@@ -1,0 +1,135 @@
+2025-06-03 00:40:26 - ERROR - estado_bot - 🔒 Error de autenticación con Binance API. Verifica tus claves.
+2025-06-03 00:40:26 - INFO - estado_bot - 🧭 Monitoreo de estado completado.
+2025-06-03 00:40:26 - DEBUG - estado_bot - 📌 Órdenes abiertas: []
+2025-06-03 00:45:29 - ERROR - estado_bot - 🔒 Error de autenticación con Binance API. Verifica tus claves.
+2025-06-03 00:45:29 - INFO - estado_bot - 🧭 Monitoreo de estado completado.
+2025-06-03 00:45:29 - DEBUG - estado_bot - 📌 Órdenes abiertas: ['ETH/EUR']
+2025-06-03 00:50:32 - ERROR - estado_bot - 🔒 Error de autenticación con Binance API. Verifica tus claves.
+2025-06-03 00:50:32 - INFO - estado_bot - 🧭 Monitoreo de estado completado.
+2025-06-03 00:50:32 - DEBUG - estado_bot - 📌 Órdenes abiertas: ['ETH/EUR']
+2025-06-03 00:55:35 - ERROR - estado_bot - 🔒 Error de autenticación con Binance API. Verifica tus claves.
+2025-06-03 00:55:35 - INFO - estado_bot - 🧭 Monitoreo de estado completado.
+2025-06-03 00:55:35 - DEBUG - estado_bot - 📌 Órdenes abiertas: ['ETH/EUR', 'ADA/EUR']
+2025-06-03 01:00:37 - ERROR - estado_bot - 🔒 Error de autenticación con Binance API. Verifica tus claves.
+2025-06-03 01:00:37 - INFO - estado_bot - 🧭 Monitoreo de estado completado.
+2025-06-03 01:00:37 - DEBUG - estado_bot - 📌 Órdenes abiertas: ['ETH/EUR', 'ADA/EUR']
+2025-06-03 01:05:40 - ERROR - estado_bot - 🔒 Error de autenticación con Binance API. Verifica tus claves.
+2025-06-03 01:05:40 - INFO - estado_bot - 🧭 Monitoreo de estado completado.
+2025-06-03 01:05:40 - DEBUG - estado_bot - 📌 Órdenes abiertas: ['BTC/EUR']
+2025-06-03 01:10:43 - ERROR - estado_bot - 🔒 Error de autenticación con Binance API. Verifica tus claves.
+2025-06-03 01:10:43 - INFO - estado_bot - 🧭 Monitoreo de estado completado.
+2025-06-03 01:10:43 - DEBUG - estado_bot - 📌 Órdenes abiertas: []
+2025-06-03 01:15:46 - ERROR - estado_bot - 🔒 Error de autenticación con Binance API. Verifica tus claves.
+2025-06-03 01:15:46 - INFO - estado_bot - 🧭 Monitoreo de estado completado.
+2025-06-03 01:15:46 - DEBUG - estado_bot - 📌 Órdenes abiertas: ['ETH/EUR']
+2025-06-03 01:20:50 - ERROR - estado_bot - 🔒 Error de autenticación con Binance API. Verifica tus claves.
+2025-06-03 01:20:50 - INFO - estado_bot - 🧭 Monitoreo de estado completado.
+2025-06-03 01:20:50 - DEBUG - estado_bot - 📌 Órdenes abiertas: ['ETH/EUR']
+2025-06-03 01:25:54 - ERROR - estado_bot - 🔒 Error de autenticación con Binance API. Verifica tus claves.
+2025-06-03 01:25:54 - INFO - estado_bot - 🧭 Monitoreo de estado completado.
+2025-06-03 01:25:54 - DEBUG - estado_bot - 📌 Órdenes abiertas: ['ETH/EUR', 'BTC/EUR', 'ADA/EUR']
+2025-06-03 01:30:57 - ERROR - estado_bot - 🔒 Error de autenticación con Binance API. Verifica tus claves.
+2025-06-03 01:30:57 - INFO - estado_bot - 🧭 Monitoreo de estado completado.
+2025-06-03 01:30:57 - DEBUG - estado_bot - 📌 Órdenes abiertas: ['ETH/EUR', 'ADA/EUR']
+2025-06-03 01:36:00 - ERROR - estado_bot - 🔒 Error de autenticación con Binance API. Verifica tus claves.
+2025-06-03 01:36:00 - INFO - estado_bot - 🧭 Monitoreo de estado completado.
+2025-06-03 01:36:00 - DEBUG - estado_bot - 📌 Órdenes abiertas: ['ETH/EUR']
+2025-06-03 01:41:03 - ERROR - estado_bot - 🔒 Error de autenticación con Binance API. Verifica tus claves.
+2025-06-03 01:41:03 - INFO - estado_bot - 🧭 Monitoreo de estado completado.
+2025-06-03 01:41:03 - DEBUG - estado_bot - 📌 Órdenes abiertas: ['ETH/EUR']
+2025-06-03 01:46:07 - ERROR - estado_bot - 🔒 Error de autenticación con Binance API. Verifica tus claves.
+2025-06-03 01:46:07 - INFO - estado_bot - 🧭 Monitoreo de estado completado.
+2025-06-03 01:46:07 - DEBUG - estado_bot - 📌 Órdenes abiertas: ['ETH/EUR', 'BTC/EUR']
+2025-06-03 01:51:10 - ERROR - estado_bot - 🔒 Error de autenticación con Binance API. Verifica tus claves.
+2025-06-03 01:51:10 - INFO - estado_bot - 🧭 Monitoreo de estado completado.
+2025-06-03 01:51:10 - DEBUG - estado_bot - 📌 Órdenes abiertas: ['ETH/EUR', 'BTC/EUR', 'ADA/EUR']
+2025-06-03 01:56:12 - ERROR - estado_bot - 🔒 Error de autenticación con Binance API. Verifica tus claves.
+2025-06-03 01:56:12 - INFO - estado_bot - 🧭 Monitoreo de estado completado.
+2025-06-03 01:56:12 - DEBUG - estado_bot - 📌 Órdenes abiertas: ['ETH/EUR', 'BTC/EUR', 'ADA/EUR']
+2025-06-03 02:01:16 - ERROR - estado_bot - 🔒 Error de autenticación con Binance API. Verifica tus claves.
+2025-06-03 02:01:16 - INFO - estado_bot - 🧭 Monitoreo de estado completado.
+2025-06-03 02:01:16 - DEBUG - estado_bot - 📌 Órdenes abiertas: ['ETH/EUR', 'ADA/EUR']
+2025-06-03 02:06:19 - ERROR - estado_bot - 🔒 Error de autenticación con Binance API. Verifica tus claves.
+2025-06-03 02:06:19 - INFO - estado_bot - 🧭 Monitoreo de estado completado.
+2025-06-03 02:06:19 - DEBUG - estado_bot - 📌 Órdenes abiertas: ['ETH/EUR']
+2025-06-03 02:11:22 - ERROR - estado_bot - 🔒 Error de autenticación con Binance API. Verifica tus claves.
+2025-06-03 02:11:22 - INFO - estado_bot - 🧭 Monitoreo de estado completado.
+2025-06-03 02:11:22 - DEBUG - estado_bot - 📌 Órdenes abiertas: ['ETH/EUR']
+2025-06-03 02:16:26 - ERROR - estado_bot - 🔒 Error de autenticación con Binance API. Verifica tus claves.
+2025-06-03 02:16:26 - INFO - estado_bot - 🧭 Monitoreo de estado completado.
+2025-06-03 02:16:26 - DEBUG - estado_bot - 📌 Órdenes abiertas: ['ETH/EUR', 'BTC/EUR']
+2025-06-03 02:21:29 - ERROR - estado_bot - 🔒 Error de autenticación con Binance API. Verifica tus claves.
+2025-06-03 02:21:29 - INFO - estado_bot - 🧭 Monitoreo de estado completado.
+2025-06-03 02:21:29 - DEBUG - estado_bot - 📌 Órdenes abiertas: ['BTC/EUR', 'ADA/EUR']
+2025-06-03 02:26:32 - ERROR - estado_bot - 🔒 Error de autenticación con Binance API. Verifica tus claves.
+2025-06-03 02:26:32 - INFO - estado_bot - 🧭 Monitoreo de estado completado.
+2025-06-03 02:26:32 - DEBUG - estado_bot - 📌 Órdenes abiertas: ['ADA/EUR']
+2025-06-03 02:31:35 - ERROR - estado_bot - 🔒 Error de autenticación con Binance API. Verifica tus claves.
+2025-06-03 02:31:35 - INFO - estado_bot - 🧭 Monitoreo de estado completado.
+2025-06-03 02:31:35 - DEBUG - estado_bot - 📌 Órdenes abiertas: ['ADA/EUR', 'ETH/EUR']
+2025-06-03 02:36:40 - ERROR - estado_bot - 🔒 Error de autenticación con Binance API. Verifica tus claves.
+2025-06-03 02:36:40 - INFO - estado_bot - 🧭 Monitoreo de estado completado.
+2025-06-03 02:36:40 - DEBUG - estado_bot - 📌 Órdenes abiertas: ['ADA/EUR', 'ETH/EUR', 'BTC/EUR']
+2025-06-03 02:41:43 - ERROR - estado_bot - 🔒 Error de autenticación con Binance API. Verifica tus claves.
+2025-06-03 02:41:43 - INFO - estado_bot - 🧭 Monitoreo de estado completado.
+2025-06-03 02:41:43 - DEBUG - estado_bot - 📌 Órdenes abiertas: ['ADA/EUR', 'ETH/EUR', 'BTC/EUR']
+2025-06-03 02:46:46 - ERROR - estado_bot - 🔒 Error de autenticación con Binance API. Verifica tus claves.
+2025-06-03 02:46:46 - INFO - estado_bot - 🧭 Monitoreo de estado completado.
+2025-06-03 02:46:46 - DEBUG - estado_bot - 📌 Órdenes abiertas: ['ADA/EUR', 'ETH/EUR', 'BTC/EUR']
+2025-06-03 02:51:49 - ERROR - estado_bot - 🔒 Error de autenticación con Binance API. Verifica tus claves.
+2025-06-03 02:51:49 - INFO - estado_bot - 🧭 Monitoreo de estado completado.
+2025-06-03 02:51:49 - DEBUG - estado_bot - 📌 Órdenes abiertas: ['ADA/EUR', 'ETH/EUR', 'BTC/EUR']
+2025-06-03 02:56:53 - ERROR - estado_bot - 🔒 Error de autenticación con Binance API. Verifica tus claves.
+2025-06-03 02:56:53 - INFO - estado_bot - 🧭 Monitoreo de estado completado.
+2025-06-03 02:56:53 - DEBUG - estado_bot - 📌 Órdenes abiertas: ['ADA/EUR', 'ETH/EUR', 'BTC/EUR']
+2025-06-03 03:01:57 - ERROR - estado_bot - 🔒 Error de autenticación con Binance API. Verifica tus claves.
+2025-06-03 03:01:57 - INFO - estado_bot - 🧭 Monitoreo de estado completado.
+2025-06-03 03:01:57 - DEBUG - estado_bot - 📌 Órdenes abiertas: ['ADA/EUR', 'ETH/EUR', 'BTC/EUR']
+2025-06-03 03:07:00 - ERROR - estado_bot - 🔒 Error de autenticación con Binance API. Verifica tus claves.
+2025-06-03 03:07:00 - INFO - estado_bot - 🧭 Monitoreo de estado completado.
+2025-06-03 03:07:00 - DEBUG - estado_bot - 📌 Órdenes abiertas: ['ETH/EUR', 'BTC/EUR']
+2025-06-03 03:12:03 - ERROR - estado_bot - 🔒 Error de autenticación con Binance API. Verifica tus claves.
+2025-06-03 03:12:03 - INFO - estado_bot - 🧭 Monitoreo de estado completado.
+2025-06-03 03:12:03 - DEBUG - estado_bot - 📌 Órdenes abiertas: ['ETH/EUR', 'BTC/EUR']
+2025-06-03 03:17:06 - ERROR - estado_bot - 🔒 Error de autenticación con Binance API. Verifica tus claves.
+2025-06-03 03:17:06 - INFO - estado_bot - 🧭 Monitoreo de estado completado.
+2025-06-03 03:17:06 - DEBUG - estado_bot - 📌 Órdenes abiertas: ['ETH/EUR', 'BTC/EUR']
+2025-06-03 03:22:09 - ERROR - estado_bot - 🔒 Error de autenticación con Binance API. Verifica tus claves.
+2025-06-03 03:22:09 - INFO - estado_bot - 🧭 Monitoreo de estado completado.
+2025-06-03 03:22:09 - DEBUG - estado_bot - 📌 Órdenes abiertas: ['ETH/EUR', 'BTC/EUR', 'ADA/EUR']
+2025-06-03 03:27:12 - ERROR - estado_bot - 🔒 Error de autenticación con Binance API. Verifica tus claves.
+2025-06-03 03:27:12 - INFO - estado_bot - 🧭 Monitoreo de estado completado.
+2025-06-03 03:27:12 - DEBUG - estado_bot - 📌 Órdenes abiertas: ['ETH/EUR', 'BTC/EUR', 'ADA/EUR']
+2025-06-03 03:32:15 - ERROR - estado_bot - 🔒 Error de autenticación con Binance API. Verifica tus claves.
+2025-06-03 03:32:15 - INFO - estado_bot - 🧭 Monitoreo de estado completado.
+2025-06-03 03:32:15 - DEBUG - estado_bot - 📌 Órdenes abiertas: ['ETH/EUR', 'BTC/EUR', 'ADA/EUR']
+2025-06-03 03:37:18 - ERROR - estado_bot - 🔒 Error de autenticación con Binance API. Verifica tus claves.
+2025-06-03 03:37:18 - INFO - estado_bot - 🧭 Monitoreo de estado completado.
+2025-06-03 03:37:18 - DEBUG - estado_bot - 📌 Órdenes abiertas: ['BTC/EUR', 'ADA/EUR']
+2025-06-03 03:42:21 - ERROR - estado_bot - 🔒 Error de autenticación con Binance API. Verifica tus claves.
+2025-06-03 03:42:21 - INFO - estado_bot - 🧭 Monitoreo de estado completado.
+2025-06-03 03:42:21 - DEBUG - estado_bot - 📌 Órdenes abiertas: ['BTC/EUR', 'ADA/EUR']
+2025-06-03 03:47:25 - ERROR - estado_bot - 🔒 Error de autenticación con Binance API. Verifica tus claves.
+2025-06-03 03:47:25 - INFO - estado_bot - 🧭 Monitoreo de estado completado.
+2025-06-03 03:47:25 - DEBUG - estado_bot - 📌 Órdenes abiertas: ['BTC/EUR', 'ETH/EUR']
+2025-06-03 03:52:27 - ERROR - estado_bot - 🔒 Error de autenticación con Binance API. Verifica tus claves.
+2025-06-03 03:52:27 - INFO - estado_bot - 🧭 Monitoreo de estado completado.
+2025-06-03 03:52:27 - DEBUG - estado_bot - 📌 Órdenes abiertas: ['BTC/EUR', 'ETH/EUR']
+2025-06-03 03:57:31 - ERROR - estado_bot - 🔒 Error de autenticación con Binance API. Verifica tus claves.
+2025-06-03 03:57:31 - INFO - estado_bot - 🧭 Monitoreo de estado completado.
+2025-06-03 03:57:31 - DEBUG - estado_bot - 📌 Órdenes abiertas: ['BTC/EUR', 'ETH/EUR']
+2025-06-03 04:02:33 - ERROR - estado_bot - 🔒 Error de autenticación con Binance API. Verifica tus claves.
+2025-06-03 04:02:33 - INFO - estado_bot - 🧭 Monitoreo de estado completado.
+2025-06-03 04:02:33 - DEBUG - estado_bot - 📌 Órdenes abiertas: ['ETH/EUR', 'ADA/EUR']
+2025-06-03 04:07:36 - ERROR - estado_bot - 🔒 Error de autenticación con Binance API. Verifica tus claves.
+2025-06-03 04:07:36 - INFO - estado_bot - 🧭 Monitoreo de estado completado.
+2025-06-03 04:07:36 - DEBUG - estado_bot - 📌 Órdenes abiertas: ['ETH/EUR']
+2025-06-03 04:12:40 - ERROR - estado_bot - 🔒 Error de autenticación con Binance API. Verifica tus claves.
+2025-06-03 04:12:40 - INFO - estado_bot - 🧭 Monitoreo de estado completado.
+2025-06-03 04:12:40 - DEBUG - estado_bot - 📌 Órdenes abiertas: ['ETH/EUR']
+2025-06-03 04:17:43 - ERROR - estado_bot - 🔒 Error de autenticación con Binance API. Verifica tus claves.
+2025-06-03 04:17:43 - INFO - estado_bot - 🧭 Monitoreo de estado completado.
+2025-06-03 04:17:43 - DEBUG - estado_bot - 📌 Órdenes abiertas: ['ETH/EUR', 'BTC/EUR']
+2025-06-03 04:22:46 - ERROR - estado_bot - 🔒 Error de autenticación con Binance API. Verifica tus claves.
+2025-06-03 04:22:46 - INFO - estado_bot - 🧭 Monitoreo de estado completado.
+2025-06-03 04:22:46 - DEBUG - estado_bot - 📌 Órdenes abiertas: ['ETH/EUR', 'ADA/EUR']
