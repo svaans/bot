@@ -1,0 +1,23 @@
+# Archivos de Python
+__pycache__/
+*.pyc
+*.pyo
+*.log
+
+# Datos y simulaciones
+ordenes_reales/
+ordenes_simuladas/
+*.parquet
+
+# Configuraciones sensibles
+.env
+config/credenciales.json
+
+# Entornos virtuales
+venv/
+.env/
+
+# Archivos de frontend (dependencias)
+node_modules/
+build/
+dist/
