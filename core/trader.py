@@ -473,7 +473,7 @@ class Trader:
 
 
     async def ejecutar(self):
-        self.tarea_estado = asyncio.create_task(monitorear_estado_periodicamente())
+        self.tarea_estado = asyncio.create_task(monitorear_estado_periodicamente(self))
         self.tareas_activas = []
         for symbol in self.symbols:
             async def tarea_simb(symbol=symbol):
