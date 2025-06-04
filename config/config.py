@@ -1,14 +1,10 @@
 # config/config.py
 
 import os
-from dotenv import load_dotenv
-
-# Cargar variables desde .env
-load_dotenv(dotenv_path="config/claves.env")
 
 # API keys
-API_KEY = os.getenv("BINANCE_API_KEY")
-API_SECRET = os.getenv("BINANCE_API_SECRET")
+API_KEY = os.environ.get("BINANCE_API_KEY")
+API_SECRET = os.environ.get("BINANCE_API_SECRET")
 
 # Configuración general del bot
 MODO_REAL = os.getenv("MODO_REAL", "False").lower() == "true"

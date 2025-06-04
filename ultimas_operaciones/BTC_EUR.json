@@ -1,0 +1,21 @@
+[
+  {
+    "retorno_total": 0.000871,
+    "estrategias_activas": {
+      "estrategia_rango": false,
+      "estrategia_sma": false,
+      "estrategia_adx": true,
+      "estrategia_bollinger_breakout": false,
+      "estrategia_estocastico": true,
+      "estrategia_volumen_alto": false,
+      "estrategia_cruce_ema_stochrsi": false,
+      "estrategia_vwap_breakout": false,
+      "estrategia_atr_breakout": true,
+      "estrategia_ichimoku_breakout": false,
+      "estrategia_divergencia_rsi": false,
+      "estrategia_macd_hist_inversion": false,
+      "tops_rectangle": false,
+      "volatility_breakout": true
+    }
+  }
+]

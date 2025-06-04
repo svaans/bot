@@ -21,3 +21,12 @@ venv/
 node_modules/
 build/
 dist/
+
+# Base de datos
+backend/db.sqlite3
+
+# Logs
+logs/
+
+# Local environment variables
+config/claves.env
