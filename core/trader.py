@@ -281,7 +281,7 @@ class Trader:
             sl, tp = calcular_tp_sl_adaptativos(df, float(vela["close"]), config)
             log.info(f"📐 SL/TP para {symbol} → SL: {sl:.4f}, TP: {tp:.4f}")
 
-            self.abrir_operacion_real(symbol, float(vela["close"]), sl, tp, estrategias_detectadas, tendencia)
+            await self.abrir_operacion_real(symbol, float(vela["close"]), sl, tp, estrategias_detectadas, tendencia)
             
 
 
@@ -307,7 +307,7 @@ class Trader:
             retorno_actual = (precio_cierre - orden["precio_entrada"]) / orden["precio_entrada"]
             if retorno_actual > 0:
                 log.warning(f"⌛ [{symbol}] Orden expirada en ganancia — Retorno: {retorno_actual:.4f}")
-                self.cerrar_orden_real(symbol, precio_cierre, exito=True, motivo="Expirada")
+                await self.cerrar_orden_real(symbol, precio_cierre, cantidad, exito=True, motivo="Expirada")
                 return
             else:
                 log.info(f"🕒 [{symbol}] Orden vencida pero aún en pérdida (retorno {retorno_actual:.4f}), se mantiene abierta")
@@ -320,7 +320,7 @@ class Trader:
 
 
             if resultado.get("cerrar", False):
-                self.cerrar_orden_real(symbol, orden["stop_loss"], exito=False, motivo="Stop Loss")
+                await self.cerrar_orden_real(symbol, orden["stop_loss"], cantidad, exito=False, motivo="Stop Loss")
             else:
                 log.info(f"🛡️ SL evitado para {symbol} → {resultado['razon']}")
             return
