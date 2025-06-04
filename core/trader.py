@@ -22,7 +22,6 @@ from config.config import INTERVALO_VELAS, MODO_REAL
 from binance_api.cliente import crear_cliente
 from core.utils import respaldar_archivo, guardar_operacion_en_csv, validar_dataframe, segundos_transcurridos
 from core.pesos import cargar_pesos_estrategias
-from aprendizaje.gestor_aprendizaje import ejecutar_aprendizaje_adaptativo
 from aprendizaje.entrenador_estrategias import actualizar_pesos_estrategias_symbol
 from core.configuracion import cargar_configuracion_simbolo
 from core.monitor_estado_bot import monitorear_estado_bot, monitorear_estado_periodicamente
