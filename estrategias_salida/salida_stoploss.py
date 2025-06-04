@@ -30,7 +30,7 @@ def salida_stoploss(orden: dict, df: pd.DataFrame, config: dict = None) -> dict:
             return {"cerrar": False, "razon": f"SL no alcanzado aún (precio: {precio_actual:.2f} > SL: {sl:.2f})"}
 
         # ⚙️ Evaluación técnica solo si se ha tocado el SL
-        tendencia = detectar_tendencia(symbol, df)
+        tendencia, _ = detectar_tendencia(symbol, df)
         if not tendencia:
             return {"cerrar": True, "razon": "Tendencia no identificada"}
 

@@ -33,15 +33,15 @@ def registrar_resultado_trade(orden: dict):
     df_orden = pd.DataFrame([orden])
 
     # Ruta del archivo donde se acumulan todas las órdenes (por modo)
-    ruta_archivo = f"{CARPETA_ORDENES}/{symbol.replace('/', '_')}.json"
+    ruta_archivo = f"{CARPETA_ORDENES}/{symbol.replace('/', '_')}.parquet"
 
     if os.path.exists(ruta_archivo):
-        df_existente = pd.read_json(ruta_archivo)
+        df_existente = pd.read_parquet(ruta_archivo)
         df_ordenes = pd.concat([df_existente, df_orden], ignore_index=True)
     else:
         df_ordenes = df_orden
 
-    df_ordenes.to_json(ruta_archivo, orient="records", indent=2)
+    df_ordenes.to_parquet(ruta_archivo, index=False)
     print(f"📝 Orden guardada en {ruta_archivo}")
 
     # Aprendizaje rápido (solo si hay al menos 20 operaciones para evitar sobreajuste)

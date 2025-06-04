@@ -11,7 +11,7 @@ def salida_por_tendencia(orden, df):
         return {"cerrar": False, "razon": "Sin tendencia previa registrada"}
 
     try:
-        tendencia_actual = detectar_tendencia(orden["symbol"], df)
+        tendencia_actual, _ = detectar_tendencia(orden["symbol"], df)
         if tendencia_actual != tendencia_entrada:
             return {
                 "cerrar": True,
@@ -27,7 +27,7 @@ def verificar_reversion_tendencia(symbol, df, tendencia_anterior):
     if not validar_dataframe(df, ["high", "low", "close"]):
         return False
 
-    nueva_tendencia = detectar_tendencia(symbol, df)
+    nueva_tendencia, _ = detectar_tendencia(symbol, df)
     return nueva_tendencia != tendencia_anterior
 
 

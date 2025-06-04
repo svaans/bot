@@ -2,10 +2,26 @@ import os
 import logging
 from datetime import datetime, timezone
 
+
+class FiltroRelevante(logging.Filter):
+    """Filtra mensajes poco informativos para el archivo de log."""
+
+    PALABRAS_CLAVE_DESCARTAR = [
+        "entrada no válida",
+        "entrada rechazada",
+        "entrada bloqueada",
+    ]
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        mensaje = record.getMessage().lower()
+        return not any(p in mensaje for p in self.PALABRAS_CLAVE_DESCARTAR)
+
+archivo_global = None
+
 # Diccionario global para evitar múltiples handlers duplicados
 loggers_configurados = {}
 
-def configurar_logger(nombre: str, nivel=logging.DEBUG, carpeta_logs="logs", modo_silencioso=False):
+def configurar_logger(nombre: str, nivel=logging.INFO, carpeta_logs="logs", modo_silencioso=False):
     if nombre in loggers_configurados:
         return loggers_configurados[nombre]
 
@@ -13,9 +29,11 @@ def configurar_logger(nombre: str, nivel=logging.DEBUG, carpeta_logs="logs", mod
     logger.setLevel(nivel)
     logger.propagate = False
 
+    global archivo_global
+
     if not logger.handlers:
         formato = logging.Formatter(
-            "%(asctime)s - %(levelname)s - %(name)s - %(message)s",
+            "%(asctime)s - %(levelname)s - %(message)s",
             datefmt="%Y-%m-%d %H:%M:%S"
         )
 
@@ -25,12 +43,14 @@ def configurar_logger(nombre: str, nivel=logging.DEBUG, carpeta_logs="logs", mod
             consola.setFormatter(formato)
             logger.addHandler(consola)
 
-        os.makedirs(carpeta_logs, exist_ok=True)
-        ruta_log = os.path.join(carpeta_logs, f"{nombre}.log")
-        archivo = logging.FileHandler(ruta_log)
-        archivo.setLevel(logging.WARNING if modo_silencioso else nivel)
-        archivo.setFormatter(formato)
-        logger.addHandler(archivo)
+        if archivo_global is None:
+            os.makedirs(carpeta_logs, exist_ok=True)
+            ruta_log = os.path.join(carpeta_logs, "bot.log")
+            archivo_global = logging.FileHandler(ruta_log)
+            archivo_global.setLevel(logging.INFO)
+            archivo_global.setFormatter(formato)
+            archivo_global.addFilter(FiltroRelevante())
+        logger.addHandler(archivo_global)
 
     loggers_configurados[nombre] = logger
     return logger

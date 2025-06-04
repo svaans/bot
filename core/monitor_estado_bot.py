@@ -2,11 +2,12 @@ import os
 import json
 import asyncio
 from datetime import datetime
+import pandas as pd
 from binance_api.cliente import crear_cliente
 from ccxt.base.errors import AuthenticationError, NetworkError
 from core.logger import configurar_logger
 
-ORDENES_REALES_PATH = os.path.join("ordenes_reales", "ordenes_reales.json")
+ORDENES_REALES_PATH = os.path.join("ordenes_reales", "ordenes_reales.parquet")
 ESTADOS_EMOCION = {
     "ganancia": "😄 Eufórico",
     "perdida": "😢 Frustrado",
@@ -20,8 +21,8 @@ log = configurar_logger("estado_bot")
 def obtener_orden_abierta():
     if os.path.exists(ORDENES_REALES_PATH):
         try:
-            with open(ORDENES_REALES_PATH, "r") as f:
-                ordenes = json.load(f)
+            df = pd.read_parquet(ORDENES_REALES_PATH)
+            ordenes = {row["symbol"]: row.to_dict() for _, row in df.iterrows()}
             return ordenes if ordenes else None
         except Exception as e:
             log.warning(f"⚠️ Error al leer órdenes: {e}")

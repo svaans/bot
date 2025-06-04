@@ -121,7 +121,7 @@ class TraderSimulado:
 
             log.info(f"🔍 [{symbol}] Procesando vela — {vela['timestamp']}")
 
-            tendencia = detectar_tendencia(symbol, df)
+            tendencia, _ = detectar_tendencia(symbol, df)
             log.info(f"🔁 [{symbol}] Tendencia detectada: {tendencia}")
 
             evaluacion = evaluar_estrategias(symbol, df, tendencia)
@@ -179,15 +179,15 @@ class TraderSimulado:
             log.info(f"⚖️ [{symbol}] Peso total: {peso_total:.2f} / {peso_min_total} — Diversidad: {diversidad} / {diversidad_min}")
 
             if puntaje < umbral:
-                log.warning(f"🚫 [{symbol}] Entrada bloqueada: puntaje {puntaje:.2f} < umbral {umbral:.2f}")
+                log.debug(f"🚫 [{symbol}] Entrada bloqueada: puntaje {puntaje:.2f} < umbral {umbral:.2f}")
                 return
 
             if diversidad < diversidad_min or peso_total < peso_min_total:
-                log.warning(f"🚫 [{symbol}] Entrada bloqueada por peso o diversidad insuficiente")
+                log.debug(f"🚫 [{symbol}] Entrada bloqueada por peso o diversidad insuficiente")
                 return
 
             if not evaluar_validez_estrategica(symbol, df, estrategias_detectadas):
-                log.warning(f"❌ [{symbol}] Rechazada por filtro estratégico")
+                log.debug(f"❌ [{symbol}] Rechazada por filtro estratégico")
                 return
 
             ventana_close = df["close"].tail(10)
@@ -196,7 +196,7 @@ class TraderSimulado:
 
             repetidas = señales_repetidas(self.buffer[symbol], pesos_symbol, tendencia, volatilidad, ventanas=3)
             if repetidas < 1 and puntaje < 1.2 * umbral:
-                log.warning(f"🚫 [{symbol}] Entrada rechazada por persistencia insuficiente y puntaje débil")
+                log.debug(f"🚫 [{symbol}] Entrada rechazada por persistencia insuficiente y puntaje débil")
                 return
             elif repetidas < 1:
                 log.info(f"⚠️ [{symbol}] Entrada débil permitida sin persistencia, puntaje alto")
@@ -206,7 +206,7 @@ class TraderSimulado:
             slope = calcular_slope(df)
 
             if not entrada_permitida(symbol, puntaje, umbral, estrategias_detectadas, rsi, slope, momentum):
-                log.warning(f"🚫 [{symbol}] Rechazada por entrada_permitida()")
+                log.debug(f"🚫 [{symbol}] Rechazada por entrada_permitida()")
                 return
 
             if self.riesgo_superado_simulado(symbol, config):
@@ -314,7 +314,7 @@ class TraderSimulado:
             razon = resultado_salida.get("razon", "Estrategia desconocida")
 
             # Reevaluación técnica actualizada
-            tendencia_actual = detectar_tendencia(symbol, df)
+            tendencia_actual, _ = detectar_tendencia(symbol, df)
             evaluacion = evaluar_estrategias(symbol, df, tendencia_actual)
             estrategias_activas = evaluacion.get("estrategias_activas", {})
             puntaje = evaluacion.get("puntaje_total", 0)
@@ -335,9 +335,9 @@ class TraderSimulado:
 
         precio_entrada = orden["precio_entrada"]
         retorno_total = round((precio_salida - precio_entrada) / precio_entrada, 6)
-        self.capital_simulado[symbol] *= (1 + retorno_total)
-
-        ganancia = self.capital_simulado[symbol] * retorno_total
+        capital_inicial = self.capital_simulado[symbol]
+        ganancia = capital_inicial * retorno_total
+        self.capital_simulado[symbol] = capital_inicial + ganancia
         self.resultados[symbol].append(ganancia)
 
         self.historial_cierres[symbol] = {
@@ -358,14 +358,14 @@ class TraderSimulado:
             log.warning(f"📤 ORDEN SIMULADA CERRADA {symbol} a {precio_salida:.2f} | Motivo: {motivo}")
 
         if motivo.lower() in ["cambio de tendencia", "estrategia: cambio de tendencia"]:
-            nueva_tendencia = detectar_tendencia(symbol, pd.DataFrame(self.buffer.get(symbol, [])))
+            nueva_tendencia, _ = detectar_tendencia(symbol, pd.DataFrame(self.buffer.get(symbol, [])))
             self.ultima_tendencia[symbol] = nueva_tendencia
 
         actualizar_pesos_estrategias_symbol(symbol)
         self.pesos_por_simbolo[symbol] = cargar_pesos_estrategias().get(symbol, {})
 
     def guardar_orden_simulada(self, symbol: str, nueva_orden: dict):
-        archivo = f"ordenes_simuladas/{symbol.replace('/', '_').lower()}.json"
+        archivo = f"ordenes_simuladas/{symbol.replace('/', '_').lower()}.parquet"
         temp_archivo = archivo + ".tmp"
 
         for intento in range(3):
@@ -373,15 +373,11 @@ class TraderSimulado:
                 with self.lock_archivo:
                     ordenes = []
                     if os.path.exists(archivo):
-                        with open(archivo, "r", encoding="utf-8") as f:
-                            contenido = f.read().strip()
-                            if contenido:
-                                try:
-                                    ordenes = json.loads(contenido)
-                                    if not isinstance(ordenes, list):
-                                        raise ValueError("El archivo debe contener una lista JSON.")
-                                except Exception as e:
-                                    raise ValueError(f"Archivo dañado: {e}")
+                        try:
+                            df = pd.read_parquet(archivo)
+                            ordenes = df.to_dict("records")
+                        except Exception as e:
+                            raise ValueError(f"Archivo dañado: {e}")
 
                     # ✅ Evitar guardar duplicados exactos
                     if ordenes and nueva_orden == ordenes[-1]:
@@ -390,17 +386,26 @@ class TraderSimulado:
 
                     ordenes.append(nueva_orden)
 
-                    with open(temp_archivo, "w", encoding="utf-8") as f:
-                        json.dump(ordenes, f, indent=2)
+                    df_guardar = pd.DataFrame(ordenes)
+                    if "estrategias_activas" in df_guardar.columns:
+                        df_guardar["estrategias_activas"] = df_guardar["estrategias_activas"].apply(
+                            lambda v: json.dumps(v) if isinstance(v, dict) else v
+                        )
+                    if "tendencia" in df_guardar.columns:
+                        df_guardar["tendencia"] = df_guardar["tendencia"].apply(
+                            lambda v: v[0] if isinstance(v, tuple) else v
+                        )
+
+                    df_guardar.to_parquet(temp_archivo, index=False)
 
                     os.replace(temp_archivo, archivo)
                     log.info(f"💾 Orden simulada registrada en {archivo}")
                     return
 
-            except (json.JSONDecodeError, ValueError) as e:
+            except ValueError as e:
                 try:
                     timestamp = int(time.time())
-                    corrupto = archivo.replace(".json", f"_corrupto_{timestamp}.json")
+                    corrupto = archivo.replace(".parquet", f"_corrupto_{timestamp}.parquet")
                     os.rename(archivo, corrupto)
                     log.warning(f"⚠️ Archivo corrupto renombrado: {archivo} → {corrupto} — Error: {e}")
                 except Exception as err:
@@ -442,10 +447,9 @@ class TraderSimulado:
             df.to_csv(archivo, index=False)
             log.info(f"💾 Resultados guardados en {archivo}")
 
-        ruta_historial = "ordenes_simuladas/ordenes_simuladas.json"
+        ruta_historial = "ordenes_simuladas/ordenes_simuladas.parquet"
         if not os.path.exists(ruta_historial):
-            with open(ruta_historial, "w", encoding="utf-8") as f:
-                json.dump(self.historial_ordenes, f, indent=4)
+            pd.DataFrame(self.historial_ordenes).to_parquet(ruta_historial, index=False)
             log.info(f"💾 Historial de órdenes guardado en {ruta_historial}")
 
     async def cerrar(self):

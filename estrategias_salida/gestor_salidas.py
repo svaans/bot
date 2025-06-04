@@ -66,7 +66,7 @@ def verificar_filtro_tecnico(symbol, df, estrategias_activas, pesos_symbol):
     if not validar_dataframe(df, ["high", "low", "close"]):
         return False
 
-    tendencia = detectar_tendencia(symbol, df)
+    tendencia, _ = detectar_tendencia(symbol, df)
     evaluacion = evaluar_estrategias(symbol, df, tendencia)
     if not evaluacion:
         return False

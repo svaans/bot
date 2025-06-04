@@ -16,7 +16,11 @@ from estrategias_salida.salida_trailing_stop import verificar_trailing_stop
 from estrategias_salida.salida_por_tendencia import verificar_reversion_tendencia
 from estrategias_salida.reajuste_tp_sl import calcular_promedios_sl_tp
 from core.tendencia import detectar_tendencia, señales_repetidas
-from core.adaptador_umbral import calcular_umbral_adaptativo, cargar_umbral_optimo, calcular_umbral_adaptativo, calcular_tp_sl_adaptativos
+from core.adaptador_umbral import (
+    calcular_umbral_adaptativo,
+    cargar_umbral_optimo,
+    calcular_tp_sl_adaptativos,
+)
 from core.logger import configurar_logger, log_resumen_operacion
 from config.config import INTERVALO_VELAS, MODO_REAL
 from binance_api.cliente import crear_cliente
@@ -85,7 +89,7 @@ class Trader:
                     # 🔍 Análisis del arranque
                     if len(self.buffer[symbol]) == 30:
                         ventana = pd.DataFrame(self.buffer[symbol])
-                        tendencia = detectar_tendencia(symbol, ventana)
+                        tendencia, _ = detectar_tendencia(symbol, ventana)
                         resultado = evaluar_estrategias(symbol, ventana, tendencia)
                         log.info(f"🔍 [{symbol}] Estrategias activas iniciales: {resultado['estrategias_activas']}")
                         log.info(f"📊 [{symbol}] Puntaje técnico inicial: {resultado['puntaje']}")
@@ -174,7 +178,7 @@ class Trader:
                 return
             self.ultimo_timestamp[symbol] = vela["timestamp"]
 
-            tendencia = detectar_tendencia(symbol, df)
+            tendencia, _ = detectar_tendencia(symbol, df)
             evaluacion = evaluar_estrategias(symbol, df, tendencia)
 
             if evaluacion is None or not isinstance(evaluacion.get("puntaje_total"), (int, float)):
@@ -237,13 +241,19 @@ class Trader:
             diversidad_min = config.get("diversidad_minima", 2)
 
             if puntaje < umbral:
-                log.info(f"🚫 Entrada no válida: Puntaje {puntaje:.2f} < Umbral {umbral:.2f}")
+                log.debug(
+                    f"🚫 Entrada no válida: Puntaje {puntaje:.2f} < Umbral {umbral:.2f}"
+                )
                 return
             if diversidad < diversidad_min or peso_total < peso_min_total:
-                log.info(f"🚫 Entrada bloqueada por diversidad/peso insuficiente: {diversidad}/{diversidad_min}, {peso_total:.2f}/{peso_min_total:.2f}")
+                log.debug(
+                    f"🚫 Entrada bloqueada por diversidad/peso insuficiente: {diversidad}/{diversidad_min}, {peso_total:.2f}/{peso_min_total:.2f}"
+                )
                 return
             if not evaluar_validez_estrategica(symbol, df, estrategias_detectadas):
-                log.info(f"❌ Entrada rechazada por filtro estratégico en {symbol}.")
+                log.debug(
+                    f"❌ Entrada rechazada por filtro estratégico en {symbol}."
+                )
                 return
 
             # Cálculo de volatilidad actual
@@ -295,6 +305,8 @@ class Trader:
         cantidad = orden["cantidad"]
         timestamp_orden = orden.get("timestamp")
 
+        df = pd.DataFrame(self.buffer[symbol])
+
         precio_max = float(vela["high"])
         precio_min = float(vela["low"])
         precio_cierre = float(vela["close"])
@@ -302,6 +314,7 @@ class Trader:
 
         # ⏱️ Tiempo máximo abierto (6h), pero solo cerrar si está en ganancia
         timestamp_orden = orden.get("timestamp")
+        
         if timestamp_orden and segundos_transcurridos(timestamp_orden) > 6 * 3600:
             retorno_actual = (precio_cierre - orden["precio_entrada"]) / orden["precio_entrada"]
             if retorno_actual > 0:
@@ -339,11 +352,12 @@ class Trader:
             await self.cerrar_orden_real(symbol, precio_cierre, cantidad, exito=True, motivo=motivo_trailing)
             return
 
-        df = pd.DataFrame(self.buffer[symbol])
+        
         if verificar_reversion_tendencia(symbol, df, self.ultima_tendencia.get(symbol)) and not verificar_filtro_tecnico(self, symbol):
             log.info(f"📉 Reversión de tendencia en {symbol}. Cerrando operación.")
             await self.cerrar_orden_real(symbol, precio_cierre, cantidad, exito=False, motivo="Cambio de tendencia")
-            self.ultima_tendencia[symbol] = detectar_tendencia(symbol, df)
+            tendencia_str, _ = detectar_tendencia(symbol, df)
+            self.ultima_tendencia[symbol] = tendencia_str
             return
 
         if not validar_dataframe(df, ["high", "low", "close"]):
@@ -353,7 +367,7 @@ class Trader:
         resultado_salida = evaluar_salidas(orden, df, config=config_actual)
         if resultado_salida.get("cerrar", False):
             razon = resultado_salida.get("razon", "Estrategia desconocida")
-            tendencia_actual = detectar_tendencia(symbol, df)
+            tendencia_actual, _ = detectar_tendencia(symbol, df)
             evaluacion = evaluar_estrategias(symbol, df, tendencia_actual)
             estrategias_activas = evaluacion.get("estrategias_activas", {})
             puntaje = evaluacion.get("puntaje_total", 0)
@@ -429,7 +443,8 @@ class Trader:
             self.ordenes_abiertas = ordenes_reales.obtener_todas_las_ordenes()
 
             if motivo.lower() in ["cambio de tendencia", "estrategia: cambio de tendencia"]:
-                self.ultima_tendencia[symbol] = detectar_tendencia(symbol, pd.DataFrame(self.buffer.get(symbol, [])))
+                tendencia_cierre, _ = detectar_tendencia(symbol, pd.DataFrame(self.buffer.get(symbol, [])))
+                self.ultima_tendencia[symbol] = tendencia_cierre
 
             log.info(f"{'✔️' if exito else '⚠️'} ORDEN CERRADA para {symbol} a {precio:.2f} | Motivo: {motivo}")
 
@@ -438,7 +453,7 @@ class Trader:
 
     def guardar_orden_real(self, orden):
         symbol = orden.get("symbol", "desconocido")
-        archivo = symbol.replace("/", "_").lower() + ".json"
+        archivo = symbol.replace("/", "_").lower() + ".parquet"
         ruta = os.path.join("ordenes_reales", archivo)
 
         os.makedirs("ordenes_reales", exist_ok=True)
@@ -450,20 +465,17 @@ class Trader:
             ordenes_actuales = []
             if os.path.exists(ruta):
                 try:
-                    with open(ruta, "r") as f:
-                        ordenes_actuales = json.load(f)
-                        if not isinstance(ordenes_actuales, list):
-                            raise ValueError("El contenido no es una lista JSON válida")
+                    df = pd.read_parquet(ruta)
+                    ordenes_actuales = df.to_dict("records")
                 except Exception as carga_error:
-                    backup_path = ruta.replace(".json", f"_corrupto_{int(datetime.now().timestamp())}.json")
+                    backup_path = ruta.replace(".parquet", f"_corrupto_{int(datetime.now().timestamp())}.parquet")
                     os.rename(ruta, backup_path)
                     log.warning(f"⚠️ Archivo corrupto renombrado a: {backup_path}")
                     ordenes_actuales = []
 
             ordenes_actuales.append(orden)
 
-            with open(ruta, "w") as f:
-                json.dump(ordenes_actuales, f, indent=4)
+            pd.DataFrame(ordenes_actuales).to_parquet(ruta, index=False)
 
             log.info(f"💾 Orden REAL registrada en {ruta}")
 

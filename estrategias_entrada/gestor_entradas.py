@@ -77,9 +77,10 @@ def evaluar_estrategias(symbol, df, tendencia):
         "puntaje_total": round(puntaje_total, 2),
         "estrategias_activas": estrategias_activadas
     }
-import logging
 
-log = logging.getLogger("entradas")
+from core.logger import configurar_logger
+
+log = configurar_logger("entradas")
 
 def entrada_permitida(symbol, potencia, umbral, estrategias_activas, rsi, slope, momentum):
     """
@@ -101,7 +102,7 @@ def entrada_permitida(symbol, potencia, umbral, estrategias_activas, rsi, slope,
         log.info(f"🟡 [{symbol}] Entrada validada por criterios técnicos. Potencia: {potencia:.2f} < Umbral: {umbral:.2f}")
         return True
 
-    log.info(f"🔴 [{symbol}] Entrada rechazada. Potencia: {potencia:.2f} < Umbral: {umbral:.2f}")
+    log.debug(f"🔴 [{symbol}] Entrada rechazada. Potencia: {potencia:.2f} < Umbral: {umbral:.2f}")
     return False
 
 

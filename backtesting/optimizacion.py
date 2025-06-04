@@ -17,7 +17,7 @@ CARPETA_ESTRATEGIAS = "estrategias_entrada"
 N_TRIALS = 60
 CAPITAL_MINIMO = 970
 N_BLOQUES = 5
-
+N_JOBS_OPTUNA = max(1, os.cpu_count() - 1)
 log = configurar_logger("opt_conjunto")
 
 # ------------------- DETECTAR TODAS LAS ESTRATEGIAS -------------------
@@ -42,32 +42,33 @@ def cargar_bloques(symbol, n_bloques=N_BLOQUES):
     return bloques
 
 # ------------------- PROCESAR BLOQUE -------------------
-async def procesar_bloque(bot, symbol, bloque, barra=None):
-    for fila in bloque.itertuples():
-        vela = {
-            "symbol": symbol,
-            "timestamp": fila.timestamp,
-            "open": fila.open,
-            "high": fila.high,
-            "low": fila.low,
-            "close": fila.close,
-            "volume": fila.volume
-        }
-        await bot.procesar_vela(vela)
-        if barra:
-            barra.update(1)
+async def procesar_bloques(bot, symbol, bloques, barra=None):
+    for bloque in bloques:
+        for fila in bloque.itertuples():
+            vela = {
+                "symbol": symbol,
+                "timestamp": fila.timestamp,
+                "open": fila.open,
+                "high": fila.high,
+                "low": fila.low,
+                "close": fila.close,
+                "volume": fila.volume,
+            }
+            await bot.procesar_vela(vela)
+            if barra:
+                barra.update(1)
 
-def simular_bloque(bloque, symbol, pesos, config, barra=None, capital_minimo=None):
+def simular_bloques(bloques, symbol, pesos, config, barra=None, capital_minimo=None):
     bot = TraderSimulado(
         [symbol],
         pesos_personalizados={symbol: pesos},
         configuraciones={symbol: config},
-        modo_optimizacion=True
+        modo_optimizacion=True,
     )
     try:
-        asyncio.run(procesar_bloque(bot, symbol, bloque, barra))
+        asyncio.run(procesar_bloques(bot, symbol, bloques, barra))
     except Exception as e:
-        log.warning(f"⚠️ Error procesando bloque en {symbol}: {e}")
+        log.warning(f"⚠️ Error procesando bloques en {symbol}: {e}")
     capital_final = bot.capital_simulado[symbol]
     if capital_minimo and capital_final < capital_minimo:
         raise optuna.TrialPruned()
@@ -93,17 +94,15 @@ def optimizar_todo(symbol):
 
         # Pesos
         pesos = {estrategia: trial.suggest_float(estrategia, 0.0, 10.0) for estrategia in estrategias}
-        capitales = []
+        
 
         with tqdm(total=total_velas, desc=f"[{symbol}] Trial {trial.number}", leave=False, dynamic_ncols=True) as barra:
-            for bloque in bloques:
-                capital = simular_bloque(bloque, symbol, pesos, config, barra, capital_minimo=CAPITAL_MINIMO)
-                capitales.append(capital)
+            capital = simular_bloques(bloques, symbol, pesos, config, barra, capital_minimo=CAPITAL_MINIMO)
 
-        return sum(capitales) / len(capitales)
+        return capital
 
     study = optuna.create_study(direction="maximize", pruner=MedianPruner(n_startup_trials=5, n_warmup_steps=2))
-    study.optimize(objective, n_trials=N_TRIALS)
+    study.optimize(objective, n_trials=N_TRIALS, n_jobs=N_JOBS_OPTUNA)
 
     print(f"✅ Finalizado {symbol} — Mejor capital promedio: {study.best_value:.2f}")
 

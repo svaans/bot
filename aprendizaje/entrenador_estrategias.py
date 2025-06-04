@@ -39,7 +39,7 @@ def normalizar_scores(scores):
 def actualizar_pesos_estrategias_symbol(symbol: str):
     FACTOR_SUAVIZADO = 0.02  # 2% de ajuste diario máximo
 
-    archivo = f"{symbol.replace('/', '_')}.json"
+    archivo = f"{symbol.replace('/', '_')}.parquet"
     ruta = os.path.join(CARPETA_ORDENES, archivo)
 
     for intento in range(3):
@@ -52,7 +52,7 @@ def actualizar_pesos_estrategias_symbol(symbol: str):
         return
 
     try:
-        ordenes = pd.read_json(ruta)
+        ordenes = pd.read_parquet(ruta)
     except Exception as e:
         print(f"❌ Error al leer el archivo {ruta}: {e}")
         return

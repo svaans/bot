@@ -93,35 +93,26 @@ lock_archivo = threading.Lock()
 
 
 def guardar_orden_simulada(symbol: str, nueva_orden: dict):
-        archivo = f"ordenes_simuladas/{symbol.replace('/', '_').lower()}.json"
+        archivo = f"ordenes_simuladas/{symbol.replace('/', '_').lower()}.parquet"
 
         for intento in range(3):  # 3 intentos para evitar errores de acceso concurrente
             try:
                 with lock_archivo:
-                    # Leer contenido anterior
                     if os.path.exists(archivo):
-                        with open(archivo, "r", encoding="utf-8") as f:
-                            contenido = f.read().strip()
-                            if contenido:
-                                ordenes = json.loads(contenido)
-                                if not isinstance(ordenes, list):
-                                    raise ValueError("Formato incorrecto: se esperaba una lista.")
-                            else:
-                                ordenes = []
+                        try:
+                            df = pd.read_parquet(archivo)
+                            ordenes = df.to_dict("records")
+                        except Exception as e:
+                            raise ValueError(f"Archivo dañado: {e}")
                     else:
                         ordenes = []
 
-                    # Añadir nueva orden
                     ordenes.append(nueva_orden)
-
-                    # Guardar en archivo
-                    with open(archivo, "w", encoding="utf-8") as f:
-                        json.dump(ordenes, f, indent=2)
-
+                    pd.DataFrame(ordenes).to_parquet(archivo, index=False)
                     log.info(f"💾 Orden simulada registrada en {archivo}")
                     return  # Éxito → salir
 
-            except (json.JSONDecodeError, ValueError) as e:
+            except ValueError as e:
                 # Archivo dañado, lo renombramos para evitar pérdida de datos
                 try:
                     timestamp = int(time.time())

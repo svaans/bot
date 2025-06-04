@@ -1,13 +1,17 @@
 import os
-import json
+import pandas as pd
+import threading
 from datetime import datetime
 from binance_api.cliente import obtener_cliente
 from core.logger import configurar_logger
 
 log = configurar_logger("ordenes")
 
-RUTA_ORDENES = os.path.join("ordenes_reales", "ordenes_reales.json")
+_lock_archivo = threading.Lock()
+
+RUTA_ORDENES = os.path.join("ordenes_reales", "ordenes_reales.parquet")
 _CACHE_ORDENES = None
+
 
 def cargar_ordenes():
     global _CACHE_ORDENES
@@ -16,9 +20,10 @@ def cargar_ordenes():
 
     if os.path.exists(RUTA_ORDENES):
         try:
-            with open(RUTA_ORDENES, "r") as f:
-                _CACHE_ORDENES = json.load(f)
-                return _CACHE_ORDENES
+            with _lock_archivo:
+                df = pd.read_parquet(RUTA_ORDENES)
+            _CACHE_ORDENES = {row["symbol"]: row.to_dict() for _, row in df.iterrows()}
+            return _CACHE_ORDENES
         except Exception as e:
             log.warning(f"⚠️ Error al leer archivo de órdenes: {e}. Se usará uno limpio.")
     _CACHE_ORDENES = {}
@@ -28,8 +33,11 @@ def guardar_ordenes(ordenes):
     global _CACHE_ORDENES
     try:
         os.makedirs(os.path.dirname(RUTA_ORDENES), exist_ok=True)
-        with open(RUTA_ORDENES, "w") as f:
-            json.dump(ordenes, f, indent=2)
+        temp = RUTA_ORDENES + ".tmp"
+        with _lock_archivo:
+            df = pd.DataFrame(list(ordenes.values()))
+            df.to_parquet(temp, index=False)
+            os.replace(temp, RUTA_ORDENES)
         _CACHE_ORDENES = ordenes
         log.info("💾 Órdenes guardadas correctamente.")
     except Exception as e:

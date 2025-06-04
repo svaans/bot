@@ -9,7 +9,7 @@ def analizar_estrategias_en_ordenes(path_ordenes):
     Devuelve un DataFrame con métricas por estrategia.
     """
     try:
-        df = pd.read_json(path_ordenes)
+        df = pd.read_parquet(path_ordenes)
     except Exception as e:
         print(f"❌ Error al leer el archivo de órdenes: {e}")
         return pd.DataFrame()
@@ -48,6 +48,6 @@ def analizar_estrategias_en_ordenes(path_ordenes):
 
 
 if __name__ == "__main__":
-    df_metricas = analizar_estrategias_en_ordenes("ordenes_reales.json")
+    df_metricas = analizar_estrategias_en_ordenes("ordenes_reales.parquet")
     print("\n\U0001F4CA Métricas por estrategia:")
     print(df_metricas.to_string(index=False))

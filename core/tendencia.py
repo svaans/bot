@@ -133,7 +133,7 @@ def señales_repetidas(buffer, estrategias_func, tendencia_actual, volatilidad_a
                 continue
 
             symbol = df.iloc[i]["symbol"]
-            tendencia = detectar_tendencia(symbol, ventana)
+            tendencia, _ = detectar_tendencia(symbol, ventana)
             evaluacion = evaluar_estrategias(symbol, ventana, tendencia)
             if not evaluacion:
                 continue
