@@ -58,11 +58,20 @@ def validar_dataframe(df, columnas):
     return df is not None and not df.empty and all(col in df.columns for col in columnas)
 
 def segundos_transcurridos(timestamp_iso):
+    """Devuelve los segundos transcurridos desde un timestamp ISO o epoch."""
     try:
-        inicio = datetime.fromisoformat(timestamp_iso)
+        if isinstance(timestamp_iso, (int, float)):
+            ts = timestamp_iso / 1000 if timestamp_iso > 1e12 else timestamp_iso
+            inicio = datetime.utcfromtimestamp(ts)
+        elif isinstance(timestamp_iso, str) and timestamp_iso.isdigit():
+            ts = int(timestamp_iso)
+            ts = ts / 1000 if ts > 1e12 else ts
+            inicio = datetime.utcfromtimestamp(ts)
+        else:
+            inicio = datetime.fromisoformat(str(timestamp_iso))
         ahora = datetime.utcnow()
         return (ahora - inicio).total_seconds()
-    except:
+    except Exception:
         return 0
     
 

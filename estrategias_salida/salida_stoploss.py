@@ -7,7 +7,7 @@ from core.utils import validar_dataframe
 from core.adaptador_umbral import calcular_umbral_adaptativo
 from estrategias_entrada.gestor_entradas import evaluar_estrategias
 from core.pesos import cargar_pesos_estrategias
-from core.logger import configurar_logger, log_unico_por_tiempo
+from core.logger import configurar_logger
 
 log = configurar_logger("salida_stoploss")
 pesos = cargar_pesos_estrategias()
@@ -64,7 +64,7 @@ def salida_stoploss(orden: dict, df: pd.DataFrame, config: dict = None) -> dict:
                 f"🛡️ SL evitado en {symbol} → Tendencia: {tendencia}, "
                 f"Estrategias activas: {activas}, Puntaje: {puntaje:.2f}/{umbral:.2f}"
             )
-            log_unico_por_tiempo(log, clave=f"{symbol}_sl_evitar", mensaje=mensaje, nivel="info", cooldown_segundos=15)
+            log.info(mensaje)
             return {"cerrar": False, "razon": "SL evitado por validación técnica y concordancia con tendencia"}
 
         return {"cerrar": True, "razon": "Condiciones técnicas débiles para mantener"}

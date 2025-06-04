@@ -55,23 +55,6 @@ def configurar_logger(nombre: str, nivel=logging.INFO, carpeta_logs="logs", modo
     loggers_configurados[nombre] = logger
     return logger
 
-# Registro de última ejecución por clave para evitar spam
-registro_temporal = {}
-
-def log_unico_por_tiempo(clave, mensaje, nivel="info", cooldown=10):
-    logger = logging.getLogger("cooldown")
-    ahora = datetime.now(timezone.utc).timestamp()
-    ultimo = registro_temporal.get(clave, 0)
-    if ahora - ultimo >= cooldown:
-        if nivel == "info":
-            logger.info(mensaje)
-        elif nivel == "warning":
-            logger.warning(mensaje)
-        elif nivel == "error":
-            logger.error(mensaje)
-        elif nivel == "debug":
-            logger.debug(mensaje)
-        registro_temporal[clave] = ahora
 
 def log_resumen_operacion(tipo, symbol, **kwargs):
     log = logging.getLogger("resumen")

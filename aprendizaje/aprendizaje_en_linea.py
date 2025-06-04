@@ -16,17 +16,15 @@ os.makedirs(CARPETA_OPERACIONES, exist_ok=True)
 
 
 def registrar_resultado_trade(symbol: str, orden: dict, ganancia: float):
-    archivo = os.path.join(CARPETA_OPERACIONES, symbol.replace("/", "_").upper() + ".json")
+    archivo = os.path.join(CARPETA_OPERACIONES, symbol.replace("/", "_").upper() + ".parquet")
 
     # ---------- Leer historial anterior de operaciones ----------
     historial = []
     if os.path.exists(archivo):
         try:
-            with open(archivo, "r", encoding="utf-8") as f:
-                historial = json.load(f)
-                if not isinstance(historial, list):
-                    raise ValueError("El historial debe ser una lista de operaciones.")
-        except (json.JSONDecodeError, ValueError) as e:
+            df_prev = pd.read_parquet(archivo)
+            historial = df_prev.to_dict("records")
+        except Exception as e:
             print(f"⚠️ Archivo dañado: {archivo} — se sobrescribirá. Error: {e}")
             historial = []
 
@@ -50,8 +48,8 @@ def registrar_resultado_trade(symbol: str, orden: dict, ganancia: float):
 
     # ---------- Guardar el historial actualizado ----------
     try:
-        with open(archivo, "w", encoding="utf-8") as f:
-            json.dump(historial, f, indent=2)
+        df_guardar = pd.DataFrame(historial)
+        df_guardar.to_parquet(archivo, index=False)
     except Exception as e:
         print(f"❌ Error al guardar historial para {symbol}: {e}")
         return

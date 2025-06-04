@@ -28,6 +28,7 @@ from core.utils import respaldar_archivo, guardar_operacion_en_csv, validar_data
 from core.pesos import cargar_pesos_estrategias
 from aprendizaje.entrenador_estrategias import actualizar_pesos_estrategias_symbol
 from core.configuracion import cargar_configuracion_simbolo
+from core.adaptador_configuracion import configurar_parametros_dinamicos
 from core.monitor_estado_bot import monitorear_estado_bot, monitorear_estado_periodicamente
 from core import ordenes_reales
 from core.riesgo import riesgo_superado, actualizar_perdida
@@ -173,6 +174,10 @@ class Trader:
             if not validar_dataframe(df, ["high", "low", "close"]):
                 log.warning(f"⚠️ DataFrame inválido para {symbol}, omitiendo...")
                 return
+            
+            # 🔄 Actualizar configuración con los últimos datos
+            config = configurar_parametros_dinamicos(symbol, df, config)
+            self.config_por_simbolo[symbol] = config
 
             if vela["timestamp"] == self.ultimo_timestamp.get(symbol):
                 return
@@ -345,7 +350,8 @@ class Trader:
         if precio_cierre > max_price_actual:
             self.ordenes_abiertas[symbol]["max_price"] = precio_cierre
 
-        config_actual = self.config_por_simbolo.get(symbol, {})
+        config_actual = configurar_parametros_dinamicos(symbol, df, self.config_por_simbolo.get(symbol, {}))
+        self.config_por_simbolo[symbol] = config_actual
         cerrar, motivo_trailing = verificar_trailing_stop(orden, precio_cierre, config=config_actual)
         if cerrar:
             log.info(f"🔃 Trailing Stop activado para {symbol}")

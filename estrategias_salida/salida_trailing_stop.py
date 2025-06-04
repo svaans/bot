@@ -85,5 +85,8 @@ def verificar_trailing_stop(info: dict, precio_actual: float, config: dict = Non
         trailing_stop = max_price * (1 - trailing_distance_ratio)  # Nivel de caída para cerrar
         if precio_actual <= trailing_stop:
             return True, f"Trailing Stop activado — Máximo: {max_price:.2f}, Límite: {trailing_stop:.2f}, Precio actual: {precio_actual:.2f}"
+        else:
+            # Trailing activo pero aún no toca el nivel de salida
+            return False, f"Trailing supervisando — Máx {max_price:.2f}, Límite {trailing_stop:.2f}"
 
     return False, ""

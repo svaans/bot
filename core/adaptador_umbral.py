@@ -2,7 +2,7 @@ import numpy as np
 import json
 import os
 import pandas as pd
-from core.logger import configurar_logger, log_unico_por_tiempo
+from core.logger import configurar_logger
 
 log = configurar_logger("umbral")
 
@@ -103,16 +103,11 @@ def calcular_umbral_adaptativo(symbol, df, estrategias_activadas, pesos_symbol, 
     umbral = min(umbral_base * factor_umbral, 30)
 
     # --- Log ---
-    log_unico_por_tiempo(
-        clave=f"{symbol}_umbral",
-        mensaje=(
-            f"📊 [{symbol}] Umbral: {umbral:.2f} | Base: {umbral_base:.2f} | Contexto: {contexto_score:.2f} | "
-            f"Potencia: {potencia_tecnica:.2f} | Slope: {slope:.4f} | RSI: {rsi:.2f} | "
-            f"Momentum: {momentum_std:.4f} | VolAdj: {ajuste_volatilidad:.2f} | "
-            f"FactorUmbral: {factor_umbral:.2f} | Riesgo: {ajuste_riesgo:.2f}"
-        ),
-        nivel="debug",
-        cooldown=60
+    log.debug(
+        f"📊 [{symbol}] Umbral: {umbral:.2f} | Base: {umbral_base:.2f} | Contexto: {contexto_score:.2f} | "
+        f"Potencia: {potencia_tecnica:.2f} | Slope: {slope:.4f} | RSI: {rsi:.2f} | "
+        f"Momentum: {momentum_std:.4f} | VolAdj: {ajuste_volatilidad:.2f} | "
+        f"FactorUmbral: {factor_umbral:.2f} | Riesgo: {ajuste_riesgo:.2f}"
     )
 
     return umbral

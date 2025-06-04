@@ -14,9 +14,9 @@ from core.configuracion import guardar_configuracion_simbolo
 SIMBOLOS = ["BTC/EUR", "ETH/EUR", "ADA/EUR"]
 RUTA_DATOS = "datos"
 CARPETA_ESTRATEGIAS = "estrategias_entrada"
-N_TRIALS = 60
+N_TRIALS = 30
 CAPITAL_MINIMO = 970
-N_BLOQUES = 5
+N_BLOQUES = 3
 N_JOBS_OPTUNA = max(1, os.cpu_count() - 1)
 log = configurar_logger("opt_conjunto")
 
@@ -84,6 +84,11 @@ def optimizar_todo(symbol):
     def objective(trial):
         # Configuración
         config = {
+            "factor_umbral": trial.suggest_float("factor_umbral", 0.8, 2.5),
+            "ajuste_volatilidad": trial.suggest_float("ajuste_volatilidad", 0.8, 2.0),
+            "ponderar_por_diversidad": trial.suggest_categorical("ponderar_por_diversidad", [True, False]),
+            "modo_agresivo": trial.suggest_categorical("modo_agresivo", [True, False]),
+            "multiplicador_estrategias_recurrentes": trial.suggest_float("multiplicador_estrategias_recurrentes", 0.5, 2.0),
             "peso_minimo_total": trial.suggest_float("peso_minimo_total", 0.0, 5.0),
             "diversidad_minima": trial.suggest_int("diversidad_minima", 0, 5),
             "cooldown_tras_perdida": trial.suggest_int("cooldown_tras_perdida", 0, 15),
@@ -109,8 +114,17 @@ def optimizar_todo(symbol):
     # Separar pesos y config
     params = study.best_params
     config_final = {k: v for k, v in params.items() if k in {
-        "peso_minimo_total", "diversidad_minima", "cooldown_tras_perdida",
-        "sl_ratio", "tp_ratio", "riesgo_maximo_diario"
+        "factor_umbral",
+        "ajuste_volatilidad",
+        "ponderar_por_diversidad",
+        "modo_agresivo",
+        "multiplicador_estrategias_recurrentes",
+        "peso_minimo_total",
+        "diversidad_minima",
+        "cooldown_tras_perdida",
+        "sl_ratio",
+        "tp_ratio",
+        "riesgo_maximo_diario",
     }}
     pesos_finales = {k: v for k, v in params.items() if k not in config_final}
 

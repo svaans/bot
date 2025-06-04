@@ -227,7 +227,7 @@ class TraderSimulado:
                 "precio_entrada": precio,
                 "stop_loss": sl,
                 "take_profit": tp,
-                "timestamp": str(vela["timestamp"]),
+                "timestamp": datetime.utcnow().isoformat(),
                 "estrategias_activas": estrategias_detectadas,
                 "max_price": precio,
                 "tendencia": tendencia

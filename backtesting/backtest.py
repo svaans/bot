@@ -3,48 +3,66 @@ import pandas as pd
 import asyncio
 from datetime import datetime
 from tqdm import tqdm
+from typing import Iterable, Dict
 from core.trader_simulado import TraderSimulado
 
-async def backtest_con_datos_historicos(symbols, ruta_datos="datos"):
-    bot = TraderSimulado(symbols)
-    total_ticks = {}
+BUFFER_INICIAL = 30
+CAPITAL_INICIAL = 1000.0
 
-    # Cargar los datos por símbolo
-    for symbol in symbols:
-        archivo = f"{ruta_datos}/{symbol.replace('/', '_').lower()}_1m.parquet"
-        df = pd.read_parquet(archivo).dropna().sort_values("timestamp")
-        total_ticks[symbol] = df
+async def backtest_con_datos_historicos(
+    symbols: Iterable[str], ruta_datos: str = "datos"
+) -> TraderSimulado:
+    """Ejecuta el backtesting con velas históricas para los *symbols* indicados."""
+
+    bot = TraderSimulado(list(symbols))
+
+    total_ticks: Dict[str, pd.DataFrame] = {
+        s: pd.read_parquet(
+            f"{ruta_datos}/{s.replace('/', '_').lower()}_1m.parquet"
+        )
+        .dropna()
+        .sort_values("timestamp")
+        for s in bot.symbols
+    }
 
     max_largo = max(len(df) for df in total_ticks.values())
     total_pasos = sum(min(max_largo, len(df)) for df in total_ticks.values())
-    progress_bar = tqdm(total=total_pasos, desc="⏳ Procesando velas")
+    
 
-    # Procesamiento vela a vela
-    for i in range(30, max_largo):
-        for symbol in symbols:
-            df = total_ticks[symbol]
-            if i >= len(df):
-                continue
+    with tqdm(total=total_pasos, desc="⏳ Procesando velas") as progress_bar:
+        for i in range(BUFFER_INICIAL, max_largo):
+            tareas = []
+            for symbol in bot.symbols:
+                df = total_ticks[symbol]
+                if i >= len(df):
+                    continue
 
-            fila = df.iloc[i]
-            vela = {
-                "symbol": symbol,
-                "timestamp": fila["timestamp"],
-                "open": fila["open"],
-                "high": fila["high"],
-                "low": fila["low"],
-                "close": fila["close"],
-                "volume": fila["volume"],
-            }
+                fila = df.iloc[i]
+                vela = {
+                    "symbol": symbol,
+                    "timestamp": fila["timestamp"],
+                    "open": fila["open"],
+                    "high": fila["high"],
+                    "low": fila["low"],
+                    "close": fila["close"],
+                    "volume": fila["volume"],
+                }
 
-            await bot.procesar_vela(vela)
-            progress_bar.update(1)
+                tareas.append(bot.procesar_vela(vela))
 
-    progress_bar.close()
+            if tareas:
+                await asyncio.gather(*tareas)
+                progress_bar.update(len(tareas))
+
     await bot.cerrar()
     generar_informe_completo(bot)
+    return bot
 
-def generar_informe_completo(bot: TraderSimulado):
+def generar_informe_completo(
+    bot: TraderSimulado, capital_inicial: float = CAPITAL_INICIAL
+) -> None:
+    """Genera un informe de resultados en consola y en `resultados/`."""
+
     informe = []
     informe.append("🧾 INFORME DE BACKTESTING")
     informe.append(f"Fecha de ejecución: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
@@ -63,7 +81,7 @@ def generar_informe_completo(bot: TraderSimulado):
         perdida_max = min(operaciones)
         ganancia_max = max(operaciones)
         winrate = ganadoras / total * 100
-        rentabilidad = ganancia / 1000 * 100  # capital inicial
+        rentabilidad = ganancia / capital_inicial * 100
 
         total_ordenes += total
         total_ganancia += ganancia
@@ -79,7 +97,7 @@ def generar_informe_completo(bot: TraderSimulado):
         informe.append("")
 
     winrate_global = (total_ganadoras / total_ordenes * 100) if total_ordenes else 0
-    rentabilidad_total = (total_ganancia / (1000 * len(bot.symbols))) * 100
+    rentabilidad_total = (total_ganancia / (capital_inicial * len(bot.symbols))) * 100
 
     informe.append("🎯 RESUMEN GLOBAL")
     informe.append(f"- Total operaciones: {total_ordenes}")
