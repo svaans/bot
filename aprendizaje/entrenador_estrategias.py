@@ -8,7 +8,7 @@ from core.pesos import gestor_pesos
 from core.logger import configurar_logger
 
 # Cargar configuración del .env
-CONFIG = dotenv_values("claves.env")
+CONFIG = dotenv_values("config/claves.env")
 MODO_REAL = CONFIG.get("MODO_REAL", "False") == "True"
 CARPETA_ORDENES = "ordenes_reales" if MODO_REAL else "ordenes_simuladas"
 RUTA_PESOS = "config/estrategias_pesos.json"

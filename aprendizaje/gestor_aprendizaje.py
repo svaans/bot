@@ -9,7 +9,7 @@ from core.adaptador_umbral import calcular_umbral_adaptativo
 from dotenv import dotenv_values
 
 # Configuración global
-CONFIG = dotenv_values("claves.env")
+CONFIG = dotenv_values("config/claves.env")
 MODO_REAL = CONFIG.get("MODO_REAL", "False") == "True"
 CARPETA_ORDENES = "ordenes_reales" if MODO_REAL else "ordenes_simuladas"
 RUTA_PESOS = "config/estrategias_pesos.json"

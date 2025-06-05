@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 from typing import List
 import os
-
+from dotenv import load_dotenv
 
 @dataclass(frozen=True)
 class Config:
@@ -19,6 +19,7 @@ class ConfigManager:
 
     @staticmethod
     def load_from_env() -> Config:
+        load_dotenv("config/claves.env")
         symbols = os.getenv("SYMBOLS", "BTC/EUR,ETH/EUR,ADA/EUR").split(",")
         return Config(
             api_key=os.environ.get("BINANCE_API_KEY"),
