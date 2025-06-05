@@ -4,12 +4,12 @@ import pandas as pd
 from datetime import datetime
 from .analisis_resultados import analizar_estrategias_en_ordenes
 from core.ajustador_pesos import ajustar_pesos_por_desempeno
-from core.pesos import cargar_pesos_estrategias, guardar_pesos_estrategias
+from core.pesos import gestor_pesos
 from core.adaptador_umbral import calcular_umbral_adaptativo
 from dotenv import dotenv_values
 
 # Configuración global
-CONFIG = dotenv_values("claves.env")
+CONFIG = dotenv_values("config/claves.env")
 MODO_REAL = CONFIG.get("MODO_REAL", "False") == "True"
 CARPETA_ORDENES = "ordenes_reales" if MODO_REAL else "ordenes_simuladas"
 RUTA_PESOS = "config/estrategias_pesos.json"
@@ -47,10 +47,12 @@ def registrar_resultado_trade(orden: dict):
     # Aprendizaje rápido (solo si hay al menos 20 operaciones para evitar sobreajuste)
     if len(df_ordenes) >= 20:
         df_metricas = analizar_estrategias_en_ordenes(ruta_archivo)
-        pesos_actuales = cargar_pesos_estrategias().get(symbol, {})
+        pesos_actuales = gestor_pesos.obtener_pesos_symbol(symbol)
         if pesos_actuales:
             nuevos_pesos = ajustar_pesos_por_desempeno(df_metricas, pesos_actuales)
-            guardar_pesos_estrategias({symbol: nuevos_pesos})
+            datos = gestor_pesos.pesos
+            datos[symbol] = nuevos_pesos
+            gestor_pesos.guardar(datos)
             print("✅ Pesos actualizados tras operación.")
 
 

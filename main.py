@@ -2,17 +2,11 @@ import asyncio
 import platform
 import signal
 import traceback
-from config.config import SYMBOLS, MODO_REAL
-from core.pesos import cargar_pesos_estrategias
+from core.pesos import gestor_pesos
 from aprendizaje.reset_pesos import resetear_pesos_diarios_si_corresponde
+from aprendizaje.reset_configuracion import resetear_configuracion_diaria_si_corresponde
+from core.config_manager import ConfigManager
 
-# 📌 Selección dinámica de clase Trader
-if MODO_REAL:
-    from core.trader import Trader
-    print("🟢 Modo REAL activado: usando Trader")
-else:
-    from core.trader_simulado import TraderSimulado as Trader
-    print("🟡 Modo SIMULADO activado: usando TraderSimulado")
 
 def mostrar_banner():
     print("\n===============================")
@@ -20,17 +14,28 @@ def mostrar_banner():
     print("===============================\n")
 
 async def main():
+    config = ConfigManager.load_from_env()
+
+    # 📌 Selección dinámica de clase Trader
+    if config.modo_real:
+        from core.trader_modular import Trader
+        print("🟢 Modo REAL activado: usando Trader modular")
+    else:
+        from core.trader_simulado import TraderSimulado as Trader
+        print("🟡 Modo SIMULADO activado: usando TraderSimulado")
+
     try:
+        resetear_configuracion_diaria_si_corresponde()
         resetear_pesos_diarios_si_corresponde()
-        cargar_pesos_estrategias()
     except Exception as e:
         print("❌ Error al cargar los pesos desde backtest:")
         traceback.print_exc()
 
     mostrar_banner()
-    print(f"🚀 Iniciando bot de trading... Modo real: {MODO_REAL}")
+    print(f"🚀 Iniciando bot de trading... Modo real: {config.modo_real}")
 
-    bot = Trader(symbols=SYMBOLS)
+    config = ConfigManager.load_from_env()
+    bot = Trader(config)
     tarea_bot = asyncio.create_task(bot.ejecutar())
     stop_event = asyncio.Event()
 

@@ -2,16 +2,17 @@
 
 import pandas as pd
 
-from core.tendencia import detectar_tendencia, obtener_estrategias_por_tendencia, ESTRATEGIAS_POR_TENDENCIA
+from core.tendencia import detectar_tendencia
+from core.estrategias import obtener_estrategias_por_tendencia, ESTRATEGIAS_POR_TENDENCIA
 from core.utils import validar_dataframe
 from core.adaptador_umbral import calcular_umbral_adaptativo
 from estrategias_entrada.gestor_entradas import evaluar_estrategias
-from core.pesos import cargar_pesos_estrategias
+from core.pesos import gestor_pesos
 from core.logger import configurar_logger
 
 log = configurar_logger("salida_stoploss")
-pesos = cargar_pesos_estrategias()
 
+pesos = gestor_pesos.pesos
 def salida_stoploss(orden: dict, df: pd.DataFrame, config: dict = None) -> dict:
     """
     Evalúa si debe cerrarse una orden cuyo precio ha tocado el SL,

@@ -1,18 +1,20 @@
 import os
 import ccxt
-from config.config import API_KEY, API_SECRET, MODO_REAL
+from core.config_manager import Config, ConfigManager
 
-def crear_cliente():
+def crear_cliente(config: Config | None = None):
+    if config is None:
+        config = ConfigManager.load_from_env()
     exchange = ccxt.binance({
-        'apiKey': API_KEY,
-        'secret': API_SECRET,
+        'apiKey': config.api_key,
+        'secret': config.api_secret,
         'enableRateLimit': True,
         'options': {
             'defaultType': 'spot',
             'adjustForTimeDifference': True 
         }
     })
-    exchange.set_sandbox_mode(not MODO_REAL)
+    exchange.set_sandbox_mode(not config.modo_real)
     return exchange
 
 obtener_cliente = crear_cliente

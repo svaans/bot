@@ -9,6 +9,7 @@ from multiprocessing import Process, Manager
 
 from core.trader_simulado import TraderSimulado
 from core.logger import configurar_logger
+from core.pesos import gestor_pesos
 
 # -------- CONFIGURACIÓN --------
 SIMBOLOS = ["BTC/EUR", "ETH/EUR", "ADA/EUR"]
@@ -155,9 +156,7 @@ def optimizar_y_guardar(symbol, retorno_compartido):
 
 # -------- GUARDAR LOS PESOS ÓPTIMOS --------
 def guardar_pesos_estrategias(pesos):
-    with open(RUTA_PESOS, "w") as f:
-        json.dump(pesos, f, indent=4)
-    log.info(f"✅ Pesos guardados en {RUTA_PESOS}")
+    gestor_pesos.guardar(pesos)
 
 
 # -------- MAIN FINAL --------

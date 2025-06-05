@@ -10,7 +10,7 @@ from optuna.pruners import MedianPruner
 
 from core.trader_simulado import TraderSimulado
 from core.logger import configurar_logger
-from core.pesos import guardar_pesos_estrategias
+from core.pesos import gestor_pesos
 
 # ------------------- CONFIGURACIÓN -------------------
 SIMBOLOS = ["BTC/EUR", "ETH/EUR", "ADA/EUR"]
@@ -118,7 +118,7 @@ def main():
         pesos_optimos = optimizar_pesos(symbol)
         pesos_finales[symbol] = pesos_optimos
 
-    guardar_pesos_estrategias(pesos_finales)
+    gestor_pesos.guardar(pesos_finales)
     print("\n✅ Optimización completada. Pesos guardados en config/estrategias_pesos.json")
 
 if __name__ == "__main__":

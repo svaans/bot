@@ -1,7 +1,7 @@
 import os
 import json
 from datetime import datetime
-from core.pesos import guardar_pesos_estrategias
+from core.pesos import gestor_pesos
 
 RUTA_BASE = "config/estrategias_pesos_base.json"
 RUTA_ACTUAL = "config/estrategias_pesos.json"
@@ -30,7 +30,7 @@ def resetear_pesos_diarios_si_corresponde():
             json.dump(pesos_actuales, f, indent=2)
 
     # Aplicar reset
-    guardar_pesos_estrategias(pesos_base)
+    gestor_pesos.guardar(pesos_base)
     print("🔁 Pesos reiniciados desde base.")
 
     # Actualizar fecha de control

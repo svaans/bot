@@ -7,7 +7,7 @@ from tqdm import tqdm
 from optuna.pruners import MedianPruner
 from core.trader_simulado import TraderSimulado
 from core.logger import configurar_logger
-from core.pesos import guardar_pesos_estrategias
+from core.pesos import gestor_pesos
 from core.configuracion import guardar_configuracion_simbolo
 
 # ------------------- CONFIGURACIÓN -------------------
@@ -138,7 +138,7 @@ def main():
         symbol, pesos = optimizar_todo(symbol)
         pesos_por_simbolo[symbol] = pesos
 
-    guardar_pesos_estrategias(pesos_por_simbolo)
+    gestor_pesos.guardar(pesos_por_simbolo)
     print("\n✅ Optimización conjunta completada. Pesos y configuración guardados.")
 
 if __name__ == "__main__":

@@ -11,7 +11,7 @@ import asyncio
 
 from core.trader_simulado import TraderSimulado
 from core.logger import configurar_logger
-from core.pesos import cargar_pesos_estrategias
+from core.pesos import gestor_pesos
 from core.configuracion import guardar_configuracion_simbolo
 
 # -------- CONFIGURACIÓN --------
@@ -101,8 +101,7 @@ def objective(trial, symbol, bloques, pesos_symbol):
 # -------- OPTIMIZACIÓN POR SÍMBOLO --------
 def optimizar_config_symbolo(symbol):
     bloques = cargar_historico_bloques(symbol)
-    pesos = cargar_pesos_estrategias()
-    pesos_symbol = pesos.get(symbol, {})
+    pesos_symbol = gestor_pesos.obtener_pesos_symbol(symbol)
 
     sampler = optuna.samplers.TPESampler(seed=42)
     study = optuna.create_study(

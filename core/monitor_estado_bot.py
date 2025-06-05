@@ -66,12 +66,15 @@ def monitorear_estado_bot():
         log.error(f"❌ Error inesperado en monitoreo del bot: {e}")
 
 async def monitorear_estado_periodicamente(self, intervalo=300):
-        while True:
-            try:
-                monitorear_estado_bot()  # puedes hacer que retorne resumen si quieres
-                log.info("🧭 Monitoreo de estado completado.")
-                log.debug(f"📌 Órdenes abiertas: {list(self.ordenes_abiertas.keys())}")
-            except Exception as e:
-                log.warning(f"⚠️ Error durante el monitoreo de estado: {e}")
-            await asyncio.sleep(intervalo)
+    """Ejecuta ``monitorear_estado_bot`` de forma periódica sin bloquear el loop."""
+
+    loop = asyncio.get_running_loop()
+    while True:
+        try:
+            await loop.run_in_executor(None, monitorear_estado_bot)
+            log.info("🧭 Monitoreo de estado completado.")
+            log.debug(f"📌 Órdenes abiertas: {list(self.ordenes_abiertas.keys())}")
+        except Exception as e:
+            log.warning(f"⚠️ Error durante el monitoreo de estado: {e}")
+        await asyncio.sleep(intervalo)
 
