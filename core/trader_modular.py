@@ -54,3 +54,8 @@ class Trader:
     async def cerrar(self):
         for t in self._tasks:
             t.cancel()
+            try:
+                await t
+            except asyncio.CancelledError:
+                pass
+        await asyncio.gather(*self._tasks, return_exceptions=True)

@@ -31,6 +31,7 @@ from core.configuracion import cargar_configuracion_simbolo
 from core.adaptador_configuracion import configurar_parametros_dinamicos
 from core.monitor_estado_bot import monitorear_estado_bot, monitorear_estado_periodicamente
 from core import ordenes_reales
+from core.ordenes_model import Orden
 from core.riesgo import riesgo_superado, actualizar_perdida
 from filtros.validador_entradas import evaluar_validez_estrategica
 from filtros.filtro_salidas import validar_necesidad_de_salida
@@ -54,7 +55,7 @@ class Trader:
         }
         self.estado = {s: "esperando" for s in symbols}
         self.buffer = {s: [] for s in symbols}
-        self.ordenes_abiertas = {}
+        self.ordenes_abiertas: dict[str, Orden] = {}
         self.pesos_por_simbolo = cargar_pesos_estrategias()
         self.historial_cierres = {}
         self.ultimo_stop_loss = {s: None for s in symbols}
@@ -144,18 +145,18 @@ class Trader:
             log.info(f"🟢 Ejecutando ORDEN REAL en {symbol}: Comprar {cantidad_crypto} a {precio_entrada} EUR")
             orden = self.cliente.create_market_buy_order(symbol.replace("/", ""), cantidad_crypto)
 
-            self.ordenes_abiertas[symbol] = {
-                "symbol": symbol,
-                "precio_entrada": precio_entrada,
-                "stop_loss": sl,
-                "take_profit": tp,
-                "cantidad": cantidad_crypto,
-                "timestamp": datetime.utcnow().isoformat(),
-                "max_price": precio_entrada,
-                "direccion": "long",
-                "tendencia": tendencia,
-                "estrategias_activas": estrategias_activas
-            }
+            self.ordenes_abiertas[symbol] = Orden(
+                symbol=symbol,
+                precio_entrada=precio_entrada,
+                stop_loss=sl,
+                take_profit=tp,
+                cantidad=cantidad_crypto,
+                timestamp=datetime.utcnow().isoformat(),
+                max_price=precio_entrada,
+                direccion="long",
+                tendencia=tendencia,
+                estrategias_activas=estrategias_activas,
+            )
             # Registrar la nueva orden para poder recuperarla tras un reinicio
             ordenes_reales.registrar_orden(
                 symbol,
@@ -166,7 +167,7 @@ class Trader:
                 estrategias_activas,
                 tendencia,
             )
-            self.guardar_orden_real(self.ordenes_abiertas[symbol].copy())
+            self.guardar_orden_real(self.ordenes_abiertas[symbol].to_dict())
             self.ordenes_abiertas = ordenes_reales.obtener_todas_las_ordenes()
 
         except Exception as e:
@@ -318,24 +319,26 @@ class Trader:
             return
 
         orden = ordenes_reales.obtener_orden(symbol)
-        stop_loss = orden["stop_loss"]
-        take_profit = orden["take_profit"]
-        entrada = orden["precio_entrada"]
-        cantidad = orden["cantidad"]
-        timestamp_orden = orden.get("timestamp")
+        if orden is None:
+            return
+        stop_loss = orden.stop_loss
+        take_profit = orden.take_profit
+        entrada = orden.precio_entrada
+        cantidad = orden.cantidad
+        timestamp_orden = orden.timestamp
 
         df = pd.DataFrame(self.buffer[symbol])
 
         precio_max = float(vela["high"])
         precio_min = float(vela["low"])
         precio_cierre = float(vela["close"])
-        max_price_actual = orden.get("max_price", entrada)
+        max_price_actual = orden.max_price
 
         # ⏱️ Tiempo máximo abierto (6h), pero solo cerrar si está en ganancia
-        timestamp_orden = orden.get("timestamp")
+        timestamp_orden = orden.timestamp
         
         if timestamp_orden and segundos_transcurridos(timestamp_orden) > 6 * 3600:
-            retorno_actual = (precio_cierre - orden["precio_entrada"]) / orden["precio_entrada"]
+            retorno_actual = (precio_cierre - orden.precio_entrada) / orden.precio_entrada
             if retorno_actual > 0:
                 log.warning(f"⌛ [{symbol}] Orden expirada en ganancia — Retorno: {retorno_actual:.4f}")
                 await self.cerrar_orden_real(symbol, precio_cierre, cantidad, exito=True, motivo="Expirada")
@@ -344,14 +347,14 @@ class Trader:
                 log.info(f"🕒 [{symbol}] Orden vencida pero aún en pérdida (retorno {retorno_actual:.4f}), se mantiene abierta")
 
 
-        if df["low"].iloc[-1] <= orden["stop_loss"]:
+        if df["low"].iloc[-1] <= orden.stop_loss:
             from estrategias_salida.salida_stoploss import salida_stoploss
             config_actual = self.config_por_simbolo.get(symbol, {})
-            resultado = salida_stoploss(orden, df, config=config_actual)
+            resultado = salida_stoploss(orden.__dict__, df, config=config_actual)
 
 
             if resultado.get("cerrar", False):
-                await self.cerrar_orden_real(symbol, orden["stop_loss"], cantidad, exito=False, motivo="Stop Loss")
+                await self.cerrar_orden_real(symbol, orden.stop_loss, cantidad, exito=False, motivo="Stop Loss")
             else:
                 log.info(f"🛡️ SL evitado para {symbol} → {resultado['razon']}")
             return
@@ -362,11 +365,11 @@ class Trader:
             return
 
         if precio_cierre > max_price_actual:
-            self.ordenes_abiertas[symbol]["max_price"] = precio_cierre
+            self.ordenes_abiertas[symbol].max_price = precio_cierre
 
         config_actual = configurar_parametros_dinamicos(symbol, df, self.config_por_simbolo.get(symbol, {}))
         self.config_por_simbolo[symbol] = config_actual
-        cerrar, motivo_trailing = verificar_trailing_stop(orden, precio_cierre, config=config_actual)
+        cerrar, motivo_trailing = verificar_trailing_stop(orden.__dict__, precio_cierre, config=config_actual)
         if cerrar:
             log.info(f"🔃 Trailing Stop activado para {symbol}")
             await self.cerrar_orden_real(symbol, precio_cierre, cantidad, exito=True, motivo=motivo_trailing)
@@ -384,7 +387,7 @@ class Trader:
             log.warning(f"⚠️ DataFrame inválido para salida personalizada en {symbol}.")
             return
 
-        resultado_salida = evaluar_salidas(orden, df, config=config_actual)
+        resultado_salida = evaluar_salidas(orden.__dict__, df, config=config_actual)
         if resultado_salida.get("cerrar", False):
             razon = resultado_salida.get("razon", "Estrategia desconocida")
             tendencia_actual, _ = detectar_tendencia(symbol, df)
@@ -395,7 +398,7 @@ class Trader:
             config_actual = self.config_por_simbolo.get(symbol, {})
             umbral = calcular_umbral_adaptativo(symbol, df, estrategias_activas, pesos_symbol, config=config_actual)
 
-            if not validar_necesidad_de_salida(df, orden, estrategias_activas, puntaje=puntaje, umbral=umbral, config=config_actual):
+            if not validar_necesidad_de_salida(df, orden.__dict__, estrategias_activas, puntaje=puntaje, umbral=umbral, config=config_actual):
                 log.info(f"❌ Cierre por '{razon}' evitado: condiciones técnicas aún válidas.")
                 return
             log.info(f"🚪 Estrategia de salida activada en {symbol} → {razon}")
@@ -427,8 +430,8 @@ class Trader:
                 log.warning(f"⚠️ Orden cerrada en {symbol} no registrada. No se guardará.")
                 return
 
-            info = self.ordenes_abiertas[symbol].copy()
-            precio_entrada = info.get("precio_entrada", 0)
+            info = self.ordenes_abiertas[symbol]
+            precio_entrada = info.precio_entrada
             retorno_total = round((precio - precio_entrada) / precio_entrada, 6) if precio_entrada else 0.0
             resultado_trade = "ganancia" if retorno_total > 0 else "pérdida"
             log.info(f"📈 Resultado de {symbol}: {resultado_trade.upper()} con retorno {retorno_total*100:.2f}%")
@@ -438,15 +441,13 @@ class Trader:
                 actualizar_perdida(symbol, abs(retorno_total * precio_entrada))
 
 
-            info.update({
-                "precio_cierre": precio,
-                "motivo_cierre": motivo,
-                "fecha_cierre": datetime.utcnow().isoformat(),
-                "retorno_total": retorno_total
-            })
-            self.guardar_orden_real(info.copy())
-            registrar_resultado_trade(symbol, info, retorno_total)
-            guardar_operacion_en_csv(symbol, info)
+            info.precio_cierre = precio
+            info.motivo_cierre = motivo
+            info.fecha_cierre = datetime.utcnow().isoformat()
+            info.retorno_total = retorno_total
+            self.guardar_orden_real(info.to_dict())
+            registrar_resultado_trade(symbol, info.to_dict(), retorno_total)
+            guardar_operacion_en_csv(symbol, info.to_dict())
 
             motivo_normalizado = motivo.lower().strip()
             self.historial_cierres[symbol] = {
@@ -472,14 +473,18 @@ class Trader:
             log.error(f"❌ Error al cerrar orden para {symbol}: {e}")
 
     def guardar_orden_real(self, orden):
-        symbol = orden.get("symbol", "desconocido")
+        if isinstance(orden, Orden):
+            data = orden.to_parquet_record()
+        else:
+            data = orden
+        symbol = data.get("symbol", "desconocido")
         archivo = symbol.replace("/", "_").lower() + ".parquet"
         ruta = os.path.join("ordenes_reales", archivo)
 
         os.makedirs("ordenes_reales", exist_ok=True)
 
-        if isinstance(orden.get("timestamp"), (pd.Timestamp, datetime)):
-            orden["timestamp"] = orden["timestamp"].timestamp()
+        if isinstance(data.get("timestamp"), (pd.Timestamp, datetime)):
+            data["timestamp"] = data["timestamp"].timestamp()
 
         try:
             ordenes_actuales = []
@@ -493,7 +498,7 @@ class Trader:
                     log.warning(f"⚠️ Archivo corrupto renombrado a: {backup_path}")
                     ordenes_actuales = []
 
-            ordenes_actuales.append(orden)
+            ordenes_actuales.append(data)
 
             pd.DataFrame(ordenes_actuales).to_parquet(ruta, index=False)
 

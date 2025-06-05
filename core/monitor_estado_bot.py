@@ -74,7 +74,11 @@ async def monitorear_estado_periodicamente(self, intervalo=300):
             await loop.run_in_executor(None, monitorear_estado_bot)
             log.info("🧭 Monitoreo de estado completado.")
             log.debug(f"📌 Órdenes abiertas: {list(self.ordenes_abiertas.keys())}")
+            await asyncio.sleep(intervalo)
+        except asyncio.CancelledError:
+            log.info("⏹️ Monitoreo cancelado. Cerrando tarea.")
+            break
         except Exception as e:
             log.warning(f"⚠️ Error durante el monitoreo de estado: {e}")
-        await asyncio.sleep(intervalo)
+        
 

@@ -27,6 +27,7 @@ from aprendizaje.aprendizaje_en_linea import registrar_resultado_trade
 from aprendizaje.entrenador_estrategias import actualizar_pesos_estrategias_symbol
 from core.configuracion import cargar_configuracion_simbolo
 from core.monitor_estado_bot import monitorear_estado_periodicamente
+from core.ordenes_model import Orden
 from indicadores.rsi import calcular_rsi
 from indicadores.momentum import calcular_momentum
 from indicadores.slope import calcular_slope
@@ -228,19 +229,20 @@ class TraderSimulado:
                 log.warning(f"⚠️ [{symbol}] Entrada ignorada — sin estrategias activas válidas")
                 return
 
-            self.ordenes_abiertas[symbol] = {
-                "symbol": symbol,
-                "precio_entrada": precio,
-                "stop_loss": sl,
-                "take_profit": tp,
-                "timestamp": datetime.utcnow().isoformat(),
-                "estrategias_activas": estrategias_detectadas,
-                "max_price": precio,
-                "tendencia": tendencia
-            }
+            self.ordenes_abiertas[symbol] = Orden(
+                symbol=symbol,
+                precio_entrada=precio,
+                stop_loss=sl,
+                take_profit=tp,
+                timestamp=datetime.utcnow().isoformat(),
+                estrategias_activas=estrategias_detectadas,
+                max_price=precio,
+                tendencia=tendencia,
+                cantidad=0.0,
+            )
 
             if not self.modo_optimizacion:
-                self.guardar_orden_simulada(symbol, self.ordenes_abiertas[symbol].copy())
+                self.guardar_orden_simulada(symbol, self.ordenes_abiertas[symbol].__dict__.copy())
                 actualizar_pesos_estrategias_symbol(symbol)
                 self.pesos_por_simbolo[symbol] = gestor_pesos.obtener_pesos_symbol(symbol)
                 log.warning(f"🟢 ORDEN SIMULADA {symbol} COMPRA a {precio} | SL: {sl} | TP: {tp}")
@@ -261,16 +263,16 @@ class TraderSimulado:
         precio_min = float(vela["low"])
         precio_max = float(vela["high"])
         precio_cierre = float(vela["close"])
-        stop_loss = orden["stop_loss"]
-        take_profit = orden["take_profit"]
-        entrada = orden["precio_entrada"]
+        stop_loss = orden.stop_loss
+        take_profit = orden.take_profit
+        entrada = orden.precio_entrada
 
         log.info(f"🔎 [{symbol}] Verificando cierre — Precio actual: {precio_cierre:.2f}, SL: {stop_loss:.2f}, TP: {take_profit:.2f}")
 
         # ⏱️ Tiempo máximo abierto (6h), pero solo cerrar si está en ganancia
-        timestamp_orden = orden.get("timestamp")
+        timestamp_orden = orden.timestamp
         if timestamp_orden and segundos_transcurridos(timestamp_orden) > 6 * 3600:
-            retorno_actual = (precio_cierre - orden["precio_entrada"]) / orden["precio_entrada"]
+            retorno_actual = (precio_cierre - orden.precio_entrada) / orden.precio_entrada
             if retorno_actual > 0:
                 log.warning(f"⌛ [{symbol}] Orden expirada en ganancia — Retorno: {retorno_actual:.4f}")
                 await self.cerrar_orden_simulada(symbol, precio_cierre, exito=True, motivo="Expirada")
@@ -283,7 +285,7 @@ class TraderSimulado:
         config_actual = self.config_por_simbolo.get(symbol, {})
         if precio_min <= stop_loss:
             log.info(f"🛑 [{symbol}] Posible SL activado — Precio mínimo: {precio_min:.2f}")
-            resultado = salida_stoploss(orden, df, config=config_actual)
+            resultado = salida_stoploss(orden.__dict__, df, config=config_actual)
 
             if resultado.get("cerrar", False):
                 log.info(f"🟥 [{symbol}] SL confirmado — {resultado.get('razon', '')}")
@@ -299,7 +301,7 @@ class TraderSimulado:
             return
 
         # 🔃 Trailing Stop
-        cerrar, motivo = verificar_trailing_stop(orden, precio_cierre, config=config_actual)
+        cerrar, motivo = verificar_trailing_stop(orden.__dict__, precio_cierre, config=config_actual)
         if cerrar:
             log.info(f"🔃 [{symbol}] Trailing Stop activado — {motivo}")
             await self.cerrar_orden_simulada(symbol, precio_cierre, exito=True, motivo=motivo)
@@ -315,7 +317,7 @@ class TraderSimulado:
                 log.warning(f"🧠 [{symbol}] Cambio de tendencia detectado, pero filtros técnicos evitan cierre")
 
         # 🧠 Estrategia de salida activada
-        resultado_salida = evaluar_salidas(orden, df, config=config_actual)
+        resultado_salida = evaluar_salidas(orden.__dict__, df, config=config_actual)
         if resultado_salida.get("cerrar", False):
             razon = resultado_salida.get("razon", "Estrategia desconocida")
 
@@ -327,7 +329,7 @@ class TraderSimulado:
             pesos_symbol = self.pesos_por_simbolo.get(symbol, {})
             umbral = calcular_umbral_adaptativo(symbol, df, estrategias_activas, pesos_symbol, config=config_actual)
 
-            if not validar_necesidad_de_salida(df, orden, estrategias_activas, puntaje=puntaje, umbral=umbral, config=config_actual):
+            if not validar_necesidad_de_salida(df, orden.__dict__, estrategias_activas, puntaje=puntaje, umbral=umbral, config=config_actual):
                 log.warning(f"❌ [{symbol}] Cierre por '{razon}' evitado: condiciones técnicas aún válidas.")
                 return
 
@@ -339,7 +341,7 @@ class TraderSimulado:
         if not orden:
             return
 
-        precio_entrada = orden["precio_entrada"]
+        precio_entrada = orden.precio_entrada
         retorno_total = round((precio_salida - precio_entrada) / precio_entrada, 6)
         capital_inicial = self.capital_simulado[symbol]
         ganancia = capital_inicial * retorno_total
@@ -351,16 +353,14 @@ class TraderSimulado:
             "motivo": motivo
         }
 
-        orden.update({
-            "precio_cierre": precio_salida,
-            "retorno_total": retorno_total,
-            "fecha_cierre": datetime.utcnow().isoformat(),
-            "motivo_cierre": motivo
-        })
+        orden.precio_cierre = precio_salida
+        orden.retorno_total = retorno_total
+        orden.fecha_cierre = datetime.utcnow().isoformat()
+        orden.motivo_cierre = motivo
         if not self.modo_optimizacion:
-            self.guardar_orden_simulada(symbol, orden)
-            self.historial_ordenes.append(orden)
-            registrar_resultado_trade(symbol, orden, retorno_total)
+            self.guardar_orden_simulada(symbol, orden.__dict__)
+            self.historial_ordenes.append(orden.__dict__) 
+            registrar_resultado_trade(symbol, orden.__dict__, retorno_total)
             log.warning(f"📤 ORDEN SIMULADA CERRADA {symbol} a {precio_salida:.2f} | Motivo: {motivo}")
 
         if motivo.lower() in ["cambio de tendencia", "estrategia: cambio de tendencia"]:

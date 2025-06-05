@@ -53,3 +53,6 @@ siguiente comando desde la raíz del repositorio:
 
 ```bash
 pip install -r requirements.txt -r backend/requirements.txt
+```
+
+Con esto tendrás todas las dependencias necesarias para ejecutar el bot.
