@@ -313,7 +313,7 @@ class TraderSimulado:
                 return
             else:
                 log.warning(f"🧠 [{symbol}] Cambio de tendencia detectado, pero filtros técnicos evitan cierre")
-        
+
         # 🧠 Estrategia de salida activada
         resultado_salida = evaluar_salidas(orden, df, config=config_actual)
         if resultado_salida.get("cerrar", False):

@@ -33,11 +33,7 @@ async def main():
 
     mostrar_banner()
     print(f"🚀 Iniciando bot de trading... Modo real: {config.modo_real}")
-
-<<<<<<< HEAD
-    
-=======
->>>>>>> ee61381 (Fix: actualizacion modular)
+)
     bot = Trader(config)
     tarea_bot = asyncio.create_task(bot.ejecutar())
     stop_event = asyncio.Event()

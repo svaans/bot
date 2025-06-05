@@ -1,12 +1,8 @@
 from dataclasses import dataclass
 from typing import List
 import os
-<<<<<<< HEAD
 from dotenv import load_dotenv
 from pathlib import Path
-=======
->>>>>>> ee61381 (Fix: actualizacion modular)
-
 
 @dataclass(frozen=True)
 class Config:
@@ -24,11 +20,8 @@ class ConfigManager:
 
     @staticmethod
     def load_from_env() -> Config:
-<<<<<<< HEAD
         env_path = Path(__file__).resolve().parent.parent / "config" / "claves.env"
         load_dotenv(env_path)
-=======
->>>>>>> ee61381 (Fix: actualizacion modular)
         symbols = os.getenv("SYMBOLS", "BTC/EUR,ETH/EUR,ADA/EUR").split(",")
         return Config(
             api_key=os.environ.get("BINANCE_API_KEY"),
