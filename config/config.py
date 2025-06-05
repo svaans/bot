@@ -1,16 +1,15 @@
 # config/config.py
+"""Configuración de alto nivel cargada desde ``ConfigManager``."""
 
+from core.config_manager import ConfigManager
 import os
 
 # API keys
-API_KEY = os.environ.get("BINANCE_API_KEY")
-API_SECRET = os.environ.get("BINANCE_API_SECRET")
+cfg = ConfigManager.load_from_env()
 
 # Configuración general del bot
-MODO_REAL = os.getenv("MODO_REAL", "False").lower() == "true"
-INTERVALO_VELAS = "1m"
-SYMBOLS = ["BTC/EUR", "ETH/EUR", "ADA/EUR"]
-
-# Parámetros del bot agresivo
-UMBRAL_RIESGO_DIARIO = float(os.getenv("UMBRAL_RIESGO_DIARIO", 0.03))  # 3%
-MODO_VERBOSE = True
+API_KEY = cfg.api_key
+API_SECRET = cfg.api_secret
+MODO_REAL = cfg.modo_real
+INTERVALO_VELAS = cfg.intervalo_velas
+SYMBOLS = cfg.symbols

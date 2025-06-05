@@ -127,10 +127,10 @@ class TraderSimulado:
 
             log.info(f"🔍 [{symbol}] Procesando vela — {vela['timestamp']}")
 
-            tendencia, _ = detectar_tendencia(symbol, df)
+            tendencia, _ = await asyncio.to_thread(detectar_tendencia, symbol, df)
             log.info(f"🔁 [{symbol}] Tendencia detectada: {tendencia}")
 
-            evaluacion = evaluar_estrategias(symbol, df, tendencia)
+            evaluacion = await asyncio.to_thread(evaluar_estrategias, symbol, df, tendencia)
             if evaluacion is None:
                 log.warning(f"⚠️ [{symbol}] Evaluación de estrategias nula")
                 return
@@ -207,9 +207,9 @@ class TraderSimulado:
             elif repetidas < 1:
                 log.info(f"⚠️ [{symbol}] Entrada débil permitida sin persistencia, puntaje alto")
 
-            rsi = calcular_rsi(df)
-            momentum = calcular_momentum(df)
-            slope = calcular_slope(df)
+            rsi = await asyncio.to_thread(calcular_rsi, df)
+            momentum = await asyncio.to_thread(calcular_momentum, df)
+            slope = await asyncio.to_thread(calcular_slope, df)
 
             if not entrada_permitida(symbol, puntaje, umbral, estrategias_detectadas, rsi, slope, momentum):
                 log.debug(f"🚫 [{symbol}] Rechazada por entrada_permitida()")
@@ -273,7 +273,7 @@ class TraderSimulado:
             retorno_actual = (precio_cierre - orden["precio_entrada"]) / orden["precio_entrada"]
             if retorno_actual > 0:
                 log.warning(f"⌛ [{symbol}] Orden expirada en ganancia — Retorno: {retorno_actual:.4f}")
-                self.cerrar_orden_simulada(symbol, precio_cierre, exito=True, motivo="Expirada")
+                await self.cerrar_orden_simulada(symbol, precio_cierre, exito=True, motivo="Expirada")
                 return
             else:
                 log.info(f"🕒 [{symbol}] Orden vencida pero aún en pérdida (retorno {retorno_actual:.4f}), se mantiene abierta")
@@ -287,7 +287,7 @@ class TraderSimulado:
 
             if resultado.get("cerrar", False):
                 log.info(f"🟥 [{symbol}] SL confirmado — {resultado.get('razon', '')}")
-                self.cerrar_orden_simulada(symbol, stop_loss, exito=False, motivo="Stop Loss")
+                await self.cerrar_orden_simulada(symbol, stop_loss, exito=False, motivo="Stop Loss")
             else:
                 log.warning(f"🛡️ [{symbol}] SL evitado — {resultado.get('razon', 'sin razón')}")
             return
@@ -302,14 +302,14 @@ class TraderSimulado:
         cerrar, motivo = verificar_trailing_stop(orden, precio_cierre, config=config_actual)
         if cerrar:
             log.info(f"🔃 [{symbol}] Trailing Stop activado — {motivo}")
-            self.cerrar_orden_simulada(symbol, precio_cierre, exito=True, motivo=motivo)
+            await self.cerrar_orden_simulada(symbol, precio_cierre, exito=True, motivo=motivo)
             return
 
         # 📉 Reversión de tendencia
         if verificar_reversion_tendencia(symbol, df, self.ultima_tendencia.get(symbol)):
             if not verificar_filtro_tecnico(self, symbol):
                 log.warning(f"📉 [{symbol}] Cambio de tendencia detectado — Cierre forzado")
-                self.cerrar_orden_simulada(symbol, precio_cierre, exito=False, motivo="Cambio de tendencia")
+                await self.cerrar_orden_simulada(symbol, precio_cierre, exito=False, motivo="Cambio de tendencia")
                 return
             else:
                 log.warning(f"🧠 [{symbol}] Cambio de tendencia detectado, pero filtros técnicos evitan cierre")
@@ -320,8 +320,8 @@ class TraderSimulado:
             razon = resultado_salida.get("razon", "Estrategia desconocida")
 
             # Reevaluación técnica actualizada
-            tendencia_actual, _ = detectar_tendencia(symbol, df)
-            evaluacion = evaluar_estrategias(symbol, df, tendencia_actual)
+            tendencia_actual, _ = await asyncio.to_thread(detectar_tendencia, symbol, df)
+            evaluacion = await asyncio.to_thread(evaluar_estrategias, symbol, df, tendencia_actual)
             estrategias_activas = evaluacion.get("estrategias_activas", {})
             puntaje = evaluacion.get("puntaje_total", 0)
             pesos_symbol = self.pesos_por_simbolo.get(symbol, {})
@@ -332,9 +332,9 @@ class TraderSimulado:
                 return
 
             log.info(f"🚪 [{symbol}] Estrategia de salida activada — {razon}")
-            self.cerrar_orden_simulada(symbol, precio_cierre, exito="profit" in razon.lower(), motivo=f"Estrategia: {razon}")
+            await self.cerrar_orden_simulada(symbol, precio_cierre, exito="profit" in razon.lower(), motivo=f"Estrategia: {razon}")
 
-    def cerrar_orden_simulada(self, symbol, precio_salida, exito, motivo):
+    async def cerrar_orden_simulada(self, symbol, precio_salida, exito, motivo):
         orden = self.ordenes_abiertas.pop(symbol, None)
         if not orden:
             return
@@ -364,7 +364,11 @@ class TraderSimulado:
             log.warning(f"📤 ORDEN SIMULADA CERRADA {symbol} a {precio_salida:.2f} | Motivo: {motivo}")
 
         if motivo.lower() in ["cambio de tendencia", "estrategia: cambio de tendencia"]:
-            nueva_tendencia, _ = detectar_tendencia(symbol, pd.DataFrame(self.buffer.get(symbol, [])))
+            nueva_tendencia, _ = await asyncio.to_thread(
+                detectar_tendencia,
+                symbol,
+                pd.DataFrame(self.buffer.get(symbol, []))
+            )
             self.ultima_tendencia[symbol] = nueva_tendencia
 
         actualizar_pesos_estrategias_symbol(symbol)

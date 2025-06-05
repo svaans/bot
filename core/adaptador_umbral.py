@@ -11,7 +11,7 @@ if os.path.exists(RUTA_CONFIGS_OPTIMAS):
     with open(RUTA_CONFIGS_OPTIMAS, "r") as f:
         CONFIGS_OPTIMAS = json.load(f)
 else:
-    print("❌ Archivo de configuración no encontrado. Se usará configuración por defecto.")
+    log.warning("❌ Archivo de configuración no encontrado. Se usará configuración por defecto.")
     CONFIGS_OPTIMAS = {}
 
 UMBRAL_MAXIMO = 15
@@ -24,7 +24,7 @@ PESO_VOLUMEN = 0.2
 
 def calcular_umbral_adaptativo(symbol, df, estrategias_activadas, pesos_symbol, config=None):
     if df is None or len(df) < 30 or not estrategias_activadas:
-        print(f"⚠️ [{symbol}] Datos insuficientes o sin estrategias activas. Umbral: {UMBRAL_POR_DEFECTO}")
+        log.warning(f"⚠️ [{symbol}] Datos insuficientes o sin estrategias activas. Umbral: {UMBRAL_POR_DEFECTO}")
         return UMBRAL_POR_DEFECTO
 
     ventana_close = df["close"].tail(10)
@@ -114,28 +114,28 @@ def calcular_umbral_adaptativo(symbol, df, estrategias_activadas, pesos_symbol, 
 
 
 def calcular_tp_sl_adaptativos(df, precio_actual, config=None):
-        if config is None:
-            config = {}
+    if config is None:
+        config = {}
 
-        if "high" in df.columns and "low" in df.columns and "close" in df.columns:
-            df["hl"] = df["high"] - df["low"]
-            df["hc"] = abs(df["high"] - df["close"].shift(1))
-            df["lc"] = abs(df["low"] - df["close"].shift(1))
-            df["tr"] = df[["hl", "hc", "lc"]].max(axis=1)
-            atr = df["tr"].rolling(window=14).mean().iloc[-1]
+    if "high" in df.columns and "low" in df.columns and "close" in df.columns:
+        df["hl"] = df["high"] - df["low"]
+        df["hc"] = abs(df["high"] - df["close"].shift(1))
+        df["lc"] = abs(df["low"] - df["close"].shift(1))
+        df["tr"] = df[["hl", "hc", "lc"]].max(axis=1)
+        atr = df["tr"].rolling(window=14).mean().iloc[-1]
 
-            if pd.isna(atr):
-                atr = precio_actual * 0.01  # Fallback mínimo
+        if pd.isna(atr):
+            atr = precio_actual * 0.01  # Fallback mínimo
 
-            multiplicador_sl = config.get("sl_ratio", 1.5)
-            multiplicador_tp = config.get("tp_ratio", 2.5)
+        multiplicador_sl = config.get("sl_ratio", 1.5)
+        multiplicador_tp = config.get("tp_ratio", 2.5)
 
-            sl = round(precio_actual - atr * multiplicador_sl, 6)
-            tp = round(precio_actual + atr * multiplicador_tp, 6)
-            return sl, tp
-        else:
-            margen = precio_actual * 0.01
-            return precio_actual - margen, precio_actual + margen
+        sl = round(precio_actual - atr * multiplicador_sl, 6)
+        tp = round(precio_actual + atr * multiplicador_tp, 6)
+        return sl, tp
+    else:
+        margen = precio_actual * 0.01
+        return precio_actual - margen, precio_actual + margen
 
 
 

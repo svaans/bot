@@ -84,3 +84,7 @@ class GestorPesos:
         self.guardar(pesos_por_symbol)
 
 gestor_pesos = GestorPesos()
+
+def cargar_pesos_estrategias() -> Dict[str, Dict[str, float]]:
+    """Carga y devuelve los pesos actuales de las estrategias."""
+    return GestorPesos().pesos

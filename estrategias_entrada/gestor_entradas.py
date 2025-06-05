@@ -1,50 +1,27 @@
-import importlib
+
 from core.pesos import gestor_pesos
 from estrategias_entrada.loader import cargar_estrategias
+from core.estrategias import obtener_estrategias_por_tendencia
 import traceback
 
-# Categorías de estrategias por tipo de tendencia
-estrategias_alcistas = [
-    "estrategia_rsi", "estrategia_macd", "estrategia_cruce_medias", "estrategia_ema",
-    "estrategia_momentum", "flag_alcista", "pennant", "cup_with_handle",
-    "ascending_triangle", "symmetrical_triangle_up", "measured_move_up",
-    "ascending_scallop", "three_rising_valleys", "double_bottom", "diamond_bottom",
-    "triple_bottom", "wedge_breakout", "measured_move_up"
-]
-
-estrategias_bajistas = [
-    "estrategia_rsi_invertida", "cruce_medias_bajista", "estrategia_sma_bajista",
-    "flag_bajista", "pennant_bajista", "inverted_cup_with_handle",
-    "descending_triangle", "symmetrical_triangle_down", "measured_move_down",
-    "descending_scallop", "three_descending_peaks", "head_and_shoulders", "triple_top"
-]
-
-estrategias_laterales = [
-    "estrategia_rango", "estrategia_sma", "estrategia_adx", "estrategia_bollinger_breakout",
-    "estrategia_estocastico", "estrategia_volumen_alto", "estrategia_cruce_ema_stochrsi",
-    "estrategia_vwap_breakout", "estrategia_atr_breakout", "estrategia_ichimoku_breakout",
-    "estrategia_divergencia_rsi", "estrategia_macd_hist_inversion", "tops_rectangle",
-    "volatility_breakout"
+ESTRATEGIAS_DISPONIBLES = cargar_estrategias()
 ]
 
 def evaluar_estrategias(symbol, df, tendencia):
     # Evalúa las estrategias relevantes según la tendencia detectada.
     # Retorna el puntaje total y las estrategias activadas.
 
-    estrategias_disponibles = cargar_estrategias()
+    global ESTRATEGIAS_DISPONIBLES
+    if not ESTRATEGIAS_DISPONIBLES:
+        ESTRATEGIAS_DISPONIBLES = cargar_estrategias()
 
-    if tendencia == "alcista":
-        activas = estrategias_alcistas
-    elif tendencia == "bajista":
-        activas = estrategias_bajistas
-    else:
-        activas = estrategias_laterales
+    activas = obtener_estrategias_por_tendencia(tendencia)
 
     puntaje_total = 0
     estrategias_activadas = {}
 
     for nombre in activas:
-        funcion = estrategias_disponibles.get(nombre)
+        funcion = ESTRATEGIAS_DISPONIBLES.get(nombre)
         if funcion is None:
             print(f"⚠️ Estrategia no encontrada: {nombre}")
             continue
