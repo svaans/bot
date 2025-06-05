@@ -18,7 +18,6 @@ from estrategias_salida.reajuste_tp_sl import calcular_promedios_sl_tp
 from core.tendencia import detectar_tendencia, señales_repetidas
 from core.adaptador_umbral import (
     calcular_umbral_adaptativo,
-    cargar_umbral_optimo,
     calcular_tp_sl_adaptativos,
 )
 from core.logger import configurar_logger, log_resumen_operacion
@@ -39,6 +38,7 @@ from aprendizaje.aprendizaje_en_linea import registrar_resultado_trade
 from indicadores.rsi import calcular_rsi
 from indicadores.momentum import calcular_momentum
 from indicadores.slope import calcular_slope
+from core.reporting import reporter_diario
 
 
 log = configurar_logger("trading_bot")
@@ -448,6 +448,7 @@ class Trader:
             self.guardar_orden_real(info.to_dict())
             registrar_resultado_trade(symbol, info.to_dict(), retorno_total)
             guardar_operacion_en_csv(symbol, info.to_dict())
+            reporter_diario.registrar_operacion(info.to_dict())
 
             motivo_normalizado = motivo.lower().strip()
             self.historial_cierres[symbol] = {

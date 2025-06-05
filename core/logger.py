@@ -1,6 +1,9 @@
 import os
 import logging
+import json
 from datetime import datetime, timezone
+from pathlib import Path
+from dotenv import load_dotenv
 
 
 class FiltroRelevante(logging.Filter):
@@ -21,7 +24,23 @@ archivo_global = None
 # Diccionario global para evitar múltiples handlers duplicados
 loggers_configurados = {}
 
-def configurar_logger(nombre: str, nivel=logging.INFO, carpeta_logs="logs", modo_silencioso=False):
+load_dotenv(Path(__file__).resolve().parent.parent / "config" / "claves.env")
+
+
+class JsonFormatter(logging.Formatter):
+    """Formatter que genera cada entrada en formato JSON."""
+
+    def format(self, record: logging.LogRecord) -> str:
+        data = {
+            "timestamp": datetime.fromtimestamp(record.created, tz=timezone.utc).isoformat(),
+            "level": record.levelname,
+            "logger": record.name,
+            "message": record.getMessage(),
+        }
+        return json.dumps(data, ensure_ascii=False)
+
+
+def configurar_logger(nombre: str, nivel=logging.INFO, carpeta_logs="logs", modo_silencioso=False, estructurado=None):
     if nombre in loggers_configurados:
         return loggers_configurados[nombre]
 
@@ -31,11 +50,17 @@ def configurar_logger(nombre: str, nivel=logging.INFO, carpeta_logs="logs", modo
 
     global archivo_global
 
+    if estructurado is None:
+        estructurado = os.getenv("MODO_REAL", "False").lower() == "true"
+
     if not logger.handlers:
-        formato = logging.Formatter(
-            "%(asctime)s - %(levelname)s - %(message)s",
-            datefmt="%Y-%m-%d %H:%M:%S"
-        )
+        if estructurado:
+            formato = JsonFormatter()
+        else:
+            formato = logging.Formatter(
+                "%(asctime)s - %(levelname)s - %(message)s",
+                datefmt="%Y-%m-%d %H:%M:%S"
+            )
 
         if not modo_silencioso:
             consola = logging.StreamHandler()

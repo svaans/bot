@@ -1,4 +1,12 @@
-from typing import Dict
+"""Gestión de órdenes simuladas o reales."""
+
+from __future__ import annotations
+
+from dataclasses import asdict
+from typing import Dict, Optional
+from datetime import datetime
+
+from core.ordenes_model import Orden
 from core.logger import configurar_logger
 from core import ordenes_reales
 
@@ -7,17 +15,48 @@ log = configurar_logger("orders", modo_silencioso=True)
 
 
 class OrderManager:
-    """Gestiona el registro y ejecución de órdenes."""
+    """Abstrae la creación y cierre de órdenes."""
 
-    def registrar_orden(self, symbol: str, precio: float, cantidad: float, sl: float, tp: float, estrategias: Dict, tendencia: str) -> None:
-        """Guarda una nueva orden abierta."""
-        ordenes_reales.registrar_orden(symbol, precio, cantidad, sl, tp, estrategias, tendencia)
+    def __init__(self, modo_real: bool) -> None:
+        self.modo_real = modo_real
+        self.ordenes: Dict[str, Orden] = {}
 
-    def cerrar_orden(self, symbol: str, info: Dict) -> None:
-        """Elimina y vuelve a registrar una orden ya cerrada."""
-        ordenes_reales.eliminar_orden(symbol)
-        ordenes_reales.registrar_orden(symbol, **info)
+    # ------------------------------------------------------------------
+    # Operaciones de apertura
+    # ------------------------------------------------------------------
+    def abrir(self, symbol: str, precio: float, sl: float, tp: float, estrategias: Dict, tendencia: str) -> None:
+        """Registra una nueva orden en memoria y, si corresponde, en Binance."""
+        orden = Orden(
+            symbol=symbol,
+            precio_entrada=precio,
+            cantidad=0.0,
+            stop_loss=sl,
+            take_profit=tp,
+            estrategias_activas=estrategias,
+            tendencia=tendencia,
+            timestamp=datetime.utcnow().isoformat(),
+            max_price=precio,
+        )
+        self.ordenes[symbol] = orden
+        if self.modo_real:
+            ordenes_reales.registrar_orden(symbol, precio, 0.0, sl, tp, estrategias, tendencia)
+        log.info(f"🟢 Orden abierta para {symbol} @ {precio:.2f}")
+    # ------------------------------------------------------------------
+    # Operaciones de cierre
+    # ------------------------------------------------------------------
+    def cerrar(self, symbol: str, precio: float, motivo: str) -> None:
+        """Cierra la orden indicada y la elimina del registro."""
+        orden = self.ordenes.pop(symbol, None)
+        if not orden:
+            return
+        orden.precio_cierre = precio
+        orden.fecha_cierre = datetime.utcnow().isoformat()
+        orden.motivo_cierre = motivo
+        if self.modo_real:
+            info = asdict(orden)
+            ordenes_reales.eliminar_orden(symbol)
+            ordenes_reales.registrar_orden(symbol, **info)
+        log.info(f"📤 Orden cerrada para {symbol} @ {precio:.2f} | {motivo}")
 
-    def ejecutar_market_buy(self, symbol: str, cantidad: float):
-        """Ejecuta una orden real de mercado usando el cliente configurado."""
-        return ordenes_reales.ejecutar_orden_market(symbol, cantidad)
+    def obtener(self, symbol: str) -> Optional[Orden]:
+        return self.ordenes.get(symbol)

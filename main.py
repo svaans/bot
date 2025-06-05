@@ -18,13 +18,12 @@ def mostrar_banner():
 async def main():
     config = ConfigManager.load_from_env()
 
-    # 📌 Selección dinámica de clase Trader
+    # El nuevo Trader modular soporta ambos modos
+    from core.trader_modular import Trader
     if config.modo_real:
-        from core.trader_modular import Trader
-        print("🟢 Modo REAL activado: usando Trader modular")
+        print("🟢 Modo REAL activado")
     else:
-        from core.trader_simulado import TraderSimulado as Trader
-        print("🟡 Modo SIMULADO activado: usando TraderSimulado")
+        print("🟡 Modo SIMULADO activado")
 
     try:
         resetear_configuracion_diaria_si_corresponde()

@@ -28,5 +28,8 @@ backend/db.sqlite3
 # Logs
 logs/
 
+# Reportes diarios
+reportes_diarios/
+
 # Local environment variables
 config/claves.env

@@ -1,61 +1,86 @@
-import pandas as pd
+"""Controlador principal del bot modular."""
+
+from __future__ import annotations
 import asyncio
-from datetime import datetime
-import os
+from dataclasses import dataclass
+from typing import Dict, List
+
+import pandas as pd
 
 from core.config_manager import Config
 from core.data_feed import DataFeed
 from core.strategy_engine import StrategyEngine
 from core.risk_manager import RiskManager
 from core.order_manager import OrderManager
+from core.adaptador_umbral import calcular_tp_sl_adaptativos, calcular_umbral_adaptativo
 from core.logger import configurar_logger
-from core.adaptador_umbral import calcular_umbral_adaptativo, calcular_tp_sl_adaptativos
 
 log = configurar_logger("trader")
 
 
-class Trader:
-    """Orquestador principal que utiliza componentes desacoplados."""
+@dataclass
+class EstadoSimbolo:
+    buffer: List[dict]
+    ultimo_umbral: float = 0.0
 
-    def __init__(self, config: Config):
+
+class Trader:
+    """Orquesta el flujo de datos y las operaciones de trading."""
+
+    def __init__(self, config: Config) -> None:
         self.config = config
         self.data_feed = DataFeed(config.intervalo_velas)
         self.engine = StrategyEngine()
-        self.orders = OrderManager()
-        self.buffers = {s: [] for s in config.symbols}
-        self._tasks = []
+        self.risk = RiskManager(config.umbral_riesgo_diario)
+        self.orders = OrderManager(config.modo_real)
+        self.estado: Dict[str, EstadoSimbolo] = {s: EstadoSimbolo([]) for s in config.symbols}
+        self._task: asyncio.Task | None = None
 
-    async def ejecutar(self):
-        for symbol in self.config.symbols:
-            self._tasks.append(asyncio.create_task(self._procesar_symbol(symbol)))
-        await asyncio.gather(*self._tasks)
+    async def ejecutar(self) -> None:
+        """Inicia el procesamiento de todos los símbolos."""
+        async def handle(candle: dict) -> None:
+            await self._procesar_vela(candle)
 
-    async def _procesar_symbol(self, symbol: str):
-        async def handle(candle: dict):
-            buf = self.buffers[symbol]
-            buf.append(candle)
-            if len(buf) > 50:
-                self.buffers[symbol] = buf[-50:]
-            if len(buf) < 30:
-                return
-            df = pd.DataFrame(self.buffers[symbol])
-            evaluacion = self.engine.evaluar_entrada(symbol, df)
-            if not evaluacion:
-                return
-            puntaje = evaluacion.get("puntaje_total", 0)
-            estrategias = evaluacion.get("estrategias_activas", {})
-            umbral = calcular_umbral_adaptativo(symbol, df, estrategias, {})
-            if puntaje < umbral:
-                return
-            sl, tp = calcular_tp_sl_adaptativos(df, float(candle["close"]))
-            self.orders.registrar_orden(symbol, float(candle["close"]), 0, sl, tp, estrategias, "")
-        await self.data_feed.stream(symbol, handle)
+        symbols = list(self.estado.keys())
+        self._task = asyncio.create_task(self.data_feed.escuchar(symbols, handle))
+        await self._task
 
-    async def cerrar(self):
-        for t in self._tasks:
-            t.cancel()
+    async def _procesar_vela(self, vela: dict) -> None:
+        symbol = vela["symbol"]
+        estado = self.estado[symbol]
+        estado.buffer.append(vela)
+        if len(estado.buffer) > 50:
+            estado.buffer = estado.buffer[-50:]
+        if len(estado.buffer) < 30:
+            return
+
+        df = pd.DataFrame(estado.buffer)
+        evaluacion = self.engine.evaluar_entrada(symbol, df)
+        if not evaluacion:
+            return
+
+        puntaje = evaluacion.get("puntaje_total", 0)
+        estrategias = evaluacion.get("estrategias_activas", {})
+        umbral = calcular_umbral_adaptativo(symbol, df, estrategias, {})
+        estado.ultimo_umbral = umbral
+
+        if puntaje < umbral:
+            log.debug(f"🚫 {symbol}: puntaje {puntaje:.2f} < umbral {umbral:.2f}")
+            return
+
+        if self.risk.riesgo_superado(1.0):  # Capital total ficticio
+            log.warning(f"🚫 Riesgo diario superado para {symbol}")
+            return
+
+        sl, tp = calcular_tp_sl_adaptativos(df, float(vela["close"]))
+        self.orders.abrir(symbol, float(vela["close"]), sl, tp, estrategias, "")
+
+    async def cerrar(self) -> None:
+        if self._task:
+            await self.data_feed.detener()
+            self._task.cancel()
             try:
-                await t
+                await self._task
             except asyncio.CancelledError:
                 pass
-        await asyncio.gather(*self._tasks, return_exceptions=True)
+        

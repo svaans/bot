@@ -45,6 +45,13 @@ Las funcionalidades principales del bot están divididas en componentes dentro d
 La clase `Trader` orquesta estos módulos y mantiene compatibilidad con
 `TraderSimulado` para los escenarios de backtesting.
 
+## Logging estructurado y reportes
+
+En modo real el bot utiliza un logger en formato JSON cuya salida se guarda en
+`logs/bot.log`. Cada operación cerrada se agrega al directorio
+`reportes_diarios/` y al finalizar el día se genera automáticamente un PDF con
+las métricas principales: ganancia acumulada, winrate y drawdown.
+
 
 ## Instalación
 
