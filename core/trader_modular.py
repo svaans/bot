@@ -1,6 +1,7 @@
 import pandas as pd
 import asyncio
 from datetime import datetime
+import os
 
 from core.config_manager import Config
 from core.data_feed import DataFeed
@@ -20,7 +21,6 @@ class Trader:
         self.config = config
         self.data_feed = DataFeed(config.intervalo_velas)
         self.engine = StrategyEngine()
-        self.risk = RiskManager(config.umbral_riesgo_diario)
         self.orders = OrderManager()
         self.buffers = {s: [] for s in config.symbols}
         self._tasks = []
