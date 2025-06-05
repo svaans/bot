@@ -35,12 +35,7 @@ async def main():
 
     mostrar_banner()
     print(f"🚀 Iniciando bot de trading... Modo real: {config.modo_real}")
-<<<<<<< HEAD
-)
-=======
 
-
->>>>>>> 07c34d0 (puliendo codigo)
     bot = Trader(config)
     tarea_bot = asyncio.create_task(bot.ejecutar())
     stop_event = asyncio.Event()
