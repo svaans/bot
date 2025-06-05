@@ -11,7 +11,7 @@ class Config:
     modo_real: bool
     intervalo_velas: str
     symbols: List[str]
-    umbral_riesgo_diario: float
+    
 
 
 class ConfigManager:
@@ -26,5 +26,4 @@ class ConfigManager:
             modo_real=os.getenv("MODO_REAL", "False").lower() == "true",
             intervalo_velas=os.getenv("INTERVALO_VELAS", "1m"),
             symbols=[s.strip() for s in symbols if s.strip()],
-            umbral_riesgo_diario=float(os.getenv("UMBRAL_RIESGO_DIARIO", 0.03)),
         )

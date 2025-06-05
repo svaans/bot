@@ -1,83 +1,86 @@
 import json
 import os
+from dataclasses import dataclass, field
+from typing import Dict
+
 import pandas as pd
 from collections import defaultdict
 from core.logger import configurar_logger
 
 log = configurar_logger("pesos")
 
-RUTA_PESOS = "config/estrategias_pesos.json"
-PESOS = None  # Solo si prefieres lazy loading
+@dataclass
+class GestorPesos:
+    """Maneja la carga y acceso a los pesos de estrategias."""
 
-def cargar_pesos_estrategias():
-    global PESOS
-    if PESOS is not None:
-        return PESOS
+    ruta: str = "config/estrategias_pesos.json"
+    pesos: Dict[str, Dict[str, float]] = field(init=False, default_factory=dict)
 
-    if os.path.exists(RUTA_PESOS):
-        with open(RUTA_PESOS, "r") as f:
-            try:
-                PESOS = json.load(f)
-            except Exception as e:
-                log.error(f"❌ Error cargando pesos desde JSON: {e}")
-                PESOS = {}
-    else:
-        PESOS = {}
-        print(f"❌ No se encontró archivo de pesos: {RUTA_PESOS}")
-    return PESOS
+    def __post_init__(self) -> None:
+        self.pesos = self._cargar_pesos()
 
-def guardar_pesos_estrategias(pesos):
-    with open(RUTA_PESOS, "w") as f:
-        json.dump(pesos, f, indent=4)
-    log.info("✅ Pesos guardados.")
+    def _cargar_pesos(self) -> Dict[str, Dict[str, float]]:
+        if os.path.exists(self.ruta):
+            with open(self.ruta, "r") as f:
+                try:
+                    return json.load(f)
+                except Exception as e:
+                    log.error(f"❌ Error cargando pesos desde JSON: {e}")
+        else:
+            log.warning(f"❌ No se encontró archivo de pesos: {self.ruta}")
+        return {}
 
-def obtener_peso(nombre_estrategia, symbol):
-    global PESOS
-    if PESOS is None:
-        PESOS = cargar_pesos_estrategias()
-    if not isinstance(PESOS, dict):
-        log.warning(f"⚠️ PESOS no está cargado correctamente. Valor: {PESOS}")
-        return 0.0
-    return PESOS.get(symbol, {}).get(nombre_estrategia, 0.0)
+    def guardar(self, pesos: Dict[str, Dict[str, float]]) -> None:
+        self.pesos = pesos
+        with open(self.ruta, "w") as f:
+            json.dump(self.pesos, f, indent=4)
+        log.info("✅ Pesos guardados.")
 
-def calcular_pesos_desde_backtest(simbolos, carpeta="backtesting", escala=20):
-    pesos_por_symbol = {}
-    for symbol in simbolos:
-        ruta = f"{carpeta}/ordenes_{symbol.replace('/', '_')}_resultado.csv"
-        if not os.path.exists(ruta):
-            log.warning(f"❌ Archivo no encontrado: {ruta}")
-            continue
-        try:
-            df = pd.read_csv(ruta)
-        except pd.errors.EmptyDataError:
-            log.warning(f"⚠️ Archivo vacío: {ruta}")
-            continue
+    def obtener_peso(self, estrategia: str, symbol: str) -> float:
+        return self.pesos.get(symbol, {}).get(estrategia, 0.0)
 
-        conteo = defaultdict(int)
-        for _, fila in df.iterrows():
-            if fila.get("resultado") != "ganancia":
+    def obtener_pesos_symbol(self, symbol: str) -> Dict[str, float]:
+        return self.pesos.get(symbol, {})
+
+    def calcular_desde_backtest(self, simbolos, carpeta="backtesting", escala=20) -> None:
+        pesos_por_symbol = {}
+        for symbol in simbolos:
+            ruta = f"{carpeta}/ordenes_{symbol.replace('/', '_')}_resultado.csv"
+            if not os.path.exists(ruta):
+                log.warning(f"❌ Archivo no encontrado: {ruta}")
                 continue
             try:
-                estrategias = json.loads(fila["estrategias_activas"].replace("'", "\""))
-            except Exception as e:
-                log.warning(f"❌ JSON inválido en fila: {fila['estrategias_activas']}")
+                df = pd.read_csv(ruta)
+            except pd.errors.EmptyDataError:
+                log.warning(f"⚠️ Archivo vacío: {ruta}")
                 continue
 
-            for estrategia, activa in estrategias.items():
-                if activa:
-                    conteo[estrategia] += 1
+            conteo = defaultdict(int)
+            for _, fila in df.iterrows():
+                if fila.get("resultado") != "ganancia":
+                    continue
+                try:
+                    estrategias = json.loads(fila["estrategias_activas"].replace("'", "\"") )
+                except Exception:
+                    log.warning(f"❌ JSON inválido en fila: {fila['estrategias_activas']}")
+                    continue
 
-        total = sum(conteo.values())
-        if total == 0:
-            continue
+                for estrategia, activa in estrategias.items():
+                    if activa:
+                        conteo[estrategia] += 1
 
-        normalizados = {k: round(v / total * 10, 2) for k, v in conteo.items()}
-        suma_actual = sum(normalizados.values())
-        factor = escala / suma_actual if suma_actual > 0 else 1
-        reescalados = {k: round(v * factor, 2) for k, v in normalizados.items()}
+            total = sum(conteo.values())
+            if total == 0:
+                continue
 
-        pesos_por_symbol[symbol] = reescalados
-        log.info(f"📊 {symbol}: {reescalados}")
+            normalizados = {k: round(v / total * 10, 2) for k, v in conteo.items()}
+            suma_actual = sum(normalizados.values())
+            factor = escala / suma_actual if suma_actual > 0 else 1
+            reescalados = {k: round(v * factor, 2) for k, v in normalizados.items()}
 
-    guardar_pesos_estrategias(pesos_por_symbol)
+            pesos_por_symbol[symbol] = reescalados
+            log.info(f"📊 {symbol}: {reescalados}")
 
+        self.guardar(pesos_por_symbol)
+
+gestor_pesos = GestorPesos()

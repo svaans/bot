@@ -1,16 +1,12 @@
 # estrategias/analisis_pesos.py
+import os
 import pandas as pd
 import json
 from collections import defaultdict
-from core.pesos import guardar_pesos_estrategias
+from core.pesos import gestor_pesos
 
 
 def calcular_pesos_desde_backtest(csv_path="ordenes_simuladas_con_resultado.csv", output_json="estrategias_pesos_backtest.json"):
-    import pandas as pd
-    import json
-    import os
-    from collections import defaultdict
-    from core.pesos import guardar_pesos_estrategias
 
     df = pd.read_csv(csv_path)
     df = df[df["status"] == "cerrada"].copy()
@@ -65,7 +61,7 @@ def calcular_pesos_desde_backtest(csv_path="ordenes_simuladas_con_resultado.csv"
     with open(output_json, "w") as f:
         json.dump(datos_anteriores, f, indent=4)
 
-    guardar_pesos_estrategias(datos_anteriores)
+    gestor_pesos.guardar(datos_anteriores)
     print("✅ Pesos generados y guardados por símbolo en", output_json)
     return datos_anteriores
 

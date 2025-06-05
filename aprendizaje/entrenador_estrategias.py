@@ -4,7 +4,7 @@ import time
 import pandas as pd
 from collections import defaultdict
 from dotenv import dotenv_values
-from core.pesos import guardar_pesos_estrategias, cargar_pesos_estrategias
+from core.pesos import gestor_pesos
 from core.logger import configurar_logger
 
 # Cargar configuración del .env
@@ -77,7 +77,7 @@ def actualizar_pesos_estrategias_symbol(symbol: str):
     nuevos_scores_normalizados = normalizar_scores(nuevos_scores)
 
     # Cargar pesos actuales
-    pesos_totales = cargar_pesos_estrategias()
+    pesos_totales = gestor_pesos.pesos
     pesos_actuales = pesos_totales.get(symbol, {})
 
     # Aplicar suavizado
@@ -89,7 +89,7 @@ def actualizar_pesos_estrategias_symbol(symbol: str):
 
     # Guardar nuevos pesos
     pesos_totales[symbol] = pesos_suavizados
-    guardar_pesos_estrategias(pesos_totales)
+    gestor_pesos.guardar(pesos_totales)
 
     print(f"✅ Pesos suavizados para {symbol} en modo {'REAL' if MODO_REAL else 'SIMULADO'}:")
     for estrategia, peso in pesos_suavizados.items():

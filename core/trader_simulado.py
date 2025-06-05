@@ -9,10 +9,11 @@ from datetime import datetime
 
 from core.logger import configurar_logger
 from core.utils import validar_dataframe, segundos_transcurridos
-from core.pesos import cargar_pesos_estrategias
+from core.pesos import gestor_pesos
 from core.tendencia import detectar_tendencia, señales_repetidas
 from core.modo import MODO_REAL
-from core.adaptador_umbral import calcular_umbral_adaptativo, cargar_umbral_optimo, calcular_tp_sl_adaptativos
+from core.config_manager import Config
+from core.adaptador_umbral import calcular_umbral_adaptativo, calcular_tp_sl_adaptativos
 from estrategias_entrada.gestor_entradas import evaluar_estrategias, entrada_permitida
 from estrategias_salida.reajuste_tp_sl import calcular_promedios_sl_tp
 from estrategias_salida.salida_trailing_stop import verificar_trailing_stop
@@ -36,6 +37,12 @@ log = configurar_logger("trader_simulado", modo_silencioso=True)
 
 class TraderSimulado:
     def __init__(self, symbols, configuraciones=None, pesos_personalizados=None, modo_optimizacion=False):
+        if isinstance(symbols, Config):
+            self.config = symbols
+            symbols = self.config.symbols
+        else:
+            self.config = None
+
         self.symbols = symbols
         self.modo_optimizacion = modo_optimizacion
         self.estado = {s: "esperando" for s in symbols}
@@ -60,8 +67,7 @@ class TraderSimulado:
 
         for symbol in self.symbols:
             self.config_por_simbolo[symbol] = self.configuraciones.get(symbol) or cargar_configuracion_simbolo(symbol)
-            self.pesos_por_simbolo[symbol] = self.pesos_personalizados.get(symbol) or cargar_pesos_estrategias().get(symbol, {})
-
+            self.pesos_por_simbolo[symbol] = self.pesos_personalizados.get(symbol) or gestor_pesos.obtener_pesos_symbol(symbol)
             try:
                 archivo = f"datos/{symbol.replace('/', '_').lower()}_1m.parquet"
                 df = pd.read_parquet(archivo)
@@ -236,7 +242,7 @@ class TraderSimulado:
             if not self.modo_optimizacion:
                 self.guardar_orden_simulada(symbol, self.ordenes_abiertas[symbol].copy())
                 actualizar_pesos_estrategias_symbol(symbol)
-                self.pesos_por_simbolo[symbol] = cargar_pesos_estrategias().get(symbol, {})
+                self.pesos_por_simbolo[symbol] = gestor_pesos.obtener_pesos_symbol(symbol)
                 log.warning(f"🟢 ORDEN SIMULADA {symbol} COMPRA a {precio} | SL: {sl} | TP: {tp}")
 
 
@@ -362,7 +368,7 @@ class TraderSimulado:
             self.ultima_tendencia[symbol] = nueva_tendencia
 
         actualizar_pesos_estrategias_symbol(symbol)
-        self.pesos_por_simbolo[symbol] = cargar_pesos_estrategias().get(symbol, {})
+        self.pesos_por_simbolo[symbol] = gestor_pesos.obtener_pesos_symbol(symbol)
 
     def guardar_orden_simulada(self, symbol: str, nueva_orden: dict):
         archivo = f"ordenes_simuladas/{symbol.replace('/', '_').lower()}.parquet"

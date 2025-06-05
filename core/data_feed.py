@@ -14,5 +14,5 @@ class DataFeed:
         self.intervalo = intervalo
 
     async def stream(self, symbol: str, handler: Callable[[dict], Awaitable[None]]):
-        """Escucha las velas y envía cada cierre al handler."""
+        """Escucha las velas de ``symbol`` y envía cada cierre al ``handler``."""
         await escuchar_velas(symbol, self.intervalo, handler)

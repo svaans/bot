@@ -1,5 +1,5 @@
 import importlib
-from core.pesos import obtener_peso
+from core.pesos import gestor_pesos
 from estrategias_entrada.loader import cargar_estrategias
 import traceback
 
@@ -65,7 +65,7 @@ def evaluar_estrategias(symbol, df, tendencia):
             activo = resultado.get("activo", False)
             estrategias_activadas[nombre] = activo
             if activo:
-                peso = obtener_peso(nombre, symbol)
+                peso = gestor_pesos.obtener_peso(nombre, symbol)
                 puntaje_total += peso
 
         except Exception as e:

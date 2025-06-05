@@ -6,7 +6,7 @@ log = configurar_logger("risk", modo_silencioso=True)
 
 
 class RiskManager:
-    """Gestiona el riesgo diario del bot."""
+    """Gestiona las comprobaciones de riesgo."""
 
     def __init__(self, umbral: float) -> None:
         self.umbral = umbral
