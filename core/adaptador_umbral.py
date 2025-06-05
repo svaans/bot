@@ -113,42 +113,6 @@ def calcular_umbral_adaptativo(symbol, df, estrategias_activadas, pesos_symbol, 
     return umbral
 
 
-
-RUTA_UMBRAL = "config/umbrales_optimos.json"
-
-def guardar_umbral_optimo(symbol: str, umbral: float):
-    """
-    Guarda el umbral adaptativo óptimo para un símbolo en archivo JSON.
-    """
-    os.makedirs(os.path.dirname(RUTA_UMBRAL), exist_ok=True)
-
-    data = {}
-    if os.path.exists(RUTA_UMBRAL):
-        with open(RUTA_UMBRAL, "r") as f:
-            data = json.load(f)
-
-    data[symbol] = round(umbral, 2)
-
-    with open(RUTA_UMBRAL, "w") as f:
-        json.dump(data, f, indent=2)
-
-    print(f"📥 Umbral óptimo guardado para {symbol}: {umbral:.2f}")
-
-
-def cargar_umbral_optimo(symbol: str) -> float:
-    """
-    Carga el umbral guardado desde archivo para el símbolo dado.
-    Si no existe, retorna -1 como señal de no encontrado.
-    """
-    if not os.path.exists(RUTA_UMBRAL):
-        return -1
-
-    with open(RUTA_UMBRAL, "r") as f:
-        data = json.load(f)
-
-    return data.get(symbol, -1)
-
-
 def calcular_tp_sl_adaptativos(df, precio_actual, config=None):
         if config is None:
             config = {}

@@ -3,7 +3,7 @@ import json
 import pandas as pd
 from collections import defaultdict
 from core.pesos import guardar_pesos_estrategias, cargar_pesos_estrategias
-from core.adaptador_umbral import calcular_umbral_adaptativo, guardar_umbral_optimo
+from core.adaptador_umbral import calcular_umbral_adaptativo
 from core.logger import configurar_logger
 
 CARPETA_OPERACIONES = "ultimas_operaciones"
@@ -111,8 +111,7 @@ def actualizar_pesos_dinamicos(symbol: str, historial: list, factor_ajuste=0.05)
             estrategias = json.loads(estrategias.replace("'", "\""))
         if estrategias:
             umbral = calcular_umbral_adaptativo(symbol, df_fake, estrategias, nuevos_pesos)
-            guardar_umbral_optimo(symbol, umbral)
-            print(f"📥 Umbral óptimo guardado para {symbol}: {umbral:.2f}")
+            print(f"📈 Umbral estimado para {symbol}: {umbral:.2f}")
     except Exception as e:
         print(f"❌ Error al recalcular/guardar umbral para {symbol}: {e}")
 

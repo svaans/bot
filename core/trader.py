@@ -63,12 +63,17 @@ class Trader:
         self.ultima_tendencia = {s: None for s in symbols}
         self.ultimas_estrategias = {s: None for s in symbols}
         self.locks = {s: asyncio.Lock() for s in symbols}
-
+        
+        # 📦 Cargar órdenes abiertas de ejecuciones anteriores
+        try:
+            self.ordenes_abiertas = ordenes_reales.obtener_todas_las_ordenes()
+        except Exception as e:
+            log.warning(f"⚠️ Error cargando órdenes previas: {e}")
 
 
         if self.ordenes_abiertas:
-            log.warning("⚠️ Órdenes abiertas encontradas. No se eliminarán automáticamente.")
-            log.info(f"📌 Órdenes encontradas: {list(self.ordenes_abiertas.keys())}")
+            log.warning("⚠️ Órdenes abiertas encontradas al iniciar. Serán monitoreadas.")
+            log.info(f"📌 Órdenes cargadas: {list(self.ordenes_abiertas.keys())}")
         else:
             log.info("📥 Precargando velas históricas...")
             for symbol in self.symbols:
@@ -151,6 +156,16 @@ class Trader:
                 "tendencia": tendencia,
                 "estrategias_activas": estrategias_activas
             }
+            # Registrar la nueva orden para poder recuperarla tras un reinicio
+            ordenes_reales.registrar_orden(
+                symbol,
+                precio_entrada,
+                cantidad_crypto,
+                sl,
+                tp,
+                estrategias_activas,
+                tendencia,
+            )
             self.guardar_orden_real(self.ordenes_abiertas[symbol].copy())
             self.ordenes_abiertas = ordenes_reales.obtener_todas_las_ordenes()
 
