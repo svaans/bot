@@ -45,7 +45,7 @@ log = configurar_logger("trading_bot")
 
 
 class Trader:
-    def __init__(self, symbols):
+    async def __init__(self, symbols):
         self.symbols = symbols
         self.cliente = crear_cliente()
         self.config_por_simbolo = {
@@ -103,7 +103,7 @@ class Trader:
                     log.info(f"✅ {symbol}: 30 velas precargadas.")
                 except Exception as e:
                     log.error(f"❌ Error precargando {symbol}: {e}")
-                time.sleep(0.5)
+                await asyncio.sleep(0.5)
 
     async def abrir_operacion_real(self, symbol, precio_entrada, sl, tp, estrategias_activas, tendencia):
         config = self.config_por_simbolo.get(symbol, {})
@@ -218,7 +218,6 @@ class Trader:
             if condiciones_estables:
                 umbral = self.ultimo_umbral[symbol]
             else:
-                umbral = cargar_umbral_optimo(symbol)
                 if umbral == -1:
                     config_actual = self.config_por_simbolo.get(symbol, {})
                     umbral = calcular_umbral_adaptativo(symbol, df, estrategias_detectadas, pesos_symbol, config=config_actual)

@@ -4,7 +4,9 @@ import signal
 import traceback
 from core.pesos import gestor_pesos
 from aprendizaje.reset_pesos import resetear_pesos_diarios_si_corresponde
-from aprendizaje.reset_configuracion import resetear_configuracion_diaria_si_corresponde
+from aprendizaje.reset_configuracion import (
+    resetear_configuracion_diaria_si_corresponde,
+)
 from core.config_manager import ConfigManager
 
 
@@ -33,7 +35,12 @@ async def main():
 
     mostrar_banner()
     print(f"🚀 Iniciando bot de trading... Modo real: {config.modo_real}")
+<<<<<<< HEAD
 )
+=======
+
+
+>>>>>>> 07c34d0 (puliendo codigo)
     bot = Trader(config)
     tarea_bot = asyncio.create_task(bot.ejecutar())
     stop_event = asyncio.Event()

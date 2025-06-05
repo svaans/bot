@@ -125,7 +125,7 @@ def guardar_orden_simulada(symbol: str, nueva_orden: dict):
                 # Archivo dañado, lo renombramos para evitar pérdida de datos
                 try:
                     timestamp = int(time.time())
-                    corrupto = archivo.replace(".json", f"_corrupto_{timestamp}.json")
+                    corrupto = archivo.replace(".parquet", f"_corrupto_{timestamp}.parquet")
                     os.rename(archivo, corrupto)
                     log.warning(f"⚠️ Archivo corrupto renombrado: {archivo} → {corrupto} — Error: {e}")
                 except Exception as err:
