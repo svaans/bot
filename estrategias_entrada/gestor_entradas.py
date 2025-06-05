@@ -5,7 +5,7 @@ from core.estrategias import obtener_estrategias_por_tendencia
 import traceback
 
 ESTRATEGIAS_DISPONIBLES = cargar_estrategias()
-]
+
 
 def evaluar_estrategias(symbol, df, tendencia):
     # Evalúa las estrategias relevantes según la tendencia detectada.
