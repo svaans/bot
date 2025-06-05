@@ -2,6 +2,8 @@ from dataclasses import dataclass
 from typing import List
 import os
 from dotenv import load_dotenv
+from pathlib import Path
+
 
 @dataclass(frozen=True)
 class Config:
@@ -11,7 +13,7 @@ class Config:
     modo_real: bool
     intervalo_velas: str
     symbols: List[str]
-    
+    umbral_riesgo_diario: float
 
 
 class ConfigManager:
@@ -19,7 +21,8 @@ class ConfigManager:
 
     @staticmethod
     def load_from_env() -> Config:
-        load_dotenv("config/claves.env")
+        env_path = Path(__file__).resolve().parent.parent / "config" / "claves.env"
+        load_dotenv(env_path)
         symbols = os.getenv("SYMBOLS", "BTC/EUR,ETH/EUR,ADA/EUR").split(",")
         return Config(
             api_key=os.environ.get("BINANCE_API_KEY"),

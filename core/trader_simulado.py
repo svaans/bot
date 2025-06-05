@@ -295,7 +295,7 @@ class TraderSimulado:
         # 🎯 Take Profit
         if precio_max >= take_profit:
             log.info(f"🎯 [{symbol}] TP alcanzado — Cerrando por Take Profit")
-            self.cerrar_orden_simulada(symbol, take_profit, exito=True, motivo="Take Profit")
+            await self.cerrar_orden_simulada(symbol, take_profit, exito=True, motivo="Take Profit")
             return
 
         # 🔃 Trailing Stop
