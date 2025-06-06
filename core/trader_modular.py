@@ -14,6 +14,8 @@ from core.risk_manager import RiskManager
 from core.order_manager import OrderManager
 from binance_api.cliente import crear_cliente
 from core.adaptador_umbral import calcular_tp_sl_adaptativos, calcular_umbral_adaptativo
+from core.pesos import cargar_pesos_estrategias
+from aprendizaje.entrenador_estrategias import actualizar_pesos_estrategias_symbol
 from core.logger import configurar_logger
 from core.monitor_estado_bot import monitorear_estado_periodicamente
 from core import ordenes_reales
@@ -41,6 +43,7 @@ class Trader:
         self.cliente = crear_cliente(config)
         self.estado: Dict[str, EstadoSimbolo] = {s: EstadoSimbolo([]) for s in config.symbols}
         self.config_por_simbolo: Dict[str, dict] = {s: {} for s in config.symbols}
+        self.pesos_por_simbolo: Dict[str, Dict[str, float]] = cargar_pesos_estrategias()
         self._task: asyncio.Task | None = None
         self._task_estado: asyncio.Task | None = None
 
@@ -51,6 +54,12 @@ class Trader:
 
         if self.orders.ordenes:
             log.warning("⚠️ Órdenes abiertas encontradas al iniciar. Serán monitoreadas.")
+
+    def cerrar_operacion(self, symbol: str, precio: float, motivo: str) -> None:
+        """Cierra una orden y actualiza los pesos si corresponden."""
+        self.orders.cerrar(symbol, precio, motivo)
+        actualizar_pesos_estrategias_symbol(symbol)
+        self.pesos_por_simbolo = cargar_pesos_estrategias()
 
     @property
     def ordenes_abiertas(self):
@@ -105,7 +114,8 @@ class Trader:
 
         puntaje = evaluacion.get("puntaje_total", 0)
         estrategias = evaluacion.get("estrategias_activas", {})
-        umbral = calcular_umbral_adaptativo(symbol, df, estrategias, {})
+        pesos_symbol = self.pesos_por_simbolo.get(symbol, {})
+        umbral = calcular_umbral_adaptativo(symbol, df, estrategias, pesos_symbol)
         estado.ultimo_umbral = umbral
 
         if puntaje < umbral:
