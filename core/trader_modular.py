@@ -5,6 +5,7 @@ import asyncio
 from dataclasses import dataclass
 from typing import Dict, List
 from datetime import datetime
+import numpy as np
 
 import pandas as pd
 
@@ -30,7 +31,12 @@ from estrategias_salida.salida_por_tendencia import verificar_reversion_tendenci
 from estrategias_salida.gestor_salidas import evaluar_salidas, verificar_filtro_tecnico
 from estrategias_salida.salida_stoploss import salida_stoploss
 from filtros.filtro_salidas import validar_necesidad_de_salida
-from core.tendencia import detectar_tendencia
+from core.tendencia import detectar_tendencia, señales_repetidas
+from filtros.validador_entradas import evaluar_validez_estrategica
+from estrategias_entrada.gestor_entradas import entrada_permitida
+from indicadores.rsi import calcular_rsi
+from indicadores.momentum import calcular_momentum
+from indicadores.slope import calcular_slope
 
 
 log = configurar_logger("trader")
@@ -40,6 +46,7 @@ log = configurar_logger("trader")
 class EstadoSimbolo:
     buffer: List[dict]
     ultimo_umbral: float = 0.0
+    ultimo_timestamp: int | None = None
 
 
 class Trader:
@@ -55,6 +62,7 @@ class Trader:
         self.estado: Dict[str, EstadoSimbolo] = {s: EstadoSimbolo([]) for s in config.symbols}
         self.config_por_simbolo: Dict[str, dict] = {s: {} for s in config.symbols}
         self.pesos_por_simbolo: Dict[str, Dict[str, float]] = cargar_pesos_estrategias()
+        self.historial_cierres: Dict[str, dict] = {}
         self._task: asyncio.Task | None = None
         self._task_estado: asyncio.Task | None = None
 
@@ -92,6 +100,10 @@ class Trader:
         reporter_diario.registrar_operacion(info)
         actualizar_pesos_estrategias_symbol(orden.symbol)
         self.pesos_por_simbolo = cargar_pesos_estrategias()
+        self.historial_cierres[orden.symbol] = {
+            "timestamp": datetime.utcnow().isoformat(),
+            "motivo": motivo.lower().strip(),
+        }
 
     @property
     def ordenes_abiertas(self):
@@ -190,12 +202,16 @@ class Trader:
         estado.buffer.append(vela)
         if len(estado.buffer) > 50:
             estado.buffer = estado.buffer[-50:]
+        if vela.get("timestamp") == estado.ultimo_timestamp:
+            return
+        estado.ultimo_timestamp = vela.get("timestamp")
         if len(estado.buffer) < 30:
             return
 
         df = pd.DataFrame(estado.buffer)
         if self.orders.obtener(symbol):
             self._verificar_salidas(symbol, df)
+            return
         config_actual = configurar_parametros_dinamicos(
             symbol, df, self.config_por_simbolo.get(symbol, {})
         )
@@ -210,9 +226,78 @@ class Trader:
         umbral = calcular_umbral_adaptativo(symbol, df, estrategias, pesos_symbol)
         estado.ultimo_umbral = umbral
 
+        cierre = self.historial_cierres.get(symbol)
+        if cierre:
+            cooldown = int(config_actual.get("cooldown_tras_perdida", 5)) * 60
+            try:
+                ts = cierre["timestamp"]
+                if isinstance(ts, str):
+                    ts = datetime.fromisoformat(ts)
+                elif isinstance(ts, (int, float)):
+                    ts = datetime.utcfromtimestamp(ts)
+                tiempo_desde_cierre = (datetime.utcnow() - ts).total_seconds()
+            except Exception as e:
+                log.warning(f"⚠️ No se pudo calcular cooldown para {symbol}: {e}")
+                tiempo_desde_cierre = float('inf')
+
+            if cierre["motivo"] in ["stop loss", "estrategia: cambio de tendencia", "cambio de tendencia"] and tiempo_desde_cierre < cooldown:
+                log.info(
+                    f"🕒 Cooldown activo para {symbol}. Esperando tras pérdida anterior ({tiempo_desde_cierre:.0f}s)"
+                )
+                return
+
+        estrategias_activas = [k for k, v in estrategias.items() if v]
+        peso_total = sum(pesos_symbol.get(k, 0) for k in estrategias_activas)
+        diversidad = len(estrategias_activas)
+        peso_min_total = config_actual.get("peso_minimo_total", 0.5)
+        diversidad_min = config_actual.get("diversidad_minima", 2)
+
+
         if puntaje < umbral:
             log.debug(f"🚫 {symbol}: puntaje {puntaje:.2f} < umbral {umbral:.2f}")
             return
+        
+        if diversidad < diversidad_min or peso_total < peso_min_total:
+            log.debug(
+                f"🚫 Entrada bloqueada por diversidad/peso insuficiente: {diversidad}/{diversidad_min}, {peso_total:.2f}/{peso_min_total:.2f}"
+            )
+            return
+        if not evaluar_validez_estrategica(symbol, df, estrategias):
+            log.debug(f"❌ Entrada rechazada por filtro estratégico en {symbol}.")
+            return
+
+        ventana_close = df["close"].tail(10)
+        media_close = np.mean(ventana_close)
+        volatilidad_actual = np.std(ventana_close) / media_close if media_close else 0
+
+        repetidas = señales_repetidas(
+            buffer=estado.buffer,
+            estrategias_func=pesos_symbol,
+            tendencia_actual=evaluacion.get("tendencia", ""),
+            volatilidad_actual=volatilidad_actual,
+            ventanas=5,
+        )
+
+        if repetidas < 1 and puntaje < 1.2 * umbral:
+            log.info(
+                f"🚫 Entrada rechazada en {symbol}: {repetidas}/5 señales persistentes y puntaje débil ({puntaje:.2f})"
+            )
+            return
+        elif repetidas < 1:
+            log.info(
+                f"⚠️ Entrada débil en {symbol}: Sin persistencia pero puntaje alto ({puntaje}) > Umbral {umbral} — Permitida."
+            )
+
+        rsi = calcular_rsi(df)
+        momentum = calcular_momentum(df)
+        slope = calcular_slope(df)
+
+        if not entrada_permitida(symbol, puntaje, umbral, estrategias, rsi, slope, momentum):
+            return
+
+        log.info(
+            f"✅ Entrada confirmada en {symbol}. Puntaje {puntaje:.2f}, Peso {peso_total:.2f}, Diversidad {diversidad}, Persistencia {repetidas}/5"
+        )
 
         balance = self.cliente.fetch_balance()
         capital_total = balance['total'].get('EUR', 0)
