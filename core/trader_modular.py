@@ -115,16 +115,24 @@ class Trader:
         balance = self.cliente.fetch_balance()
         euros = balance['total'].get('EUR', 0)
         if euros <= 0:
+            log.debug("Saldo en EUR insuficiente")
             return 0.0
         euros_por_simbolo = euros / max(len(self.estado), 1)
         euros_compra = euros_por_simbolo * 0.95
         cantidad = round(euros_compra / precio, 6)
-        return cantidad if cantidad * precio >= 10 else 0.0
+        if cantidad * precio < self.config.min_order_eur:
+            log.debug(
+                f"Orden mínima {self.config.min_order_eur}€, intento {cantidad * precio:.2f}€"
+            )
+            return 0.0
+        return cantidad
 
     def _abrir_operacion_real(self, symbol: str, precio: float, sl: float, tp: float, estrategias: Dict) -> None:
         cantidad = self._calcular_cantidad(precio)
         if cantidad <= 0:
-            log.warning(f"❌ No se pudo calcular cantidad válida para {symbol}")
+            log.warning(
+                f"❌ No se pudo calcular cantidad válida para {symbol}"
+            )
             return
         self.orders.abrir(symbol, precio, sl, tp, estrategias, "", cantidad)
 

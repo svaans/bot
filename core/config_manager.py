@@ -17,6 +17,7 @@ class Config:
     intervalo_velas: str
     symbols: List[str]
     umbral_riesgo_diario: float
+    min_order_eur: float
 
 
 class ConfigManager:
@@ -51,4 +52,5 @@ class ConfigManager:
             intervalo_velas=os.getenv("INTERVALO_VELAS", "1m"),
             symbols=symbols,
             umbral_riesgo_diario=float(os.getenv("UMBRAL_RIESGO_DIARIO", 0.03)),
+            min_order_eur=float(os.getenv("MIN_ORDER_EUR", 10)),
         )
