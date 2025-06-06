@@ -28,6 +28,7 @@ from aprendizaje.entrenador_estrategias import actualizar_pesos_estrategias_symb
 from core.configuracion import cargar_configuracion_simbolo
 from core.monitor_estado_bot import monitorear_estado_periodicamente
 from core.ordenes_model import Orden
+from core.kelly import calcular_fraccion_kelly
 from indicadores.rsi import calcular_rsi
 from indicadores.momentum import calcular_momentum
 from indicadores.slope import calcular_slope
@@ -62,6 +63,8 @@ class TraderSimulado:
         self.lock_archivo = threading.Lock()
         self.fecha_actual = datetime.utcnow().date()
         self.capital_inicial_diario = self.capital_simulado.copy()
+        self.fraccion_kelly = calcular_fraccion_kelly()
+        log.info(f"⚖️ Fracción Kelly: {self.fraccion_kelly:.4f}")
 
         self.configuraciones = configuraciones or {}
         self.pesos_personalizados = pesos_personalizados or {}
@@ -368,7 +371,8 @@ class TraderSimulado:
         precio_entrada = orden.precio_entrada
         retorno_total = round((precio_salida - precio_entrada) / precio_entrada, 6)
         capital_inicial = self.capital_simulado[symbol]
-        ganancia = capital_inicial * retorno_total
+        invertido = capital_inicial * self.fraccion_kelly
+        ganancia = invertido * retorno_total
         self.capital_simulado[symbol] = capital_inicial + ganancia
         self.resultados[symbol].append(ganancia)
 

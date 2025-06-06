@@ -60,6 +60,7 @@ class Trader:
         self.risk = RiskManager(config.umbral_riesgo_diario)
         self.orders = OrderManager(config.modo_real, self.risk)
         self.cliente = crear_cliente(config)
+        self.fraccion_kelly = calcular_fraccion_kelly()
         log.info(f"⚖️ Fracción Kelly: {self.fraccion_kelly:.4f}")
         try:
             balance = self.cliente.fetch_balance()
