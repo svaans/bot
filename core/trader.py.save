@@ -414,9 +414,7 @@ class Trader:
 
     async def cerrar_orden_real(self, symbol, precio, cantidad, exito, motivo="Desconocido"):
         try:
-            if symbol not in self.ordenes_abiertas:
-                log.warning(f"se intento cerrar una orden existente : {symbol}")
-            return
+            if  symbol 
             crypto = symbol.split("/")[0]
             balance = self.cliente.fetch_balance()
             disponible = balance['free'].get(crypto, 0)

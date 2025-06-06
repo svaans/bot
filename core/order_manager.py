@@ -78,7 +78,15 @@ class OrderManager:
         if self.modo_real:
             info = asdict(orden)
             ordenes_reales.eliminar_orden(symbol)
-            ordenes_reales.registrar_orden(symbol, **info)
+            ordenes_reales.registrar_orden(
+                symbol,
+                info["precio_entrada"],
+                info["cantidad"],
+                info["stop_loss"],
+                info["take_profit"],
+                info["estrategias_activas"],
+                info["tendencia"],
+            )
         log.info(f"📤 Orden cerrada para {symbol} @ {precio:.2f} | {motivo}")
 
     def obtener(self, symbol: str) -> Optional[Orden]:
