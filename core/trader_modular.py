@@ -14,6 +14,7 @@ from core.risk_manager import RiskManager
 from core.order_manager import OrderManager
 from core.adaptador_umbral import calcular_tp_sl_adaptativos, calcular_umbral_adaptativo
 from core.logger import configurar_logger
+from core.monitor_estado_bot import monitorear_estado_periodicamente
 
 log = configurar_logger("trader")
 
@@ -36,6 +37,11 @@ class Trader:
         self.estado: Dict[str, EstadoSimbolo] = {s: EstadoSimbolo([]) for s in config.symbols}
         self._task: asyncio.Task | None = None
 
+    @property
+    def ordenes_abiertas(self):
+        """Compatibilidad con ``monitorear_estado_periodicamente``."""
+        return self.orders.ordenes
+
     async def ejecutar(self) -> None:
         """Inicia el procesamiento de todos los símbolos."""
         async def handle(candle: dict) -> None:
@@ -43,7 +49,8 @@ class Trader:
 
         symbols = list(self.estado.keys())
         self._task = asyncio.create_task(self.data_feed.escuchar(symbols, handle))
-        await self._task
+        self._task_estado = asyncio.create_task(monitorear_estado_periodicamente(self))
+        await asyncio.gather(self._task, self._task_estado)
 
     async def _procesar_vela(self, vela: dict) -> None:
         symbol = vela["symbol"]
@@ -83,4 +90,9 @@ class Trader:
                 await self._task
             except asyncio.CancelledError:
                 pass
-        
+        if self._task_estado:
+            self._task_estado.cancel()
+            try:
+                await self._task_estado
+            except asyncio.CancelledError:
+                pass

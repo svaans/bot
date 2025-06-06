@@ -48,8 +48,18 @@ def cargar_ordenes() -> dict[str, Orden]:
     return _CACHE_ORDENES
 
 def guardar_ordenes(ordenes: dict[str, Orden]) -> None:
-    """Guarda las órdenes en disco en formato Parquet."""
+    """Guarda las órdenes en disco en formato Parquet solo si hay cambios."""
     global _CACHE_ORDENES
+
+    # Evitar escrituras innecesarias cuando no hay modificaciones
+    if _CACHE_ORDENES is not None and _CACHE_ORDENES == ordenes:
+        return
+
+    # Si no hay órdenes y tampoco existe el archivo, no hacer nada
+    if not ordenes and not os.path.exists(RUTA_ORDENES):
+        _CACHE_ORDENES = ordenes
+        return
+    
     try:
         os.makedirs(os.path.dirname(RUTA_ORDENES), exist_ok=True)
         temp = RUTA_ORDENES + ".tmp"
@@ -72,7 +82,9 @@ def obtener_todas_las_ordenes():
 
 def actualizar_orden(symbol, data):
     ordenes = cargar_ordenes()
-    ordenes[symbol] = data
+    if ordenes.get(symbol) == data:
+        return
+    
     guardar_ordenes(ordenes)
     log.info(f"📌 Orden actualizada para {symbol}.")
 
