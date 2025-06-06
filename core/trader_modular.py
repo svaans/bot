@@ -16,6 +16,9 @@ from binance_api.cliente import crear_cliente
 from core.adaptador_umbral import calcular_tp_sl_adaptativos, calcular_umbral_adaptativo
 from core.logger import configurar_logger
 from core.monitor_estado_bot import monitorear_estado_periodicamente
+from core import ordenes_reales
+from core.adaptador_configuracion import configurar_parametros_dinamicos
+
 
 log = configurar_logger("trader")
 
@@ -37,7 +40,17 @@ class Trader:
         self.orders = OrderManager(config.modo_real)
         self.cliente = crear_cliente(config)
         self.estado: Dict[str, EstadoSimbolo] = {s: EstadoSimbolo([]) for s in config.symbols}
+        self.config_por_simbolo: Dict[str, dict] = {s: {} for s in config.symbols}
         self._task: asyncio.Task | None = None
+        self._task_estado: asyncio.Task | None = None
+
+        try:
+            self.orders.ordenes = ordenes_reales.obtener_todas_las_ordenes()
+        except Exception as e:
+            log.warning(f"⚠️ Error cargando órdenes previas: {e}")
+
+        if self.orders.ordenes:
+            log.warning("⚠️ Órdenes abiertas encontradas al iniciar. Serán monitoreadas.")
 
     @property
     def ordenes_abiertas(self):
@@ -82,6 +95,10 @@ class Trader:
             return
 
         df = pd.DataFrame(estado.buffer)
+        config_actual = configurar_parametros_dinamicos(
+            symbol, df, self.config_por_simbolo.get(symbol, {})
+        )
+        self.config_por_simbolo[symbol] = config_actual
         evaluacion = self.engine.evaluar_entrada(symbol, df)
         if not evaluacion:
             return
