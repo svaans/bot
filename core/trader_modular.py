@@ -50,7 +50,7 @@ class Trader:
         self.data_feed = DataFeed(config.intervalo_velas)
         self.engine = StrategyEngine()
         self.risk = RiskManager(config.umbral_riesgo_diario)
-        self.orders = OrderManager(config.modo_real)
+        self.orders = OrderManager(config.modo_real, self.risk)
         self.cliente = crear_cliente(config)
         self.estado: Dict[str, EstadoSimbolo] = {s: EstadoSimbolo([]) for s in config.symbols}
         self.config_por_simbolo: Dict[str, dict] = {s: {} for s in config.symbols}

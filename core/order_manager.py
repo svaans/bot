@@ -17,9 +17,10 @@ log = configurar_logger("orders", modo_silencioso=True)
 class OrderManager:
     """Abstrae la creación y cierre de órdenes."""
 
-    def __init__(self, modo_real: bool) -> None:
+    def __init__(self, modo_real: bool, risk=None) -> None:
         self.modo_real = modo_real
         self.ordenes: Dict[str, Orden] = {}
+        self.risk = risk
 
     # ------------------------------------------------------------------
     # Operaciones de apertura
@@ -64,6 +65,16 @@ class OrderManager:
         orden.precio_cierre = precio
         orden.fecha_cierre = datetime.utcnow().isoformat()
         orden.motivo_cierre = motivo
+        retorno = (
+            (precio - orden.precio_entrada) / orden.precio_entrada
+            if orden.precio_entrada
+            else 0.0
+        )
+        if retorno < 0 and self.risk is not None:
+            try:
+                self.risk.registrar_perdida(symbol, retorno)
+            except Exception as e:
+                log.warning(f"⚠️ No se pudo registrar pérdida para {symbol}: {e}")
         if self.modo_real:
             info = asdict(orden)
             ordenes_reales.eliminar_orden(symbol)
