@@ -12,6 +12,7 @@ from core.data_feed import DataFeed
 from core.strategy_engine import StrategyEngine
 from core.risk_manager import RiskManager
 from core.order_manager import OrderManager
+from binance_api.cliente import crear_cliente
 from core.adaptador_umbral import calcular_tp_sl_adaptativos, calcular_umbral_adaptativo
 from core.logger import configurar_logger
 from core.monitor_estado_bot import monitorear_estado_periodicamente
@@ -34,6 +35,7 @@ class Trader:
         self.engine = StrategyEngine()
         self.risk = RiskManager(config.umbral_riesgo_diario)
         self.orders = OrderManager(config.modo_real)
+        self.cliente = crear_cliente(config)
         self.estado: Dict[str, EstadoSimbolo] = {s: EstadoSimbolo([]) for s in config.symbols}
         self._task: asyncio.Task | None = None
 
@@ -41,6 +43,24 @@ class Trader:
     def ordenes_abiertas(self):
         """Compatibilidad con ``monitorear_estado_periodicamente``."""
         return self.orders.ordenes
+    
+    def _calcular_cantidad(self, precio: float) -> float:
+        """Determina la cantidad de cripto a comprar de forma simplificada."""
+        balance = self.cliente.fetch_balance()
+        euros = balance['total'].get('EUR', 0)
+        if euros <= 0:
+            return 0.0
+        euros_por_simbolo = euros / max(len(self.estado), 1)
+        euros_compra = euros_por_simbolo * 0.95
+        cantidad = round(euros_compra / precio, 6)
+        return cantidad if cantidad * precio >= 10 else 0.0
+
+    def _abrir_operacion_real(self, symbol: str, precio: float, sl: float, tp: float, estrategias: Dict) -> None:
+        cantidad = self._calcular_cantidad(precio)
+        if cantidad <= 0:
+            log.warning(f"❌ No se pudo calcular cantidad válida para {symbol}")
+            return
+        self.orders.abrir(symbol, precio, sl, tp, estrategias, "", cantidad)
 
     async def ejecutar(self) -> None:
         """Inicia el procesamiento de todos los símbolos."""
@@ -75,12 +95,18 @@ class Trader:
             log.debug(f"🚫 {symbol}: puntaje {puntaje:.2f} < umbral {umbral:.2f}")
             return
 
-        if self.risk.riesgo_superado(1.0):  # Capital total ficticio
+        balance = self.cliente.fetch_balance()
+        capital_total = balance['total'].get('EUR', 0)
+        if self.risk.riesgo_superado(capital_total):
             log.warning(f"🚫 Riesgo diario superado para {symbol}")
             return
 
         sl, tp = calcular_tp_sl_adaptativos(df, float(vela["close"]))
-        self.orders.abrir(symbol, float(vela["close"]), sl, tp, estrategias, "")
+        precio = float(vela["close"])
+        if self.config.modo_real:
+            self._abrir_operacion_real(symbol, precio, sl, tp, estrategias)
+        else:
+            self.orders.abrir(symbol, precio, sl, tp, estrategias, "")
 
     async def cerrar(self) -> None:
         if self._task:

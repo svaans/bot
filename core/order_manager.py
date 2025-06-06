@@ -24,12 +24,22 @@ class OrderManager:
     # ------------------------------------------------------------------
     # Operaciones de apertura
     # ------------------------------------------------------------------
-    def abrir(self, symbol: str, precio: float, sl: float, tp: float, estrategias: Dict, tendencia: str) -> None:
-        """Registra una nueva orden en memoria y, si corresponde, en Binance."""
+    def abrir(
+        self,
+        symbol: str,
+        precio: float,
+        sl: float,
+        tp: float,
+        estrategias: Dict,
+        tendencia: str,
+        cantidad: float = 0.0,
+    ) -> None:
+        """Registra una nueva orden en memoria y, si ``modo_real`` es ``True``
+        ejecuta la orden en Binance."""
         orden = Orden(
             symbol=symbol,
             precio_entrada=precio,
-            cantidad=0.0,
+            cantidad=cantidad,
             stop_loss=sl,
             take_profit=tp,
             estrategias_activas=estrategias,
@@ -39,7 +49,9 @@ class OrderManager:
         )
         self.ordenes[symbol] = orden
         if self.modo_real:
-            ordenes_reales.registrar_orden(symbol, precio, 0.0, sl, tp, estrategias, tendencia)
+            if cantidad > 0:
+                ordenes_reales.ejecutar_orden_market(symbol, cantidad)
+            ordenes_reales.registrar_orden(symbol, precio, cantidad, sl, tp, estrategias, tendencia)
         log.info(f"🟢 Orden abierta para {symbol} @ {precio:.2f}")
     # ------------------------------------------------------------------
     # Operaciones de cierre
