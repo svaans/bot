@@ -52,7 +52,15 @@ def guardar_ordenes(ordenes: dict[str, Orden]) -> None:
     global _CACHE_ORDENES
 
     # Evitar escrituras innecesarias cuando no hay modificaciones
-    if _CACHE_ORDENES is not None and _CACHE_ORDENES == ordenes:
+    current_hash = json.dumps(
+        {k: o.to_dict() for k, o in ordenes.items()}, sort_keys=True
+    )
+    cache_hash = None
+    if _CACHE_ORDENES is not None:
+        cache_hash = json.dumps(
+            {k: o.to_dict() for k, o in _CACHE_ORDENES.items()}, sort_keys=True
+        )
+    if cache_hash == current_hash:
         return
 
     # Si no hay órdenes y tampoco existe el archivo, no hacer nada
@@ -85,6 +93,7 @@ def actualizar_orden(symbol, data):
     if ordenes.get(symbol) == data:
         return
     
+    ordenes[symbol] = data
     guardar_ordenes(ordenes)
     log.info(f"📌 Orden actualizada para {symbol}.")
 

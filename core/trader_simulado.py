@@ -60,6 +60,8 @@ class TraderSimulado:
         self.locks = {s: asyncio.Lock() for s in symbols}
         self.ultimo_log_cooldown = {}
         self.lock_archivo = threading.Lock()
+        self.fecha_actual = datetime.utcnow().date()
+        self.capital_inicial_diario = self.capital_simulado.copy()
 
         self.configuraciones = configuraciones or {}
         self.pesos_personalizados = pesos_personalizados or {}
@@ -98,6 +100,26 @@ class TraderSimulado:
         riesgo_maximo = config.get("riesgo_maximo_diario", 0.3)
         capital_actual = self.capital_simulado.get(symbol, 1000)
         return (1000 - capital_actual) / 1000 > riesgo_maximo
+    
+    def ajustar_capital_diario(self, factor: float = 0.2, limite: float = 0.3) -> None:
+        """Redistribuye el capital entre símbolos según el rendimiento diario."""
+        total = sum(self.capital_simulado.values())
+        pesos = {}
+        for symbol in self.symbols:
+            inicio = self.capital_inicial_diario.get(symbol, self.capital_simulado[symbol])
+            final = self.capital_simulado[symbol]
+            rendimiento = (final - inicio) / inicio if inicio else 0
+            peso = 1 + factor * rendimiento
+            peso = max(1 - limite, min(1 + limite, peso))
+            pesos[symbol] = peso
+
+        suma = sum(pesos.values()) or 1
+        for symbol in self.symbols:
+            self.capital_simulado[symbol] = round(total * pesos[symbol] / suma, 2)
+
+        self.capital_inicial_diario = self.capital_simulado.copy()
+        self.fecha_actual = datetime.utcnow().date()
+        log.info(f"💰 Capital redistribuido: {self.capital_simulado}")
 
     async def ejecutar(self):
         self.tarea_estado = asyncio.create_task(monitorear_estado_periodicamente(self))
@@ -111,6 +133,8 @@ class TraderSimulado:
     async def procesar_vela(self, vela):
         symbol = vela["symbol"]
         async with self.locks[symbol]:
+            if datetime.utcnow().date() != self.fecha_actual:
+                self.ajustar_capital_diario()
             self.buffer[symbol].append(vela)
             self.buffer[symbol] = self.buffer[symbol][-50:]
             if vela["timestamp"] == self.ultimo_timestamp.get(symbol):

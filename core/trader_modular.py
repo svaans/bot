@@ -20,6 +20,7 @@ from core.adaptador_umbral import (
     calcular_umbral_adaptativo,
 )
 from core.pesos import cargar_pesos_estrategias
+from core.kelly import calcular_fraccion_kelly
 from aprendizaje.entrenador_estrategias import actualizar_pesos_estrategias_symbol
 from core.logger import configurar_logger
 from core.monitor_estado_bot import monitorear_estado_periodicamente
@@ -59,6 +60,18 @@ class Trader:
         self.risk = RiskManager(config.umbral_riesgo_diario)
         self.orders = OrderManager(config.modo_real, self.risk)
         self.cliente = crear_cliente(config)
+        log.info(f"⚖️ Fracción Kelly: {self.fraccion_kelly:.4f}")
+        try:
+            balance = self.cliente.fetch_balance()
+            euros = balance['total'].get('EUR', 0)
+        except Exception:
+            euros = 0
+        inicial = euros / max(len(config.symbols), 1)
+        self.capital_por_simbolo: Dict[str, float] = {
+            s: inicial for s in config.symbols
+        }
+        self.capital_inicial_diario = self.capital_por_simbolo.copy()
+        self.fecha_actual = datetime.utcnow().date() 
         self.estado: Dict[str, EstadoSimbolo] = {s: EstadoSimbolo([]) for s in config.symbols}
         self.config_por_simbolo: Dict[str, dict] = {s: {} for s in config.symbols}
         self.pesos_por_simbolo: Dict[str, Dict[str, float]] = cargar_pesos_estrategias()
@@ -100,6 +113,9 @@ class Trader:
         reporter_diario.registrar_operacion(info)
         actualizar_pesos_estrategias_symbol(orden.symbol)
         self.pesos_por_simbolo = cargar_pesos_estrategias()
+        capital_inicial = self.capital_por_simbolo.get(orden.symbol, 0.0)
+        ganancia = capital_inicial * retorno_total
+        self.capital_por_simbolo[orden.symbol] = capital_inicial + ganancia
         self.historial_cierres[orden.symbol] = {
             "timestamp": datetime.utcnow().isoformat(),
             "motivo": motivo.lower().strip(),
@@ -110,16 +126,36 @@ class Trader:
         """Compatibilidad con ``monitorear_estado_periodicamente``."""
         return self.orders.ordenes
     
-    def _calcular_cantidad(self, precio: float) -> float:
-        """Determina la cantidad de cripto a comprar de forma simplificada."""
+    def ajustar_capital_diario(self, factor: float = 0.2, limite: float = 0.3) -> None:
+        """Redistribuye el capital entre símbolos según rendimiento diario."""
+        total = sum(self.capital_por_simbolo.values())
+        pesos = {}
+        for symbol in self.capital_por_simbolo:
+            inicio = self.capital_inicial_diario.get(symbol, self.capital_por_simbolo[symbol])
+            final = self.capital_por_simbolo[symbol]
+            rendimiento = (final - inicio) / inicio if inicio else 0
+            peso = 1 + factor * rendimiento
+            peso = max(1 - limite, min(1 + limite, peso))
+            pesos[symbol] = peso
+
+        suma = sum(pesos.values()) or 1
+        for symbol in self.capital_por_simbolo:
+            self.capital_por_simbolo[symbol] = round(total * pesos[symbol] / suma, 2)
+
+        self.capital_inicial_diario = self.capital_por_simbolo.copy()
+        self.fecha_actual = datetime.utcnow().date()
+        log.info(f"💰 Capital redistribuido: {self.capital_por_simbolo}")
+    
+    def _calcular_cantidad(self, symbol: str, precio: float) -> float:
+        """Determina la cantidad de cripto a comprar con capital asignado."""
         balance = self.cliente.fetch_balance()
         euros = balance['total'].get('EUR', 0)
         if euros <= 0:
             log.debug("Saldo en EUR insuficiente")
             return 0.0
-        euros_por_simbolo = euros / max(len(self.estado), 1)
-        euros_compra = euros_por_simbolo * 0.95
-        cantidad = round(euros_compra / precio, 6)
+        capital_symbol = self.capital_por_simbolo.get(symbol, euros / max(len(self.estado), 1))
+        riesgo = capital_symbol * self.fraccion_kelly
+        cantidad = round(riesgo / precio, 6)
         if cantidad * precio < self.config.min_order_eur:
             log.debug(
                 f"Orden mínima {self.config.min_order_eur}€, intento {cantidad * precio:.2f}€"
@@ -128,7 +164,7 @@ class Trader:
         return cantidad
 
     def _abrir_operacion_real(self, symbol: str, precio: float, sl: float, tp: float, estrategias: Dict) -> None:
-        cantidad = self._calcular_cantidad(precio)
+        cantidad = self._calcular_cantidad(symbol, precio)
         if cantidad <= 0:
             log.warning(
                 f"❌ No se pudo calcular cantidad válida para {symbol}"
@@ -207,6 +243,8 @@ class Trader:
     async def _procesar_vela(self, vela: dict) -> None:
         symbol = vela["symbol"]
         estado = self.estado[symbol]
+        if datetime.utcnow().date() != self.fecha_actual:
+            self.ajustar_capital_diario()
         estado.buffer.append(vela)
         if len(estado.buffer) > 50:
             estado.buffer = estado.buffer[-50:]

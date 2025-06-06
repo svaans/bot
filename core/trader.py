@@ -416,7 +416,7 @@ class Trader:
         try:
             if symbol not in self.ordenes_abiertas:
                 log.warning(f"se intento cerrar una orden existente : {symbol}")
-            return
+                return
             crypto = symbol.split("/")[0]
             balance = self.cliente.fetch_balance()
             disponible = balance['free'].get(crypto, 0)
@@ -471,7 +471,9 @@ class Trader:
                 tendencia_cierre, _ = detectar_tendencia(symbol, pd.DataFrame(self.buffer.get(symbol, [])))
                 self.ultima_tendencia[symbol] = tendencia_cierre
 
-            log.info(f"{'✔️' if exito else '⚠️'} ORDEN CERRADA para {symbol} a {precio:.2f} | Motivo: {motivo}")
+            log.info(
+                f"🛑 Orden cerrada: {symbol} — Salida: {precio:.4f} — Retorno: {retorno_total*100:.2f}% — Motivo: {motivo}"
+            )
 
         except Exception as e:
             log.error(f"❌ Error al cerrar orden para {symbol}: {e}")
