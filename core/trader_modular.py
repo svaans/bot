@@ -70,12 +70,16 @@ class Trader:
         )
         self.fraccion_kelly = calcular_fraccion_kelly()
         log.info(f"⚖️ Fracción Kelly: {self.fraccion_kelly:.4f}")
-        try:
-            balance = self.cliente.fetch_balance()
-            euros = balance['total'].get('EUR', 0)
-        except BaseError as e:
-            log.error(f"❌ Error al obtener balance: {e}")
-            raise
+        euros = 0
+        if config.api_key and config.api_secret:
+            try:
+                balance = self.cliente.fetch_balance()
+                euros = balance['total'].get('EUR', 0)
+            except BaseError as e:
+                log.error(f"❌ Error al obtener balance: {e}")
+                raise
+        else:
+            log.info("⚠️ Claves API no proporcionadas, se inicia con balance 0")
         inicial = euros / max(len(config.symbols), 1)
         inicial = max(inicial, 20.0)
         self.capital_por_simbolo: Dict[str, float] = {
