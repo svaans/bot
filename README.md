@@ -37,6 +37,14 @@ Las pruebas del frontend se ejecutan con:
 
 ```bash
 npm test --prefix fronted
+```
+Para probar los componentes del bot con **pytest**:
+
+```bash
+pytest
+```
+
+En CI se recomienda ejecutar estas pruebas en este orden para asegurar la integridad del proyecto.
 
 ## Arquitectura modular
 

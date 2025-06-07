@@ -11,6 +11,7 @@ from core.logger import configurar_logger
 CONFIG = dotenv_values("config/claves.env")
 MODO_REAL = CONFIG.get("MODO_REAL", "False") == "True"
 CARPETA_ORDENES = "ordenes_reales" if MODO_REAL else "ordenes_simuladas"
+CARPETA_HISTORICO = "ultimas_operaciones"
 RUTA_PESOS = "config/estrategias_pesos.json"
 MIN_OPERACIONES = 5
 
@@ -36,11 +37,20 @@ def normalizar_scores(scores):
     max_score = max(scores.values(), default=1)
     return {k: v / max_score for k, v in scores.items()}
 
+def dividir_train_test(df: pd.DataFrame, test_ratio: float = 0.2):
+    """Divide el DataFrame en particiones de entrenamiento y prueba."""
+    if df.empty:
+        return df, pd.DataFrame()
+    n_test = max(1, int(len(df) * test_ratio))
+    df_train = df.iloc[:-n_test]
+    df_test = df.iloc[-n_test:]
+    return df_train, df_test
+
 def actualizar_pesos_estrategias_symbol(symbol: str):
     FACTOR_SUAVIZADO = 0.02  # 2% de ajuste diario máximo
 
-    archivo = f"{symbol.replace('/', '_')}.parquet"
-    ruta = os.path.join(CARPETA_ORDENES, archivo)
+    archivo = f"{symbol.replace('/', '_').upper()}.parquet"
+    ruta = os.path.join(CARPETA_HISTORICO, archivo)
 
     for intento in range(3):
         if os.path.exists(ruta):
@@ -48,7 +58,7 @@ def actualizar_pesos_estrategias_symbol(symbol: str):
         time.sleep(0.3)
 
     if not os.path.exists(ruta):
-        print(f"⚠️ No se encontró archivo de órdenes para {symbol} en {CARPETA_ORDENES}")
+        print(f"⚠️ No se encontró historial para {symbol} en {CARPETA_HISTORICO}")
         return
 
     try:
@@ -57,7 +67,13 @@ def actualizar_pesos_estrategias_symbol(symbol: str):
         print(f"❌ Error al leer el archivo {ruta}: {e}")
         return
 
-    datos_estrategias = evaluar_estrategias(ordenes)
+    if len(ordenes) < MIN_OPERACIONES:
+        log.info(f"⚠️ Insuficientes operaciones para {symbol}.")
+        return
+
+    train_df, test_df = dividir_train_test(ordenes)
+
+    datos_estrategias = evaluar_estrategias(train_df)
     nuevos_scores = {}
 
     for estrategia, retornos in datos_estrategias.items():
@@ -94,3 +110,13 @@ def actualizar_pesos_estrategias_symbol(symbol: str):
     print(f"✅ Pesos suavizados para {symbol} en modo {'REAL' if MODO_REAL else 'SIMULADO'}:")
     for estrategia, peso in pesos_suavizados.items():
         print(f"  - {estrategia}: {peso:.3f}")
+
+    # --------- Validación básica usando el conjunto de prueba ---------
+    datos_test = evaluar_estrategias(test_df)
+    resultados = [r for lst in datos_test.values() for r in lst]
+    if resultados:
+        promedio = sum(resultados) / len(resultados)
+        winrate = sum(1 for r in resultados if r > 0) / len(resultados)
+        log.info(
+            f"📊 Validación {symbol}: retorno medio {promedio:.3f}, winrate {winrate*100:.2f}%"
+        )
