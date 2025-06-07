@@ -139,3 +139,35 @@ def guardar_orden_simulada(symbol: str, nueva_orden: dict):
             except Exception as e:
                 log.error(f"❌ Error inesperado guardando orden simulada: {e}")
                 return
+
+def guardar_orden_real(symbol: str, orden: dict | 'Orden'):
+    """Guarda una orden real en formato Parquet por símbolo."""
+    if hasattr(orden, "to_parquet_record"):
+        data = orden.to_parquet_record()
+    else:
+        data = orden
+    archivo = f"ordenes_reales/{symbol.replace('/', '_').lower()}.parquet"
+    os.makedirs(os.path.dirname(archivo), exist_ok=True)
+
+    if isinstance(data.get("timestamp"), (pd.Timestamp, datetime)):
+        data["timestamp"] = data["timestamp"].timestamp()
+
+    try:
+        ordenes = []
+        if os.path.exists(archivo):
+            try:
+                df = pd.read_parquet(archivo)
+                ordenes = df.to_dict("records")
+            except Exception as e:
+                backup = archivo.replace(
+                    ".parquet", f"_corrupto_{int(datetime.now().timestamp())}.parquet"
+                )
+                os.rename(archivo, backup)
+                log.warning(f"⚠️ Archivo corrupto renombrado: {backup}")
+                ordenes = []
+
+        ordenes.append(data)
+        pd.DataFrame(ordenes).to_parquet(archivo, index=False)
+        log.info(f"💾 Orden REAL registrada en {archivo}")
+    except Exception as e:
+        log.error(f"❌ Error guardando orden real: {e}")
