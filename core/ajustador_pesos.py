@@ -36,8 +36,9 @@ def ajustar_pesos_por_desempeno(resultados_backtest, ruta_salida):
         with open(ruta_salida, "w") as f:
             json.dump(pesos_ajustados, f, indent=4)
         print(f"✅ Pesos ajustados guardados en {ruta_salida}")
-    except Exception as e:
+    except OSError as e:
         print(f"❌ Error al guardar pesos en {ruta_salida}: {e}")
+        raise
 
     return pesos_ajustados
 

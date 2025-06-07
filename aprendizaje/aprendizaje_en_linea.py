@@ -10,6 +10,8 @@ CARPETA_OPERACIONES = "ultimas_operaciones"
 RUTA_PESOS = "config/estrategias_pesos.json"
 MAX_OPERACIONES = 30
 MIN_OPERACIONES = 5
+# Nuevo tamaño de ventana para actualizar pesos
+VENTANA_ACTUALIZACION = 10
 
 log = configurar_logger("trader_simulado", modo_silencioso=True)
 os.makedirs(CARPETA_OPERACIONES, exist_ok=True)
@@ -54,9 +56,9 @@ def registrar_resultado_trade(symbol: str, orden: dict, ganancia: float):
         print(f"❌ Error al guardar historial para {symbol}: {e}")
         return
 
-    # ---------- Entrenamiento: actualizar pesos si hay suficientes operaciones ----------
-    if len(historial) >= MIN_OPERACIONES:
-        actualizar_pesos_dinamicos(symbol, historial)
+    if len(historial) >= VENTANA_ACTUALIZACION and len(historial) % VENTANA_ACTUALIZACION == 0:
+        ventana = historial[-VENTANA_ACTUALIZACION:]
+        actualizar_pesos_dinamicos(symbol, ventana)
 
 
 def actualizar_pesos_dinamicos(symbol: str, historial: list, factor_ajuste=0.05):
