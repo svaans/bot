@@ -162,7 +162,8 @@ class Trader:
             log.debug("Saldo en EUR insuficiente")
             return 0.0
         capital_symbol = self.capital_por_simbolo.get(symbol, euros / max(len(self.estado), 1))
-        riesgo = capital_symbol * self.fraccion_kelly
+        riesgo = max(capital_symbol * self.fraccion_kelly, self.config.min_order_eur)
+        riesgo = min(riesgo, euros)
         cantidad = round(riesgo / precio, 6)
         if cantidad * precio < self.config.min_order_eur:
             log.debug(
@@ -333,6 +334,13 @@ class Trader:
             volatilidad_actual=volatilidad_actual,
             ventanas=5,
         )
+
+        minimo = self.persistencia.minimo
+        if repetidas < minimo:
+            log.info(
+                f"🚫 Entrada rechazada en {symbol}: Persistencia {repetidas}/5 < {minimo}"
+            )
+            return
 
         if repetidas < 2 and puntaje < 1.2 * umbral:
             log.info(

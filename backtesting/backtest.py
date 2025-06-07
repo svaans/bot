@@ -1,72 +1,118 @@
-import os
-import pandas as pd
+# -*- coding: utf-8 -*-
+"""Backtesting usando el Trader modular sin side effects."""
+
 import asyncio
-from datetime import datetime
-from tqdm import tqdm
+import logging
+from datetime import datetime, timezone
 from typing import Iterable, Dict
-from core.trader_simulado import TraderSimulado
+
+import pandas as pd
+from tqdm import tqdm
+
+from core.config_manager import Config
+from core.trader_modular import Trader
 
 BUFFER_INICIAL = 30
 CAPITAL_INICIAL = 1000.0
 
-async def backtest_con_datos_historicos(
-    symbols: Iterable[str], ruta_datos: str = "datos"
-) -> TraderSimulado:
-    """Ejecuta el backtesting con velas históricas para los *symbols* indicados."""
 
-    bot = TraderSimulado(list(symbols))
+class DummyCliente:
+    def fetch_balance(self):
+        return {"total": {"EUR": CAPITAL_INICIAL}}
+
+
+class DummyRisk:
+    def riesgo_superado(self, capital_total: float) -> bool:
+        return False
+
+    def registrar_perdida(self, symbol: str, perdida: float) -> None:
+        pass
+
+
+class BacktestTrader(Trader):
+    """Versión simplificada de ``Trader`` para backtesting."""
+
+    def __init__(self, config: Config) -> None:
+        super().__init__(config)
+        self.notificador = None
+        self.orders.notificador = None
+        self.orders.risk = DummyRisk()
+        self.cliente = DummyCliente()
+        self.orders.ordenes = {}
+        self.resultados: Dict[str, list] = {s: [] for s in config.symbols}
+
+    def _cerrar_y_reportar(self, orden, precio: float, motivo: str) -> None:
+        retorno_total = (
+            (precio - orden.precio_entrada) / orden.precio_entrada
+            if orden.precio_entrada
+            else 0.0
+        )
+        self.orders.cerrar(orden.symbol, precio, motivo)
+        capital_inicial = self.capital_por_simbolo.get(orden.symbol, 0.0)
+        ganancia = capital_inicial * retorno_total
+        self.capital_por_simbolo[orden.symbol] = capital_inicial + ganancia
+        self.resultados[orden.symbol].append(ganancia)
+        self.historial_cierres[orden.symbol] = {
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "motivo": motivo.lower().strip(),
+        }
+
+
+async def backtest_modular(symbols: Iterable[str], ruta_datos: str = "datos") -> BacktestTrader:
+    """Ejecuta el backtesting utilizando el Trader modular."""
+
+    config = Config(
+        api_key="",
+        api_secret="",
+        modo_real=False,
+        intervalo_velas="1m",
+        symbols=list(symbols),
+        umbral_riesgo_diario=0.03,
+        min_order_eur=10.0,
+    )
+
+    bot = BacktestTrader(config)
 
     total_ticks: Dict[str, pd.DataFrame] = {
-        s: pd.read_parquet(
-            f"{ruta_datos}/{s.replace('/', '_').lower()}_1m.parquet"
-        )
+        s: pd.read_parquet(f"{ruta_datos}/{s.replace('/', '_').lower()}_1m.parquet")
         .dropna()
         .sort_values("timestamp")
-        for s in bot.symbols
+        for s in bot.config.symbols
     }
 
-    max_largo = max(len(df) for df in total_ticks.values())
-    total_pasos = sum(min(max_largo, len(df)) for df in total_ticks.values())
-    
+    max_len = max(len(df) for df in total_ticks.values())
+    total_steps = sum(min(max_len, len(df)) for df in total_ticks.values())
 
-    with tqdm(total=total_pasos, desc="⏳ Procesando velas") as progress_bar:
-        for i in range(BUFFER_INICIAL, max_largo):
+    with tqdm(total=total_steps, desc="⏳ Procesando velas") as bar:
+        for i in range(BUFFER_INICIAL, max_len):
             tareas = []
-            for symbol in bot.symbols:
+            for symbol in bot.config.symbols:
                 df = total_ticks[symbol]
                 if i >= len(df):
                     continue
-
-                fila = df.iloc[i]
+                row = df.iloc[i]
                 vela = {
                     "symbol": symbol,
-                    "timestamp": fila["timestamp"],
-                    "open": fila["open"],
-                    "high": fila["high"],
-                    "low": fila["low"],
-                    "close": fila["close"],
-                    "volume": fila["volume"],
+                    "timestamp": row["timestamp"],
+                    "open": row["open"],
+                    "high": row["high"],
+                    "low": row["low"],
+                    "close": row["close"],
+                    "volume": row["volume"],
                 }
-
-                tareas.append(bot.procesar_vela(vela))
-
+                tareas.append(bot._procesar_vela(vela))
             if tareas:
                 await asyncio.gather(*tareas)
-                progress_bar.update(len(tareas))
+                bar.update(len(tareas))
 
     await bot.cerrar()
-    generar_informe_completo(bot)
+    generar_informe(bot)
     return bot
 
-def generar_informe_completo(
-    bot: TraderSimulado, capital_inicial: float = CAPITAL_INICIAL
-) -> None:
-    """Genera un informe de resultados en consola y en `resultados/`."""
 
-    informe = []
-    informe.append("🧾 INFORME DE BACKTESTING")
-    informe.append(f"Fecha de ejecución: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-    informe.append("")
+def generar_informe(bot: BacktestTrader, capital_inicial: float = CAPITAL_INICIAL) -> None:
+    print("🧾 INFORME DE BACKTESTING")
+    print(f"Fecha de ejecución: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
 
     total_ordenes = 0
     total_ganancia = 0.0
@@ -87,36 +133,31 @@ def generar_informe_completo(
         total_ganancia += ganancia
         total_ganadoras += ganadoras
 
-        informe.append(f"📌 {symbol}")
-        informe.append(f"- Operaciones totales: {total}")
-        informe.append(f"- Ganancia neta: {ganancia:.2f} €")
-        informe.append(f"- Rentabilidad: {rentabilidad:.2f} %")
-        informe.append(f"- Winrate: {winrate:.2f} % ({ganadoras}/{total})")
-        informe.append(f"- Mejor operación: {ganancia_max:.2f} €")
-        informe.append(f"- Peor operación: {perdida_max:.2f} €")
-        informe.append("")
+        print(f"📌 {symbol}")
+        print(f"- Operaciones totales: {total}")
+        print(f"- Ganancia neta: {ganancia:.2f} €")
+        print(f"- Rentabilidad: {rentabilidad:.2f} %")
+        print(f"- Winrate: {winrate:.2f} % ({ganadoras}/{total})")
+        print(f"- Mejor operación: {ganancia_max:.2f} €")
+        print(f"- Peor operación: {perdida_max:.2f} €\n")
 
     winrate_global = (total_ganadoras / total_ordenes * 100) if total_ordenes else 0
-    rentabilidad_total = (total_ganancia / (capital_inicial * len(bot.symbols))) * 100
+    rentabilidad_total = (
+        total_ganancia / (capital_inicial * len(bot.config.symbols)) * 100
+        if bot.config.symbols
+        else 0
+    )
 
-    informe.append("🎯 RESUMEN GLOBAL")
-    informe.append(f"- Total operaciones: {total_ordenes}")
-    informe.append(f"- Winrate global: {winrate_global:.2f} %")
-    informe.append(f"- Ganancia total: {total_ganancia:.2f} €")
-    informe.append(f"- Rentabilidad total: {rentabilidad_total:.2f} %")
+    print("🎯 RESUMEN GLOBAL")
+    print(f"- Total operaciones: {total_ordenes}")
+    print(f"- Winrate global: {winrate_global:.2f} %")
+    print(f"- Ganancia total: {total_ganancia:.2f} €")
+    print(f"- Rentabilidad total: {rentabilidad_total:.2f} %")
 
-    # Guardar informe
-    os.makedirs("resultados", exist_ok=True)
-    ruta_txt = "resultados/informe_backtesting.txt"
-    with open(ruta_txt, "w", encoding="utf-8") as f:
-        for linea in informe:
-            print(linea)
-            f.write(linea + "\n")
-
-    print(f"\n📁 Informe guardado en: {ruta_txt}")
 
 if __name__ == "__main__":
-    symbols = ["BTC/EUR", "ETH/EUR", "ADA/EUR"]
-    asyncio.run(backtest_con_datos_historicos(symbols))
+    import sys
 
-
+    logging.disable(logging.CRITICAL)
+    symbols = sys.argv[1:] or ["BTC/EUR", "ETH/EUR", "ADA/EUR"]
+    asyncio.run(backtest_modular(symbols))

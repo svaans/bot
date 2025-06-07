@@ -21,7 +21,7 @@ from core.adaptador_umbral import (
     calcular_tp_sl_adaptativos,
 )
 from core.logger import configurar_logger, log_resumen_operacion
-from config.config import INTERVALO_VELAS, MODO_REAL
+from config.config import INTERVALO_VELAS, MODO_REAL, PERSISTENCIA_MINIMA
 from binance_api.cliente import crear_cliente
 from core.utils import respaldar_archivo, guardar_operacion_en_csv, validar_dataframe, segundos_transcurridos
 from core.pesos import cargar_pesos_estrategias
@@ -291,11 +291,18 @@ class Trader:
             )
 
             # Condición inteligente de entrada
-            if repetidas < 2 and puntaje < 1.2 * umbral:
-                log.info(f"🚫 Entrada rechazada en {symbol}: {repetidas}/5 señales persistentes y puntaje débil ({puntaje:.2f})")
+            if repetidas < PERSISTENCIA_MINIMA:
+                log.info(
+                    f"🚫 Entrada rechazada en {symbol}: Persistencia {repetidas}/5 < {PERSISTENCIA_MINIMA}"
+                )
                 return
-             elif repetidas < 2:
-                log.info(f"⚠️ Entrada débil en {symbol}: Persistencia {repetidas}/5 insuficiente pero puntaje alto ({puntaje}) > Umbral {umbral} — Permitida.")
+            log.info(
+                    f"🚫 Entrada rechazada en {symbol}: {repetidas}/5 señales persistentes y puntaje débil ({puntaje:.2f})"
+                return
+            elif repetidas < 2:
+                log.info(
+                    f"⚠️ Entrada débil en {symbol}: Persistencia {repetidas}/5 insuficiente pero puntaje alto ({puntaje}) > Umbral {umbral} — Permitida."
+                )
             # 🎯 Validación técnica final
             rsi = calcular_rsi(df)
             momentum = calcular_momentum(df)
