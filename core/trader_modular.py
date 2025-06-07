@@ -22,7 +22,7 @@ from core.adaptador_umbral import (
 )
 from core.pesos import cargar_pesos_estrategias
 from core.kelly import calcular_fraccion_kelly
-from core.persistencia_tecnica import PersistenciaTecnica
+from core.persistencia_tecnica import PersistenciaTecnica, coincidencia_parcial
 from aprendizaje.entrenador_estrategias import actualizar_pesos_estrategias_symbol
 from core.logger import configurar_logger
 from core.monitor_estado_bot import monitorear_estado_periodicamente
@@ -35,7 +35,7 @@ from estrategias_salida.salida_por_tendencia import verificar_reversion_tendenci
 from estrategias_salida.gestor_salidas import evaluar_salidas, verificar_filtro_tecnico
 from estrategias_salida.salida_stoploss import salida_stoploss
 from filtros.filtro_salidas import validar_necesidad_de_salida
-from core.tendencia import detectar_tendencia, señales_repetidas
+from core.tendencia import detectar_tendencia
 from filtros.validador_entradas import evaluar_validez_estrategica
 from estrategias_entrada.gestor_entradas import entrada_permitida
 from indicadores.rsi import calcular_rsi
@@ -233,28 +233,22 @@ class Trader:
         media_close = np.mean(ventana_close)
         volatilidad_actual = np.std(ventana_close) / media_close if media_close else 0
 
-        repetidas = señales_repetidas(
-            buffer=estado.buffer,
-            estrategias_func=pesos_symbol,
-            tendencia_actual=tendencia_actual,
-            volatilidad_actual=volatilidad_actual,
-            ventanas=5,
-        )
+        repetidas = coincidencia_parcial(estado.buffer, pesos_symbol, ventanas=5)
 
         minimo = self.persistencia.minimo
         if repetidas < minimo:
-            self._rechazo(symbol, f"Persistencia {repetidas}/5 < {minimo}")
+            self._rechazo(symbol, f"Persistencia {repetidas:.2f} < {minimo}")
             return False
 
         if repetidas < 1 and puntaje < 1.2 * umbral:
             self._rechazo(
                 symbol,
-                f"{repetidas}/5 señales persistentes y puntaje débil ({puntaje:.2f})",
+                f"{repetidas:.2f} coincidencia y puntaje débil ({puntaje:.2f})",
             )
             return False
         elif repetidas < 1:
             log.info(
-                f"⚠️ Entrada débil en {symbol}: Persistencia {repetidas}/5 insuficiente pero puntaje alto ({puntaje}) > Umbral {umbral} — Permitida."
+                f"⚠️ Entrada débil en {symbol}: Coincidencia {repetidas:.2f} insuficiente pero puntaje alto ({puntaje}) > Umbral {umbral} — Permitida."
             )
         return True
 
@@ -363,28 +357,35 @@ class Trader:
         if vela.get("timestamp") == estado.ultimo_timestamp:
             return
         estado.ultimo_timestamp = vela.get("timestamp")
-        if len(estado.buffer) < 30:
-            return
+        
 
         df = pd.DataFrame(estado.buffer)
-        tendencia_actual, _ = detectar_tendencia(symbol, df)
-        if self.orders.obtener(symbol):
-            self._verificar_salidas(symbol, df)
-            return
-        # Ajusta parámetros dinámicos y evalúa las estrategias activas
         config_actual = configurar_parametros_dinamicos(
             symbol, df, self.config_por_simbolo.get(symbol, {})
         )
         self.config_por_simbolo[symbol] = config_actual
+        
         evaluacion = self.engine.evaluar_entrada(symbol, df)
-        if not evaluacion:
+        estrategias = evaluacion.get("estrategias_activas", {})
+        estado.buffer[-1]["estrategias_activas"] = estrategias
+        self.persistencia.actualizar(symbol, estrategias)
+
+        if len(estado.buffer) < 30:
+            return
+
+        tendencia_actual, _ = detectar_tendencia(symbol, df)
+        if self.orders.obtener(symbol):
+            self._verificar_salidas(symbol, df)
             return
 
         
-        estrategias = evaluacion.get("estrategias_activas", {})
         pesos_symbol = self.pesos_por_simbolo.get(symbol, {})
         umbral = calcular_umbral_adaptativo(symbol, df, estrategias, pesos_symbol)
-        estrategias_persistentes = self.persistencia.filtrar_persistentes(symbol, estrategias)
+        estrategias_persistentes = {
+            e: True
+            for e, act in estrategias.items()
+            if act and self.persistencia.es_persistente(symbol, e)
+        }
         if not estrategias_persistentes:
             return
         puntaje = sum(pesos_symbol.get(k, 0) for k in estrategias_persistentes)
