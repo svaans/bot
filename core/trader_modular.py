@@ -173,13 +173,13 @@ class Trader:
         capital_symbol = self.capital_por_simbolo.get(symbol, euros / max(len(self.estado), 1))
         riesgo = max(capital_symbol * self.fraccion_kelly, self.config.min_order_eur)
         riesgo = min(riesgo, euros)
-        cantidad = round(riesgo / precio, 6)
+        cantidad = riesgo / precio
         if cantidad * precio < self.config.min_order_eur:
             log.debug(
                 f"Orden mínima {self.config.min_order_eur}€, intento {cantidad * precio:.2f}€"
             )
             return 0.0
-        return cantidad
+        return round(cantidad, 6)
     
     # Helpers de soporte -------------------------------------------------
 
