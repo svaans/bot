@@ -40,6 +40,10 @@ class BacktestTrader(Trader):
         self.cliente = DummyCliente()
         self.orders.ordenes = {}
         self.resultados: Dict[str, list] = {s: [] for s in config.symbols}
+        capital_unit = CAPITAL_INICIAL / max(len(config.symbols), 1)
+        capital_unit = max(capital_unit, 20.0)
+        self.capital_por_simbolo = {s: capital_unit for s in config.symbols}
+        self.capital_inicial_diario = self.capital_por_simbolo.copy()
 
     def _cerrar_y_reportar(self, orden, precio: float, motivo: str) -> None:
         retorno_total = (

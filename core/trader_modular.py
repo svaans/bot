@@ -75,6 +75,7 @@ class Trader:
         except Exception:
             euros = 0
         inicial = euros / max(len(config.symbols), 1)
+        inicial = max(inicial, 20.0)
         self.capital_por_simbolo: Dict[str, float] = {
             s: inicial for s in config.symbols
         }
@@ -100,6 +101,7 @@ class Trader:
         self.orders.cerrar(symbol, precio, motivo)
         actualizar_pesos_estrategias_symbol(symbol)
         self.pesos_por_simbolo = cargar_pesos_estrategias()
+        log.info(f"✅ Orden cerrada: {symbol} a {precio:.2f}€ por '{motivo}'")
 
     def _cerrar_y_reportar(self, orden, precio: float, motivo: str) -> None:
         """Cierra ``orden`` y registra la operación para el reporte diario."""
@@ -177,17 +179,21 @@ class Trader:
         if cantidad <= 0:
             return
         self.orders.abrir(symbol, precio, sl, tp, estrategias, "", cantidad)
+        log.info("✅ Orden abierta en modo real: "
+                 f"{symbol} {cantidad} unidades a {precio:.2f}€ SL: {sl:.2f} TP: {tp:.2f}")
 
     def _verificar_salidas(self, symbol: str, df: pd.DataFrame) -> None:
         """Evalúa si la orden abierta en ``symbol`` debe cerrarse."""
         orden = self.orders.obtener(symbol)
         if not orden:
+            log.debug(f"No hay orden abierta para {symbol}.")
             return
 
         precio_min = float(df["low"].iloc[-1])
         precio_max = float(df["high"].iloc[-1])
         precio_cierre = float(df["close"].iloc[-1])
         config_actual = self.config_por_simbolo.get(symbol, {})
+        log.debug(f"Verificando salidas para {symbol} con orden: {orden.to_dict()}")
 
         # --- Stop Loss con validación ---
         if precio_min <= orden.stop_loss:
@@ -201,7 +207,9 @@ class Trader:
         # --- Take Profit ---
         if precio_max >= orden.take_profit:
             self._cerrar_y_reportar(orden, precio_max, "Take Profit")
+            log.info(f"💰 TP alcanzado para {symbol} a {precio_max:.2f}€")
             return
+        
 
         # --- Trailing Stop ---
         if precio_cierre > orden.max_price:
@@ -213,6 +221,7 @@ class Trader:
         cerrar, motivo = verificar_trailing_stop(orden.to_dict(), precio_cierre, config=config_actual)
         if cerrar:
             self._cerrar_y_reportar(orden, precio_cierre, motivo)
+            log.info(f"🔄 Trailing Stop activado para {symbol} a {precio_cierre:.2f}€")
             return
 
         # --- Cambio de tendencia ---
@@ -220,6 +229,7 @@ class Trader:
             pesos_symbol = self.pesos_por_simbolo.get(symbol, {})
             if not verificar_filtro_tecnico(symbol, df, orden.estrategias_activas, pesos_symbol):
                 self._cerrar_y_reportar(orden, precio_cierre, "Cambio de tendencia")
+                log.info(f"🔄 Cambio de tendencia detectado para {symbol}. Cierre recomendado.")
                 return
 
         # --- Estrategias de salida personalizadas ---

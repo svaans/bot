@@ -3,7 +3,7 @@ from datetime import datetime, timedelta
 import pandas as pd
 
 
-def calcular_fraccion_kelly(dias_historia: int = 30, fallback: float = 0.02) -> float:
+def calcular_fraccion_kelly(dias_historia: int = 30, fallback: float = 0.10) -> float:
     """Calcula la fracción de capital a arriesgar usando el Criterio de Kelly.
 
     Se basa en los reportes diarios generados por ``ReporterDiario``. Si no
