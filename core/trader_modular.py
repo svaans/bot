@@ -173,6 +173,83 @@ class Trader:
             )
             return 0.0
         return cantidad
+    
+    # Helpers de soporte -------------------------------------------------
+
+    def _rechazo(self, symbol: str, motivo: str) -> None:
+        """Centraliza los mensajes de rechazo para las entradas."""
+        log.info(f"🚫 Entrada rechazada en {symbol}: {motivo}")
+
+    def _validar_puntaje(self, symbol: str, puntaje: float, umbral: float) -> bool:
+        """Comprueba si ``puntaje`` supera ``umbral``."""
+        if puntaje < umbral:
+            log.debug(f"🚫 {symbol}: puntaje {puntaje:.2f} < umbral {umbral:.2f}")
+            return False
+        return True
+
+    def _validar_diversidad(
+        self,
+        symbol: str,
+        peso_total: float,
+        peso_min_total: float,
+        diversidad: int,
+        diversidad_min: int,
+    ) -> bool:
+        """Verifica que la diversidad y el peso total sean suficientes."""
+        if diversidad < diversidad_min or peso_total < peso_min_total:
+            self._rechazo(
+                symbol,
+                f"Diversidad/Peso insuficiente {diversidad}/{diversidad_min}, {peso_total:.2f}/{peso_min_total:.2f}",
+            )
+            return False
+        return True
+
+    def _validar_estrategia(self, symbol: str, df: pd.DataFrame, estrategias: Dict) -> bool:
+        """Aplica el filtro estratégico de entradas."""
+        if not evaluar_validez_estrategica(symbol, df, estrategias):
+            log.debug(f"❌ Entrada rechazada por filtro estratégico en {symbol}.")
+            return False
+        return True
+
+    def _evaluar_persistencia(
+        self,
+        symbol: str,
+        estado: EstadoSimbolo,
+        df: pd.DataFrame,
+        pesos_symbol: Dict[str, float],
+        tendencia_actual: str,
+        puntaje: float,
+        umbral: float,
+    ) -> bool:
+        """Evalúa si las señales persistentes son suficientes para entrar."""
+        ventana_close = df["close"].tail(10)
+        media_close = np.mean(ventana_close)
+        volatilidad_actual = np.std(ventana_close) / media_close if media_close else 0
+
+        repetidas = señales_repetidas(
+            buffer=estado.buffer,
+            estrategias_func=pesos_symbol,
+            tendencia_actual=tendencia_actual,
+            volatilidad_actual=volatilidad_actual,
+            ventanas=5,
+        )
+
+        minimo = self.persistencia.minimo
+        if repetidas < minimo:
+            self._rechazo(symbol, f"Persistencia {repetidas}/5 < {minimo}")
+            return False
+
+        if repetidas < 1 and puntaje < 1.2 * umbral:
+            self._rechazo(
+                symbol,
+                f"{repetidas}/5 señales persistentes y puntaje débil ({puntaje:.2f})",
+            )
+            return False
+        elif repetidas < 1:
+            log.info(
+                f"⚠️ Entrada débil en {symbol}: Persistencia {repetidas}/5 insuficiente pero puntaje alto ({puntaje}) > Umbral {umbral} — Permitida."
+            )
+        return True
 
     def _abrir_operacion_real(
         self,
@@ -271,6 +348,8 @@ class Trader:
         estado = self.estado[symbol]
         if datetime.utcnow().date() != self.fecha_actual:
             self.ajustar_capital_diario()
+
+        # Mantiene un buffer de velas reciente por símbolo
         estado.buffer.append(vela)
         if len(estado.buffer) > 50:
             estado.buffer = estado.buffer[-50:]
@@ -285,6 +364,7 @@ class Trader:
         if self.orders.obtener(symbol):
             self._verificar_salidas(symbol, df)
             return
+        # Ajusta parámetros dinámicos y evalúa las estrategias activas
         config_actual = configurar_parametros_dinamicos(
             symbol, df, self.config_por_simbolo.get(symbol, {})
         )
@@ -303,7 +383,8 @@ class Trader:
         puntaje = sum(pesos_symbol.get(k, 0) for k in estrategias_persistentes)
         puntaje += self.persistencia.peso_extra * len(estrategias_persistentes)
         estado.ultimo_umbral = umbral
-
+        
+        # Respeta un tiempo de espera tras cerrar una operación con pérdida
         cierre = self.historial_cierres.get(symbol)
         if cierre:
             cooldown = int(config_actual.get("cooldown_tras_perdida", 5)) * 60
@@ -331,48 +412,19 @@ class Trader:
         diversidad_min = config_actual.get("diversidad_minima", 2)
 
 
-        if puntaje < umbral:
-            log.debug(f"🚫 {symbol}: puntaje {puntaje:.2f} < umbral {umbral:.2f}")
+        if not self._validar_puntaje(symbol, puntaje, umbral):
+            return
+
+        if not self._validar_diversidad(symbol, peso_total, peso_min_total, diversidad, diversidad_min):
+            return
+
+        if not self._validar_estrategia(symbol, df, estrategias):
+            return
+
+        # Comprueba persistencia y fuerza de las señales
+        if not self._evaluar_persistencia(symbol, estado, df, pesos_symbol, tendencia_actual, puntaje, umbral):
             return
         
-        if diversidad < diversidad_min or peso_total < peso_min_total:
-            log.debug(
-                f"🚫 Entrada bloqueada por diversidad/peso insuficiente: {diversidad}/{diversidad_min}, {peso_total:.2f}/{peso_min_total:.2f}"
-            )
-            return
-        if not evaluar_validez_estrategica(symbol, df, estrategias):
-            log.debug(f"❌ Entrada rechazada por filtro estratégico en {symbol}.")
-            return
-
-        ventana_close = df["close"].tail(10)
-        media_close = np.mean(ventana_close)
-        volatilidad_actual = np.std(ventana_close) / media_close if media_close else 0
-
-        repetidas = señales_repetidas(
-            buffer=estado.buffer,
-            estrategias_func=pesos_symbol,
-            tendencia_actual=tendencia_actual,
-            volatilidad_actual=volatilidad_actual,
-            ventanas=5,
-        )
-
-        minimo = self.persistencia.minimo
-        if repetidas < minimo:
-            log.info(
-                f"🚫 Entrada rechazada en {symbol}: Persistencia {repetidas}/5 < {minimo}"
-            )
-            return
-
-        if repetidas < 1 and puntaje < 1.2 * umbral:
-            log.info(
-                f"🚫 Entrada rechazada en {symbol}: {repetidas}/5 señales persistentes y puntaje débil ({puntaje:.2f})"
-            )
-            return
-        elif repetidas < 1:
-            log.info(
-                f"⚠️ Entrada débil en {symbol}: Persistencia {repetidas}/5 insuficiente pero puntaje alto ({puntaje}) > Umbral {umbral} — Permitida."
-            )
-
         rsi = calcular_rsi(df)
         momentum = calcular_momentum(df)
         slope = calcular_slope(df)
@@ -386,6 +438,7 @@ class Trader:
 
         balance = self.cliente.fetch_balance()
         capital_total = balance['total'].get('EUR', 0)
+        # Verifica el límite de riesgo diario antes de abrir una nueva orden
         if self.risk.riesgo_superado(capital_total):
             log.warning(f"🚫 Riesgo diario superado para {symbol}")
             return
