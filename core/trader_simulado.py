@@ -90,6 +90,7 @@ class TraderSimulado:
                 log.info(f"✅ Precargadas 30 velas para {symbol}.")
             except Exception as e:
                 log.error(f"❌ Error precargando velas para {symbol}: {e}")
+                raise
 
     def cooldown_activo(self, symbol, cierre, cooldown_segundos):
         try:
@@ -414,6 +415,7 @@ class TraderSimulado:
                             df = pd.read_parquet(archivo)
                             ordenes = df.to_dict("records")
                         except Exception as e:
+                            log.error(f"❌ Error leyendo {archivo}: {e}")
                             raise ValueError(f"Archivo dañado: {e}")
 
                     # ✅ Evitar guardar duplicados exactos
@@ -445,8 +447,9 @@ class TraderSimulado:
                     corrupto = archivo.replace(".parquet", f"_corrupto_{timestamp}.parquet")
                     os.rename(archivo, corrupto)
                     log.warning(f"⚠️ Archivo corrupto renombrado: {archivo} → {corrupto} — Error: {e}")
-                except Exception as err:
+                except OSError as err:
                     log.error(f"❌ Error al renombrar archivo corrupto: {err}")
+                    raise
                 ordenes = [nueva_orden]
 
             except PermissionError:
@@ -455,7 +458,7 @@ class TraderSimulado:
 
             except Exception as e:
                 log.error(f"❌ Error inesperado guardando orden simulada: {e}")
-                return
+                raise
 
         log.error(f"❌ No se pudo guardar la orden simulada para {symbol} tras 3 intentos.")
 

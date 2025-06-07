@@ -1,6 +1,9 @@
 import pandas as pd
 from estrategias_entrada.gestor_entradas import evaluar_estrategias
 from core.estrategias import obtener_estrategias_por_tendencia
+from core.logger import configurar_logger
+
+log = configurar_logger("tendencia")
 
 # ------------------ DETECCIÓN DE TENDENCIA ------------------
 
@@ -86,7 +89,8 @@ def señales_repetidas(buffer, estrategias_func, tendencia_actual, volatilidad_a
             if len(estrategias_validas) >= min_estrategias:
                 contador += 1
 
-        except Exception:
+        except (KeyError, ValueError, TypeError) as e:
+            log.warning(f"⚠️ Evaluación de tendencia falló para {symbol}: {e}")
             continue
 
     return contador

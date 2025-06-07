@@ -25,7 +25,7 @@ class Orden:
         if isinstance(estrategias, str):
             try:
                 estrategias = json.loads(estrategias.replace("'", '"'))
-            except Exception:
+            except json.JSONDecodeError:
                 estrategias = {}
         data["estrategias_activas"] = estrategias or {}
 

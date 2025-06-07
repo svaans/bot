@@ -1,6 +1,9 @@
 import os
 from datetime import datetime, timedelta
 import pandas as pd
+from core.logger import configurar_logger
+
+log = configurar_logger("kelly")
 
 
 def calcular_fraccion_kelly(dias_historia: int = 30, fallback: float = 0.10) -> float:
@@ -21,13 +24,15 @@ def calcular_fraccion_kelly(dias_historia: int = 30, fallback: float = 0.10) -> 
             continue
         try:
             fecha = datetime.fromisoformat(archivo.replace(".csv", "")).date()
-        except Exception:
+        except ValueError as e:
+            log.warning(f"⚠️ Nombre de archivo inválido {archivo}: {e}")
             continue
         if fecha < fecha_limite:
             continue
         try:
             df = pd.read_csv(os.path.join(carpeta, archivo))
-        except Exception:
+        except (pd.errors.EmptyDataError, OSError) as e:
+            log.warning(f"⚠️ No se pudo leer reporte {archivo}: {e}")
             continue
         if "retorno_total" in df.columns:
             retornos.extend(df["retorno_total"].dropna().tolist())

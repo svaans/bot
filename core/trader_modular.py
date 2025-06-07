@@ -28,6 +28,7 @@ from core.logger import configurar_logger
 from core.monitor_estado_bot import monitorear_estado_periodicamente
 from core import ordenes_reales
 from core.adaptador_configuracion import configurar_parametros_dinamicos
+from ccxt.base.errors import BaseError
 from core.reporting import reporter_diario
 from estrategias_salida.salida_trailing_stop import verificar_trailing_stop
 from estrategias_salida.salida_por_tendencia import verificar_reversion_tendencia
@@ -72,8 +73,9 @@ class Trader:
         try:
             balance = self.cliente.fetch_balance()
             euros = balance['total'].get('EUR', 0)
-        except Exception:
-            euros = 0
+        except BaseError as e:
+            log.error(f"❌ Error al obtener balance: {e}")
+            raise
         inicial = euros / max(len(config.symbols), 1)
         inicial = max(inicial, 20.0)
         self.capital_por_simbolo: Dict[str, float] = {
@@ -91,7 +93,8 @@ class Trader:
         try:
             self.orders.ordenes = ordenes_reales.obtener_todas_las_ordenes()
         except Exception as e:
-            log.warning(f"⚠️ Error cargando órdenes previas: {e}")
+            log.warning(f"⚠️ Error cargando órdenes previas desde la base de datos: {e}")
+            raise
 
         if self.orders.ordenes:
             log.warning("⚠️ Órdenes abiertas encontradas al iniciar. Serán monitoreadas.")
@@ -395,7 +398,7 @@ class Trader:
                 elif isinstance(ts, (int, float)):
                     ts = datetime.utcfromtimestamp(ts)
                 tiempo_desde_cierre = (datetime.utcnow() - ts).total_seconds()
-            except Exception as e:
+            except (KeyError, ValueError, TypeError) as e:
                 log.warning(f"⚠️ No se pudo calcular cooldown para {symbol}: {e}")
                 tiempo_desde_cierre = float('inf')
 

@@ -61,8 +61,9 @@ def cargar_ordenes() -> dict[str, Orden]:
                 data = dict(row)
                 orden = Orden.from_dict(data)
                 ordenes[orden.symbol] = orden
-    except Exception as e:
+    except sqlite3.Error as e:
         log.warning(f"⚠️ Error al leer órdenes desde la base de datos: {e}")
+        raise
     _CACHE_ORDENES = ordenes
     return _CACHE_ORDENES
 
@@ -119,9 +120,9 @@ def guardar_ordenes(ordenes: dict[str, Orden]) -> None:
                 )
         _CACHE_ORDENES = ordenes
         log.info("💾 Órdenes guardadas correctamente.")
-    except Exception as e:
+    except sqlite3.Error as e:
         log.error(f"❌ Error al guardar órdenes: {e}")
-
+        raise
 
 def obtener_orden(symbol: str) -> Orden | None:
     return cargar_ordenes().get(symbol)
@@ -170,9 +171,9 @@ def actualizar_orden(symbol, data):
         ordenes[symbol] = data if isinstance(data, Orden) else Orden.from_dict(d)
         _CACHE_ORDENES = ordenes
         log.info(f"📌 Orden actualizada para {symbol}.")
-    except Exception as e:
+    except sqlite3.Error as e:
         log.error(f"❌ Error actualizando la orden en la base de datos: {e}")
-
+        raise
 
 def eliminar_orden(symbol):
     ordenes = cargar_ordenes()
@@ -183,8 +184,9 @@ def eliminar_orden(symbol):
             del ordenes[symbol]
             _CACHE_ORDENES = ordenes
             log.info(f"🗑️ Orden eliminada para {symbol}.")
-        except Exception as e:
+        except sqlite3.Error as e:
             log.error(f"❌ Error eliminando orden de la base de datos: {e}")
+            raise
     else:
         log.warning(f"⚠️ Se intentó eliminar una orden inexistente: {symbol}.")
 
@@ -218,4 +220,4 @@ def ejecutar_orden_market(symbol, cantidad):
         return response
     except Exception as e:
         log.error(f"❌ Error ejecutando orden real para {symbol}: {e}")
-        return None
+        raise

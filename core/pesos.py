@@ -24,8 +24,9 @@ class GestorPesos:
             with open(self.ruta, "r") as f:
                 try:
                     return json.load(f)
-                except Exception as e:
+                except json.JSONDecodeError as e:
                     log.error(f"❌ Error cargando pesos desde JSON: {e}")
+                    raise
         else:
             log.warning(f"❌ No se encontró archivo de pesos: {self.ruta}")
         return {}
@@ -61,7 +62,7 @@ class GestorPesos:
                     continue
                 try:
                     estrategias = json.loads(fila["estrategias_activas"].replace("'", "\"") )
-                except Exception:
+                except json.JSONDecodeError:
                     log.warning(f"❌ JSON inválido en fila: {fila['estrategias_activas']}")
                     continue
 

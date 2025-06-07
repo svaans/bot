@@ -85,6 +85,7 @@ class OrderManager:
                 self.risk.registrar_perdida(symbol, retorno)
             except Exception as e:
                 log.warning(f"⚠️ No se pudo registrar pérdida para {symbol}: {e}")
+                raise
         if self.modo_real:
             info = asdict(orden)
             ordenes_reales.eliminar_orden(symbol)

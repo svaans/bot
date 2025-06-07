@@ -15,7 +15,7 @@ def cargar_estado_riesgo():
         if not isinstance(estado, dict):
             raise ValueError("❌ Formato inválido en estado de riesgo.")
         return estado
-    except Exception as e:
+    except (OSError, json.JSONDecodeError) as e:
         log.warning(f"⚠️ Error al cargar estado de riesgo: {e}")
         return {"fecha": "", "perdida_acumulada": 0}
 
@@ -24,8 +24,9 @@ def guardar_estado_riesgo(estado):
         with open(RUTA_ESTADO, "w") as f:
             json.dump(estado, f)
         log.info(f"💾 Estado de riesgo actualizado: {estado}")
-    except Exception as e:
+    except OSError as e:
         log.error(f"❌ No se pudo guardar estado de riesgo: {e}")
+        raise
 
 def actualizar_perdida(simbolo, perdida):
     estado = cargar_estado_riesgo()

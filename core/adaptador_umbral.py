@@ -53,14 +53,16 @@ def calcular_umbral_adaptativo(symbol, df, estrategias_activadas, pesos_symbol, 
     from scipy.stats import linregress
     try:
         slope = linregress(range(len(ventana_close)), ventana_close).slope
-    except Exception:
+    except ValueError as e:
+        log.warning(f"⚠️ Error calculando slope para {symbol}: {e}")
         slope = 0
 
     # RSI lateralidad
     from ta.momentum import RSIIndicator
     try:
         rsi = RSIIndicator(close=df["close"], window=14).rsi().iloc[-1]
-    except Exception:
+    except ValueError as e:
+        log.warning(f"⚠️ Error calculando RSI para {symbol}: {e}")
         rsi = 50  # neutro
 
     # --- Parámetros desde configuración ---

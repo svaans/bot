@@ -15,7 +15,7 @@ def configurar_parametros_dinamicos(symbol: str, df: pd.DataFrame, base_config: 
     cierre_reciente = df["close"].tail(10)
     try:
         slope = linregress(range(len(cierre_reciente)), cierre_reciente).slope
-    except Exception:
+    except ValueError:
         slope = 0
 
     # === Ajustes por volatilidad ===

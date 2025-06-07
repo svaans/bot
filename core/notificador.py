@@ -19,5 +19,6 @@ class Notificador:
             resp = requests.post(url, json={"chat_id": self.chat_id, "text": mensaje})
             if resp.status_code != 200:
                 log.warning(f"⚠️ Error al enviar notificación: {resp.text}")
-        except Exception as e:
+        except requests.RequestException as e:
             log.warning(f"⚠️ No se pudo enviar notificación: {e}")
+            raise

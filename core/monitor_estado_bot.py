@@ -2,6 +2,7 @@ import os
 import json
 import asyncio
 from datetime import datetime
+import sqlite3
 from binance_api.cliente import crear_cliente
 from ccxt.base.errors import AuthenticationError, NetworkError
 from core.logger import configurar_logger
@@ -23,8 +24,9 @@ def obtener_orden_abierta():
         try:
             ordenes = ordenes_reales.cargar_ordenes()
             return ordenes if ordenes else None
-        except Exception as e:
-            log.warning(f"⚠️ Error al leer órdenes: {e}")
+        except (OSError, sqlite3.Error) as e:
+            log.warning(f"⚠️ Error al leer órdenes desde la base de datos: {e}")
+            raise
     return None
 
 def estimar_estado_emocional(ultima_orden):
@@ -69,6 +71,7 @@ def monitorear_estado_bot():
         log.error("📡 Error de red al contactar con Binance. Verifica tu conexión.")
     except Exception as e:
         log.error(f"❌ Error inesperado en monitoreo del bot: {e}")
+        raise
 
 async def monitorear_estado_periodicamente(self, intervalo=300):
     """Ejecuta ``monitorear_estado_bot`` de forma periódica sin bloquear el loop."""
@@ -85,5 +88,6 @@ async def monitorear_estado_periodicamente(self, intervalo=300):
             break
         except Exception as e:
             log.warning(f"⚠️ Error durante el monitoreo de estado: {e}")
+            raise
         
 
