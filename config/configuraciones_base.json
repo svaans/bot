@@ -1,42 +1,42 @@
 {
   "BTC/EUR": {
-    "factor_umbral": 1.20,
-    "ajuste_volatilidad": 1.0,
-    "riesgo_maximo_diario": 2.0,
+    "factor_umbral": 1.3,
+    "ajuste_volatilidad": 1.1,
+    "riesgo_maximo_diario": 1.9,
     "ponderar_por_diversidad": true,
     "modo_agresivo": false,
-    "multiplicador_estrategias_recurrentes": 1.2,
-    "peso_minimo_total": 2.5,
-    "diversidad_minima": 4,
-    "cooldown_tras_perdida": 6,
-    "sl_ratio": 1.5,
-    "tp_ratio": 4.0
+    "multiplicador_estrategias_recurrentes": 1.3,
+    "peso_minimo_total": 2.8,
+    "diversidad_minima": 3,
+    "cooldown_tras_perdida": 5,
+    "sl_ratio": 1.6,
+    "tp_ratio": 4.2
   },
   "ETH/EUR": {
-    "factor_umbral": 1.00,
-    "ajuste_volatilidad": 1.0,
-    "riesgo_maximo_diario": 2.5,
-    "ponderar_por_diversidad": true,
-    "modo_agresivo": true,
-    "multiplicador_estrategias_recurrentes": 1.5,
-    "peso_minimo_total": 3.5,
-    "diversidad_minima": 2,
-    "cooldown_tras_perdida": 4,
-    "sl_ratio": 1.2,
-    "tp_ratio": 2.5
-  },
-  "ADA/EUR": {
-    "factor_umbral": 1.40,
-    "ajuste_volatilidad": 1.0,
-    "riesgo_maximo_diario": 2.0,
+    "factor_umbral": 0.95,
+    "ajuste_volatilidad": 1.1,
+    "riesgo_maximo_diario": 2.7,
     "ponderar_por_diversidad": true,
     "modo_agresivo": true,
     "multiplicador_estrategias_recurrentes": 1.6,
-    "peso_minimo_total": 4.2,
-    "diversidad_minima": 2,
-    "cooldown_tras_perdida": 6,
-    "sl_ratio": 1.8,
-    "tp_ratio": 5.0
+    "peso_minimo_total": 3.3,
+    "diversidad_minima": 3,
+    "cooldown_tras_perdida": 3,
+    "sl_ratio": 1.1,
+    "tp_ratio": 2.8
+  },
+  "ADA/EUR": {
+    "factor_umbral": 1.5,
+    "ajuste_volatilidad": 1.2,
+    "riesgo_maximo_diario": 1.8,
+    "ponderar_por_diversidad": true,
+    "modo_agresivo": true,
+    "multiplicador_estrategias_recurrentes": 1.7,
+    "peso_minimo_total": 4.0,
+    "diversidad_minima": 3,
+    "cooldown_tras_perdida": 7,
+    "sl_ratio": 2.0,
+    "tp_ratio": 4.8
   }
 }
 
