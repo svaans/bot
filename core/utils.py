@@ -6,6 +6,7 @@ import threading
 import json
 import pandas as pd
 from datetime import datetime
+from core.ordenes_model import Orden
 
 
 from core.logger import configurar_logger
@@ -140,7 +141,7 @@ def guardar_orden_simulada(symbol: str, nueva_orden: dict):
                 log.error(f"❌ Error inesperado guardando orden simulada: {e}")
                 return
 
-def guardar_orden_real(symbol: str, orden: dict | 'Orden'):
+def guardar_orden_real(symbol: str, orden: dict | Orden):
     """Guarda una orden real en formato Parquet por símbolo."""
     if hasattr(orden, "to_parquet_record"):
         data = orden.to_parquet_record()
