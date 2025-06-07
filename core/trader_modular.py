@@ -174,13 +174,23 @@ class Trader:
             return 0.0
         return cantidad
 
-    def _abrir_operacion_real(self, symbol: str, precio: float, sl: float, tp: float, estrategias: Dict) -> None:
+    def _abrir_operacion_real(
+        self,
+        symbol: str,
+        precio: float,
+        sl: float,
+        tp: float,
+        estrategias: Dict,
+        tendencia: str,
+    ) -> None:
         cantidad = self._calcular_cantidad(symbol, precio)
         if cantidad <= 0:
             return
-        self.orders.abrir(symbol, precio, sl, tp, estrategias, "", cantidad)
-        log.info("✅ Orden abierta en modo real: "
-                 f"{symbol} {cantidad} unidades a {precio:.2f}€ SL: {sl:.2f} TP: {tp:.2f}")
+        self.orders.abrir(symbol, precio, sl, tp, estrategias, tendencia, cantidad)
+        log.info(
+            "✅ Orden abierta: "
+            f"{symbol} {cantidad} unidades a {precio:.2f}€ SL: {sl:.2f} TP: {tp:.2f}"
+        )
 
     def _verificar_salidas(self, symbol: str, df: pd.DataFrame) -> None:
         """Evalúa si la orden abierta en ``symbol`` debe cerrarse."""
@@ -271,6 +281,7 @@ class Trader:
             return
 
         df = pd.DataFrame(estado.buffer)
+        tendencia_actual, _ = detectar_tendencia(symbol, df)
         if self.orders.obtener(symbol):
             self._verificar_salidas(symbol, df)
             return
@@ -340,7 +351,7 @@ class Trader:
         repetidas = señales_repetidas(
             buffer=estado.buffer,
             estrategias_func=pesos_symbol,
-            tendencia_actual=evaluacion.get("tendencia", ""),
+            tendencia_actual=tendencia_actual,
             volatilidad_actual=volatilidad_actual,
             ventanas=5,
         )
@@ -382,9 +393,13 @@ class Trader:
         sl, tp = calcular_tp_sl_adaptativos(df, float(vela["close"]))
         precio = float(vela["close"])
         if self.config.modo_real:
-            self._abrir_operacion_real(symbol, precio, sl, tp, estrategias_persistentes)
+            self._abrir_operacion_real(
+                symbol, precio, sl, tp, estrategias_persistentes, tendencia_actual
+            )
         else:
-            self.orders.abrir(symbol, precio, sl, tp, estrategias_persistentes, "")
+            self.orders.abrir(
+                symbol, precio, sl, tp, estrategias_persistentes, tendencia_actual
+            )
 
     async def cerrar(self) -> None:
         if self._task:

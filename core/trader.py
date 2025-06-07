@@ -296,9 +296,10 @@ class Trader:
                     f"🚫 Entrada rechazada en {symbol}: Persistencia {repetidas}/5 < {PERSISTENCIA_MINIMA}"
                 )
                 return
-            log.info(
+            if repetidas < 1 and puntaje < 1.2 * umbral:
+                log.info(
                     f"🚫 Entrada rechazada en {symbol}: {repetidas}/5 señales persistentes y puntaje débil ({puntaje:.2f})"
-                return
+                )
             elif repetidas < 1:
                 log.info(
                     f"⚠️ Entrada débil en {symbol}: Persistencia {repetidas}/5 insuficiente pero puntaje alto ({puntaje}) > Umbral {umbral} — Permitida."
