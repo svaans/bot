@@ -2,27 +2,26 @@ import os
 import json
 import asyncio
 from datetime import datetime
-import pandas as pd
 from binance_api.cliente import crear_cliente
 from ccxt.base.errors import AuthenticationError, NetworkError
 from core.logger import configurar_logger
+from core import ordenes_reales
 
-ORDENES_REALES_PATH = os.path.join("ordenes_reales", "ordenes_reales.parquet")
+ORDENES_DB_PATH = os.path.join("ordenes_reales", "ordenes.db")
 ESTADOS_EMOCION = {
     "ganancia": "😄 Eufórico",
     "perdida": "😢 Frustrado",
     "expirada": "😐 Impaciente",
     "esperando": "🧘 En calma",
-    "activo": "😎 Determinado"
+    "activo": "😎 Determinado",
 }
 
 log = configurar_logger("estado_bot")
 
 def obtener_orden_abierta():
-    if os.path.exists(ORDENES_REALES_PATH):
+    if os.path.exists(ORDENES_DB_PATH):
         try:
-            df = pd.read_parquet(ORDENES_REALES_PATH)
-            ordenes = {row["symbol"]: row.to_dict() for _, row in df.iterrows()}
+            ordenes = ordenes_reales.cargar_ordenes()
             return ordenes if ordenes else None
         except Exception as e:
             log.warning(f"⚠️ Error al leer órdenes: {e}")
@@ -41,20 +40,26 @@ def monitorear_estado_bot():
     try:
         cliente = crear_cliente()
         balance = cliente.fetch_balance()
-        euros = balance['total'].get('EUR', 0)
+        euros = balance["total"].get("EUR", 0)
         orden_abierta = obtener_orden_abierta()
 
         log.info("======= 🤖 ESTADO ACTUAL DEL BOT =======")
-        log.info(f"🕒 Hora actual: {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')} UTC")
+        log.info(
+            f"🕒 Hora actual: {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')} UTC"
+        )
         log.info(f"💶 Saldo disponible (EUR): {euros:.2f}")
 
         if orden_abierta:
             for symbol, orden in orden_abierta.items():
-                log.info(f"📈 Orden abierta: {symbol} → Entrada: {orden['precio_entrada']} | SL: {orden['stop_loss']} | TP: {orden['take_profit']}")
+                log.info(
+                    f"📈 Orden abierta: {symbol} → Entrada: {orden['precio_entrada']} | SL: {orden['stop_loss']} | TP: {orden['take_profit']}"
+                )
         else:
             log.info("📭 No hay órdenes abiertas.")
 
-        estado_emocional = estimar_estado_emocional(list(orden_abierta.values())[-1] if orden_abierta else None)
+        estado_emocional = estimar_estado_emocional(
+            list(orden_abierta.values())[-1] if orden_abierta else None
+        )
         log.info(f"🧠 Estado emocional del bot: {estado_emocional}")
         log.info("========================================")
 

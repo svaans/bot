@@ -17,7 +17,13 @@ Este proyecto implementa un bot de trading para Binance.
 
 ## Persistencia de órdenes
 
-El bot guarda las operaciones abiertas en `ordenes_reales/ordenes_reales.parquet`. Si el proceso se reinicia, las órdenes se cargan automáticamente para continuar su seguimiento y evitar pérdidas de información.
+Las órdenes abiertas ahora se guardan en una base SQLite ubicada en `ordenes_reales/ordenes.db`. Si el proceso se reinicia, las órdenes se cargan automáticamente desde esa base de datos para continuar su seguimiento.
+
+Para migrar un archivo `.parquet` existente ejecuta:
+
+```bash
+python scripts/migrate_parquet_to_db.py
+```
 
 ## Pruebas
 
