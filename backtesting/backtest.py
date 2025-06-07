@@ -73,6 +73,7 @@ async def backtest_modular(symbols: Iterable[str], ruta_datos: str = "datos") ->
         symbols=list(symbols),
         umbral_riesgo_diario=0.03,
         min_order_eur=10.0,
+        persistencia_minima=1,
     )
 
     bot = BacktestTrader(config)
