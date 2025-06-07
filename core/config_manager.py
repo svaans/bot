@@ -18,6 +18,10 @@ class Config:
     symbols: List[str]
     umbral_riesgo_diario: float
     min_order_eur: float
+    persistencia_minima: int = 2
+    peso_extra_persistencia: float = 0.5
+    telegram_token: str | None = None
+    telegram_chat_id: str | None = None
 
 
 class ConfigManager:
@@ -53,4 +57,8 @@ class ConfigManager:
             symbols=symbols,
             umbral_riesgo_diario=float(os.getenv("UMBRAL_RIESGO_DIARIO", 0.03)),
             min_order_eur=float(os.getenv("MIN_ORDER_EUR", 10)),
+            persistencia_minima=int(os.getenv("PERSISTENCIA_MINIMA", 2)),
+            peso_extra_persistencia=float(os.getenv("PESO_EXTRA_PERSISTENCIA", 0.5)),
+            telegram_token=os.getenv("TELEGRAM_TOKEN"),
+            telegram_chat_id=os.getenv("TELEGRAM_CHAT_ID"),
         )

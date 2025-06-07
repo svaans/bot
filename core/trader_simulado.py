@@ -229,12 +229,11 @@ class TraderSimulado:
             volatilidad = np.std(ventana_close) / media_close if media_close else 0
 
             repetidas = señales_repetidas(self.buffer[symbol], pesos_symbol, tendencia, volatilidad, ventanas=3)
-            if repetidas < 1 and puntaje < 1.2 * umbral:
+            if repetidas < 2 and puntaje < 1.2 * umbral:
                 log.debug(f"🚫 [{symbol}] Entrada rechazada por persistencia insuficiente y puntaje débil")
                 return
-            elif repetidas < 1:
-                log.info(f"⚠️ [{symbol}] Entrada débil permitida sin persistencia, puntaje alto")
-
+            elif repetidas < 2:
+                log.info(f"⚠️ [{symbol}] Entrada débil permitida con persistencia {repetidas}/5 insuficiente, puntaje alto")
             rsi = await asyncio.to_thread(calcular_rsi, df)
             momentum = await asyncio.to_thread(calcular_momentum, df)
             slope = await asyncio.to_thread(calcular_slope, df)

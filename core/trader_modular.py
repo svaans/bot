@@ -14,6 +14,7 @@ from core.data_feed import DataFeed
 from core.strategy_engine import StrategyEngine
 from core.risk_manager import RiskManager
 from core.order_manager import OrderManager
+from core.notificador import Notificador
 from binance_api.cliente import crear_cliente
 from core.adaptador_umbral import (
     calcular_tp_sl_adaptativos,
@@ -21,6 +22,7 @@ from core.adaptador_umbral import (
 )
 from core.pesos import cargar_pesos_estrategias
 from core.kelly import calcular_fraccion_kelly
+from core.persistencia_tecnica import PersistenciaTecnica
 from aprendizaje.entrenador_estrategias import actualizar_pesos_estrategias_symbol
 from core.logger import configurar_logger
 from core.monitor_estado_bot import monitorear_estado_periodicamente
@@ -58,8 +60,13 @@ class Trader:
         self.data_feed = DataFeed(config.intervalo_velas)
         self.engine = StrategyEngine()
         self.risk = RiskManager(config.umbral_riesgo_diario)
-        self.orders = OrderManager(config.modo_real, self.risk)
+        self.notificador = Notificador(config.telegram_token, config.telegram_chat_id)
+        self.orders = OrderManager(config.modo_real, self.risk, self.notificador)
         self.cliente = crear_cliente(config)
+        self.persistencia = PersistenciaTecnica(
+            config.persistencia_minima,
+            config.peso_extra_persistencia,
+        )
         self.fraccion_kelly = calcular_fraccion_kelly()
         log.info(f"⚖️ Fracción Kelly: {self.fraccion_kelly:.4f}")
         try:
@@ -167,9 +174,6 @@ class Trader:
     def _abrir_operacion_real(self, symbol: str, precio: float, sl: float, tp: float, estrategias: Dict) -> None:
         cantidad = self._calcular_cantidad(symbol, precio)
         if cantidad <= 0:
-            log.warning(
-                f"❌ No se pudo calcular cantidad válida para {symbol}"
-            )
             return
         self.orders.abrir(symbol, precio, sl, tp, estrategias, "", cantidad)
 
@@ -267,10 +271,15 @@ class Trader:
         if not evaluacion:
             return
 
-        puntaje = evaluacion.get("puntaje_total", 0)
+        
         estrategias = evaluacion.get("estrategias_activas", {})
         pesos_symbol = self.pesos_por_simbolo.get(symbol, {})
         umbral = calcular_umbral_adaptativo(symbol, df, estrategias, pesos_symbol)
+        estrategias_persistentes = self.persistencia.filtrar_persistentes(symbol, estrategias)
+        if not estrategias_persistentes:
+            return
+        puntaje = sum(pesos_symbol.get(k, 0) for k in estrategias_persistentes)
+        puntaje += self.persistencia.peso_extra * len(estrategias_persistentes)
         estado.ultimo_umbral = umbral
 
         cierre = self.historial_cierres.get(symbol)
@@ -293,7 +302,7 @@ class Trader:
                 )
                 return
 
-        estrategias_activas = [k for k, v in estrategias.items() if v]
+        estrategias_activas = list(estrategias_persistentes.keys())
         peso_total = sum(pesos_symbol.get(k, 0) for k in estrategias_activas)
         diversidad = len(estrategias_activas)
         peso_min_total = config_actual.get("peso_minimo_total", 0.5)
@@ -325,25 +334,25 @@ class Trader:
             ventanas=5,
         )
 
-        if repetidas < 1 and puntaje < 1.2 * umbral:
+        if repetidas < 2 and puntaje < 1.2 * umbral:
             log.info(
                 f"🚫 Entrada rechazada en {symbol}: {repetidas}/5 señales persistentes y puntaje débil ({puntaje:.2f})"
             )
             return
-        elif repetidas < 1:
+        elif repetidas < 2:
             log.info(
-                f"⚠️ Entrada débil en {symbol}: Sin persistencia pero puntaje alto ({puntaje}) > Umbral {umbral} — Permitida."
+                f"⚠️ Entrada débil en {symbol}: Persistencia {repetidas}/5 insuficiente pero puntaje alto ({puntaje}) > Umbral {umbral} — Permitida."
             )
 
         rsi = calcular_rsi(df)
         momentum = calcular_momentum(df)
         slope = calcular_slope(df)
 
-        if not entrada_permitida(symbol, puntaje, umbral, estrategias, rsi, slope, momentum):
+        if not entrada_permitida(symbol, puntaje, umbral, estrategias_persistentes, rsi, slope, momentum):
             return
 
         log.info(
-            f"✅ Entrada confirmada en {symbol}. Puntaje {puntaje:.2f}, Peso {peso_total:.2f}, Diversidad {diversidad}, Persistencia {repetidas}/5"
+            f"✅ Entrada confirmada en {symbol}. Puntaje {puntaje:.2f}, Peso {peso_total:.2f}, Diversidad {diversidad}, Persistentes {len(estrategias_persistentes)}"
         )
 
         balance = self.cliente.fetch_balance()
@@ -355,9 +364,9 @@ class Trader:
         sl, tp = calcular_tp_sl_adaptativos(df, float(vela["close"]))
         precio = float(vela["close"])
         if self.config.modo_real:
-            self._abrir_operacion_real(symbol, precio, sl, tp, estrategias)
+            self._abrir_operacion_real(symbol, precio, sl, tp, estrategias_persistentes)
         else:
-            self.orders.abrir(symbol, precio, sl, tp, estrategias, "")
+            self.orders.abrir(symbol, precio, sl, tp, estrategias_persistentes, "")
 
     async def cerrar(self) -> None:
         if self._task:

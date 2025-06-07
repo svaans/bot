@@ -17,10 +17,11 @@ log = configurar_logger("orders", modo_silencioso=True)
 class OrderManager:
     """Abstrae la creación y cierre de órdenes."""
 
-    def __init__(self, modo_real: bool, risk=None) -> None:
+    def __init__(self, modo_real: bool, risk=None, notificador=None) -> None:
         self.modo_real = modo_real
         self.ordenes: Dict[str, Orden] = {}
         self.risk = risk
+        self.notificador = notificador
 
     # ------------------------------------------------------------------
     # Operaciones de apertura
@@ -54,6 +55,15 @@ class OrderManager:
                 ordenes_reales.ejecutar_orden_market(symbol, cantidad)
             ordenes_reales.registrar_orden(symbol, precio, cantidad, sl, tp, estrategias, tendencia)
         log.info(f"🟢 Orden abierta para {symbol} @ {precio:.2f}")
+        if self.notificador:
+            estrategias_txt = ", ".join(estrategias.keys())
+            mensaje = (
+                f"🟢 Compra {symbol}\n"
+                f"Precio: {precio:.2f} Cantidad: {cantidad}\n"
+                f"SL: {sl:.2f} TP: {tp:.2f}\n"
+                f"Estrategias: {estrategias_txt}"
+            )
+            self.notificador.enviar(mensaje)
     # ------------------------------------------------------------------
     # Operaciones de cierre
     # ------------------------------------------------------------------
@@ -88,6 +98,15 @@ class OrderManager:
                 info["tendencia"],
             )
         log.info(f"📤 Orden cerrada para {symbol} @ {precio:.2f} | {motivo}")
+        if self.notificador:
+            retorno_pct = retorno * 100
+            mensaje = (
+                f"📤 Venta {symbol}\n"
+                f"Entrada: {orden.precio_entrada:.2f} Salida: {precio:.2f}\n"
+                f"Retorno: {retorno_pct:.2f}%\n"
+                f"Motivo: {motivo}"
+            )
+            self.notificador.enviar(mensaje)
 
     def obtener(self, symbol: str) -> Optional[Orden]:
         return self.ordenes.get(symbol)

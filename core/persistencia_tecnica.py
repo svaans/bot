@@ -1,0 +1,28 @@
+from dataclasses import dataclass, field
+from typing import Dict
+
+@dataclass
+class PersistenciaTecnica:
+    """Conteo de activaciones consecutivas por estrategia y símbolo."""
+
+    minimo: int = 2
+    peso_extra: float = 0.5
+    conteo: Dict[str, Dict[str, int]] = field(default_factory=dict)
+
+    def actualizar(self, symbol: str, estrategias: Dict[str, bool]) -> None:
+        """Actualiza los contadores de persistencia."""
+        actual = self.conteo.setdefault(symbol, {})
+        for nombre, activa in estrategias.items():
+            if activa:
+                actual[nombre] = actual.get(nombre, 0) + 1
+            else:
+                actual[nombre] = 0
+
+    def es_persistente(self, symbol: str, estrategia: str) -> bool:
+        """Devuelve ``True`` si ``estrategia`` ha estado activa ``minimo`` velas."""
+        return self.conteo.get(symbol, {}).get(estrategia, 0) >= self.minimo
+
+    def filtrar_persistentes(self, symbol: str, estrategias: Dict[str, bool]) -> Dict[str, bool]:
+        """Actualiza contadores y retorna solo estrategias persistentes."""
+        self.actualizar(symbol, estrategias)
+        return {e: True for e, act in estrategias.items() if act and self.es_persistente(symbol, e)}

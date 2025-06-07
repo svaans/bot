@@ -291,12 +291,11 @@ class Trader:
             )
 
             # Condición inteligente de entrada
-            if repetidas < 1 and puntaje < 1.2 * umbral:
+            if repetidas < 2 and puntaje < 1.2 * umbral:
                 log.info(f"🚫 Entrada rechazada en {symbol}: {repetidas}/5 señales persistentes y puntaje débil ({puntaje:.2f})")
                 return
-            elif repetidas < 1:
-                log.info(f"⚠️ Entrada débil en {symbol}: Sin persistencia pero puntaje alto ({puntaje}) > Umbral {umbral} — Permitida.")
-            
+             elif repetidas < 2:
+                log.info(f"⚠️ Entrada débil en {symbol}: Persistencia {repetidas}/5 insuficiente pero puntaje alto ({puntaje}) > Umbral {umbral} — Permitida.")
             # 🎯 Validación técnica final
             rsi = calcular_rsi(df)
             momentum = calcular_momentum(df)
