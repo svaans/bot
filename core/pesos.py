@@ -2,12 +2,53 @@ import json
 import os
 from dataclasses import dataclass, field
 from typing import Dict
+from typing import Dict, Optional
 
 import pandas as pd
 from collections import defaultdict
 from core.logger import configurar_logger
 
 log = configurar_logger("pesos")
+
+def normalizar_pesos(
+    pesos_actuales: Dict[str, float],
+    total: float = 100,
+    peso_min: float = 0.5,
+    factor_temporal: Optional[float] = None,
+) -> Dict[str, float]:
+    """Normaliza los pesos de las estrategias.
+
+    Reescala los valores para que su suma sea ``total`` y aplica un peso
+    mínimo ``peso_min`` a cada estrategia. Si ``factor_temporal`` se
+    proporciona, se multiplica cada peso por ese valor antes de la
+    normalización (útil para aplicar un decaimiento según la antigüedad de
+    los datos).
+    """
+
+    # Aplicar decaimiento temporal si se especifica
+    if factor_temporal is not None:
+        pesos_temporales = {
+            estrategia: valor * factor_temporal
+            for estrategia, valor in pesos_actuales.items()
+        }
+    else:
+        pesos_temporales = pesos_actuales.copy()
+
+    # Respetar peso mínimo
+    pesos_min = {
+        estrategia: max(valor, peso_min)
+        for estrategia, valor in pesos_temporales.items()
+    }
+
+    suma_actual = sum(pesos_min.values())
+    if suma_actual == 0:
+        return {estrategia: 0.0 for estrategia in pesos_min}
+
+    factor = total / suma_actual
+    return {
+        estrategia: round(valor * factor, 4)
+        for estrategia, valor in pesos_min.items()
+    }
 
 @dataclass
 class GestorPesos:
@@ -31,8 +72,23 @@ class GestorPesos:
             log.warning(f"❌ No se encontró archivo de pesos: {self.ruta}")
         return {}
 
-    def guardar(self, pesos: Dict[str, Dict[str, float]]) -> None:
-        self.pesos = pesos
+    def guardar(
+        self,
+        pesos: Dict[str, Dict[str, float]],
+        factor_temporal: Optional[float] = None,
+    ) -> None:
+        """Guarda los pesos normalizados en disco."""
+
+        pesos_normalizados = {}
+        for symbol, datos in pesos.items():
+            pesos_normalizados[symbol] = normalizar_pesos(
+                datos,
+                total=100,
+                peso_min=0.5,
+                factor_temporal=factor_temporal,
+            )
+
+        self.pesos = pesos_normalizados
         with open(self.ruta, "w") as f:
             json.dump(self.pesos, f, indent=4)
         log.info("✅ Pesos guardados.")
