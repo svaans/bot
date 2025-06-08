@@ -107,7 +107,11 @@ class Trader:
 
     def cerrar_operacion(self, symbol: str, precio: float, motivo: str) -> None:
         """Cierra una orden y actualiza los pesos si corresponden."""
-        self.orders.cerrar(symbol, precio, motivo)
+        if not self.orders.cerrar(symbol, precio, motivo):
+            log.debug(
+                f"🔁 Intento duplicado de cierre ignorado para {symbol}"
+            )
+            return
         actualizar_pesos_estrategias_symbol(symbol)
         self.pesos_por_simbolo = cargar_pesos_estrategias()
         log.info(f"✅ Orden cerrada: {symbol} a {precio:.2f}€ por '{motivo}'")
@@ -128,7 +132,11 @@ class Trader:
                 "retorno_total": retorno_total,
             }
         )
-        self.orders.cerrar(orden.symbol, precio, motivo)
+        if not self.orders.cerrar(orden.symbol, precio, motivo):
+            log.debug(
+                f"🔁 Ignorando registro duplicado de cierre para {orden.symbol}"
+            )
+            return
         reporter_diario.registrar_operacion(info)
         actualizar_pesos_estrategias_symbol(orden.symbol)
         self.pesos_por_simbolo = cargar_pesos_estrategias()
@@ -311,7 +319,9 @@ class Trader:
         """Evalúa si la orden abierta en ``symbol`` debe cerrarse."""
         orden = self.orders.obtener(symbol)
         if not orden:
-            log.debug(f"No hay orden abierta para {symbol}.")
+            log.warning(
+                f"⚠️ Se intentó verificar TP/SL sin orden activa en {symbol}"
+            )
             return
 
         precio_min = float(df["low"].iloc[-1])

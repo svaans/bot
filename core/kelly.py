@@ -1,4 +1,5 @@
 import os
+import re
 from datetime import datetime, timedelta
 import pandas as pd
 from core.logger import configurar_logger
@@ -19,13 +20,15 @@ def calcular_fraccion_kelly(dias_historia: int = 30, fallback: float = 0.10) -> 
     fecha_limite = datetime.utcnow().date() - timedelta(days=dias_historia)
     retornos: list[float] = []
 
+    patron = re.compile(r"\d{4}-\d{2}-\d{2}\.csv$")
+
     for archivo in os.listdir(carpeta):
-        if not archivo.endswith(".csv"):
+        if not patron.match(archivo):
             continue
         try:
             fecha = datetime.fromisoformat(archivo.replace(".csv", "")).date()
         except ValueError as e:
-            log.warning(f"⚠️ Nombre de archivo inválido {archivo}: {e}")
+            log.debug(f"Archivo de reporte ignorado {archivo}: {e}")
             continue
         if fecha < fecha_limite:
             continue

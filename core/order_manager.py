@@ -49,11 +49,18 @@ class OrderManager:
             timestamp=datetime.utcnow().isoformat(),
             max_price=precio,
         )
-        self.ordenes[symbol] = orden
+        
         if self.modo_real:
-            if cantidad > 0:
-                ordenes_reales.ejecutar_orden_market(symbol, cantidad)
-            ordenes_reales.registrar_orden(symbol, precio, cantidad, sl, tp, estrategias, tendencia)
+            try:
+                if cantidad > 0:
+                    ordenes_reales.ejecutar_orden_market(symbol, cantidad)
+                ordenes_reales.registrar_orden(
+                    symbol, precio, cantidad, sl, tp, estrategias, tendencia
+                )
+            except Exception as e:
+                log.error(f"❌ No se pudo abrir la orden real para {symbol}: {e}")
+                return
+        self.ordenes[symbol] = orden
         log.info(f"🟢 Orden abierta para {symbol} @ {precio:.2f}")
         if self.notificador:
             estrategias_txt = ", ".join(estrategias.keys())
@@ -67,11 +74,17 @@ class OrderManager:
     # ------------------------------------------------------------------
     # Operaciones de cierre
     # ------------------------------------------------------------------
-    def cerrar(self, symbol: str, precio: float, motivo: str) -> None:
-        """Cierra la orden indicada y la elimina del registro."""
+    def cerrar(self, symbol: str, precio: float, motivo: str) -> bool:
+        """Cierra la orden indicada y la elimina del registro.
+
+        Returns ``True`` si la orden existía y fue cerrada correctamente,
+        ``False`` en caso contrario."""
         orden = self.ordenes.pop(symbol, None)
         if not orden:
-            return
+            log.warning(
+                f"⚠️ Se intentó verificar TP/SL sin orden activa en {symbol}"
+            )
+            return False
         orden.precio_cierre = precio
         orden.fecha_cierre = datetime.utcnow().isoformat()
         orden.motivo_cierre = motivo
@@ -88,7 +101,8 @@ class OrderManager:
                 raise
         if self.modo_real:
             info = asdict(orden)
-            ordenes_reales.eliminar_orden(symbol)
+            if ordenes_reales.obtener_orden(symbol) is not None:
+                ordenes_reales.eliminar_orden(symbol)
             ordenes_reales.registrar_orden(
                 symbol,
                 info["precio_entrada"],
@@ -108,6 +122,7 @@ class OrderManager:
                 f"Motivo: {motivo}"
             )
             self.notificador.enviar(mensaje)
+        return True
 
     def obtener(self, symbol: str) -> Optional[Orden]:
         return self.ordenes.get(symbol)

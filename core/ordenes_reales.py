@@ -188,7 +188,7 @@ def eliminar_orden(symbol):
             log.error(f"❌ Error eliminando orden de la base de datos: {e}")
             raise
     else:
-        log.warning(f"⚠️ Se intentó eliminar una orden inexistente: {symbol}.")
+        log.debug(f"Intento de eliminar orden inexistente ignorado: {symbol}")
 
 def registrar_orden(
     symbol: str,
