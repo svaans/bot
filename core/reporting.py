@@ -14,6 +14,7 @@ class ReporterDiario:
         self.log = configurar_logger("reporte")
         self.estadisticas_archivo = os.path.join(self.carpeta, "estadisticas.csv")
         self._cargar_estadisticas()
+        self.ultimas_operaciones = {}
 
     def _cargar_estadisticas(self):
         columnas = [
@@ -39,9 +40,7 @@ class ReporterDiario:
             return
         df = self.estadisticas.copy()
         df["winrate"] = (df["wins"] / df["operaciones"]) * 100
-        df["buy_hold"] = (
-            (df["last_price"] - df["buy_hold_start"]) / df["buy_hold_start"]
-        )
+        df["buy_hold"] = (df["last_price"] - df["buy_hold_start"]) / df["buy_hold_start"]
         df.to_csv(self.estadisticas_archivo, index=False)
 
     def _actualizar_estadisticas(self, info: dict):
@@ -63,24 +62,27 @@ class ReporterDiario:
                 "buy_hold_start": entrada if entrada else cierre,
                 "last_price": cierre,
             }
-            self.estadisticas = pd.concat(
-                [self.estadisticas, pd.DataFrame([nueva])], ignore_index=True
-            )
+            frames = [df for df in [self.estadisticas, pd.DataFrame([nueva])] if not df.empty]
+            self.estadisticas = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame([nueva])
 
-        idx = self.estadisticas.index[self.estadisticas["symbol"] == symbol][0]
-        fila = self.estadisticas.loc[idx]
-        fila["operaciones"] += 1
-        fila["retorno_acumulado"] += retorno
+        if self.estadisticas.empty:
+            return
+        filas = self.estadisticas[self.estadisticas["symbol"] == symbol]
+        if filas.empty:
+            return
+        idx = filas.index[0]
+        self.estadisticas.loc[idx, "operaciones"] += 1
+        self.estadisticas.loc[idx, "retorno_acumulado"] += retorno
         if retorno > 0:
-            fila["wins"] += 1
-        fila["max_equity"] = max(fila["max_equity"], fila["retorno_acumulado"])
-        fila["drawdown"] = min(
-            fila["drawdown"], fila["retorno_acumulado"] - fila["max_equity"]
-        )
-        if fila["buy_hold_start"] == 0:
-            fila["buy_hold_start"] = entrada if entrada else cierre
-        fila["last_price"] = cierre
-        self.estadisticas.loc[idx] = fila
+            self.estadisticas.loc[idx, "wins"] += 1
+        acum = self.estadisticas.loc[idx, "retorno_acumulado"]
+        max_eq = self.estadisticas.loc[idx, "max_equity"]
+        max_eq = max(max_eq, acum)
+        self.estadisticas.loc[idx, "max_equity"] = max_eq
+        self.estadisticas.loc[idx, "drawdown"] = min(self.estadisticas.loc[idx, "drawdown"], acum - max_eq)
+        if self.estadisticas.loc[idx, "buy_hold_start"] == 0:
+            self.estadisticas.loc[idx, "buy_hold_start"] = entrada if entrada else cierre
+        self.estadisticas.loc[idx, "last_price"] = cierre
         self._guardar_estadisticas()
 
     def registrar_operacion(self, info: dict):
@@ -91,6 +93,10 @@ class ReporterDiario:
             df.to_csv(archivo, mode="a", header=False, index=False)
         else:
             df.to_csv(archivo, index=False)
+        symbol = info.get("symbol") or info.get("simbolo")
+        if symbol:
+            self.ultimas_operaciones.setdefault(symbol, [])
+            self.ultimas_operaciones[symbol].append(info)
         self.log.info(f"📝 Operación registrada para reporte {fecha}")
         self._actualizar_estadisticas(info)
         if fecha != self.fecha_actual:
@@ -126,11 +132,7 @@ class ReporterDiario:
 
             fig, ax = plt.subplots(figsize=(8, 2))
             ax.axis("off")
-            texto = (
-                f"Ganancia total: {ganancia:.2f}\n"
-                f"Winrate: {winrate:.2f}%\n"
-                f"Drawdown: {drawdown:.4f}"
-            )
+            texto = f"Ganancia total: {ganancia:.2f}\n" f"Winrate: {winrate:.2f}%\n" f"Drawdown: {drawdown:.4f}"
             ax.text(0.01, 0.8, texto, fontsize=12)
             pdf.savefig(fig)
             plt.close(fig)
