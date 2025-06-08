@@ -3,16 +3,54 @@
 import pandas as pd
 
 from core.tendencia import detectar_tendencia
-from core.estrategias import obtener_estrategias_por_tendencia, ESTRATEGIAS_POR_TENDENCIA
+from core.estrategias import (
+    obtener_estrategias_por_tendencia,
+    ESTRATEGIAS_POR_TENDENCIA,
+)
 from core.utils import validar_dataframe
 from core.adaptador_umbral import calcular_umbral_adaptativo
 from estrategias_entrada.gestor_entradas import evaluar_estrategias
 from core.pesos import gestor_pesos
 from core.logger import configurar_logger
+from indicadores.rsi import calcular_rsi
+from indicadores.slope import calcular_slope
+from indicadores.vwap import calcular_vwap
 
 log = configurar_logger("salida_stoploss")
 
 pesos = gestor_pesos.pesos
+
+def validar_sl_tecnico(df: pd.DataFrame, direccion: str = "long") -> bool:
+    """Comprueba si existen razones técnicas sólidas para ejecutar el SL."""
+    try:
+        if not validar_dataframe(df, ["close"]):
+            return True
+
+        rsi = calcular_rsi(df)
+        slope = calcular_slope(df.tail(5))
+        precio = df["close"].iloc[-1]
+        ma9 = df["close"].rolling(window=9).mean().iloc[-1]
+        ma20 = df["close"].rolling(window=20).mean().iloc[-1]
+        vwap = calcular_vwap(df)
+
+        debajo_ma = precio < ma9 and precio < ma20
+        debajo_vwap = vwap is not None and precio < vwap
+        velas_rojas = (df["close"].diff().tail(5) < 0).sum()
+        persistencia = velas_rojas >= 3
+
+        if direccion in ["long", "compra"]:
+            return (
+                (rsi is not None and rsi < 40)
+                and slope < 0
+                and (debajo_vwap or debajo_ma)
+                and persistencia
+            )
+        return True
+
+    except Exception as e:
+        log.warning(f"Error validando SL técnico: {e}")
+        return True
+    
 def salida_stoploss(orden: dict, df: pd.DataFrame, config: dict = None) -> dict:
     """
     Evalúa si debe cerrarse una orden cuyo precio ha tocado el SL,
@@ -74,8 +112,17 @@ def salida_stoploss(orden: dict, df: pd.DataFrame, config: dict = None) -> dict:
         return {"cerrar": True, "razon": f"Error interno en SL: {e}"}
     
     
-def verificar_salida_stoploss(orden: dict, df: pd.DataFrame, config: dict | None = None) -> dict:
-    """Envuelve ``salida_stoploss`` y estandariza su salida."""
+def verificar_salida_stoploss(
+    orden: dict, df: pd.DataFrame, config: dict | None = None
+) -> dict:
+    """Determina si el SL debe ejecutarse tras validar condiciones técnicas."""
+
+    if not validar_sl_tecnico(df, orden.get("direccion", "long")):
+        return {
+            "cerrar": False,
+            "motivo": "SL tocado pero indicadores válidos para mantener",
+            "evitado": True,
+        }
     resultado = salida_stoploss(orden, df, config=config)
     cerrar = resultado.get("cerrar", False)
     motivo = resultado.get("razon", "")
