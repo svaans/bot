@@ -133,10 +133,10 @@ class Trader:
             }
         )
         if not self.orders.cerrar(orden.symbol, precio, motivo):
-            log.debug(
-                f"🔁 Ignorando registro duplicado de cierre para {orden.symbol}"
+            log.warning(
+                f"❌ No se pudo confirmar el cierre de {orden.symbol}. Se omitirá el registro."
             )
-            return
+            return False
         reporter_diario.registrar_operacion(info)
         actualizar_pesos_estrategias_symbol(orden.symbol)
         self.pesos_por_simbolo = cargar_pesos_estrategias()
@@ -149,6 +149,7 @@ class Trader:
         }
         metricas = self._metricas_recientes()
         self.risk.ajustar_umbral(metricas)
+        return True
 
     @property
     def ordenes_abiertas(self):
@@ -345,8 +346,8 @@ class Trader:
 
         # --- Take Profit ---
         if precio_max >= orden.take_profit:
-            self._cerrar_y_reportar(orden, precio_max, "Take Profit")
-            log.info(f"💰 TP alcanzado para {symbol} a {precio_max:.2f}€")
+            if self._cerrar_y_reportar(orden, precio_max, "Take Profit"):
+                log.info(f"💰 TP alcanzado para {symbol} a {precio_max:.2f}€")
             return
         
 
@@ -359,16 +360,16 @@ class Trader:
 
         cerrar, motivo = verificar_trailing_stop(orden.to_dict(), precio_cierre, config=config_actual)
         if cerrar:
-            self._cerrar_y_reportar(orden, precio_cierre, motivo)
-            log.info(f"🔄 Trailing Stop activado para {symbol} a {precio_cierre:.2f}€")
+            if self._cerrar_y_reportar(orden, precio_cierre, motivo):
+                log.info(f"🔄 Trailing Stop activado para {symbol} a {precio_cierre:.2f}€")
             return
 
         # --- Cambio de tendencia ---
         if verificar_reversion_tendencia(symbol, df, orden.tendencia):
             pesos_symbol = self.pesos_por_simbolo.get(symbol, {})
             if not verificar_filtro_tecnico(symbol, df, orden.estrategias_activas, pesos_symbol):
-                self._cerrar_y_reportar(orden, precio_cierre, "Cambio de tendencia")
-                log.info(f"🔄 Cambio de tendencia detectado para {symbol}. Cierre recomendado.")
+                if self._cerrar_y_reportar(orden, precio_cierre, "Cambio de tendencia"):
+                    log.info(f"🔄 Cambio de tendencia detectado para {symbol}. Cierre recomendado.")
                 return
 
         # --- Estrategias de salida personalizadas ---

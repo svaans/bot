@@ -80,12 +80,38 @@ class OrderManager:
 
         Returns ``True`` si la orden existía y fue cerrada correctamente,
         ``False`` en caso contrario."""
-        orden = self.ordenes.pop(symbol, None)
+        orden = self.ordenes.get(symbol)
         if not orden:
             log.warning(
                 f"⚠️ Se intentó verificar TP/SL sin orden activa en {symbol}"
             )
             return False
+        if self.modo_real:
+            try:
+                if orden.cantidad > 0:
+                    ordenes_reales.ejecutar_orden_market_sell(symbol, orden.cantidad)
+            except Exception as e:
+                log.error(f"❌ No se pudo cerrar la orden real para {symbol}: {e}")
+                if self.notificador:
+                    self.notificador.enviar(
+                        f"❌ Venta fallida en {symbol}: {e}"
+                    )
+                return False
+            if ordenes_reales.obtener_orden(symbol) is not None:
+                ordenes_reales.eliminar_orden(symbol)
+            info = asdict(orden)
+            ordenes_reales.registrar_orden(
+                symbol,
+                info["precio_entrada"],
+                info["cantidad"],
+                info["stop_loss"],
+                info["take_profit"],
+                info["estrategias_activas"],
+                info["tendencia"],
+            )
+        
+        self.ordenes.pop(symbol, None)
+
         orden.precio_cierre = precio
         orden.fecha_cierre = datetime.utcnow().isoformat()
         orden.motivo_cierre = motivo
@@ -100,24 +126,7 @@ class OrderManager:
             except Exception as e:
                 log.warning(f"⚠️ No se pudo registrar pérdida para {symbol}: {e}")
                 raise
-        if self.modo_real:
-            info = asdict(orden)
-            try:
-                if orden.cantidad > 0:
-                    ordenes_reales.ejecutar_orden_market_sell(symbol, orden.cantidad)
-            except Exception as e:
-                log.error(f"❌ No se pudo cerrar la orden real para {symbol}: {e}")
-            if ordenes_reales.obtener_orden(symbol) is not None:
-                ordenes_reales.eliminar_orden(symbol)
-            ordenes_reales.registrar_orden(
-                symbol,
-                info["precio_entrada"],
-                info["cantidad"],
-                info["stop_loss"],
-                info["take_profit"],
-                info["estrategias_activas"],
-                info["tendencia"],
-            )
+            
         log.info(f"📤 Orden cerrada para {symbol} @ {precio:.2f} | {motivo}")
         if self.notificador:
             retorno_pct = retorno * 100
