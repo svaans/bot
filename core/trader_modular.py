@@ -67,6 +67,7 @@ class Trader:
         self.notificador = Notificador(config.telegram_token, config.telegram_chat_id)
         self.orders = OrderManager(config.modo_real, self.risk, self.notificador)
         self.cliente = crear_cliente(config)
+        self._markets = None
         self.persistencia = PersistenciaTecnica(
             config.persistencia_minima,
             config.peso_extra_persistencia,
@@ -89,7 +90,7 @@ class Trader:
             s: inicial for s in config.symbols
         }
         self.capital_inicial_diario = self.capital_por_simbolo.copy()
-        self.fecha_actual = datetime.utcnow().date() 
+        self.fecha_actual = datetime.utcnow().date()
         self.estado: Dict[str, EstadoSimbolo] = {s: EstadoSimbolo([]) for s in config.symbols}
         self.config_por_simbolo: Dict[str, dict] = {s: {} for s in config.symbols}
         self.pesos_por_simbolo: Dict[str, Dict[str, float]] = cargar_pesos_estrategias()
@@ -177,6 +178,18 @@ class Trader:
         self.capital_inicial_diario = self.capital_por_simbolo.copy()
         self.fecha_actual = datetime.utcnow().date()
         log.info(f"💰 Capital redistribuido: {self.capital_por_simbolo}")
+
+    def _obtener_minimo_binance(self, symbol: str) -> float | None:
+        """Devuelve el valor mínimo de compra permitido por Binance."""
+        try:
+            if self._markets is None:
+                self._markets = self.cliente.load_markets()
+            info = self._markets.get(symbol.replace("/", ""))
+            minimo = info.get("limits", {}).get("cost", {}).get("min") if info else None
+            return float(minimo) if minimo else None
+        except Exception as e:
+            log.debug(f"No se pudo obtener mínimo para {symbol}: {e}")
+            return None
     
     def _calcular_cantidad(self, symbol: str, precio: float) -> float:
         """Determina la cantidad de cripto a comprar con capital asignado."""
@@ -188,12 +201,24 @@ class Trader:
         capital_symbol = self.capital_por_simbolo.get(symbol, euros / max(len(self.estado), 1))
         riesgo = max(capital_symbol * self.fraccion_kelly, self.config.min_order_eur)
         riesgo = min(riesgo, euros)
+        minimo_binance = self._obtener_minimo_binance(symbol)
         cantidad = riesgo / precio
         if cantidad * precio < self.config.min_order_eur:
             log.debug(
                 f"Orden mínima {self.config.min_order_eur}€, intento {cantidad * precio:.2f}€"
             )
             return 0.0
+        orden_eur = cantidad * precio
+        log.info(
+            "📊 Capital disponible: %.2f€ | Kelly: %.4f | Orden: %.2f€ | Mínimo Binance: %s | %s"
+            % (
+                euros,
+                self.fraccion_kelly,
+                orden_eur,
+                f"{minimo_binance:.2f}€" if minimo_binance else "desconocido",
+                symbol,
+            )
+        )
         return round(cantidad, 6)
     
     def _metricas_recientes(self, dias: int = 7) -> dict:
@@ -511,10 +536,7 @@ class Trader:
             self._abrir_operacion_real(
                 symbol, precio, sl, tp, estrategias_persistentes, tendencia_actual
             )
-        else:
-            self.orders.abrir(
-                symbol, precio, sl, tp, estrategias_persistentes, tendencia_actual
-            )
+            return
 
     async def cerrar(self) -> None:
         if self._task:
