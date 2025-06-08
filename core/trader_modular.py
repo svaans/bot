@@ -35,7 +35,7 @@ from core.reporting import reporter_diario
 from estrategias_salida.salida_trailing_stop import verificar_trailing_stop
 from estrategias_salida.salida_por_tendencia import verificar_reversion_tendencia
 from estrategias_salida.gestor_salidas import evaluar_salidas, verificar_filtro_tecnico
-from estrategias_salida.salida_stoploss import salida_stoploss
+from estrategias_salida.salida_stoploss import verificar_salida_stoploss
 from filtros.filtro_salidas import validar_necesidad_de_salida
 from core.tendencia import detectar_tendencia
 from filtros.validador_entradas import evaluar_validez_estrategica
@@ -322,11 +322,15 @@ class Trader:
 
         # --- Stop Loss con validación ---
         if precio_min <= orden.stop_loss:
-            resultado = salida_stoploss(orden.to_dict(), df, config=config_actual)
+            resultado = verificar_salida_stoploss(orden.to_dict(), df, config=config_actual)
             if resultado.get("cerrar", False):
                 self._cerrar_y_reportar(orden, orden.stop_loss, "Stop Loss")
             else:
-                log.info(f"🛡️ SL evitado para {symbol} → {resultado.get('razon', '')}")
+                if resultado.get("evitado", False):
+                    log.debug("SL evitado correctamente, no se notificará por Telegram")
+                    log.info(f"🛡️ SL evitado para {symbol} → {resultado.get('motivo', '')}")
+                else:
+                    log.info(f"ℹ️ {symbol} → {resultado.get('motivo', '')}")
             return
 
         # --- Take Profit ---

@@ -73,4 +73,15 @@ def salida_stoploss(orden: dict, df: pd.DataFrame, config: dict = None) -> dict:
     except Exception as e:
         return {"cerrar": True, "razon": f"Error interno en SL: {e}"}
     
+    
+def verificar_salida_stoploss(orden: dict, df: pd.DataFrame, config: dict | None = None) -> dict:
+    """Envuelve ``salida_stoploss`` y estandariza su salida."""
+    resultado = salida_stoploss(orden, df, config=config)
+    cerrar = resultado.get("cerrar", False)
+    motivo = resultado.get("razon", "")
+    evitado = not cerrar and "evitado" in motivo.lower()
+    return {"cerrar": cerrar, "motivo": motivo, "evitado": evitado}
+    
+
+    
 

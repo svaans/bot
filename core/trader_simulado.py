@@ -19,7 +19,7 @@ from estrategias_salida.reajuste_tp_sl import calcular_promedios_sl_tp
 from estrategias_salida.salida_trailing_stop import verificar_trailing_stop
 from estrategias_salida.salida_por_tendencia import verificar_reversion_tendencia
 from estrategias_salida.gestor_salidas import evaluar_salidas, verificar_filtro_tecnico
-from estrategias_salida.salida_stoploss import salida_stoploss
+from estrategias_salida.salida_stoploss import verificar_salida_stoploss
 from filtros.validador_entradas import evaluar_validez_estrategica
 from filtros.filtro_salidas import validar_necesidad_de_salida
 from binance_api.websocket import escuchar_velas
@@ -312,13 +312,17 @@ class TraderSimulado:
         config_actual = self.config_por_simbolo.get(symbol, {})
         if precio_min <= stop_loss:
             log.info(f"🛑 [{symbol}] Posible SL activado — Precio mínimo: {precio_min:.2f}")
-            resultado = salida_stoploss(orden.__dict__, df, config=config_actual)
+            resultado = verificar_salida_stoploss(orden.__dict__, df, config=config_actual)
 
             if resultado.get("cerrar", False):
-                log.info(f"🟥 [{symbol}] SL confirmado — {resultado.get('razon', '')}")
+                log.info(f"🟥 [{symbol}] SL confirmado — {resultado.get('motivo', '')}")
                 await self.cerrar_orden_simulada(symbol, stop_loss, exito=False, motivo="Stop Loss")
             else:
-                log.warning(f"🛡️ [{symbol}] SL evitado — {resultado.get('razon', 'sin razón')}")
+                if resultado.get("evitado", False):
+                    log.debug("SL evitado correctamente, no se notificará por Telegram")
+                    log.warning(f"🛡️ [{symbol}] SL evitado — {resultado.get('motivo', 'sin razón')}")
+                else:
+                    log.info(f"ℹ️ [{symbol}] {resultado.get('motivo', '')}")
             return
 
         # 🎯 Take Profit
