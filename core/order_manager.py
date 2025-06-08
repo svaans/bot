@@ -53,10 +53,11 @@ class OrderManager:
         if self.modo_real:
             try:
                 if cantidad > 0:
-                    ordenes_reales.ejecutar_orden_market(symbol, cantidad)
+                    cantidad = ordenes_reales.ejecutar_orden_market(symbol, cantidad)
                 ordenes_reales.registrar_orden(
                     symbol, precio, cantidad, sl, tp, estrategias, tendencia
                 )
+                orden.cantidad = cantidad
             except Exception as e:
                 log.error(f"❌ No se pudo abrir la orden real para {symbol}: {e}")
                 return
@@ -101,6 +102,11 @@ class OrderManager:
                 raise
         if self.modo_real:
             info = asdict(orden)
+            try:
+                if orden.cantidad > 0:
+                    ordenes_reales.ejecutar_orden_market_sell(symbol, orden.cantidad)
+            except Exception as e:
+                log.error(f"❌ No se pudo cerrar la orden real para {symbol}: {e}")
             if ordenes_reales.obtener_orden(symbol) is not None:
                 ordenes_reales.eliminar_orden(symbol)
             ordenes_reales.registrar_orden(

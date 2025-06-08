@@ -213,11 +213,29 @@ def registrar_orden(
     actualizar_orden(symbol, orden)
 
 def ejecutar_orden_market(symbol, cantidad):
+    """Ejecuta una compra de mercado y devuelve la cantidad realmente comprada."""
     try:
         cliente = obtener_cliente()
         response = cliente.create_market_buy_order(symbol.replace("/", ""), cantidad)
-        log.info(f"🟢 Orden real ejecutada: {symbol}, cantidad: {cantidad}")
-        return response
+        ejecutado = float(response.get("amount") or response.get("filled") or 0)
+        if ejecutado <= 0:
+            ejecutado = cantidad
+        log.info(f"🟢 Orden real ejecutada: {symbol}, cantidad: {ejecutado}")
+        return ejecutado
     except Exception as e:
         log.error(f"❌ Error ejecutando orden real para {symbol}: {e}")
+        raise
+
+def ejecutar_orden_market_sell(symbol, cantidad):
+    """Ejecuta una venta de mercado y devuelve la cantidad realmente vendida."""
+    try:
+        cliente = obtener_cliente()
+        response = cliente.create_market_sell_order(symbol.replace("/", ""), cantidad)
+        ejecutado = float(response.get("amount") or response.get("filled") or 0)
+        if ejecutado <= 0:
+            ejecutado = cantidad
+        log.info(f"🔴 Orden de venta ejecutada: {symbol}, cantidad: {ejecutado}")
+        return ejecutado
+    except Exception as e:
+        log.error(f"❌ Error ejecutando venta real para {symbol}: {e}")
         raise
