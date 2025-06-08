@@ -7,7 +7,7 @@ from core.logger import configurar_logger
 log = configurar_logger("kelly")
 
 
-def calcular_fraccion_kelly(dias_historia: int = 30, fallback: float = 0.10) -> float:
+def calcular_fraccion_kelly(dias_historia: int = 30, fallback: float = 0.20) -> float:
     """Calcula la fracción de capital a arriesgar usando el Criterio de Kelly.
 
     Se basa en los reportes diarios generados por ``ReporterDiario``. Si no
@@ -58,4 +58,4 @@ def calcular_fraccion_kelly(dias_historia: int = 30, fallback: float = 0.10) -> 
     f = winrate - (1 - winrate) / payoff
     if f <= 0:
         return fallback
-    return min(f, 0.25)  # Evitar apuestas excesivas
+    return min(f, 0.60)  # Evitar apuestas excesivas
