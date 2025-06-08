@@ -33,11 +33,15 @@ def estimar_estado_emocional(ultima_orden):
     if not ultima_orden:
         return ESTADOS_EMOCION["esperando"]
     if isinstance(ultima_orden, dict):
-        motivo = ultima_orden.get("motivo_cierre", "")
+        motivo = ultima_orden.get("motivo_cierre")
     else:
-        motivo = getattr(ultima_orden, "motivo_cierre", "")
+        motivo = getattr(ultima_orden, "motivo_cierre", None)
+
+    # ``motivo`` puede ser ``None`` si no se especificó un motivo de cierre.
+    # Convertimos a cadena vacía para evitar ``AttributeError`` al llamar ``lower``.
+    motivo_normalizado = (motivo or "").lower()
     for clave in ESTADOS_EMOCION:
-        if clave in motivo.lower():
+        if clave in motivo_normalizado:
             return ESTADOS_EMOCION[clave]
     return ESTADOS_EMOCION["activo"]
 
