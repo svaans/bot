@@ -13,7 +13,7 @@ from core.config_manager import Config
 from core.trader_modular import Trader
 
 BUFFER_INICIAL = 30
-CAPITAL_INICIAL = 1000.0
+CAPITAL_INICIAL = 300.0
 
 
 class DummyCliente:

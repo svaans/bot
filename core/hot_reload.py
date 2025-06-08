@@ -3,9 +3,12 @@ import sys
 from pathlib import Path
 from typing import Iterable
 import threading
+from core.logger import configurar_logger
 
 from watchdog.observers import Observer
 from watchdog.events import PatternMatchingEventHandler
+
+log = configurar_logger("hot_reload")
 
 DEFAULT_MODULES: list[str] = [
     "core.kelly",
@@ -57,9 +60,9 @@ class _ReloadHandler(PatternMatchingEventHandler):
                 importlib.reload(module)
             else:
                 module = importlib.import_module(module_name)
-            print(f"🔄 Cambio detectado en {path.name}, recargando módulo {module_name}...")
+            log.warning(f"🔄 Cambio detectado en {path.name}, recargando módulo {module_name}...")
         except Exception as exc:
-            print(f"❌ Error al recargar {module_name}: {exc}")
+            log.info(f"❌ Error al recargar {module_name}: {exc}")
 
 
 def start_hot_reload(path: str | Path = None, modules: Iterable[str] = None, exclude: Iterable[str] | None = None) -> Observer:
