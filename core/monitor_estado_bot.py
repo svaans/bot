@@ -32,7 +32,10 @@ def obtener_orden_abierta():
 def estimar_estado_emocional(ultima_orden):
     if not ultima_orden:
         return ESTADOS_EMOCION["esperando"]
-    motivo = ultima_orden.get("motivo_cierre", "")
+    if isinstance(ultima_orden, dict):
+        motivo = ultima_orden.get("motivo_cierre", "")
+    else:
+        motivo = getattr(ultima_orden, "motivo_cierre", "")
     for clave in ESTADOS_EMOCION:
         if clave in motivo.lower():
             return ESTADOS_EMOCION[clave]
@@ -53,8 +56,23 @@ def monitorear_estado_bot():
 
         if orden_abierta:
             for symbol, orden in orden_abierta.items():
+                precio = (
+                    orden.get("precio_entrada")
+                    if isinstance(orden, dict)
+                    else getattr(orden, "precio_entrada", None)
+                )
+                sl = (
+                    orden.get("stop_loss")
+                    if isinstance(orden, dict)
+                    else getattr(orden, "stop_loss", None)
+                )
+                tp = (
+                    orden.get("take_profit")
+                    if isinstance(orden, dict)
+                    else getattr(orden, "take_profit", None)
+                )
                 log.info(
-                    f"📈 Orden abierta: {symbol} → Entrada: {orden['precio_entrada']} | SL: {orden['stop_loss']} | TP: {orden['take_profit']}"
+                    f"📈 Orden abierta: {symbol} → Entrada: {precio} | SL: {sl} | TP: {tp}"
                 )
         else:
             log.info("📭 No hay órdenes abiertas.")
