@@ -5,6 +5,8 @@ import asyncio
 from dataclasses import dataclass
 from typing import Dict, List
 from datetime import datetime
+from datetime import datetime, timedelta
+import os
 import numpy as np
 
 import pandas as pd
@@ -137,6 +139,8 @@ class Trader:
             "timestamp": datetime.utcnow().isoformat(),
             "motivo": motivo.lower().strip(),
         }
+        metricas = self._metricas_recientes()
+        self.risk.ajustar_umbral(metricas)
 
     @property
     def ordenes_abiertas(self):
@@ -180,6 +184,39 @@ class Trader:
             )
             return 0.0
         return round(cantidad, 6)
+    
+    def _metricas_recientes(self, dias: int = 7) -> dict:
+        """Calcula ganancia acumulada y drawdown de los últimos ``dias``."""
+        carpeta = reporter_diario.carpeta
+        if not os.path.isdir(carpeta):
+            return {"ganancia_semana": 0.0, "drawdown": 0.0}
+
+        fecha_limite = datetime.utcnow().date() - timedelta(days=dias)
+        retornos: list[float] = []
+
+        for archivo in os.listdir(carpeta):
+            if not archivo.endswith(".csv"):
+                continue
+            try:
+                fecha = datetime.fromisoformat(archivo.replace(".csv", "")).date()
+            except ValueError:
+                continue
+            if fecha < fecha_limite:
+                continue
+            try:
+                df = pd.read_csv(os.path.join(carpeta, archivo))
+            except (pd.errors.EmptyDataError, OSError):
+                continue
+            if "retorno_total" in df.columns:
+                retornos.extend(df["retorno_total"].dropna().tolist())
+
+        if not retornos:
+            return {"ganancia_semana": 0.0, "drawdown": 0.0}
+
+        serie = pd.Series(retornos).cumsum()
+        drawdown = float((serie - serie.cummax()).min())
+        ganancia = float(serie.iloc[-1])
+        return {"ganancia_semana": ganancia, "drawdown": drawdown}
     
     # Helpers de soporte -------------------------------------------------
 

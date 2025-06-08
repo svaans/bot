@@ -12,6 +12,76 @@ class ReporterDiario:
         os.makedirs(self.carpeta, exist_ok=True)
         self.fecha_actual = datetime.utcnow().date()
         self.log = configurar_logger("reporte")
+        self.estadisticas_archivo = os.path.join(self.carpeta, "estadisticas.csv")
+        self._cargar_estadisticas()
+
+    def _cargar_estadisticas(self):
+        columnas = [
+            "symbol",
+            "operaciones",
+            "wins",
+            "retorno_acumulado",
+            "max_equity",
+            "drawdown",
+            "buy_hold_start",
+            "last_price",
+        ]
+        if os.path.exists(self.estadisticas_archivo):
+            try:
+                self.estadisticas = pd.read_csv(self.estadisticas_archivo)
+            except Exception:
+                self.estadisticas = pd.DataFrame(columns=columnas)
+        else:
+            self.estadisticas = pd.DataFrame(columns=columnas)
+
+    def _guardar_estadisticas(self):
+        if self.estadisticas.empty:
+            return
+        df = self.estadisticas.copy()
+        df["winrate"] = (df["wins"] / df["operaciones"]) * 100
+        df["buy_hold"] = (
+            (df["last_price"] - df["buy_hold_start"]) / df["buy_hold_start"]
+        )
+        df.to_csv(self.estadisticas_archivo, index=False)
+
+    def _actualizar_estadisticas(self, info: dict):
+        symbol = info.get("symbol") or info.get("simbolo")
+        if not symbol:
+            return
+        retorno = float(info.get("retorno_total", 0.0))
+        entrada = float(info.get("precio_entrada", 0.0))
+        cierre = float(info.get("precio_cierre", entrada))
+
+        if symbol not in self.estadisticas["symbol"].values:
+            nueva = {
+                "symbol": symbol,
+                "operaciones": 0,
+                "wins": 0,
+                "retorno_acumulado": 0.0,
+                "max_equity": 0.0,
+                "drawdown": 0.0,
+                "buy_hold_start": entrada if entrada else cierre,
+                "last_price": cierre,
+            }
+            self.estadisticas = pd.concat(
+                [self.estadisticas, pd.DataFrame([nueva])], ignore_index=True
+            )
+
+        idx = self.estadisticas.index[self.estadisticas["symbol"] == symbol][0]
+        fila = self.estadisticas.loc[idx]
+        fila["operaciones"] += 1
+        fila["retorno_acumulado"] += retorno
+        if retorno > 0:
+            fila["wins"] += 1
+        fila["max_equity"] = max(fila["max_equity"], fila["retorno_acumulado"])
+        fila["drawdown"] = min(
+            fila["drawdown"], fila["retorno_acumulado"] - fila["max_equity"]
+        )
+        if fila["buy_hold_start"] == 0:
+            fila["buy_hold_start"] = entrada if entrada else cierre
+        fila["last_price"] = cierre
+        self.estadisticas.loc[idx] = fila
+        self._guardar_estadisticas()
 
     def registrar_operacion(self, info: dict):
         fecha = datetime.utcnow().date()
@@ -22,6 +92,7 @@ class ReporterDiario:
         else:
             df.to_csv(archivo, index=False)
         self.log.info(f"📝 Operación registrada para reporte {fecha}")
+        self._actualizar_estadisticas(info)
         if fecha != self.fecha_actual:
             self.generar_informe(self.fecha_actual)
             self.fecha_actual = fecha

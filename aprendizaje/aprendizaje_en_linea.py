@@ -3,7 +3,14 @@ import json
 import pandas as pd
 from collections import defaultdict
 from core.pesos import gestor_pesos
-from core.adaptador_umbral import calcular_umbral_adaptativo
+from core.adaptador_umbral import (
+    calcular_umbral_adaptativo,
+    calcular_tp_sl_adaptativos,
+)
+from core.configuracion import (
+    cargar_configuracion_simbolo,
+    guardar_configuracion_simbolo,
+)
 from core.logger import configurar_logger
 
 CARPETA_OPERACIONES = "ultimas_operaciones"
@@ -114,6 +121,28 @@ def actualizar_pesos_dinamicos(symbol: str, historial: list, factor_ajuste=0.05)
         if estrategias:
             umbral = calcular_umbral_adaptativo(symbol, df_fake, estrategias, nuevos_pesos)
             print(f"📈 Umbral estimado para {symbol}: {umbral:.2f}")
+
+            config_actual = cargar_configuracion_simbolo(symbol) or {}
+            config_actual["umbral_adaptativo"] = round(float(umbral), 2)
+
+            precio_actual = None
+            if "close" in df_fake.columns:
+                precio_actual = float(df_fake["close"].iloc[-1])
+
+            if precio_actual is not None and all(c in df_fake.columns for c in ["high", "low", "close"]):
+                sl, tp = calcular_tp_sl_adaptativos(df_fake, precio_actual, config_actual)
+                df_tmp = df_fake.copy()
+                df_tmp["hl"] = df_tmp["high"] - df_tmp["low"]
+                df_tmp["hc"] = abs(df_tmp["high"] - df_tmp["close"].shift(1))
+                df_tmp["lc"] = abs(df_tmp["low"] - df_tmp["close"].shift(1))
+                df_tmp["tr"] = df_tmp[["hl", "hc", "lc"]].max(axis=1)
+                atr = df_tmp["tr"].rolling(window=14).mean().iloc[-1]
+                if pd.isna(atr):
+                    atr = precio_actual * 0.01
+                config_actual["sl_ratio"] = round(abs(precio_actual - sl) / atr, 2)
+                config_actual["tp_ratio"] = round(abs(tp - precio_actual) / atr, 2)
+
+            guardar_configuracion_simbolo(symbol, config_actual)
     except Exception as e:
         print(f"❌ Error al recalcular/guardar umbral para {symbol}: {e}")
 

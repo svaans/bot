@@ -22,3 +22,26 @@ class RiskManager:
     def registrar_perdida(self, symbol: str, perdida: float) -> None:
         """Registra una pérdida para ``symbol``."""
         actualizar_perdida(symbol, perdida)
+
+    def ajustar_umbral(self, segun_metricas: dict) -> None:
+        """Modifica ``self.umbral`` de acuerdo al desempeño reciente.
+
+        ``segun_metricas`` debe contener ``ganancia_semana`` y ``drawdown``.
+        Si la ganancia semanal es mayor a 5% se incrementa ligeramente el
+        umbral. Si el drawdown es negativo por debajo de -5%, se reduce.
+        """
+        if not isinstance(segun_metricas, dict):
+            return
+
+        ganancia = segun_metricas.get("ganancia_semana", 0.0)
+        drawdown = segun_metricas.get("drawdown", 0.0)
+
+        anterior = self.umbral
+
+        if ganancia > 0.05:
+            self.umbral = round(min(0.5, self.umbral * 1.05), 4)
+        elif drawdown < -0.05:
+            self.umbral = round(max(0.01, self.umbral * 0.9), 4)
+
+        if self.umbral != anterior:
+            log.info(f"🔧 Umbral ajustado de {anterior:.4f} a {self.umbral:.4f}")
