@@ -14,6 +14,7 @@ DEFAULT_MODULES: list[str] = [
     "core.kelly",
     "core.utils",
     "core.pesos",
+    "core.trader_modular",
     "core.strategy_engine",
     "core.risk_manager",
     "estrategias_entrada",

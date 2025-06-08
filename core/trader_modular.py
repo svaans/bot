@@ -32,6 +32,7 @@ from core import ordenes_reales
 from core.adaptador_configuracion import configurar_parametros_dinamicos
 from ccxt.base.errors import BaseError
 from core.reporting import reporter_diario
+from aprendizaje.aprendizaje_en_linea import registrar_resultado_trade
 from estrategias_salida.salida_trailing_stop import verificar_trailing_stop
 from estrategias_salida.salida_por_tendencia import verificar_reversion_tendencia
 from estrategias_salida.gestor_salidas import evaluar_salidas, verificar_filtro_tecnico
@@ -138,6 +139,7 @@ class Trader:
             )
             return False
         reporter_diario.registrar_operacion(info)
+        registrar_resultado_trade(orden.symbol, info, retorno_total)
         actualizar_pesos_estrategias_symbol(orden.symbol)
         self.pesos_por_simbolo = cargar_pesos_estrategias()
         capital_inicial = self.capital_por_simbolo.get(orden.symbol, 0.0)
