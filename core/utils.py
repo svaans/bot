@@ -66,6 +66,31 @@ def validar_dataframe(df, columnas):
     return df is not None and not df.empty and all(col in df.columns for col in columnas)
 
 
+def validar_tp(tp: float, precio: float, max_relativo: float = 1.05, max_absoluto: float = 0.03) -> float:
+    """Limita el Take Profit a valores razonables."""
+    limite_rel = precio * max_relativo
+    limite_abs = precio * (1 + max_absoluto)
+    max_tp = min(limite_rel, limite_abs)
+    if tp > max_tp:
+        log.warning(f"🎯 TP ajustado de {tp} a {max_tp}")
+        return max_tp
+    return tp
+
+
+def margen_tp_sl_valido(tp: float, sl: float, precio_actual: float, min_pct: float = 0.001) -> bool:
+    """Valida que la distancia entre TP y SL sea suficiente."""
+    return abs(tp - sl) >= precio_actual * min_pct
+
+
+def validar_ratio_beneficio(entrada: float, sl: float, tp: float, ratio_minimo: float) -> bool:
+    """Comprueba que el ratio beneficio/riesgo cumpla el mínimo requerido."""
+    riesgo = entrada - sl
+    beneficio = tp - entrada
+    if riesgo <= 0:
+        return False
+    return (beneficio / riesgo) >= ratio_minimo
+
+
 def segundos_transcurridos(timestamp_iso):
     """Devuelve los segundos transcurridos desde un timestamp ISO o epoch."""
     try:

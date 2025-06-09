@@ -38,6 +38,11 @@ from estrategias_salida.salida_por_tendencia import verificar_reversion_tendenci
 from estrategias_salida.gestor_salidas import evaluar_salidas, verificar_filtro_tecnico
 from estrategias_salida.salida_stoploss import verificar_salida_stoploss
 from filtros.filtro_salidas import validar_necesidad_de_salida
+from core.utils import (
+    validar_tp,
+    margen_tp_sl_valido,
+    validar_ratio_beneficio,
+)
 from core.tendencia import detectar_tendencia
 from filtros.validador_entradas import evaluar_validez_estrategica
 from estrategias_entrada.gestor_entradas import entrada_permitida
@@ -151,6 +156,7 @@ class Trader:
         self.historial_cierres[orden.symbol] = {
             "timestamp": datetime.utcnow().isoformat(),
             "motivo": motivo.lower().strip(),
+            "velas": 0,
         }
         metricas = self._metricas_recientes()
         self.risk.ajustar_umbral(metricas)
@@ -516,26 +522,20 @@ class Trader:
         puntaje -= penalizacion
         estado.ultimo_umbral = umbral
         
-        # Respeta un tiempo de espera tras cerrar una operación con pérdida
+        # Respeta un número de velas tras un Stop Loss
         cierre = self.historial_cierres.get(symbol)
-        if cierre:
-            cooldown = int(config_actual.get("cooldown_tras_perdida", 5)) * 60
-            try:
-                ts = cierre["timestamp"]
-                if isinstance(ts, str):
-                    ts = datetime.fromisoformat(ts)
-                elif isinstance(ts, (int, float)):
-                    ts = datetime.utcfromtimestamp(ts)
-                tiempo_desde_cierre = (datetime.utcnow() - ts).total_seconds()
-            except (KeyError, ValueError, TypeError) as e:
-                log.warning(f"⚠️ No se pudo calcular cooldown para {symbol}: {e}")
-                tiempo_desde_cierre = float('inf')
-
-            if cierre["motivo"] in ["stop loss", "estrategia: cambio de tendencia", "cambio de tendencia"] and tiempo_desde_cierre < cooldown:
+        if cierre and cierre.get("motivo") == "stop loss":
+            cooldown_velas = int(config_actual.get("cooldown_tras_perdida", 5))
+            velas = cierre.get("velas", 0)
+            if velas < cooldown_velas:
+                cierre["velas"] = velas + 1
+                restante = cooldown_velas - velas
                 log.info(
-                    f"🕒 Cooldown activo para {symbol}. Esperando tras pérdida anterior ({tiempo_desde_cierre:.0f}s)"
+                    f"🕒 Cooldown activo para {symbol}. Quedan {restante} velas"
                 )
                 return
+            else:
+                self.historial_cierres.pop(symbol, None)
 
         estrategias_activas = list(estrategias_persistentes.keys())
         peso_total = sum(pesos_symbol.get(k, 0) for k in estrategias_activas)
@@ -583,6 +583,21 @@ class Trader:
             capital_symbol,
         )
         precio = float(vela["close"])
+
+        tp = validar_tp(tp, precio)
+        if not margen_tp_sl_valido(tp, sl, precio):
+            log.warning(
+                f"📏 Margen TP/SL inválido para {symbol}. SL: {sl:.2f} TP: {tp:.2f}"
+            )
+            return
+
+        ratio_min = config_actual.get("ratio_minimo_beneficio", 1.5)
+        if not validar_ratio_beneficio(precio, sl, tp, ratio_min):
+            log.warning(
+                f"⚖️ Ratio riesgo/beneficio insuficiente para {symbol}"
+            )
+            return
+        
         self._abrir_operacion_real(
             symbol, precio, sl, tp, estrategias_persistentes, tendencia_actual, direccion
         )

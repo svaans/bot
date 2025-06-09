@@ -10,7 +10,8 @@
     "diversidad_minima": 3,
     "cooldown_tras_perdida": 5,
     "sl_ratio": 1.6,
-    "tp_ratio": 4.2
+    "tp_ratio": 4.2,
+    "ratio_minimo_beneficio": 1.5
   },
   "ETH/EUR": {
     "factor_umbral": 0.95,
@@ -23,7 +24,8 @@
     "diversidad_minima": 3,
     "cooldown_tras_perdida": 3,
     "sl_ratio": 1.1,
-    "tp_ratio": 2.8
+    "tp_ratio": 2.8,
+    "ratio_minimo_beneficio": 1.5
   },
   "ADA/EUR": {
     "factor_umbral": 1.5,
@@ -36,7 +38,8 @@
     "diversidad_minima": 3,
     "cooldown_tras_perdida": 7,
     "sl_ratio": 2.0,
-    "tp_ratio": 4.8
+    "tp_ratio": 4.8,
+    "ratio_minimo_beneficio": 1.5
   }
 }
 
