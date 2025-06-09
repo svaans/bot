@@ -125,7 +125,9 @@ class Trader:
         self.pesos_por_simbolo = cargar_pesos_estrategias()
         log.info(f"✅ Orden cerrada: {symbol} a {precio:.2f}€ por '{motivo}'")
 
-    def _cerrar_y_reportar(self, orden, precio: float, motivo: str) -> None:
+    def _cerrar_y_reportar(
+        self, orden, precio: float, motivo: str, tendencia: str | None = None
+    ) -> None:
         """Cierra ``orden`` y registra la operación para el reporte diario."""
         retorno_total = (
             (precio - orden.precio_entrada) / orden.precio_entrada
@@ -157,6 +159,8 @@ class Trader:
             "timestamp": datetime.utcnow().isoformat(),
             "motivo": motivo.lower().strip(),
             "velas": 0,
+            "precio": precio,
+            "tendencia": tendencia,
         }
         metricas = self._metricas_recientes()
         self.risk.ajustar_umbral(metricas)
@@ -361,6 +365,47 @@ class Trader:
                 f"⚠️ Entrada débil en {symbol}: Coincidencia {repetidas:.2f} insuficiente pero puntaje alto ({puntaje}) > Umbral {umbral} — Permitida."
             )
         return True
+    
+    def _tendencia_persistente(
+        self, symbol: str, df: pd.DataFrame, tendencia: str, velas: int = 3
+    ) -> bool:
+        if len(df) < 30 + velas:
+            return False
+        tiempos = pd.to_datetime(df["timestamp"])
+        for i in range(velas):
+            sub_df = df.iloc[: -(velas - 1 - i)] if velas - 1 - i > 0 else df
+            t, _ = detectar_tendencia(symbol, sub_df)
+            if t != tendencia:
+                return False
+        return True
+
+    def _validar_reentrada_tendencia(
+        self, symbol: str, df: pd.DataFrame, cierre: dict, precio: float
+    ) -> bool:
+        if cierre.get("motivo") != "cambio de tendencia":
+            return True
+
+        tendencia = cierre.get("tendencia")
+        if not tendencia:
+            return False
+
+        cierre_dt = pd.to_datetime(cierre.get("timestamp"))
+        df_post = df[pd.to_datetime(df["timestamp"]) > cierre_dt]
+        if len(df_post) < 3:
+            log.info(f"⏳ {symbol}: esperando confirmación de tendencia")
+            return False
+        if not self._tendencia_persistente(symbol, df_post, tendencia, velas=3):
+            log.info(f"⏳ {symbol}: tendencia {tendencia} no persistente tras cierre")
+            return False
+
+        precio_salida = cierre.get("precio")
+        if precio_salida is not None and abs(precio - precio_salida) <= precio * 0.001:
+            log.info(
+                f"🚫 {symbol}: precio de entrada similar al de salida anterior"
+            )
+            return False
+
+        return True
 
     def _abrir_operacion_real(
         self,
@@ -433,8 +478,13 @@ class Trader:
         if verificar_reversion_tendencia(symbol, df, orden.tendencia):
             pesos_symbol = self.pesos_por_simbolo.get(symbol, {})
             if not verificar_filtro_tecnico(symbol, df, orden.estrategias_activas, pesos_symbol):
-                if self._cerrar_y_reportar(orden, precio_cierre, "Cambio de tendencia"):
-                    log.info(f"🔄 Cambio de tendencia detectado para {symbol}. Cierre recomendado.")
+                nueva_tendencia, _ = detectar_tendencia(symbol, df)
+                if self._cerrar_y_reportar(
+                    orden, precio_cierre, "Cambio de tendencia", tendencia=nueva_tendencia
+                ):
+                    log.info(
+                        f"🔄 Cambio de tendencia detectado para {symbol}. Cierre recomendado."
+                    )
                 return
 
         # --- Estrategias de salida personalizadas ---
@@ -533,6 +583,16 @@ class Trader:
                 log.info(
                     f"🕒 Cooldown activo para {symbol}. Quedan {restante} velas"
                 )
+                return
+            else:
+                self.historial_cierres.pop(symbol, None)
+
+        # Validación de reentrada tras cambio de tendencia
+        cierre = self.historial_cierres.get(symbol)
+        if cierre and cierre.get("motivo") == "cambio de tendencia":
+            precio_actual = float(df["close"].iloc[-1])
+            if not self._validar_reentrada_tendencia(symbol, df, cierre, precio_actual):
+                cierre["velas"] = cierre.get("velas", 0) + 1
                 return
             else:
                 self.historial_cierres.pop(symbol, None)

@@ -105,6 +105,36 @@ class TraderSimulado:
         capital_actual = self.capital_simulado.get(symbol, 1000)
         return (1000 - capital_actual) / 1000 > riesgo_maximo
     
+    def _tendencia_persistente(self, symbol, df, tendencia, velas=3):
+        if len(df) < 30 + velas:
+            return False
+        for i in range(velas):
+            sub_df = df.iloc[: -(velas - 1 - i)] if velas - 1 - i > 0 else df
+            t, _ = detectar_tendencia(symbol, sub_df)
+            if t != tendencia:
+                return False
+        return True
+
+    def _validar_reentrada_tendencia(self, symbol, df, cierre, precio):
+        if cierre.get("motivo") != "cambio de tendencia":
+            return True
+        tendencia = cierre.get("tendencia")
+        if not tendencia:
+            return False
+        cierre_dt = pd.to_datetime(cierre.get("timestamp"))
+        df_post = df[pd.to_datetime(df["timestamp"]) > cierre_dt]
+        if len(df_post) < 3:
+            log.info(f"⏳ [{symbol}] Esperando confirmación de tendencia")
+            return False
+        if not self._tendencia_persistente(symbol, df_post, tendencia, velas=3):
+            log.info(f"⏳ [{symbol}] Tendencia {tendencia} no persistente tras cierre")
+            return False
+        precio_salida = cierre.get("precio")
+        if precio_salida is not None and abs(precio - precio_salida) <= precio * 0.001:
+            log.info(f"🚫 [{symbol}] Precio de entrada similar al de salida anterior")
+            return False
+        return True
+    
     def ajustar_capital_diario(self, factor: float = 0.2, limite: float = 0.3) -> None:
         """Redistribuye el capital entre símbolos según el rendimiento diario."""
         total = sum(self.capital_simulado.values())
@@ -206,6 +236,16 @@ class TraderSimulado:
                     self.ultimo_log_cooldown[symbol] = tiempo
                     log.info(f"🕒 [{symbol}] Cooldown activo tras pérdida anterior ({tiempo}s)")
                 return
+            
+            # Validación de reentrada por cambio de tendencia
+            cierre = self.historial_cierres.get(symbol)
+            if cierre and cierre.get("motivo") == "cambio de tendencia":
+                precio_actual = float(df["close"].iloc[-1])
+                if not self._validar_reentrada_tendencia(symbol, df, cierre, precio_actual):
+                    self.historial_cierres[symbol]["velas"] = cierre.get("velas", 0) + 1
+                    return
+                else:
+                    self.historial_cierres.pop(symbol, None)
 
             estrategias_activas = [k for k, v in estrategias_detectadas.items() if v]
             peso_total = sum(pesos_symbol.get(k, 0) for k in estrategias_activas)
@@ -387,7 +427,9 @@ class TraderSimulado:
 
         self.historial_cierres[symbol] = {
             "timestamp": datetime.utcnow().isoformat(),
-            "motivo": motivo
+            "motivo": motivo.lower().strip(),
+            "precio": precio_salida,
+            "tendencia": None,
         }
 
         orden.precio_cierre = precio_salida
@@ -407,6 +449,9 @@ class TraderSimulado:
                 pd.DataFrame(self.buffer.get(symbol, []))
             )
             self.ultima_tendencia[symbol] = nueva_tendencia
+            if symbol in self.historial_cierres:
+                self.historial_cierres[symbol]["tendencia"] = nueva_tendencia   
+
 
         actualizar_pesos_estrategias_symbol(symbol)
         self.pesos_por_simbolo[symbol] = gestor_pesos.obtener_pesos_symbol(symbol)

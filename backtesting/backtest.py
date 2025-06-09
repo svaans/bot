@@ -59,6 +59,8 @@ class BacktestTrader(Trader):
         self.historial_cierres[orden.symbol] = {
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "motivo": motivo.lower().strip(),
+            "precio": precio,
+            "tendencia": None,
         }
 
 
