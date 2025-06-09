@@ -50,6 +50,7 @@ class _ReloadHandler(PatternMatchingEventHandler):
             return
         module_name = self._module_from_path(path)
         if not module_name or not self._should_reload(module_name):
+            log.debug(f"🔍 Ignorando recarga para {path.name} ({module_name})")
             return
         try:
             module = sys.modules.get(module_name)
