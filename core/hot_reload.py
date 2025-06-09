@@ -11,16 +11,12 @@ from watchdog.events import PatternMatchingEventHandler
 log = configurar_logger("hot_reload")
 
 DEFAULT_MODULES: list[str] = [
-    "core.kelly",
-    "core.utils",
-    "core.pesos",
-    "core.trader_modular",
-    "core.strategy_engine",
-    "core.risk_manager",
+    "core",
     "estrategias_entrada",
     "estrategias_salida",
     "filtros",
     "indicadores",
+
 ]
 
 class _ReloadHandler(PatternMatchingEventHandler):
@@ -62,6 +58,7 @@ class _ReloadHandler(PatternMatchingEventHandler):
             else:
                 module = importlib.import_module(module_name)
             log.warning(f"🔄 Cambio detectado en {path.name}, recargando módulo {module_name}...")
+            log.warning(f"✅ Recarga completada con éxito: {module_name}")
         except Exception as exc:
             log.info(f"❌ Error al recargar {module_name}: {exc}")
 

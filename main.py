@@ -2,6 +2,7 @@ import asyncio
 import platform
 import signal
 import traceback
+from pathlib import Path
 from core.pesos import gestor_pesos
 from core.hot_reload import start_hot_reload, stop_hot_reload, DEFAULT_MODULES
 from aprendizaje.reset_pesos import resetear_pesos_diarios_si_corresponde
@@ -18,7 +19,7 @@ def mostrar_banner():
 
 async def main():
     config = ConfigManager.load_from_env()
-    observer = start_hot_reload(modules=DEFAULT_MODULES)
+    observer = start_hot_reload(path=Path(__file__).resolve().parent.parent, modules=DEFAULT_MODULES)
 
     # El nuevo Trader modular soporta ambos modos
     from core.trader_modular import Trader

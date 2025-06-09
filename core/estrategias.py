@@ -53,7 +53,38 @@ ESTRATEGIAS_POR_TENDENCIA = {
     ]
 }
 
+# Mapeo de estrategia → tendencia ideal
+TENDENCIA_IDEAL = {
+    nombre: tendencia
+    for tendencia, lista in ESTRATEGIAS_POR_TENDENCIA.items()
+    for nombre in lista
+}
+
 
 def obtener_estrategias_por_tendencia(tendencia: str) -> list:
     """Devuelve las estrategias recomendadas para una tendencia dada."""
     return ESTRATEGIAS_POR_TENDENCIA.get(tendencia.lower(), [])
+
+
+def filtrar_por_direccion(
+    estrategias: dict, direccion: str
+) -> tuple[dict, list[str]]:
+    """Filtra ``estrategias`` según la coherencia con ``direccion``.
+
+    Retorna las estrategias coherentes y una lista de las descartadas.
+    """
+    direccion = direccion.lower()
+    coherentes = {}
+    incoherentes: list[str] = []
+
+    for nombre, activo in estrategias.items():
+        ideal = TENDENCIA_IDEAL.get(nombre, "lateral")
+        if direccion == "long" and ideal == "bajista":
+            incoherentes.append(nombre)
+            continue
+        if direccion == "short" and ideal == "alcista":
+            incoherentes.append(nombre)
+            continue
+        coherentes[nombre] = activo
+
+    return coherentes, incoherentes

@@ -198,6 +198,7 @@ def registrar_orden(
     tp: float,
     estrategias,
     tendencia,
+    direccion: str = "long",
 ) -> None:
     orden = Orden(
         symbol=symbol,
@@ -209,6 +210,7 @@ def registrar_orden(
         estrategias_activas=estrategias,
         tendencia=tendencia,
         max_price=precio,
+        direccion=direccion,
     )
     actualizar_orden(symbol, orden)
 

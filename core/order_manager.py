@@ -34,7 +34,9 @@ class OrderManager:
         tp: float,
         estrategias: Dict,
         tendencia: str,
+        direccion: str = "long",
         cantidad: float = 0.0,
+        
     ) -> None:
         """Registra una nueva orden en memoria y, si ``modo_real`` es ``True``
         ejecuta la orden en Binance."""
@@ -48,6 +50,7 @@ class OrderManager:
             tendencia=tendencia,
             timestamp=datetime.utcnow().isoformat(),
             max_price=precio,
+            direccion=direccion,
         )
         
         if self.modo_real:
@@ -55,7 +58,7 @@ class OrderManager:
                 if cantidad > 0:
                     cantidad = ordenes_reales.ejecutar_orden_market(symbol, cantidad)
                 ordenes_reales.registrar_orden(
-                    symbol, precio, cantidad, sl, tp, estrategias, tendencia
+                    symbol, precio, cantidad, sl, tp, estrategias, tendencia, direccion
                 )
                 orden.cantidad = cantidad
             except Exception as e:
@@ -108,10 +111,10 @@ class OrderManager:
                 info["take_profit"],
                 info["estrategias_activas"],
                 info["tendencia"],
+                info.get("direccion", "long"),
             )
         
         self.ordenes.pop(symbol, None)
-
         orden.precio_cierre = precio
         orden.fecha_cierre = datetime.utcnow().isoformat()
         orden.motivo_cierre = motivo

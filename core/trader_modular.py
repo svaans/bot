@@ -41,6 +41,7 @@ from filtros.filtro_salidas import validar_necesidad_de_salida
 from core.tendencia import detectar_tendencia
 from filtros.validador_entradas import evaluar_validez_estrategica
 from estrategias_entrada.gestor_entradas import entrada_permitida
+from core.estrategias import filtrar_por_direccion
 from indicadores.rsi import calcular_rsi
 from indicadores.momentum import calcular_momentum
 from indicadores.slope import calcular_slope
@@ -333,11 +334,12 @@ class Trader:
         tp: float,
         estrategias: Dict,
         tendencia: str,
+        direccion: str,
     ) -> None:
         cantidad = self._calcular_cantidad(symbol, precio)
         if cantidad <= 0:
             return
-        self.orders.abrir(symbol, precio, sl, tp, estrategias, tendencia, cantidad)
+        self.orders.abrir(symbol, precio, sl, tp, estrategias, tendencia, direccion, cantidad)
         log.info(
             "✅ Orden abierta: "
             f"{symbol} {cantidad} unidades a {precio:.2f}€ SL: {sl:.2f} TP: {tp:.2f}"
@@ -467,8 +469,21 @@ class Trader:
         }
         if not estrategias_persistentes:
             return
+        
+        direccion = "short" if tendencia_actual == "bajista" else "long"
+        estrategias_persistentes, incoherentes = filtrar_por_direccion(
+            estrategias_persistentes, direccion
+        )
+        if not estrategias_persistentes:
+            return
+
+        penalizacion = 0.0
+        if incoherentes:
+            penalizacion = 0.1 * len(incoherentes)
+
         puntaje = sum(pesos_symbol.get(k, 0) for k in estrategias_persistentes)
         puntaje += self.persistencia.peso_extra * len(estrategias_persistentes)
+        puntaje -= penalizacion
         estado.ultimo_umbral = umbral
         
         # Respeta un tiempo de espera tras cerrar una operación con pérdida
@@ -520,7 +535,7 @@ class Trader:
             return
 
         log.info(
-            f"✅ Entrada confirmada en {symbol}. Puntaje {puntaje:.2f}, Peso {peso_total:.2f}, Diversidad {diversidad}, Persistentes {len(estrategias_persistentes)}"
+            f"✅ Entrada confirmada en {symbol}. Puntaje {puntaje:.2f}, Peso {peso_total:.2f}, Diversidad {diversidad}, Persistentes {len(estrategias_persistentes)}, Tendencia {tendencia_actual}, Dirección {direccion}"
         )
 
         balance = self.cliente.fetch_balance()
@@ -533,7 +548,7 @@ class Trader:
         sl, tp = calcular_tp_sl_adaptativos(df, float(vela["close"]))
         precio = float(vela["close"])
         self._abrir_operacion_real(
-            symbol, precio, sl, tp, estrategias_persistentes, tendencia_actual
+            symbol, precio, sl, tp, estrategias_persistentes, tendencia_actual, direccion
         )
         return
 
