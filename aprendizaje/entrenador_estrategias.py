@@ -11,7 +11,8 @@ from core.logger import configurar_logger
 CONFIG = dotenv_values("config/claves.env")
 MODO_REAL = CONFIG.get("MODO_REAL", "False") == "True"
 CARPETA_ORDENES = "ordenes_reales" if MODO_REAL else "ordenes_simuladas"
-CARPETA_HISTORICO = "ultimas_operaciones"
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+CARPETA_HISTORICO = os.path.join(BASE_DIR, "ultimas_operaciones")
 RUTA_PESOS = "config/estrategias_pesos.json"
 MIN_OPERACIONES = 5
 

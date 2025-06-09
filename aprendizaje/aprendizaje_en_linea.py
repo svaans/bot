@@ -13,7 +13,8 @@ from core.configuracion import (
 )
 from core.logger import configurar_logger
 
-CARPETA_OPERACIONES = "ultimas_operaciones"
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+CARPETA_OPERACIONES = os.path.join(BASE_DIR, "ultimas_operaciones")
 RUTA_PESOS = "config/estrategias_pesos.json"
 MAX_OPERACIONES = 30
 MIN_OPERACIONES = 5
