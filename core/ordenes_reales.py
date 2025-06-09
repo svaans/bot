@@ -11,6 +11,7 @@ import sqlite3
 from datetime import datetime
 from binance_api.cliente import obtener_cliente
 from core.logger import configurar_logger
+from ccxt.base.errors import InsufficientFunds, BaseError
 from core.ordenes_model import Orden
 
 log = configurar_logger("ordenes")
@@ -19,6 +20,8 @@ RUTA_DB = os.path.join("ordenes_reales", "ordenes.db")
 
 
 _CACHE_ORDENES: dict[str, Orden] | None = None
+# Registra símbolos con intentos fallidos de venta por saldo insuficiente
+_VENTAS_FALLIDAS: set[str] = set()
 
 def _init_db() -> None:
     """Crea la tabla de órdenes si no existe."""
@@ -228,16 +231,64 @@ def ejecutar_orden_market(symbol, cantidad):
         log.error(f"❌ Error ejecutando orden real para {symbol}: {e}")
         raise
 
-def ejecutar_orden_market_sell(symbol, cantidad):
-    """Ejecuta una venta de mercado y devuelve la cantidad realmente vendida."""
+def ejecutar_orden_market_sell(symbol: str, cantidad: float) -> float:
+    """Ejecuta una venta de mercado validando saldo y límites."""
+
+    if symbol in _VENTAS_FALLIDAS:
+        log.warning(
+            f"⏭️ Venta omitida para {symbol} por intento previo fallido de saldo."
+        )
+        return 0.0
     try:
         cliente = obtener_cliente()
-        response = cliente.create_market_sell_order(symbol.replace("/", ""), cantidad)
+        balance = cliente.fetch_balance()
+        base = symbol.split("/")[0]
+        disponible = balance.get("free", {}).get(base, 0)
+        log.debug(
+            f"{symbol}: saldo disponible {base} {disponible}, intento vender {cantidad}"
+        )
+
+        if disponible <= 0 or disponible < cantidad:
+            log.error(
+                f"Saldo insuficiente para vender {symbol}. Disponible {disponible}, solicitado {cantidad}"
+            )
+            _VENTAS_FALLIDAS.add(symbol)
+            raise InsufficientFunds("saldo insuficiente")
+
+        markets = cliente.load_markets()
+        info = markets.get(symbol.replace("/", ""), {})
+        min_amount = float(info.get("limits", {}).get("amount", {}).get("min") or 0)
+        min_cost = float(info.get("limits", {}).get("cost", {}).get("min") or 0)
+
+        cantidad_vender = min(cantidad, disponible) * 0.999  # descuenta comisión
+        ticker = cliente.fetch_ticker(symbol.replace("/", ""))
+        precio = float(ticker.get("last") or ticker.get("close") or 0)
+
+        if cantidad_vender < min_amount or (precio and cantidad_vender * precio < min_cost):
+            log.error(
+                f"Cantidad inválida {cantidad_vender} para {symbol}. Mínimos -> amount: {min_amount}, notional: {min_cost}"
+            )
+            _VENTAS_FALLIDAS.add(symbol)
+            raise ValueError("cantidad invalida")
+
+        response = cliente.create_market_sell_order(
+            symbol.replace("/", ""), cantidad_vender
+        )
         ejecutado = float(response.get("amount") or response.get("filled") or 0)
         if ejecutado <= 0:
-            ejecutado = cantidad
-        log.info(f"🔴 Orden de venta ejecutada: {symbol}, cantidad: {ejecutado}")
+            ejecutado = cantidad_vender
+        log.info(
+            f"🔴 Orden de venta ejecutada: {symbol}, cantidad: {ejecutado}"
+        )
+        _VENTAS_FALLIDAS.discard(symbol)
         return ejecutado
+    except InsufficientFunds as e:
+        log.error(f"❌ Venta rechazada por saldo insuficiente en {symbol}: {e}")
+        _VENTAS_FALLIDAS.add(symbol)
+        raise
+    except BaseError as e:
+        log.error(f"❌ Error en intercambio al vender {symbol}: {e}")
+        raise
     except Exception as e:
-        log.error(f"❌ Error ejecutando venta real para {symbol}: {e}")
+        log.error(f"❌ Error estructural al ejecutar venta para {symbol}: {e}")
         raise
