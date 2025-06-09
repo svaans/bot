@@ -532,11 +532,10 @@ class Trader:
 
         sl, tp = calcular_tp_sl_adaptativos(df, float(vela["close"]))
         precio = float(vela["close"])
-        if self.config.modo_real:
-            self._abrir_operacion_real(
-                symbol, precio, sl, tp, estrategias_persistentes, tendencia_actual
-            )
-            return
+        self._abrir_operacion_real(
+            symbol, precio, sl, tp, estrategias_persistentes, tendencia_actual
+        )
+        return
 
     async def cerrar(self) -> None:
         if self._task:
