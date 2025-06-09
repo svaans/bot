@@ -283,7 +283,7 @@ def ejecutar_orden_market_sell(symbol: str, cantidad: float) -> float:
         _VENTAS_FALLIDAS.discard(symbol)
         return ejecutado
     except InsufficientFunds as e:
-        log.error(f"❌ Venta rechazada por saldo insuficiente en {symbol}: {e}")
+        log.error(f"❌ Venta rechazada por saldo insuficiente en  {symbol}: {e}")
         _VENTAS_FALLIDAS.add(symbol)
         raise
     except BaseError as e:
