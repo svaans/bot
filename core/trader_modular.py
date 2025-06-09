@@ -69,6 +69,7 @@ class Trader:
         self.orders = OrderManager(config.modo_real, self.risk, self.notificador)
         self.cliente = crear_cliente(config)
         self._markets = None
+        self.modo_capital_bajo = config.modo_capital_bajo
         self.persistencia = PersistenciaTecnica(
             config.persistencia_minima,
             config.peso_extra_persistencia,
@@ -161,14 +162,18 @@ class Trader:
         return self.orders.ordenes
     
     def ajustar_capital_diario(self, factor: float = 0.2, limite: float = 0.3) -> None:
-        """Redistribuye el capital entre símbolos según rendimiento diario."""
+        """Redistribuye el capital según rendimiento y oportunidades recientes."""
         total = sum(self.capital_por_simbolo.values())
         pesos = {}
+        senales = {s: self._contar_senales(s) for s in self.capital_por_simbolo}
+        max_senales = max(senales.values()) if senales else 0
         for symbol in self.capital_por_simbolo:
             inicio = self.capital_inicial_diario.get(symbol, self.capital_por_simbolo[symbol])
             final = self.capital_por_simbolo[symbol]
             rendimiento = (final - inicio) / inicio if inicio else 0
             peso = 1 + factor * rendimiento
+            if max_senales > 0:
+                peso += 0.2 * senales[symbol] / max_senales
             peso = max(1 - limite, min(1 + limite, peso))
             pesos[symbol] = peso
 
@@ -200,7 +205,11 @@ class Trader:
             log.debug("Saldo en EUR insuficiente")
             return 0.0
         capital_symbol = self.capital_por_simbolo.get(symbol, euros / max(len(self.estado), 1))
-        riesgo = max(capital_symbol * self.fraccion_kelly, self.config.min_order_eur)
+        fraccion = self.fraccion_kelly
+        if self.modo_capital_bajo and euros < 500:
+            deficit = (500 - euros) / 500
+            fraccion = max(fraccion, 0.02 + deficit * 0.1)
+        riesgo = max(capital_symbol * fraccion, self.config.min_order_eur)
         riesgo = min(riesgo, euros)
         minimo_binance = self._obtener_minimo_binance(symbol)
         cantidad = riesgo / precio
@@ -214,7 +223,7 @@ class Trader:
             "📊 Capital disponible: %.2f€ | Kelly: %.4f | Orden: %.2f€ | Mínimo Binance: %s | %s"
             % (
                 euros,
-                self.fraccion_kelly,
+                fraccion,
                 orden_eur,
                 f"{minimo_binance:.2f}€" if minimo_binance else "desconocido",
                 symbol,
@@ -255,6 +264,18 @@ class Trader:
         ganancia = float(serie.iloc[-1])
         return {"ganancia_semana": ganancia, "drawdown": drawdown}
     
+    def _contar_senales(self, symbol: str, minutos: int = 60) -> int:
+        """Cuenta señales válidas recientes para ``symbol``."""
+        estado = self.estado.get(symbol)
+        if not estado:
+            return 0
+        limite = datetime.utcnow().timestamp() * 1000 - minutos * 60 * 1000
+        return sum(
+            1
+            for v in estado.buffer
+            if v.get("timestamp", 0) >= limite and v.get("estrategias_activas")
+        )
+    
     # Helpers de soporte -------------------------------------------------
 
     def _rechazo(self, symbol: str, motivo: str) -> None:
@@ -277,6 +298,15 @@ class Trader:
         diversidad_min: int,
     ) -> bool:
         """Verifica que la diversidad y el peso total sean suficientes."""
+        if self.modo_capital_bajo:
+            try:
+                balance = self.cliente.fetch_balance()
+                euros = balance['total'].get('EUR', 0)
+            except BaseError:
+                euros = 0
+            if euros < 500:
+                diversidad_min = min(diversidad_min, 2)
+                peso_min_total *= 0.7
         if diversidad < diversidad_min or peso_total < peso_min_total:
             self._rechazo(
                 symbol,
@@ -545,7 +575,13 @@ class Trader:
             log.warning(f"🚫 Riesgo diario superado para {symbol}")
             return
 
-        sl, tp = calcular_tp_sl_adaptativos(df, float(vela["close"]))
+        capital_symbol = self.capital_por_simbolo.get(symbol, 0)
+        sl, tp = calcular_tp_sl_adaptativos(
+            df,
+            float(vela["close"]),
+            {**config_actual, "modo_capital_bajo": self.modo_capital_bajo},
+            capital_symbol,
+        )
         precio = float(vela["close"])
         self._abrir_operacion_real(
             symbol, precio, sl, tp, estrategias_persistentes, tendencia_actual, direccion

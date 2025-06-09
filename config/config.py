@@ -17,5 +17,6 @@ UMBRAL_RIESGO_DIARIO = cfg.umbral_riesgo_diario
 MIN_ORDER_EUR = cfg.min_order_eur
 PERSISTENCIA_MINIMA = cfg.persistencia_minima
 PESO_EXTRA_PERSISTENCIA = cfg.peso_extra_persistencia
+MODO_CAPITAL_BAJO = cfg.modo_capital_bajo
 TELEGRAM_TOKEN = cfg.telegram_token
 TELEGRAM_CHAT_ID = cfg.telegram_chat_id

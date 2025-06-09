@@ -115,7 +115,7 @@ def calcular_umbral_adaptativo(symbol, df, estrategias_activadas, pesos_symbol, 
     return umbral
 
 
-def calcular_tp_sl_adaptativos(df, precio_actual, config=None):
+def calcular_tp_sl_adaptativos(df, precio_actual, config=None, capital_actual=None):
     if config is None:
         config = {}
 
@@ -131,6 +131,10 @@ def calcular_tp_sl_adaptativos(df, precio_actual, config=None):
 
         multiplicador_sl = config.get("sl_ratio", 1.5)
         multiplicador_tp = config.get("tp_ratio", 2.5)
+        if config.get("modo_capital_bajo") and capital_actual is not None and capital_actual < 500:
+            factor = 1 + (1 - capital_actual / 500) * 0.2
+            multiplicador_tp *= factor
+            multiplicador_sl *= max(0.5, 1 - (1 - capital_actual / 500) * 0.1)
 
         sl = round(precio_actual - atr * multiplicador_sl, 6)
         tp = round(precio_actual + atr * multiplicador_tp, 6)

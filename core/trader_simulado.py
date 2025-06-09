@@ -250,7 +250,12 @@ class TraderSimulado:
             log.info(f"✅ [{symbol}] Entrada CONFIRMADA — Puntaje: {puntaje:.2f}, Peso: {peso_total:.2f}, Diversidad: {diversidad}, Persistencia: {repetidas}/5")
 
             precio = float(vela["close"])
-            sl, tp = calcular_tp_sl_adaptativos(df, precio, config)
+            sl, tp = calcular_tp_sl_adaptativos(
+                df,
+                precio,
+                config,
+                self.capital_simulado.get(symbol, 0),
+            )
 
             if not estrategias_detectadas or not any(estrategias_detectadas.values()):
                 log.warning(f"⚠️ [{symbol}] Entrada ignorada — sin estrategias activas válidas")
