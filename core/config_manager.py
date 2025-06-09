@@ -32,7 +32,7 @@ class ConfigManager:
     def load_from_env() -> Config:
         env_path = Path(__file__).resolve().parent.parent / "config" / "claves.env"
         load_dotenv(env_path)
-        symbols_env = os.getenv("SYMBOLS", "BTC/EUR,ETH/EUR,ADA/EUR")
+        symbols_env = os.getenv("SYMBOLS", "BTC/EUR,ETH/EUR,ADA/EUR,SOL/EUR,MATIC/EUR")
 
         api_key = os.environ.get("BINANCE_API_KEY")
         api_secret = os.environ.get("BINANCE_API_SECRET")

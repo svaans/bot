@@ -54,3 +54,5 @@ if __name__ == "__main__":
     descargar_historico("BTC/EUR", "btc_eur_1m.parquet", dias_historico=DIAS_HISTORICO)
     descargar_historico("ETH/EUR", "eth_eur_1m.parquet", dias_historico=DIAS_HISTORICO)
     descargar_historico("ADA/EUR", "ada_eur_1m.parquet", dias_historico=DIAS_HISTORICO)
+    descargar_historico("SOL/EUR", "sol_eur_1m.parquet", dias_historico=DIAS_HISTORICO)
+    descargar_historico("MATIC/EUR", "matic_eur_1m.parquet", dias_historico=DIAS_HISTORICO)

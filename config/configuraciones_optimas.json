@@ -40,5 +40,33 @@
         "sl_ratio": 2.0,
         "tp_ratio": 4.8,
         "ratio_minimo_beneficio": 1.5
+     },
+    "SOL/EUR": {
+        "factor_umbral": 1.2,
+        "ajuste_volatilidad": 1.25,
+        "riesgo_maximo_diario": 2.1,
+        "ponderar_por_diversidad": true,
+        "modo_agresivo": true,
+        "multiplicador_estrategias_recurrentes": 1.5,
+        "peso_minimo_total": 3.5,
+        "diversidad_minima": 3,
+        "cooldown_tras_perdida": 6,
+        "sl_ratio": 1.8,
+        "tp_ratio": 4.0,
+        "ratio_minimo_beneficio": 1.4
+        },
+    "MATIC/EUR": {
+        "factor_umbral": 1.3,
+        "ajuste_volatilidad": 1.15,
+        "riesgo_maximo_diario": 1.9,
+        "ponderar_por_diversidad": true,
+        "modo_agresivo": true,
+        "multiplicador_estrategias_recurrentes": 1.6,
+        "peso_minimo_total": 3.6,
+        "diversidad_minima": 3,
+        "cooldown_tras_perdida": 6,
+        "sl_ratio": 1.9,
+        "tp_ratio": 4.2,
+        "ratio_minimo_beneficio": 1.45
     }
 }

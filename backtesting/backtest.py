@@ -164,5 +164,5 @@ if __name__ == "__main__":
     import sys
 
     logging.disable(logging.CRITICAL)
-    symbols = sys.argv[1:] or ["BTC/EUR", "ETH/EUR", "ADA/EUR"]
+    symbols = sys.argv[1:] or ["BTC/EUR", "ETH/EUR", "ADA/EUR", "SOL/EUR", "MATIC/EUR"]
     asyncio.run(backtest_modular(symbols))
