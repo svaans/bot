@@ -66,8 +66,9 @@ class _ReloadHandler(PatternMatchingEventHandler):
 
 def start_hot_reload(path: str | Path = None, modules: Iterable[str] = None, exclude: Iterable[str] | None = None) -> Observer:
     """Inicia un observador en ``path`` para recargar ``modules`` en caliente."""
-    base = Path(path or Path(__file__).resolve().parents[1])
+    base = Path(path or Path.cwd())
     mods = modules or DEFAULT_MODULES
+    log.info(f"👀 Observando carpeta {base} con módulos: {', '.join(mods)}")
     handler = _ReloadHandler(base, mods, exclude)
     observer = Observer()
     observer.schedule(handler, str(base), recursive=True)

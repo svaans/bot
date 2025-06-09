@@ -19,7 +19,7 @@ def mostrar_banner():
 
 async def main():
     config = ConfigManager.load_from_env()
-    observer = start_hot_reload(path=Path(__file__).resolve().parent.parent, modules=DEFAULT_MODULES)
+    observer = start_hot_reload(path=Path.cwd(), modules=DEFAULT_MODULES)
 
     # El nuevo Trader modular soporta ambos modos
     from core.trader_modular import Trader
