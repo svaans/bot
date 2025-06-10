@@ -51,6 +51,7 @@ from core.estrategias import filtrar_por_direccion
 from indicadores.rsi import calcular_rsi
 from indicadores.momentum import calcular_momentum
 from indicadores.slope import calcular_slope
+from core.market_regime import detectar_regimen
 
 
 log = configurar_logger("trader")
@@ -61,6 +62,7 @@ class EstadoSimbolo:
     buffer: List[dict]
     ultimo_umbral: float = 0.0
     ultimo_timestamp: int | None = None
+    regimen: str = ""
 
 
 class Trader:
@@ -81,7 +83,11 @@ class Trader:
             config.peso_extra_persistencia,
         )
         self.fraccion_kelly = calcular_fraccion_kelly()
-        log.info(f"⚖️ Fracción Kelly: {self.fraccion_kelly:.4f}")
+        factor_kelly = self.risk.multiplicador_kelly()
+        self.fraccion_kelly *= factor_kelly
+        log.info(
+            f"⚖️ Fracción Kelly: {self.fraccion_kelly:.4f} (x{factor_kelly:.3f})"
+        )
         euros = 0
         if config.api_key and config.api_secret:
             try:
@@ -176,12 +182,19 @@ class Trader:
         """Compatibilidad con ``monitorear_estado_periodicamente``."""
         return self.orders.ordenes
     
-    def ajustar_capital_diario(self, factor: float = 0.2, limite: float = 0.3) -> None:
-        """Redistribuye el capital según rendimiento y oportunidades recientes."""
+    def ajustar_capital_diario(
+        self,
+        factor: float = 0.2,
+        limite: float = 0.3,
+        penalizacion_corr: float = 0.2,
+        umbral_corr: float = 0.8,
+    ) -> None:
+        """Redistribuye el capital según rendimiento y correlación entre símbolos."""
         total = sum(self.capital_por_simbolo.values())
         pesos = {}
         senales = {s: self._contar_senales(s) for s in self.capital_por_simbolo}
         max_senales = max(senales.values()) if senales else 0
+        correlaciones = self._calcular_correlaciones()
         for symbol in self.capital_por_simbolo:
             inicio = self.capital_inicial_diario.get(symbol, self.capital_por_simbolo[symbol])
             final = self.capital_por_simbolo[symbol]
@@ -189,6 +202,15 @@ class Trader:
             peso = 1 + factor * rendimiento
             if max_senales > 0:
                 peso += 0.2 * senales[symbol] / max_senales
+            
+            # Penaliza símbolos altamente correlacionados
+            corr_media = None
+            if not correlaciones.empty and symbol in correlaciones.columns:
+                corr_series = correlaciones[symbol].drop(labels=[symbol], errors="ignore").abs()
+                corr_media = corr_series.mean()
+            if corr_media and corr_media >= umbral_corr:
+                peso *= 1 - penalizacion_corr * corr_media
+
             peso = max(1 - limite, min(1 + limite, peso))
             pesos[symbol] = peso
 
@@ -290,6 +312,21 @@ class Trader:
             for v in estado.buffer
             if v.get("timestamp", 0) >= limite and v.get("estrategias_activas")
         )
+    
+    def _calcular_correlaciones(self, periodos: int = 1440) -> pd.DataFrame:
+        """Calcula correlación histórica de cierres entre símbolos."""
+        precios = {}
+        for symbol in self.capital_por_simbolo:
+            archivo = f"datos/{symbol.replace('/', '_').lower()}_1m.parquet"
+            try:
+                df = pd.read_parquet(archivo, columns=["close"])
+                precios[symbol] = df["close"].astype(float).tail(periodos).reset_index(drop=True)
+            except Exception as e:
+                log.debug(f"No se pudo cargar historial para {symbol}: {e}")
+        if len(precios) < 2:
+            return pd.DataFrame()
+        df_precios = pd.DataFrame(precios)
+        return df_precios.corr()
     
     # Helpers de soporte -------------------------------------------------
 
@@ -450,6 +487,7 @@ class Trader:
         precio_max = float(df["high"].iloc[-1])
         precio_cierre = float(df["close"].iloc[-1])
         config_actual = self.config_por_simbolo.get(symbol, {})
+        regimen = detectar_regimen(df)
         log.debug(f"Verificando salidas para {symbol} con orden: {orden.to_dict()}")
 
         # --- Stop Loss con validación ---
@@ -510,7 +548,7 @@ class Trader:
             resultado = {}
         if resultado.get("cerrar", False):
             razon = resultado.get("razon", "Estrategia desconocida")
-            evaluacion = self.engine.evaluar_entrada(symbol, df)
+            evaluacion = self.engine.evaluar_entrada(symbol, df, regimen)
             estrategias = evaluacion.get("estrategias_activas", {})
             puntaje = evaluacion.get("puntaje_total", 0)
             pesos_symbol = self.pesos_por_simbolo.get(symbol, {})
@@ -546,12 +584,14 @@ class Trader:
         
 
         df = pd.DataFrame(estado.buffer)
+        regimen = detectar_regimen(df)
+        estado.regimen = regimen
         config_actual = configurar_parametros_dinamicos(
             symbol, df, self.config_por_simbolo.get(symbol, {})
         )
         self.config_por_simbolo[symbol] = config_actual
         
-        evaluacion = self.engine.evaluar_entrada(symbol, df)
+        evaluacion = self.engine.evaluar_entrada(symbol, df, regimen)
         estrategias = evaluacion.get("estrategias_activas", {})
         estado.buffer[-1]["estrategias_activas"] = estrategias
         self.persistencia.actualizar(symbol, estrategias)
