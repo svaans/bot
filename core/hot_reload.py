@@ -29,6 +29,8 @@ class _ReloadHandler(PatternMatchingEventHandler):
     def _should_reload(self, module_name: str) -> bool:
         if any(module_name.startswith(e) for e in self.exclude):
             return False
+        if not self.modules:
+            return True
         return any(module_name == m or module_name.startswith(m + ".") for m in self.modules)
 
     def _module_from_path(self, path: Path) -> str | None:
@@ -64,11 +66,20 @@ class _ReloadHandler(PatternMatchingEventHandler):
             log.info(f"❌ Error al recargar {module_name}: {exc}")
 
 
-def start_hot_reload(path: str | Path = None, modules: Iterable[str] = None, exclude: Iterable[str] | None = None) -> Observer:
-    """Inicia un observador en ``path`` para recargar ``modules`` en caliente."""
+def start_hot_reload(
+    path: str | Path = None,
+    modules: Iterable[str] | None = DEFAULT_MODULES,
+    exclude: Iterable[str] | None = None,
+) -> Observer:
+    """Inicia un observador en ``path`` para recargar ``modules`` en caliente.
+
+    Si ``modules`` es ``None`` o una lista vacía, se intentarán recargar todos los
+    paquetes dentro de ``path`` salvo los indicados en ``exclude``.
+    """
     base = Path(path or Path.cwd())
-    mods = modules or DEFAULT_MODULES
-    log.info(f"👀 Observando carpeta {base} con módulos: {', '.join(mods)}")
+    mods = list(modules) if modules is not None else []
+    texto_mods = ", ".join(mods) if mods else "todos"
+    log.info(f"👀 Observando carpeta {base} con módulos: {texto_mods}")
     handler = _ReloadHandler(base, mods, exclude)
     observer = Observer()
     observer.schedule(handler, str(base), recursive=True)
