@@ -55,7 +55,7 @@
         "tp_ratio": 4.0,
         "ratio_minimo_beneficio": 1.4
         },
-    "MATIC/EUR": {
+    "BNB/EUR": {
         "factor_umbral": 1.3,
         "ajuste_volatilidad": 1.15,
         "riesgo_maximo_diario": 1.9,

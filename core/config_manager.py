@@ -34,7 +34,7 @@ class ConfigManager:
         load_dotenv(env_path)
         symbols_env = os.getenv(
             "SYMBOLS",
-            "BTC/EUR,ETH/EUR,ADA/EUR,SOL/EUR,MATIC/EUR",
+            "BTC/EUR,ETH/EUR,ADA/EUR,SOL/EUR,BNB/EUR",
         )
 
         api_key = os.environ.get("BINANCE_API_KEY")
