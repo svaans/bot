@@ -108,6 +108,10 @@ class Trader:
 
         try:
             self.orders.ordenes = ordenes_reales.obtener_todas_las_ordenes()
+            if not self.orders.ordenes:
+                self.orders.ordenes = ordenes_reales.sincronizar_ordenes_binance(
+                    config.symbols
+                )
         except Exception as e:
             log.warning(f"⚠️ Error cargando órdenes previas desde la base de datos: {e}")
             raise
@@ -636,7 +640,17 @@ class Trader:
         momentum = calcular_momentum(df)
         slope = calcular_slope(df)
 
-        if not entrada_permitida(symbol, puntaje, umbral, estrategias_persistentes, rsi, slope, momentum):
+        if not entrada_permitida(
+            symbol,
+            puntaje,
+            umbral,
+            estrategias_persistentes,
+            rsi,
+            slope,
+            momentum,
+            df,
+            direccion,
+        ):
             return
 
         log.info(

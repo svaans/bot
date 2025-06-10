@@ -2,6 +2,8 @@
 from core.pesos import gestor_pesos
 from estrategias_entrada.loader import cargar_estrategias
 from core.estrategias import obtener_estrategias_por_tendencia
+from indicadores.volumen import verificar_volumen_suficiente
+from indicadores.divergencia_rsi import detectar_divergencia_alcista
 import traceback
 
 ESTRATEGIAS_DISPONIBLES = cargar_estrategias()
@@ -59,12 +61,32 @@ from core.logger import configurar_logger
 
 log = configurar_logger("entradas")
 
-def entrada_permitida(symbol, potencia, umbral, estrategias_activas, rsi, slope, momentum):
+def entrada_permitida(
+    symbol,
+    potencia,
+    umbral,
+    estrategias_activas,
+    rsi,
+    slope,
+    momentum,
+    df=None,
+    direccion="long",
+):
     """
     Evalúa si una entrada debe permitirse según potencia, umbral y criterios técnicos.
     """
     estrategias_activas_count = sum(1 for v in estrategias_activas.values() if v)
 
+    if direccion == "short" and df is not None:
+        if not verificar_volumen_suficiente(df):
+            log.info(f"📉 Entrada evitada por volumen insuficiente en {symbol}")
+            return False
+        if detectar_divergencia_alcista(df):
+            log.warning(
+                f"⚠️ Entrada short bloqueada por divergencia alcista detectada en {symbol}"
+            )
+            return False
+        
     if potencia >= umbral:
         log.info(f"🟢 [{symbol}] Entrada directa permitida: {potencia:.2f} >= {umbral:.2f}")
         return True

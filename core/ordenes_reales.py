@@ -153,6 +153,39 @@ def obtener_orden(symbol: str) -> Orden | None:
 def obtener_todas_las_ordenes():
     return cargar_ordenes()
 
+def sincronizar_ordenes_binance(simbolos: list[str] | None = None) -> dict[str, Orden]:
+    """Consulta órdenes abiertas directamente desde Binance y las registra.
+
+    Esto permite reconstruir el estado de las posiciones cuando el bot se
+    reinicia y la base de datos local no contiene todas las operaciones
+    abiertas. Devuelve el diccionario de órdenes resultante.
+    """
+    try:
+        cliente = obtener_cliente()
+        ordenes_api = []
+        if simbolos:
+            for s in simbolos:
+                ordenes_api.extend(
+                    cliente.fetch_open_orders(s.replace("/", ""))
+                )
+        else:
+            ordenes_api = cliente.fetch_open_orders()
+    except BaseError as e:
+        log.error(f"❌ Error consultando órdenes abiertas: {e}")
+        return cargar_ordenes()
+
+    for o in ordenes_api:
+        symbol = o.get("symbol")
+        if not symbol:
+            continue
+        price = float(o.get("price") or o.get("average") or 0)
+        amount = float(o.get("amount") or o.get("remaining") or 0)
+        side = o.get("side", "buy").lower()
+        direccion = "long" if side == "buy" else "short"
+        registrar_orden(symbol, price, amount, 0.0, 0.0, {}, "", direccion)
+
+    return cargar_ordenes()
+
 def actualizar_orden(symbol, data):
     ordenes = cargar_ordenes()
     if ordenes.get(symbol) == data:

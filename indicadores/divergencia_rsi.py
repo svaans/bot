@@ -17,3 +17,8 @@ def calcular_divergencia_rsi(df: pd.DataFrame, periodo: int = 14) -> bool:
     rsi_bajos = rsi.iloc[-3:]
 
     return precio_bajos.iloc[-1] < precio_bajos.iloc[0] and rsi_bajos.iloc[-1] > rsi_bajos.iloc[0]
+
+
+def detectar_divergencia_alcista(df: pd.DataFrame, periodo: int = 14) -> bool:
+    """Alias de :func:`calcular_divergencia_rsi` para mayor claridad."""
+    return calcular_divergencia_rsi(df, periodo)

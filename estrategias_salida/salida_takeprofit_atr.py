@@ -9,7 +9,7 @@ def salida_takeprofit_atr(orden: dict, df: pd.DataFrame) -> dict:
         direccion = orden.get("direccion", "long")
         precio_actual = df["close"].iloc[-1]
         entrada = orden.get("precio_entrada")
-        atr = calcular_atr(df).iloc[-1]
+        atr = calcular_atr(df)
 
         if atr is None or entrada is None:
             return {"cerrar": False, "razon": "ATR o entrada no disponibles"}
@@ -19,11 +19,17 @@ def salida_takeprofit_atr(orden: dict, df: pd.DataFrame) -> dict:
         if direccion in ["long", "compra"]:
             tp_tecnico = entrada + margen_tp
             if precio_actual >= tp_tecnico:
-                return {"cerrar": True, "razon": f"TP-ATR alcanzado (long) a {tp_tecnico:.4f}"}
+                return {
+                    "cerrar": True,
+                    "razon": f"TP-ATR alcanzado (long) a {tp_tecnico:.4f}"
+                }
         elif direccion == "venta":
             tp_tecnico = entrada - margen_tp
             if precio_actual <= tp_tecnico:
-                return {"cerrar": True, "razon": f"TP-ATR alcanzado (short) a {tp_tecnico:.4f}"}
+                return {
+                    "cerrar": True,
+                    "razon": f"TP-ATR alcanzado (short) a {tp_tecnico:.4f}"
+                }
 
         return {"cerrar": False, "razon": "TP-ATR no alcanzado"}
 

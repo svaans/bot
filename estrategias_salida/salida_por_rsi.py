@@ -12,6 +12,9 @@ def salida_por_rsi(df: pd.DataFrame, umbral_bajo=30) -> dict:
 
     rsi = RSIIndicator(close=df["close"], window=14).rsi()
     if rsi.iloc[-1] < umbral_bajo:
-        return {"cerrar": True, "razon": f"RSI bajo ({rsi.iloc[-1]:.2f}) < {umbral_bajo}"}
+        return {
+            "cerrar": True,
+            "razon": f"RSI bajo ({rsi.iloc[-1]:.2f}) < {umbral_bajo}"
+        }
 
     return {"cerrar": False, "razon": "RSI no bajo"}

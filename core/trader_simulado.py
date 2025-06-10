@@ -188,6 +188,7 @@ class TraderSimulado:
 
             tendencia, _ = await asyncio.to_thread(detectar_tendencia, symbol, df)
             log.info(f"🔁 [{symbol}] Tendencia detectada: {tendencia}")
+            direccion = "short" if tendencia == "bajista" else "long"
 
             evaluacion = await asyncio.to_thread(evaluar_estrategias, symbol, df, tendencia)
             if evaluacion is None:
@@ -279,7 +280,17 @@ class TraderSimulado:
             momentum = await asyncio.to_thread(calcular_momentum, df)
             slope = await asyncio.to_thread(calcular_slope, df)
 
-            if not entrada_permitida(symbol, puntaje, umbral, estrategias_detectadas, rsi, slope, momentum):
+            if not entrada_permitida(
+                symbol,
+                puntaje,
+                umbral,
+                estrategias_detectadas,
+                rsi,
+                slope,
+                momentum,
+                df,
+                direccion,
+            ):
                 log.debug(f"🚫 [{symbol}] Rechazada por entrada_permitida()")
                 return
 
@@ -317,6 +328,7 @@ class TraderSimulado:
                 max_price=precio,
                 tendencia=tendencia,
                 cantidad=0.0,
+                direccion=direccion,
             )
 
             if not self.modo_optimizacion:
