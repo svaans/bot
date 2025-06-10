@@ -41,6 +41,7 @@ async def main():
     bot = Trader(config)
     tarea_bot = asyncio.create_task(bot.ejecutar())
     stop_event = asyncio.Event()
+    tarea_stop = asyncio.create_task(stop_event.wait())
 
     def detener_bot():
         print("\n🛑 Señal de detención recibida.")
@@ -53,7 +54,7 @@ async def main():
 
     try:
         await asyncio.wait(
-            [tarea_bot, stop_event.wait()],
+            [tarea_bot, tarea_stop],
             return_when=asyncio.FIRST_COMPLETED,
         )
     except asyncio.CancelledError:
@@ -79,6 +80,7 @@ if __name__ == "__main__":
         # 📁 Guardar errores también en log.txt si lo deseas:
         # with open("logs/error.log", "a") as f:
         #     f.write(traceback.format_exc() + "\n")
+
 
 
 
