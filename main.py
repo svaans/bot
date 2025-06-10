@@ -52,12 +52,18 @@ async def main():
         loop.add_signal_handler(signal.SIGTERM, detener_bot)
 
     try:
-        await asyncio.gather(tarea_bot, stop_event.wait())
+        await asyncio.wait(
+            [tarea_bot, stop_event.wait()],
+            return_when=asyncio.FIRST_COMPLETED,
+        )
     except asyncio.CancelledError:
         print("🛑 Cancelación detectada.")
     except KeyboardInterrupt:
         print("🛑 Interrupción por teclado detectada.")
     finally:
+        stop_event.set()
+        tarea_bot.cancel()
+        await asyncio.gather(tarea_bot, return_exceptions=True)
         stop_hot_reload(observer)
         await bot.cerrar()
         print("👋 Bot finalizado correctamente.")
