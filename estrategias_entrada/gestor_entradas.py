@@ -10,8 +10,6 @@ ESTRATEGIAS_DISPONIBLES = cargar_estrategias()
 
 
 def evaluar_estrategias(symbol, df, tendencia):
-    # Evalúa las estrategias relevantes según la tendencia detectada.
-    # Retorna el puntaje total y las estrategias activadas.
 
     global ESTRATEGIAS_DISPONIBLES
     if not ESTRATEGIAS_DISPONIBLES:
