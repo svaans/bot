@@ -21,4 +21,4 @@ class Notificador:
                 log.warning(f"⚠️ Error al enviar notificación: {resp.text}")
         except requests.RequestException as e:
             log.warning(f"⚠️ No se pudo enviar notificación: {e}")
-            raise
+            

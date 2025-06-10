@@ -346,7 +346,10 @@ class Trader:
         """Evalúa si las señales persistentes son suficientes para entrar."""
         ventana_close = df["close"].tail(10)
         media_close = np.mean(ventana_close)
-        volatilidad_actual = np.std(ventana_close) / media_close if media_close else 0
+        if np.isnan(media_close) or media_close == 0:
+            log.debug(f"⚠️ {symbol}: Media de cierre inválida para persistencia")
+            return False
+        volatilidad_actual = np.std(ventana_close) / media_close
 
         repetidas = coincidencia_parcial(estado.buffer, pesos_symbol, ventanas=5)
 
@@ -390,7 +393,10 @@ class Trader:
         if not tendencia:
             return False
 
-        cierre_dt = pd.to_datetime(cierre.get("timestamp"))
+        cierre_dt = pd.to_datetime(cierre.get("timestamp"), errors="coerce")
+        if pd.isna(cierre_dt):
+            log.warning(f"⚠️ {symbol}: Timestamp de cierre inválido")
+            return False
         df_post = df[pd.to_datetime(df["timestamp"]) > cierre_dt]
         if len(df_post) < 3:
             log.info(f"⏳ {symbol}: esperando confirmación de tendencia")
@@ -469,7 +475,11 @@ class Trader:
         config_actual = configurar_parametros_dinamicos(symbol, df, config_actual)
         self.config_por_simbolo[symbol] = config_actual
 
-        cerrar, motivo = verificar_trailing_stop(orden.to_dict(), precio_cierre, config=config_actual)
+        try:
+            cerrar, motivo = verificar_trailing_stop(orden.to_dict(), precio_cierre, config=config_actual)
+        except Exception as e:
+            log.warning(f"⚠️ Error en trailing stop para {symbol}: {e}")
+            cerrar, motivo = False, ""
         if cerrar:
             if self._cerrar_y_reportar(orden, precio_cierre, motivo):
                 log.info(f"🔄 Trailing Stop activado para {symbol} a {precio_cierre:.2f}€")
@@ -489,7 +499,11 @@ class Trader:
                 return
 
         # --- Estrategias de salida personalizadas ---
-        resultado = evaluar_salidas(orden.to_dict(), df, config=config_actual)
+        try:
+            resultado = evaluar_salidas(orden.to_dict(), df, config=config_actual)
+        except Exception as e:
+            log.warning(f"⚠️ Error evaluando salidas para {symbol}: {e}")
+            resultado = {}
         if resultado.get("cerrar", False):
             razon = resultado.get("razon", "Estrategia desconocida")
             evaluacion = self.engine.evaluar_entrada(symbol, df)

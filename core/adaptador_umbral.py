@@ -120,6 +120,7 @@ def calcular_tp_sl_adaptativos(df, precio_actual, config=None, capital_actual=No
         config = {}
 
     if "high" in df.columns and "low" in df.columns and "close" in df.columns:
+        df = df.fillna(method="ffill").fillna(method="bfill")
         df["hl"] = df["high"] - df["low"]
         df["hc"] = abs(df["high"] - df["close"].shift(1))
         df["lc"] = abs(df["low"] - df["close"].shift(1))

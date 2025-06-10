@@ -16,9 +16,8 @@ def calcular_pesos_desde_backtest(csv_path="ordenes_simuladas_con_resultado.csv"
         if not isinstance(x, str):
             return {}
         try:
-            x = x.lower().replace("false", "False").replace("true", "True").replace("null", "None")
-            return eval(x)
-        except:
+            return json.loads(x)
+        except json.JSONDecodeError:
             return {}
 
     df["estrategias_activas"] = df["estrategias_activas"].apply(limpiar_estrategias)

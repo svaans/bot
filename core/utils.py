@@ -186,22 +186,23 @@ def guardar_orden_real(symbol: str, orden: dict | Orden):
         data["timestamp"] = data["timestamp"].timestamp()
 
     try:
-        ordenes = []
-        if os.path.exists(archivo):
-            try:
-                df = pd.read_parquet(archivo)
-                ordenes = df.to_dict("records")
-            except (OSError, ValueError) as e:
-                backup = archivo.replace(
-                    ".parquet", f"_corrupto_{int(datetime.now().timestamp())}.parquet"
-                )
-                os.rename(archivo, backup)
-                log.warning(f"⚠️ Archivo corrupto renombrado: {backup}")
-                ordenes = []
+        with lock_archivo:
+            ordenes = []
+            if os.path.exists(archivo):
+                try:
+                    df = pd.read_parquet(archivo)
+                    ordenes = df.to_dict("records")
+                except (OSError, ValueError) as e:
+                    backup = archivo.replace(
+                        ".parquet", f"_corrupto_{int(datetime.now().timestamp())}.parquet"
+                    )
+                    os.rename(archivo, backup)
+                    log.warning(f"⚠️ Archivo corrupto renombrado: {backup}")
+                    ordenes = []
 
-        ordenes.append(data)
-        pd.DataFrame(ordenes).to_parquet(archivo, index=False)
-        log.info(f"💾 Orden REAL registrada en {archivo}")
-    except (OSError, ValueError) as e:
+            ordenes.append(data)
+            pd.DataFrame(ordenes).to_parquet(archivo, index=False)
+            log.info(f"💾 Orden REAL registrada en {archivo}")
+    except(OSError, ValueError) as e:
         log.error(f"❌ Error guardando orden real: {e}")
-        raise
+        

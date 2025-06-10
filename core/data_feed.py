@@ -19,8 +19,14 @@ class DataFeed:
         self._tasks: Dict[str, asyncio.Task] = {}
 
     async def stream(self, symbol: str, handler: Callable[[dict], Awaitable[None]]) -> None:
-        """Escucha las velas de ``symbol`` y envía cada cierre al ``handler``."""
-        await escuchar_velas(symbol, self.intervalo, handler)
+        """Escucha las velas de ``symbol`` y reintenta ante fallos de conexión."""
+        while True:
+            try:
+                await escuchar_velas(symbol, self.intervalo, handler)
+                break
+            except Exception as e:  # pragma: no cover - conexión externa
+                log.warning(f"⚠️ Stream {symbol} falló: {e}. Reintentando en 5s")
+                await asyncio.sleep(5)
 
     async def escuchar(self, symbols: Iterable[str], handler: Callable[[dict], Awaitable[None]]) -> None:
         """Inicia un stream por cada símbolo y espera a que todos finalicen."""

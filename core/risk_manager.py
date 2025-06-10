@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from core.riesgo import riesgo_superado as _riesgo_superado, actualizar_perdida
+import numpy as np
 from core.logger import configurar_logger
 
 
@@ -35,6 +36,12 @@ class RiskManager:
 
         ganancia = segun_metricas.get("ganancia_semana", 0.0)
         drawdown = segun_metricas.get("drawdown", 0.0)
+        if not isinstance(ganancia, (int, float)) or not isinstance(drawdown, (int, float)):
+            log.warning("⚠️ Métricas inválidas para ajuste de riesgo")
+            return
+        if np.isnan(ganancia) or np.isnan(drawdown):
+            log.warning("⚠️ Métricas NaN para ajuste de riesgo")
+            return
 
         anterior = self.umbral
 

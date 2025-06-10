@@ -26,7 +26,7 @@ def obtener_orden_abierta():
             return ordenes if ordenes else None
         except (OSError, sqlite3.Error) as e:
             log.warning(f"⚠️ Error al leer órdenes desde la base de datos: {e}")
-            raise
+            return None
     return None
 
 def estimar_estado_emocional(ultima_orden):
@@ -110,6 +110,6 @@ async def monitorear_estado_periodicamente(self, intervalo=300):
             break
         except Exception as e:
             log.warning(f"⚠️ Error durante el monitoreo de estado: {e}")
-            raise
+            await asyncio.sleep(intervalo)
         
 
