@@ -40,6 +40,7 @@ from estrategias_salida.salida_stoploss import verificar_salida_stoploss
 from filtros.filtro_salidas import validar_necesidad_de_salida
 from core.utils import (
     validar_tp,
+    distancia_minima_valida,
     margen_tp_sl_valido,
     validar_ratio_beneficio,
 )
@@ -645,6 +646,11 @@ class Trader:
         precio = float(vela["close"])
 
         tp = validar_tp(tp, precio)
+        if not distancia_minima_valida(precio, sl, tp):
+            log.warning(
+                f"📏 Distancia SL/TP insuficiente para {symbol}. SL: {sl:.2f} TP: {tp:.2f}"
+            )
+            return
         if not margen_tp_sl_valido(tp, sl, precio):
             log.warning(
                 f"📏 Margen TP/SL inválido para {symbol}. SL: {sl:.2f} TP: {tp:.2f}"

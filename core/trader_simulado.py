@@ -8,7 +8,7 @@ import asyncio
 from datetime import datetime
 
 from core.logger import configurar_logger
-from core.utils import validar_dataframe, segundos_transcurridos
+from core.utils import validar_dataframe, segundos_transcurridos, distancia_minima_valida
 from core.pesos import gestor_pesos
 from core.tendencia import detectar_tendencia, señales_repetidas
 from core.modo import MODO_REAL
@@ -296,6 +296,12 @@ class TraderSimulado:
                 config,
                 self.capital_simulado.get(symbol, 0),
             )
+            
+            if not distancia_minima_valida(precio, sl, tp):
+                log.warning(
+                    f"📏 [{symbol}] Distancia SL/TP insuficiente. SL: {sl:.2f} TP: {tp:.2f}"
+                )
+                return
 
             if not estrategias_detectadas or not any(estrategias_detectadas.values()):
                 log.warning(f"⚠️ [{symbol}] Entrada ignorada — sin estrategias activas válidas")

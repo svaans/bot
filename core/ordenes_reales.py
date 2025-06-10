@@ -8,6 +8,7 @@ persistencia entre reinicios del bot.
 import os
 import json
 import sqlite3
+import time
 from datetime import datetime
 from binance_api.cliente import obtener_cliente
 from core.logger import configurar_logger
@@ -22,6 +23,25 @@ RUTA_DB = os.path.join("ordenes_reales", "ordenes.db")
 _CACHE_ORDENES: dict[str, Orden] | None = None
 # Registra símbolos con intentos fallidos de venta por saldo insuficiente
 _VENTAS_FALLIDAS: set[str] = set()
+
+def esperar_balance(
+    cliente,
+    symbol: str,
+    cantidad_esperada: float,
+    max_intentos: int = 10,
+    delay: float = 0.3,
+) -> float:
+    """Espera hasta que el balance disponible alcance la cantidad esperada."""
+
+    base = symbol.split("/")[0]
+    disponible = 0.0
+    for _ in range(max_intentos):
+        balance = cliente.fetch_balance()
+        disponible = balance.get("free", {}).get(base, 0)
+        if disponible >= cantidad_esperada:
+            break
+        time.sleep(delay)
+    return disponible
 
 def _init_db() -> None:
     """Crea la tabla de órdenes si no existe."""
@@ -243,7 +263,7 @@ def ejecutar_orden_market_sell(symbol: str, cantidad: float) -> float:
         cliente = obtener_cliente()
         balance = cliente.fetch_balance()
         base = symbol.split("/")[0]
-        disponible = balance.get("free", {}).get(base, 0)
+        disponible = esperar_balance(cliente, symbol, cantidad)
         log.debug(
             f"{symbol}: saldo disponible {base} {disponible}, intento vender {cantidad}"
         )
