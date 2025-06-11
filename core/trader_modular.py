@@ -17,7 +17,11 @@ from core.strategy_engine import StrategyEngine
 from core.risk_manager import RiskManager
 from core.order_manager import OrderManager
 from core.notificador import Notificador
-from binance_api.cliente import crear_cliente
+from binance_api.cliente import (
+    crear_cliente,
+    fetch_balance_async,
+    load_markets_async,
+)
 from core.adaptador_umbral import (
     calcular_tp_sl_adaptativos,
     calcular_umbral_adaptativo,
@@ -126,9 +130,9 @@ class Trader:
         if self.orders.ordenes:
             log.warning("⚠️ Órdenes abiertas encontradas al iniciar. Serán monitoreadas.")
 
-    def cerrar_operacion(self, symbol: str, precio: float, motivo: str) -> None:
+    async def cerrar_operacion(self, symbol: str, precio: float, motivo: str) -> None:
         """Cierra una orden y actualiza los pesos si corresponden."""
-        if not self.orders.cerrar(symbol, precio, motivo):
+        if not await self.orders.cerrar(symbol, precio, motivo):
             log.debug(
                 f"🔁 Intento duplicado de cierre ignorado para {symbol}"
             )
@@ -137,7 +141,7 @@ class Trader:
         self.pesos_por_simbolo = cargar_pesos_estrategias()
         log.info(f"✅ Orden cerrada: {symbol} a {precio:.2f}€ por '{motivo}'")
 
-    def _cerrar_y_reportar(
+    async def _cerrar_y_reportar(
         self, orden, precio: float, motivo: str, tendencia: str | None = None
     ) -> None:
         """Cierra ``orden`` y registra la operación para el reporte diario."""
@@ -155,7 +159,7 @@ class Trader:
                 "retorno_total": retorno_total,
             }
         )
-        if not self.orders.cerrar(orden.symbol, precio, motivo):
+        if not await self.orders.cerrar(orden.symbol, precio, motivo):
             log.warning(
                 f"❌ No se pudo confirmar el cierre de {orden.symbol}. Se omitirá el registro."
             )
@@ -223,11 +227,11 @@ class Trader:
         self.fecha_actual = datetime.utcnow().date()
         log.info(f"💰 Capital redistribuido: {self.capital_por_simbolo}")
 
-    def _obtener_minimo_binance(self, symbol: str) -> float | None:
+    async def _obtener_minimo_binance(self, symbol: str) -> float | None:
         """Devuelve el valor mínimo de compra permitido por Binance."""
         try:
             if self._markets is None:
-                self._markets = self.cliente.load_markets()
+                self._markets = await load_markets_async(self.cliente)
             info = self._markets.get(symbol.replace("/", ""))
             minimo = info.get("limits", {}).get("cost", {}).get("min") if info else None
             return float(minimo) if minimo else None
@@ -235,9 +239,9 @@ class Trader:
             log.debug(f"No se pudo obtener mínimo para {symbol}: {e}")
             return None
     
-    def _calcular_cantidad(self, symbol: str, precio: float) -> float:
+    async def _calcular_cantidad(self, symbol: str, precio: float) -> float:
         """Determina la cantidad de cripto a comprar con capital asignado."""
-        balance = self.cliente.fetch_balance()
+        balance = await fetch_balance_async(self.cliente)
         euros = balance['total'].get('EUR', 0)
         if euros <= 0:
             log.debug("Saldo en EUR insuficiente")
@@ -249,7 +253,7 @@ class Trader:
             fraccion = max(fraccion, 0.02 + deficit * 0.1)
         riesgo = max(capital_symbol * fraccion, self.config.min_order_eur)
         riesgo = min(riesgo, euros)
-        minimo_binance = self._obtener_minimo_binance(symbol)
+        minimo_binance = await self._obtener_minimo_binance(symbol)
         cantidad = riesgo / precio
         if cantidad * precio < self.config.min_order_eur:
             log.debug(
@@ -342,7 +346,7 @@ class Trader:
             return False
         return True
 
-    def _validar_diversidad(
+    async def _validar_diversidad(
         self,
         symbol: str,
         peso_total: float,
@@ -353,7 +357,7 @@ class Trader:
         """Verifica que la diversidad y el peso total sean suficientes."""
         if self.modo_capital_bajo:
             try:
-                balance = self.cliente.fetch_balance()
+                balance = await fetch_balance_async(self.cliente)
                 euros = balance['total'].get('EUR', 0)
             except BaseError:
                 euros = 0
@@ -456,7 +460,7 @@ class Trader:
 
         return True
 
-    def _abrir_operacion_real(
+    async def _abrir_operacion_real(
         self,
         symbol: str,
         precio: float,
@@ -466,16 +470,16 @@ class Trader:
         tendencia: str,
         direccion: str,
     ) -> None:
-        cantidad = self._calcular_cantidad(symbol, precio)
+        cantidad = await self._calcular_cantidad(symbol, precio)
         if cantidad <= 0:
             return
-        self.orders.abrir(symbol, precio, sl, tp, estrategias, tendencia, direccion, cantidad)
+        await self.orders.abrir(symbol, precio, sl, tp, estrategias, tendencia, direccion, cantidad)
         log.info(
             "✅ Orden abierta: "
             f"{symbol} {cantidad} unidades a {precio:.2f}€ SL: {sl:.2f} TP: {tp:.2f}"
         )
 
-    def _verificar_salidas(self, symbol: str, df: pd.DataFrame) -> None:
+    async def _verificar_salidas(self, symbol: str, df: pd.DataFrame) -> None:
         """Evalúa si la orden abierta en ``symbol`` debe cerrarse."""
         orden = self.orders.obtener(symbol)
         if not orden:
@@ -495,7 +499,7 @@ class Trader:
         if precio_min <= orden.stop_loss:
             resultado = verificar_salida_stoploss(orden.to_dict(), df, config=config_actual)
             if resultado.get("cerrar", False):
-                self._cerrar_y_reportar(orden, orden.stop_loss, "Stop Loss")
+                await self._cerrar_y_reportar(orden, orden.stop_loss, "Stop Loss")
             else:
                 if resultado.get("evitado", False):
                     log.debug("SL evitado correctamente, no se notificará por Telegram")
@@ -506,7 +510,7 @@ class Trader:
 
         # --- Take Profit ---
         if precio_max >= orden.take_profit:
-            if self._cerrar_y_reportar(orden, precio_max, "Take Profit"):
+            if await self._cerrar_y_reportar(orden, precio_max, "Take Profit"):
                 log.info(f"💰 TP alcanzado para {symbol} a {precio_max:.2f}€")
             return
         
@@ -524,7 +528,7 @@ class Trader:
             log.warning(f"⚠️ Error en trailing stop para {symbol}: {e}")
             cerrar, motivo = False, ""
         if cerrar:
-            if self._cerrar_y_reportar(orden, precio_cierre, motivo):
+            if await self._cerrar_y_reportar(orden, precio_cierre, motivo):
                 log.info(f"🔄 Trailing Stop activado para {symbol} a {precio_cierre:.2f}€")
             return
 
@@ -533,7 +537,7 @@ class Trader:
             pesos_symbol = self.pesos_por_simbolo.get(symbol, {})
             if not verificar_filtro_tecnico(symbol, df, orden.estrategias_activas, pesos_symbol):
                 nueva_tendencia, _ = detectar_tendencia(symbol, df)
-                if self._cerrar_y_reportar(
+                if await self._cerrar_y_reportar(
                     orden, precio_cierre, "Cambio de tendencia", tendencia=nueva_tendencia
                 ):
                     log.info(
@@ -559,7 +563,7 @@ class Trader:
             if not validar_necesidad_de_salida(df, orden.to_dict(), estrategias, puntaje=puntaje, umbral=umbral, config=config_actual):
                 log.info(f"❌ Cierre por '{razon}' evitado: condiciones técnicas aún válidas.")
                 return
-            self._cerrar_y_reportar(orden, precio_cierre, f"Estrategia: {razon}")
+            await self._cerrar_y_reportar(orden, precio_cierre, f"Estrategia: {razon}")
 
     async def ejecutar(self) -> None:
         """Inicia el procesamiento de todos los símbolos."""
@@ -604,7 +608,7 @@ class Trader:
 
         tendencia_actual, _ = detectar_tendencia(symbol, df)
         if self.orders.obtener(symbol):
-            self._verificar_salidas(symbol, df)
+            await self._verificar_salidas(symbol, df)
             return
 
         
@@ -671,7 +675,7 @@ class Trader:
         if not self._validar_puntaje(symbol, puntaje, umbral):
             return
 
-        if not self._validar_diversidad(symbol, peso_total, peso_min_total, diversidad, diversidad_min):
+        if not await self._validar_diversidad(symbol, peso_total, peso_min_total, diversidad, diversidad_min):
             return
 
         if not self._validar_estrategia(symbol, df, estrategias):
@@ -702,7 +706,7 @@ class Trader:
             f"✅ Entrada confirmada en {symbol}. Puntaje {puntaje:.2f}, Peso {peso_total:.2f}, Diversidad {diversidad}, Persistentes {len(estrategias_persistentes)}, Tendencia {tendencia_actual}, Dirección {direccion}"
         )
 
-        balance = self.cliente.fetch_balance()
+        balance = await fetch_balance_async(self.cliente)
         capital_total = balance['total'].get('EUR', 0)
         # Verifica el límite de riesgo diario antes de abrir una nueva orden
         if self.risk.riesgo_superado(capital_total):
@@ -737,7 +741,7 @@ class Trader:
             )
             return
         
-        self._abrir_operacion_real(
+        await self._abrir_operacion_real(
             symbol, precio, sl, tp, estrategias_persistentes, tendencia_actual, direccion
         )
         return
