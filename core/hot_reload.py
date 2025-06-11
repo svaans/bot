@@ -16,6 +16,7 @@ DEFAULT_MODULES: list[str] = [
     "estrategias_salida",
     "filtros",
     "indicadores",
+    "config",
 
 ]
 
