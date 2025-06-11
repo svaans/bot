@@ -583,8 +583,8 @@ class Trader:
 
         # Mantiene un buffer de velas reciente por símbolo
         estado.buffer.append(vela)
-        if len(estado.buffer) > 50:
-            estado.buffer = estado.buffer[-50:]
+        if len(estado.buffer) > 120:
+            estado.buffer = estado.buffer[-120:]
         if vela.get("timestamp") == estado.ultimo_timestamp:
             return
         estado.ultimo_timestamp = vela.get("timestamp")
