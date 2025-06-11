@@ -7,10 +7,12 @@ from typing import Dict, Optional
 import pandas as pd
 
 from estrategias_entrada.gestor_entradas import evaluar_estrategias
+from estrategias_entrada import gestor_entradas
 from estrategias_salida.gestor_salidas import evaluar_salidas
 from core.tendencia import detectar_tendencia
 from core.estrategias import filtrar_por_regimen
 from core.logger import configurar_logger
+from ml.ensemble import ensemble_model
 
 log = configurar_logger("engine", modo_silencioso=True)
 
@@ -26,6 +28,13 @@ class StrategyEngine:
         if regimen:
             estrategias = resultado.get("estrategias_activas", {})
             resultado["estrategias_activas"] = filtrar_por_regimen(estrategias, regimen)
+
+            estrategias_activas = resultado.get("estrategias_activas", {})
+        nombres = sorted(gestor_entradas.ESTRATEGIAS_DISPONIBLES.keys())
+        vector = [int(estrategias_activas.get(n, False)) for n in nombres]
+        probabilidad = ensemble_model.predict_proba(vector)
+        resultado["probabilidad"] = round(float(probabilidad), 4)
+        resultado["puntaje_total"] = round(resultado.get("puntaje_total", 0) * probabilidad, 2)
         return resultado
 
     @staticmethod
