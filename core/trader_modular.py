@@ -604,6 +604,9 @@ class Trader:
         self.persistencia.actualizar(symbol, estrategias)
 
         if len(estado.buffer) < 30:
+            log.debug(
+                f"\U0001F4C9 [{symbol}] Buffer insuficiente ({len(estado.buffer)} velas)"
+            )
             return
 
         tendencia_actual, _ = detectar_tendencia(symbol, df)
