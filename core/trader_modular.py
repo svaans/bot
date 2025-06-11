@@ -215,7 +215,7 @@ class Trader:
             # Penaliza símbolos altamente correlacionados
             corr_media = None
             if not correlaciones.empty and symbol in correlaciones.columns:
-               corr_series = (
+                corr_series = (
                     correlaciones[symbol].drop(labels=[symbol], errors="ignore").abs()
                 )
                 corr_media = corr_series.mean()
