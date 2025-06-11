@@ -13,6 +13,7 @@ ccxt==4.4.80                  # Conexión con exchanges (Binance, etc.)
 python-binance==1.0.28        # API específica de Binance
 pycryptodome==3.22.0          # Criptografía para claves API
 ta==0.11.0                    # Indicadores técnicos (RSI, MACD, etc.)
+lightgbm==4.3.0               # Algoritmos de machine learning para trading
 
 # ───────── OPTIMIZACIÓN Y APRENDIZAJE ─────────
 optuna==4.3.0                 # Optimización de hiperparámetros
@@ -69,3 +70,4 @@ pytest-asyncio==0.23.6
 propcache==0.3.1              # Caché de propiedades
 dotenv==0.9.9                 # ⚠️ OBSOLETO, mantenido solo si requerido por alguna librería
 six==1.17.0                   # Compatibilidad entre Python 2 y 3
+stable-baselines3==2.3.2      # Algoritmos de RL para entrenamiento de políticas

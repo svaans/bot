@@ -9,11 +9,15 @@ import os
 import json
 import sqlite3
 import time
+import atexit
+import signal
+import threading
 from datetime import datetime
 from binance_api.cliente import obtener_cliente
 from core.logger import configurar_logger
 from ccxt.base.errors import InsufficientFunds, BaseError
 from core.ordenes_model import Orden
+from core.utils import guardar_orden_real
 
 log = configurar_logger("ordenes")
 
@@ -23,6 +27,13 @@ RUTA_DB = os.path.join("ordenes_reales", "ordenes.db")
 _CACHE_ORDENES: dict[str, Orden] | None = None
 # Registra símbolos con intentos fallidos de venta por saldo insuficiente
 _VENTAS_FALLIDAS: set[str] = set()
+
+# Buffer temporal de operaciones realizadas
+_BUFFER_OPERACIONES: list[dict] = []
+_BUFFER_LOCK = threading.Lock()
+_MAX_BUFFER = 10
+_FLUSH_INTERVAL = 300  # segundos
+_ULTIMO_FLUSH = time.time()
 
 def esperar_balance(
     cliente,
@@ -51,6 +62,27 @@ def _init_db() -> None:
             """
             CREATE TABLE IF NOT EXISTS ordenes (
                 symbol TEXT PRIMARY KEY,
+                precio_entrada REAL,
+                cantidad REAL,
+                stop_loss REAL,
+                take_profit REAL,
+                timestamp TEXT,
+                estrategias_activas TEXT,
+                tendencia TEXT,
+                max_price REAL,
+                direccion TEXT,
+                precio_cierre REAL,
+                fecha_cierre TEXT,
+                motivo_cierre TEXT,
+                retorno_total REAL
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS operaciones (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                symbol TEXT,
                 precio_entrada REAL,
                 cantidad REAL,
                 stop_loss REAL,
@@ -270,6 +302,20 @@ def registrar_orden(
     )
     actualizar_orden(symbol, orden)
 
+def registrar_operacion(data: dict | Orden) -> None:
+    """Agrega una operación al buffer en memoria."""
+    global _ULTIMO_FLUSH
+    registro = data.to_dict() if isinstance(data, Orden) else data
+    with _BUFFER_LOCK:
+        _BUFFER_OPERACIONES.append(registro)
+    ahora = time.time()
+    if (
+        len(_BUFFER_OPERACIONES) >= _MAX_BUFFER
+        or ahora - _ULTIMO_FLUSH >= _FLUSH_INTERVAL
+    ):
+        flush_operaciones()
+        _ULTIMO_FLUSH = ahora
+
 def ejecutar_orden_market(symbol, cantidad):
     """Ejecuta una compra de mercado y devuelve la cantidad realmente comprada."""
     try:
@@ -345,3 +391,76 @@ def ejecutar_orden_market_sell(symbol: str, cantidad: float) -> float:
     except Exception as e:
         log.error(f"❌ Error estructural al ejecutar venta para {symbol}: {e}")
         raise
+
+
+def flush_operaciones() -> None:
+    """Guarda en disco todas las operaciones acumuladas en el buffer."""
+    with _BUFFER_LOCK:
+        operaciones = list(_BUFFER_OPERACIONES)
+        _BUFFER_OPERACIONES.clear()
+
+    if not operaciones:
+        return
+
+    _init_db()
+    try:
+        with sqlite3.connect(RUTA_DB) as conn:
+            for op in operaciones:
+                data = op.copy()
+                if isinstance(data.get("estrategias_activas"), dict):
+                    data["estrategias_activas"] = json.dumps(data["estrategias_activas"])
+                conn.execute(
+                    """
+                    INSERT INTO operaciones (
+                        symbol, precio_entrada, cantidad, stop_loss, take_profit,
+                        timestamp, estrategias_activas, tendencia, max_price,
+                        direccion, precio_cierre, fecha_cierre, motivo_cierre,
+                        retorno_total
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        data.get("symbol"),
+                        data.get("precio_entrada"),
+                        data.get("cantidad"),
+                        data.get("stop_loss"),
+                        data.get("take_profit"),
+                        data.get("timestamp"),
+                        data.get("estrategias_activas"),
+                        data.get("tendencia"),
+                        data.get("max_price"),
+                        data.get("direccion"),
+                        data.get("precio_cierre"),
+                        data.get("fecha_cierre"),
+                        data.get("motivo_cierre"),
+                        data.get("retorno_total"),
+                    ),
+                )
+    except sqlite3.Error as e:
+        log.error(f"❌ Error al guardar operaciones en la base de datos: {e}")
+
+    for op in operaciones:
+        data = op.copy()
+        symbol = data.get("symbol")
+        if isinstance(data.get("estrategias_activas"), dict):
+            data["estrategias_activas"] = json.dumps(data["estrategias_activas"])
+        if symbol:
+            try:
+                guardar_orden_real(symbol, data)
+            except Exception as e:  # pragma: no cover - logging only
+                log.error(f"❌ Error guardando operación en Parquet para {symbol}: {e}")
+
+    global _ULTIMO_FLUSH
+    _ULTIMO_FLUSH = time.time()
+
+
+def _handle_exit(signum, frame) -> None:
+    flush_operaciones()
+
+
+for _sig in (signal.SIGTERM, signal.SIGINT):
+    try:
+        signal.signal(_sig, _handle_exit)
+    except (ValueError, RuntimeError):
+        pass
+
+atexit.register(flush_operaciones)

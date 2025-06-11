@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from core.riesgo import riesgo_superado as _riesgo_superado, actualizar_perdida
+from core.reporting import reporter_diario
 import numpy as np
 from core.logger import configurar_logger
 
@@ -52,3 +53,33 @@ class RiskManager:
 
         if self.umbral != anterior:
             log.info(f"🔧 Umbral ajustado de {anterior:.4f} a {self.umbral:.4f}")
+
+    def multiplicador_kelly(self, n_trades: int = 10) -> float:
+        """Calcula un multiplicador para la fracción Kelly basándose en los
+        últimos ``n_trades`` registrados.
+
+        Retorna ``1.0`` si no hay datos suficientes o si ocurre algún error.
+        """
+        try:
+            operaciones: list[dict] = []
+            for ops in reporter_diario.ultimas_operaciones.values():
+                operaciones.extend(ops[-n_trades:])
+            if not operaciones:
+                return 1.0
+            operaciones = operaciones[-n_trades:]
+            retornos = [
+                float(o.get("retorno_total", 0.0))
+                for o in operaciones
+                if isinstance(o.get("retorno_total"), (int, float))
+                and not np.isnan(o.get("retorno_total"))
+            ]
+            if not retornos:
+                return 1.0
+            promedio = sum(retornos) / len(retornos)
+            factor = 1 + promedio
+            factor = round(max(0.5, min(1.5, factor)), 3)
+            log.debug(f"🔧 Multiplicador Kelly calculado: {factor:.3f}")
+            return factor
+        except Exception as e:  # noqa: BLE001
+            log.warning(f"⚠️ Error calculando multiplicador Kelly: {e}")
+            return 1.0
