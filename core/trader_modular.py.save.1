@@ -21,7 +21,6 @@ from binance_api.cliente import (
     crear_cliente,
     fetch_balance_async,
     load_markets_async,
-    fetch_ohlcv_async,
 )
 from core.adaptador_umbral import (
     calcular_tp_sl_adaptativos,
@@ -239,40 +238,6 @@ class Trader:
         except Exception as e:
             log.debug(f"No se pudo obtener mínimo para {symbol}: {e}")
             return None
-
-    async def _precargar_historico(self, velas: int = 12) -> None:
-        """Carga datos recientes para todos los símbolos antes de iniciar."""
-        for symbol in self.estado.keys():
-            try:
-                datos = await fetch_ohlcv_async(
-                    self.cliente,
-                    symbol,
-                    self.config.intervalo_velas,
-                    limit=velas,
-                )
-            except BaseError as e:
-                log.warning(f"⚠️ Error cargando histórico para {symbol}: {e}")
-                continue
-            except Exception as e:
-                log.warning(f"⚠️ Error inesperado cargando histórico para {symbol}: {e}")
-                continue
-
-            for ts, o, h, l, c, v in datos:
-                self.estado[symbol].buffer.append(
-                    {
-                        "symbol": symbol,
-                        "timestamp": ts,
-                        "open": float(o),
-                        "high": float(h),
-                        "low": float(l),
-                        "close": float(c),
-                        "volume": float(v),
-                    }
-                )
-
-            if datos:
-                self.estado[symbol].ultimo_timestamp = datos[-1][0]
-        log.info("📈 Histórico inicial cargado")
     
     async def _calcular_cantidad(self, symbol: str, precio: float) -> float:
         """Determina la cantidad de cripto a comprar con capital asignado."""
@@ -606,7 +571,6 @@ class Trader:
             await self._procesar_vela(candle)
 
         symbols = list(self.estado.keys())
-        await self._precargar_historico()
         self._task = asyncio.create_task(self.data_feed.escuchar(symbols, handle))
         self._task_estado = asyncio.create_task(monitorear_estado_periodicamente(self))
         await asyncio.gather(self._task, self._task_estado)

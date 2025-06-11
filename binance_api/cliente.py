@@ -1,6 +1,7 @@
 import os
 import asyncio
 import ccxt
+import functools
 from core.config_manager import Config, ConfigManager
 
 def crear_cliente(config: Config | None = None):
@@ -61,4 +62,8 @@ async def load_markets_async(cliente, *args, **kwargs):
     loop = asyncio.get_running_loop()
     return await loop.run_in_executor(None, cliente.load_markets, *args, **kwargs)
 
-
+async def fetch_ohlcv_async(cliente, *args, **kwargs):
+    """Versión asíncrona de `fetch_ohlcv`."""
+    loop = asyncio.get_running_loop()
+    func = functools.partial(cliente.fetch_ohlcv, *args, **kwargs)
+    return await loop.run_in_executor(None, func)
