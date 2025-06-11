@@ -286,7 +286,7 @@ class Trader:
         if euros <= 0:
             log.debug("Saldo en EUR insuficiente")
             return 0.0
-       capital_symbol = self.capital_por_simbolo.get(
+        capital_symbol = self.capital_por_simbolo.get(
             symbol, euros / max(len(self.estado), 1)
         )
         fraccion = self.fraccion_kelly
