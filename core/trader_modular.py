@@ -22,6 +22,7 @@ from core.adaptador_umbral import (
     calcular_tp_sl_adaptativos,
     calcular_umbral_adaptativo,
 )
+from core.rl_policy import rl_policy
 from core.pesos import cargar_pesos_estrategias
 from core.kelly import calcular_fraccion_kelly
 from core.persistencia_tecnica import PersistenciaTecnica, coincidencia_parcial
@@ -552,7 +553,9 @@ class Trader:
             estrategias = evaluacion.get("estrategias_activas", {})
             puntaje = evaluacion.get("puntaje_total", 0)
             pesos_symbol = self.pesos_por_simbolo.get(symbol, {})
-            umbral = calcular_umbral_adaptativo(symbol, df, estrategias, pesos_symbol)
+            umbral = rl_policy.sugerir_umbral(df)
+            if umbral is None:
+                umbral = calcular_umbral_adaptativo(symbol, df, estrategias, pesos_symbol)
             if not validar_necesidad_de_salida(df, orden.to_dict(), estrategias, puntaje=puntaje, umbral=umbral, config=config_actual):
                 log.info(f"❌ Cierre por '{razon}' evitado: condiciones técnicas aún válidas.")
                 return
@@ -606,7 +609,9 @@ class Trader:
 
         
         pesos_symbol = self.pesos_por_simbolo.get(symbol, {})
-        umbral = calcular_umbral_adaptativo(symbol, df, estrategias, pesos_symbol)
+        umbral = rl_policy.sugerir_umbral(df)
+        if umbral is None:
+            umbral = calcular_umbral_adaptativo(symbol, df, estrategias, pesos_symbol)
         estrategias_persistentes = {
             e: True
             for e, act in estrategias.items()
