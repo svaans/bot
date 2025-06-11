@@ -753,7 +753,7 @@ class Trader:
         if not self._validar_puntaje(symbol, puntaje, umbral):
             return
 
-       if not await self._validar_diversidad(
+        if not await self._validar_diversidad(
             symbol, peso_total, peso_min_total, diversidad, diversidad_min
         ):
             return
