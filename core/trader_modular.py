@@ -416,7 +416,7 @@ class Trader:
             return False
         return True
 
-   def _validar_estrategia(
+    def _validar_estrategia(
         self, symbol: str, df: pd.DataFrame, estrategias: Dict
     ) -> bool:
         """Aplica el filtro estratégico de entradas."""
