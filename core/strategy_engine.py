@@ -12,7 +12,7 @@ from estrategias_salida.gestor_salidas import evaluar_salidas
 from core.tendencia import detectar_tendencia
 from core.estrategias import filtrar_por_regimen
 from core.logger import configurar_logger
-from ml.ensemble import ensemble_model
+from ml.order_model import order_model
 
 log = configurar_logger("engine", modo_silencioso=True)
 
@@ -25,14 +25,12 @@ class StrategyEngine:
         """Obtiene la evaluación técnica de entrada para ``symbol``."""
         tendencia, _ = detectar_tendencia(symbol, df)
         resultado = evaluar_estrategias(symbol, df, tendencia)
+        estrategias_activas = resultado.get("estrategias_activas", {})
         if regimen:
-            estrategias = resultado.get("estrategias_activas", {})
-            resultado["estrategias_activas"] = filtrar_por_regimen(estrategias, regimen)
+            estrategias_activas = filtrar_por_regimen(estrategias_activas, regimen)
+            resultado["estrategias_activas"] = estrategias_activas
 
-            estrategias_activas = resultado.get("estrategias_activas", {})
-        nombres = sorted(gestor_entradas.ESTRATEGIAS_DISPONIBLES.keys())
-        vector = [int(estrategias_activas.get(n, False)) for n in nombres]
-        probabilidad = ensemble_model.predict_proba(vector)
+            probabilidad = order_model.predict_proba(estrategias_activas)
         resultado["probabilidad"] = round(float(probabilidad), 4)
         resultado["puntaje_total"] = round(resultado.get("puntaje_total", 0) * probabilidad, 2)
         return resultado

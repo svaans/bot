@@ -13,6 +13,7 @@ ccxt==4.4.80                  # Conexión con exchanges (Binance, etc.)
 python-binance==1.0.28        # API específica de Binance
 pycryptodome==3.22.0          # Criptografía para claves API
 ta==0.11.0                    # Indicadores técnicos (RSI, MACD, etc.)
+lightgbm==4.3.0               # Algoritmos de machine learning para trading
 
 # ───────── OPTIMIZACIÓN Y APRENDIZAJE ─────────
 optuna==4.3.0                 # Optimización de hiperparámetros
