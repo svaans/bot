@@ -203,7 +203,7 @@ class Trader:
         max_senales = max(senales.values()) if senales else 0
         correlaciones = self._calcular_correlaciones()
         for symbol in self.capital_por_simbolo:
-           inicio = self.capital_inicial_diario.get(
+            inicio = self.capital_inicial_diario.get(
                 symbol, self.capital_por_simbolo[symbol]
             )
             final = self.capital_por_simbolo[symbol]
