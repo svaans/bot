@@ -3,9 +3,7 @@ import platform
 import signal
 import traceback
 from pathlib import Path
-from core.pesos import gestor_pesos
 from core.hot_reload import start_hot_reload, stop_hot_reload
-from aprendizaje.reset_pesos import resetear_pesos_diarios_si_corresponde
 from aprendizaje.reset_configuracion import (
     resetear_configuracion_diaria_si_corresponde,
 )
@@ -21,8 +19,15 @@ async def main():
     config = ConfigManager.load_from_env()
     observer = start_hot_reload(path=Path.cwd(), modules=None)
 
+    try:
+        from aprendizaje.reset_pesos import resetear_pesos_diarios_si_corresponde
+
+        from core.trader_modular import Trader
+    except ValueError as e:
+        print(f"❌ {e}")
+        return
+
     # El nuevo Trader modular soporta ambos modos
-    from core.trader_modular import Trader
     if config.modo_real:
         print("🟢 Modo REAL activado")
     else:
@@ -38,7 +43,11 @@ async def main():
     mostrar_banner()
     print(f"🚀 Iniciando bot de trading... Modo real: {config.modo_real}")
 
-    bot = Trader(config)
+    try:
+        bot = Trader(config)
+    except ValueError as e:
+        print(f"❌ {e}")
+        return
     tarea_bot = asyncio.create_task(bot.ejecutar())
     stop_event = asyncio.Event()
     tarea_stop = asyncio.create_task(stop_event.wait())

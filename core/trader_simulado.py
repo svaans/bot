@@ -72,8 +72,17 @@ class TraderSimulado:
         self.config_por_simbolo = {}
 
         for symbol in self.symbols:
-            self.config_por_simbolo[symbol] = self.configuraciones.get(symbol) or cargar_configuracion_simbolo(symbol)
-            self.pesos_por_simbolo[symbol] = self.pesos_personalizados.get(symbol) or gestor_pesos.obtener_pesos_symbol(symbol)
+            try:
+                self.config_por_simbolo[symbol] = (
+                    self.configuraciones.get(symbol) or cargar_configuracion_simbolo(symbol)
+                )
+            except ValueError as e:
+                log.error(f"❌ {e}")
+                raise
+
+            self.pesos_por_simbolo[symbol] = (
+                self.pesos_personalizados.get(symbol) or gestor_pesos.obtener_pesos_symbol(symbol)
+            )
             try:
                 archivo = f"datos/{symbol.replace('/', '_').lower()}_1m.parquet"
                 df = pd.read_parquet(archivo)

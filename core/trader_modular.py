@@ -113,7 +113,11 @@ class Trader:
             s: EstadoSimbolo([]) for s in config.symbols
         }
         self.config_por_simbolo: Dict[str, dict] = {s: {} for s in config.symbols}
-        self.pesos_por_simbolo: Dict[str, Dict[str, float]] = cargar_pesos_estrategias()
+        try:
+            self.pesos_por_simbolo: Dict[str, Dict[str, float]] = cargar_pesos_estrategias()
+        except ValueError as e:
+            log.error(f"❌ {e}")
+            raise
         self.historial_cierres: Dict[str, dict] = {}
         self._task: asyncio.Task | None = None
         self._task_estado: asyncio.Task | None = None
@@ -139,7 +143,11 @@ class Trader:
             log.debug(f"🔁 Intento duplicado de cierre ignorado para {symbol}")
             return
         actualizar_pesos_estrategias_symbol(symbol)
-        self.pesos_por_simbolo = cargar_pesos_estrategias()
+        try:
+            self.pesos_por_simbolo = cargar_pesos_estrategias()
+        except ValueError as e:
+            log.error(f"❌ {e}")
+            return
         log.info(f"✅ Orden cerrada: {symbol} a {precio:.2f}€ por '{motivo}'")
 
     async def _cerrar_y_reportar(
@@ -168,7 +176,11 @@ class Trader:
         reporter_diario.registrar_operacion(info)
         registrar_resultado_trade(orden.symbol, info, retorno_total)
         actualizar_pesos_estrategias_symbol(orden.symbol)
-        self.pesos_por_simbolo = cargar_pesos_estrategias()
+        try:
+            self.pesos_por_simbolo = cargar_pesos_estrategias()
+        except ValueError as e:
+            log.error(f"❌ {e}")
+            return False
         capital_inicial = self.capital_por_simbolo.get(orden.symbol, 0.0)
         ganancia = capital_inicial * retorno_total
         self.capital_por_simbolo[orden.symbol] = capital_inicial + ganancia

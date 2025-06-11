@@ -203,6 +203,7 @@ def guardar_orden_real(symbol: str, orden: dict | Orden):
             ordenes.append(data)
             pd.DataFrame(ordenes).to_parquet(archivo, index=False)
             log.info(f"💾 Orden REAL registrada en {archivo}")
-    except(OSError, ValueError) as e:
+    except (OSError, ValueError) as e:
         log.error(f"❌ Error guardando orden real: {e}")
+        raise
         

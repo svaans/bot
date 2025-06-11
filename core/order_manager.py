@@ -118,17 +118,8 @@ class OrderManager:
             if await asyncio.to_thread(ordenes_reales.obtener_orden, symbol) is not None:
                 await asyncio.to_thread(ordenes_reales.eliminar_orden, symbol)
             info = asdict(orden)
-            await asyncio.to_thread(
-                ordenes_reales.registrar_orden,
-                symbol,
-                info["precio_entrada"],
-                info["cantidad"],
-                info["stop_loss"],
-                info["take_profit"],
-                info["estrategias_activas"],
-                info["tendencia"],
-                info.get("direccion", "long"),
-            )
+            info.update({"precio_cierre": precio, "motivo_cierre": motivo})
+            await asyncio.to_thread(ordenes_reales.registrar_operacion, info)
         
         self.ordenes.pop(symbol, None)
         orden.precio_cierre = precio

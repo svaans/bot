@@ -17,7 +17,13 @@ class FiltroRelevante(logging.Filter):
 
     def filter(self, record: logging.LogRecord) -> bool:
         mensaje = record.getMessage().lower()
-        return not any(p in mensaje for p in self.PALABRAS_CLAVE_DESCARTAR)
+        if any(p in mensaje for p in self.PALABRAS_CLAVE_DESCARTAR):
+            # Si el logger está en modo debug no filtramos estas líneas
+            logger = logging.getLogger(record.name)
+            if logger.getEffectiveLevel() <= logging.DEBUG:
+                return True
+            return False
+        return True
 
 archivo_global = None
 
@@ -72,9 +78,12 @@ def configurar_logger(nombre: str, nivel=logging.INFO, carpeta_logs="logs", modo
             os.makedirs(carpeta_logs, exist_ok=True)
             ruta_log = os.path.join(carpeta_logs, "bot.log")
             archivo_global = logging.FileHandler(ruta_log)
-            archivo_global.setLevel(logging.INFO)
+            archivo_global.setLevel(nivel)
             archivo_global.setFormatter(formato)
             archivo_global.addFilter(FiltroRelevante())
+        else:
+            if nivel < archivo_global.level:
+                archivo_global.setLevel(nivel)
         logger.addHandler(archivo_global)
 
     loggers_configurados[nombre] = logger

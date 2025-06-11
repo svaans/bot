@@ -14,23 +14,24 @@ class ConfigurationService:
 
     def load(self, symbol: str) -> dict:
         if not os.path.exists(self.ruta):
-            log.warning(f"❌ Archivo de configuración no encontrado: {self.ruta}")
-            return {}
+            log.error(f"❌ Archivo de configuración no encontrado: {self.ruta}")
+            raise ValueError("Archivo de configuración inexistente")
         try:
             with open(self.ruta, "r") as f:
                 configuraciones = json.load(f)
         except json.JSONDecodeError as e:
             log.error(f"❌ Error al parsear el archivo JSON: {e}")
-            return {}
+            raise
 
-        if not isinstance(configuraciones, dict):
-            log.error("❌ El archivo debe contener un diccionario de configuraciones.")
-            return {}
+        if not isinstance(configuraciones, dict) or not configuraciones:
+            log.error("❌ El archivo debe contener un diccionario de configuraciones válido")
+            raise ValueError("Configuraciones inválidas")
+
         config = configuraciones.get(symbol)
-        if config is None:
-            log.warning(f"⚠️ No se encontró configuración para {symbol}. Se usará config vacía.")
-            return {}
-
+        if not config:
+            log.error(f"❌ No se encontró configuración válida para {symbol}")
+            raise ValueError(f"Configuración no encontrada para {symbol}")
+        
         # Validación opcional de claves mínimas
         claves_esperadas = ["factor_umbral", "peso_minimo_total", "diversidad_minima"]
         for clave in claves_esperadas:

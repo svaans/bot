@@ -32,7 +32,26 @@ class DataFeed:
         """Inicia un stream por cada símbolo y espera a que todos finalicen."""
         for sym in symbols:
             self._tasks[sym] = asyncio.create_task(self.stream(sym, handler))
-        await asyncio.gather(*self._tasks.values())
+        while self._tasks:
+            # Espera a que todos los streams finalicen y captura sus excepciones
+            tareas_actuales = list(self._tasks.items())
+            resultados = await asyncio.gather(
+                *[t for _, t in tareas_actuales], return_exceptions=True
+            )
+            self._tasks.clear()
+
+            for (sym, _), resultado in zip(tareas_actuales, resultados):
+                if isinstance(resultado, asyncio.CancelledError):
+                    continue
+                if isinstance(resultado, Exception):
+                    log.error(
+                        f"⚠️ Stream {sym} finalizó con excepción: {resultado}. "
+                        "Reiniciando en 5s"
+                    )
+                    await asyncio.sleep(5)
+                    self._tasks[sym] = asyncio.create_task(
+                        self.stream(sym, handler)
+                    )
 
     async def detener(self) -> None:
         """Cancela todos los streams en ejecución."""

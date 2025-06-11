@@ -61,16 +61,23 @@ class GestorPesos:
         self.pesos = self._cargar_pesos()
 
     def _cargar_pesos(self) -> Dict[str, Dict[str, float]]:
-        if os.path.exists(self.ruta):
-            with open(self.ruta, "r") as f:
-                try:
-                    return json.load(f)
-                except json.JSONDecodeError as e:
-                    log.error(f"❌ Error cargando pesos desde JSON: {e}")
-                    raise
-        else:
-            log.warning(f"❌ No se encontró archivo de pesos: {self.ruta}")
-        return {}
+        """Carga los pesos desde ``self.ruta`` validando su contenido."""
+        if not os.path.exists(self.ruta):
+            log.error(f"❌ No se encontró archivo de pesos: {self.ruta}")
+            raise ValueError("Archivo de pesos inexistente")
+
+        with open(self.ruta, "r") as f:
+            try:
+                datos = json.load(f)
+            except json.JSONDecodeError as e:
+                log.error(f"❌ Error cargando pesos desde JSON: {e}")
+                raise
+
+        if not isinstance(datos, dict) or not datos:
+            log.error("❌ Archivo de pesos vacío o con formato inválido")
+            raise ValueError("Datos de pesos inválidos")
+
+        return datos
 
     def guardar(
         self,
@@ -140,7 +147,11 @@ class GestorPesos:
 
         self.guardar(pesos_por_symbol)
 
-gestor_pesos = GestorPesos()
+try:
+    gestor_pesos = GestorPesos()
+except ValueError as e:
+    log.error(e)
+    raise
 
 def cargar_pesos_estrategias() -> Dict[str, Dict[str, float]]:
     """Carga y devuelve los pesos actuales de las estrategias."""
