@@ -91,14 +91,12 @@ class Trader:
         self.fraccion_kelly = calcular_fraccion_kelly()
         factor_kelly = self.risk.multiplicador_kelly()
         self.fraccion_kelly *= factor_kelly
-        log.info(
-            f"⚖️ Fracción Kelly: {self.fraccion_kelly:.4f} (x{factor_kelly:.3f})"
-        )
+        log.info(f"⚖️ Fracción Kelly: {self.fraccion_kelly:.4f} (x{factor_kelly:.3f})")
         euros = 0
         if config.api_key and config.api_secret:
             try:
                 balance = self.cliente.fetch_balance()
-                euros = balance['total'].get('EUR', 0)
+                euros = balance["total"].get("EUR", 0)
             except BaseError as e:
                 log.error(f"❌ Error al obtener balance: {e}")
                 raise
@@ -111,7 +109,9 @@ class Trader:
         }
         self.capital_inicial_diario = self.capital_por_simbolo.copy()
         self.fecha_actual = datetime.utcnow().date()
-        self.estado: Dict[str, EstadoSimbolo] = {s: EstadoSimbolo([]) for s in config.symbols}
+        self.estado: Dict[str, EstadoSimbolo] = {
+            s: EstadoSimbolo([]) for s in config.symbols
+        }
         self.config_por_simbolo: Dict[str, dict] = {s: {} for s in config.symbols}
         self.pesos_por_simbolo: Dict[str, Dict[str, float]] = cargar_pesos_estrategias()
         self.historial_cierres: Dict[str, dict] = {}
@@ -129,14 +129,14 @@ class Trader:
             raise
 
         if self.orders.ordenes:
-            log.warning("⚠️ Órdenes abiertas encontradas al iniciar. Serán monitoreadas.")
+            log.warning(
+                "⚠️ Órdenes abiertas encontradas al iniciar. Serán monitoreadas."
+            )
 
     async def cerrar_operacion(self, symbol: str, precio: float, motivo: str) -> None:
         """Cierra una orden y actualiza los pesos si corresponden."""
         if not await self.orders.cerrar(symbol, precio, motivo):
-            log.debug(
-                f"🔁 Intento duplicado de cierre ignorado para {symbol}"
-            )
+            log.debug(f"🔁 Intento duplicado de cierre ignorado para {symbol}")
             return
         actualizar_pesos_estrategias_symbol(symbol)
         self.pesos_por_simbolo = cargar_pesos_estrategias()
@@ -187,6 +187,7 @@ class Trader:
     def ordenes_abiertas(self):
         """Compatibilidad con ``monitorear_estado_periodicamente``."""
         return self.orders.ordenes
+        
     
     def ajustar_capital_diario(
         self,
@@ -202,7 +203,9 @@ class Trader:
         max_senales = max(senales.values()) if senales else 0
         correlaciones = self._calcular_correlaciones()
         for symbol in self.capital_por_simbolo:
-            inicio = self.capital_inicial_diario.get(symbol, self.capital_por_simbolo[symbol])
+           inicio = self.capital_inicial_diario.get(
+                symbol, self.capital_por_simbolo[symbol]
+            )
             final = self.capital_por_simbolo[symbol]
             rendimiento = (final - inicio) / inicio if inicio else 0
             peso = 1 + factor * rendimiento
@@ -212,7 +215,9 @@ class Trader:
             # Penaliza símbolos altamente correlacionados
             corr_media = None
             if not correlaciones.empty and symbol in correlaciones.columns:
-                corr_series = correlaciones[symbol].drop(labels=[symbol], errors="ignore").abs()
+               corr_series = (
+                    correlaciones[symbol].drop(labels=[symbol], errors="ignore").abs()
+                )
                 corr_media = corr_series.mean()
             if corr_media and corr_media >= umbral_corr:
                 peso *= 1 - penalizacion_corr * corr_media
@@ -277,11 +282,13 @@ class Trader:
     async def _calcular_cantidad(self, symbol: str, precio: float) -> float:
         """Determina la cantidad de cripto a comprar con capital asignado."""
         balance = await fetch_balance_async(self.cliente)
-        euros = balance['total'].get('EUR', 0)
+        euros = balance["total"].get("EUR", 0)
         if euros <= 0:
             log.debug("Saldo en EUR insuficiente")
             return 0.0
-        capital_symbol = self.capital_por_simbolo.get(symbol, euros / max(len(self.estado), 1))
+       capital_symbol = self.capital_por_simbolo.get(
+            symbol, euros / max(len(self.estado), 1)
+        )
         fraccion = self.fraccion_kelly
         if self.modo_capital_bajo and euros < 500:
             deficit = (500 - euros) / 500
@@ -360,7 +367,9 @@ class Trader:
             archivo = f"datos/{symbol.replace('/', '_').lower()}_1m.parquet"
             try:
                 df = pd.read_parquet(archivo, columns=["close"])
-                precios[symbol] = df["close"].astype(float).tail(periodos).reset_index(drop=True)
+                precios[symbol] = (
+                    df["close"].astype(float).tail(periodos).reset_index(drop=True)
+                )
             except Exception as e:
                 log.debug(f"No se pudo cargar historial para {symbol}: {e}")
         if len(precios) < 2:
@@ -393,7 +402,7 @@ class Trader:
         if self.modo_capital_bajo:
             try:
                 balance = await fetch_balance_async(self.cliente)
-                euros = balance['total'].get('EUR', 0)
+                euros = balance["total"].get("EUR", 0)
             except BaseError:
                 euros = 0
             if euros < 500:
@@ -407,7 +416,9 @@ class Trader:
             return False
         return True
 
-    def _validar_estrategia(self, symbol: str, df: pd.DataFrame, estrategias: Dict) -> bool:
+   def _validar_estrategia(
+        self, symbol: str, df: pd.DataFrame, estrategias: Dict
+    ) -> bool:
         """Aplica el filtro estratégico de entradas."""
         if not evaluar_validez_estrategica(symbol, df, estrategias):
             log.debug(f"❌ Entrada rechazada por filtro estratégico en {symbol}.")
@@ -433,6 +444,9 @@ class Trader:
         volatilidad_actual = np.std(ventana_close) / media_close
 
         repetidas = coincidencia_parcial(estado.buffer, pesos_symbol, ventanas=5)
+        log.info(
+            f"Persistencia detectada {repetidas:.2f} | Mínimo requerido {self.persistencia.minimo}"
+        )
 
         minimo = self.persistencia.minimo
         if repetidas < minimo:
@@ -488,9 +502,7 @@ class Trader:
 
         precio_salida = cierre.get("precio")
         if precio_salida is not None and abs(precio - precio_salida) <= precio * 0.001:
-            log.info(
-                f"🚫 {symbol}: precio de entrada similar al de salida anterior"
-            )
+            log.info(f"🚫 {symbol}: precio de entrada similar al de salida anterior")
             return False
 
         return True
@@ -508,7 +520,9 @@ class Trader:
         cantidad = await self._calcular_cantidad(symbol, precio)
         if cantidad <= 0:
             return
-        await self.orders.abrir(symbol, precio, sl, tp, estrategias, tendencia, direccion, cantidad)
+        await self.orders.abrir(
+            symbol, precio, sl, tp, estrategias, tendencia, direccion, cantidad
+        )
         log.info(
             "✅ Orden abierta: "
             f"{symbol} {cantidad} unidades a {precio:.2f}€ SL: {sl:.2f} TP: {tp:.2f}"
@@ -518,9 +532,7 @@ class Trader:
         """Evalúa si la orden abierta en ``symbol`` debe cerrarse."""
         orden = self.orders.obtener(symbol)
         if not orden:
-            log.warning(
-                f"⚠️ Se intentó verificar TP/SL sin orden activa en {symbol}"
-            )
+            log.warning(f"⚠️ Se intentó verificar TP/SL sin orden activa en {symbol}")
             return
 
         precio_min = float(df["low"].iloc[-1])
@@ -532,13 +544,17 @@ class Trader:
 
         # --- Stop Loss con validación ---
         if precio_min <= orden.stop_loss:
-            resultado = verificar_salida_stoploss(orden.to_dict(), df, config=config_actual)
+            resultado = verificar_salida_stoploss(
+                orden.to_dict(), df, config=config_actual
+            )
             if resultado.get("cerrar", False):
                 await self._cerrar_y_reportar(orden, orden.stop_loss, "Stop Loss")
             else:
                 if resultado.get("evitado", False):
                     log.debug("SL evitado correctamente, no se notificará por Telegram")
-                    log.info(f"🛡️ SL evitado para {symbol} → {resultado.get('motivo', '')}")
+                    log.info(
+                        f"🛡️ SL evitado para {symbol} → {resultado.get('motivo', '')}"
+                    )
                 else:
                     log.info(f"ℹ️ {symbol} → {resultado.get('motivo', '')}")
             return
@@ -558,22 +574,31 @@ class Trader:
         self.config_por_simbolo[symbol] = config_actual
 
         try:
-            cerrar, motivo = verificar_trailing_stop(orden.to_dict(), precio_cierre, config=config_actual)
+            cerrar, motivo = verificar_trailing_stop(
+                orden.to_dict(), precio_cierre, config=config_actual
+            )
         except Exception as e:
             log.warning(f"⚠️ Error en trailing stop para {symbol}: {e}")
             cerrar, motivo = False, ""
         if cerrar:
             if await self._cerrar_y_reportar(orden, precio_cierre, motivo):
-                log.info(f"🔄 Trailing Stop activado para {symbol} a {precio_cierre:.2f}€")
+               log.info(
+                    f"🔄 Trailing Stop activado para {symbol} a {precio_cierre:.2f}€"
+                )
             return
 
         # --- Cambio de tendencia ---
         if verificar_reversion_tendencia(symbol, df, orden.tendencia):
             pesos_symbol = self.pesos_por_simbolo.get(symbol, {})
-            if not verificar_filtro_tecnico(symbol, df, orden.estrategias_activas, pesos_symbol):
+            if not verificar_filtro_tecnico(
+                symbol, df, orden.estrategias_activas, pesos_symbol
+            ):
                 nueva_tendencia, _ = detectar_tendencia(symbol, df)
                 if await self._cerrar_y_reportar(
-                    orden, precio_cierre, "Cambio de tendencia", tendencia=nueva_tendencia
+                    orden,
+                    precio_cierre,
+                    "Cambio de tendencia",
+                    tendencia=nueva_tendencia,
                 ):
                     log.info(
                         f"🔄 Cambio de tendencia detectado para {symbol}. Cierre recomendado."
@@ -594,9 +619,20 @@ class Trader:
             pesos_symbol = self.pesos_por_simbolo.get(symbol, {})
             umbral = rl_policy.sugerir_umbral(df)
             if umbral is None:
-                umbral = calcular_umbral_adaptativo(symbol, df, estrategias, pesos_symbol)
-            if not validar_necesidad_de_salida(df, orden.to_dict(), estrategias, puntaje=puntaje, umbral=umbral, config=config_actual):
-                log.info(f"❌ Cierre por '{razon}' evitado: condiciones técnicas aún válidas.")
+                umbral = calcular_umbral_adaptativo(
+                    symbol, df, estrategias, pesos_symbol
+                )
+            if not validar_necesidad_de_salida(
+                df,
+                orden.to_dict(),
+                estrategias,
+                puntaje=puntaje,
+                umbral=umbral,
+                config=config_actual,
+            ):
+                log.info(
+                    f"❌ Cierre por '{razon}' evitado: condiciones técnicas aún válidas."
+                )
                 return
             await self._cerrar_y_reportar(orden, precio_cierre, f"Estrategia: {razon}")
 
@@ -624,6 +660,7 @@ class Trader:
         if vela.get("timestamp") == estado.ultimo_timestamp:
             return
         estado.ultimo_timestamp = vela.get("timestamp")
+        log.info(f"Procesando vela {symbol} | Precio: {vela.get('close')}")
         
 
         df = pd.DataFrame(estado.buffer)
@@ -641,7 +678,7 @@ class Trader:
 
         if len(estado.buffer) < 30:
             log.debug(
-                f"\U0001F4C9 [{symbol}] Buffer insuficiente ({len(estado.buffer)} velas)"
+                f"\U0001f4c9 [{symbol}] Buffer insuficiente ({len(estado.buffer)} velas)"
             )
             return
 
@@ -687,9 +724,7 @@ class Trader:
             if velas < cooldown_velas:
                 cierre["velas"] = velas + 1
                 restante = cooldown_velas - velas
-                log.info(
-                    f"🕒 Cooldown activo para {symbol}. Quedan {restante} velas"
-                )
+                log.info(f"🕒 Cooldown activo para {symbol}. Quedan {restante} velas")
                 return
             else:
                 self.historial_cierres.pop(symbol, None)
@@ -709,19 +744,27 @@ class Trader:
         diversidad = len(estrategias_activas)
         peso_min_total = config_actual.get("peso_minimo_total", 0.5)
         diversidad_min = config_actual.get("diversidad_minima", 2)
+        persistencia = coincidencia_parcial(estado.buffer, pesos_symbol, ventanas=5)
+        log.info(
+            f"Puntaje: {puntaje:.2f}, Umbral: {umbral:.2f}, Peso total: {peso_total:.2f}, Persistencia: {persistencia:.2f}"
+        )
 
 
         if not self._validar_puntaje(symbol, puntaje, umbral):
             return
 
-        if not await self._validar_diversidad(symbol, peso_total, peso_min_total, diversidad, diversidad_min):
+       if not await self._validar_diversidad(
+            symbol, peso_total, peso_min_total, diversidad, diversidad_min
+        ):
             return
 
         if not self._validar_estrategia(symbol, df, estrategias):
             return
 
         # Comprueba persistencia y fuerza de las señales
-        if not self._evaluar_persistencia(symbol, estado, df, pesos_symbol, tendencia_actual, puntaje, umbral):
+        if not self._evaluar_persistencia(
+            symbol, estado, df, pesos_symbol, tendencia_actual, puntaje, umbral
+        ):
             return
         
         rsi = calcular_rsi(df)
@@ -746,7 +789,7 @@ class Trader:
         )
 
         balance = await fetch_balance_async(self.cliente)
-        capital_total = balance['total'].get('EUR', 0)
+        capital_total = balance["total"].get("EUR", 0)
         # Verifica el límite de riesgo diario antes de abrir una nueva orden
         if self.risk.riesgo_superado(capital_total):
             log.warning(f"🚫 Riesgo diario superado para {symbol}")
@@ -775,13 +818,17 @@ class Trader:
 
         ratio_min = config_actual.get("ratio_minimo_beneficio", 1.5)
         if not validar_ratio_beneficio(precio, sl, tp, ratio_min):
-            log.warning(
-                f"⚖️ Ratio riesgo/beneficio insuficiente para {symbol}"
-            )
+            log.warning(f"⚖️ Ratio riesgo/beneficio insuficiente para {symbol}")
             return
         
         await self._abrir_operacion_real(
-            symbol, precio, sl, tp, estrategias_persistentes, tendencia_actual, direccion
+            symbol,
+            precio,
+            sl,
+            tp,
+            estrategias_persistentes,
+            tendencia_actual,
+            direccion,
         )
         return
 
