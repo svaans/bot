@@ -3,6 +3,8 @@ import numpy as np
 import pandas as pd
 from typing import Optional
 
+UMBRAL_HEURISTIC_BASE = float(os.getenv("UMBRAL_HEURISTIC_BASE", 6.0))
+
 try:
     from stable_baselines3 import PPO
 except Exception:  # pragma: no cover - library optional
@@ -74,15 +76,15 @@ class RLPolicy:
 
     def _heuristic_umbral(self, features: np.ndarray) -> float:
         volatilidad, rango_medio, volumen_relativo, momentum_std, slope, rsi = features
-        umbral = 10.0
-        umbral += volatilidad * 8.0
-        umbral += rango_medio * 5.0
-        umbral += volumen_relativo * 3.0
-        umbral += momentum_std * 4.0
-        umbral += slope * 2.0
+        umbral = UMBRAL_HEURISTIC_BASE
+        umbral += volatilidad * 4.0
+        umbral += rango_medio * 2.5
+        umbral += volumen_relativo * 2.0
+        umbral += momentum_std * 3.0
+        umbral += slope * 1.5
         if 45.0 <= rsi <= 55.0:
             umbral *= 0.9
-        return float(np.clip(umbral, 5.0, 30.0))
+        return float(np.clip(umbral, 3.0, 20.0))
 
     def sugerir_umbral(self, df: pd.DataFrame) -> Optional[float]:
         features = self._features_from_df(df)
