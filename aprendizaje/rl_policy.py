@@ -72,12 +72,24 @@ class RLPolicy:
             rsi,
         ], dtype=np.float32)
 
+    def _heuristic_umbral(self, features: np.ndarray) -> float:
+        volatilidad, rango_medio, volumen_relativo, momentum_std, slope, rsi = features
+        umbral = 10.0
+        umbral += volatilidad * 8.0
+        umbral += rango_medio * 5.0
+        umbral += volumen_relativo * 3.0
+        umbral += momentum_std * 4.0
+        umbral += slope * 2.0
+        if 45.0 <= rsi <= 55.0:
+            umbral *= 0.9
+        return float(np.clip(umbral, 5.0, 30.0))
+
     def sugerir_umbral(self, df: pd.DataFrame) -> Optional[float]:
-        if self.model is None:
-            return None
         features = self._features_from_df(df)
         if features is None:
             return None
+        if self.model is None:
+            log.debug("Usando heurística de umbral por ausencia de modelo RL")
         try:
             action, _ = self.model.predict(features, deterministic=True)
             return float(action)
