@@ -26,7 +26,7 @@ from core.adaptador_umbral import (
     calcular_tp_sl_adaptativos,
     calcular_umbral_adaptativo,
 )
-from core.rl_policy import rl_policy
+from aprendizaje.rl_policy import rl_policy
 from core.pesos import cargar_pesos_estrategias
 from core.kelly import calcular_fraccion_kelly
 from core.persistencia_tecnica import PersistenciaTecnica, coincidencia_parcial
