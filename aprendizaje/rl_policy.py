@@ -90,12 +90,14 @@ class RLPolicy:
             return None
         if self.model is None:
             log.debug("Usando heurística de umbral por ausencia de modelo RL")
+            return self._heuristic_umbral(features)
         try:
             action, _ = self.model.predict(features, deterministic=True)
             return float(action)
         except Exception as e:  # pragma: no cover - predicción fallida
             log.warning(f"No se pudo predecir umbral RL: {e}")
-            return None
+            return self._heuristic_umbral(features)
+
 
 
 rl_policy = RLPolicy()
