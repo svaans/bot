@@ -4,7 +4,6 @@ from datetime import datetime, timedelta
 
 from backtesting.backtest import backtest_modular
 from aprendizaje.recalibrar_semana import recalibrar_pesos_semana
-from aprendizaje.train_rl_policy import main as train_rl_policy
 
 SYMBOLS = ["BTC/EUR", "ETH/EUR", "ADA/EUR", "SOL/EUR", "BNB/EUR"]
 RUTA_CONTROL = "config/weekly_tasks_fecha.txt"
@@ -18,7 +17,6 @@ async def ejecutar_backtest_semana() -> None:
 def tarea_semanal() -> None:
     asyncio.run(ejecutar_backtest_semana())
     recalibrar_pesos_semana()
-    train_rl_policy()
 
 
 def ejecutar_si_corresponde() -> None:
