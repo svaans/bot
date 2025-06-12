@@ -38,9 +38,8 @@ class DataFeed:
             resultados = await asyncio.gather(
                 *[t for _, t in tareas_actuales], return_exceptions=True
             )
-            self._tasks.clear()
-
-            for (sym, _), resultado in zip(tareas_actuales, resultados):
+            reiniciar = {}
+            for (sym, task), resultado in zip(tareas_actuales, resultados):
                 if isinstance(resultado, asyncio.CancelledError):
                     continue
                 if isinstance(resultado, Exception):
@@ -49,9 +48,15 @@ class DataFeed:
                         "Reiniciando en 5s"
                     )
                     await asyncio.sleep(5)
-                    self._tasks[sym] = asyncio.create_task(
+                    reiniciar[sym] = asyncio.create_task(
                         self.stream(sym, handler)
                     )
+                else:
+                    self._tasks[sym] = task
+            if reiniciar:
+                self._tasks.update(reiniciar)
+            else:
+                break
 
     async def detener(self) -> None:
         """Cancela todos los streams en ejecución."""
