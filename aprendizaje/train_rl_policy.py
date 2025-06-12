@@ -18,7 +18,6 @@ def main() -> None:
         default=10,
         help="Número de pasos de entrenamiento",
     )
-    parser.add_argument("--timesteps", type=int, default=10, help="Número de pasos de entrenamiento")
     parser.add_argument("--data-dir", default="datos", help="Directorio con las velas parquet")
     parser.add_argument(
         "--save-path",
