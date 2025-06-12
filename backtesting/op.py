@@ -1,15 +1,13 @@
-# optimizador_completo.py
+# optimizador_completo.py (sin aceleración, con estrategias y configuración)
 import asyncio
 import json
 import os
 import time
-import random
 from typing import Dict, Iterable
 
 import numpy as np
 import optuna
 import pandas as pd
-from optuna.exceptions import TrialPruned
 
 from backtesting.backtest import BacktestTrader
 from core.config_manager import Config
@@ -20,8 +18,6 @@ BUFFER_INICIAL = 30
 N_TRIALS = 60
 N_JOBS = 4
 SIMBOLOS = ["BTC/EUR", "ETH/EUR", "ADA/EUR", "SOL/EUR", "BNB/EUR"]
-VELAS_POR_DIA = 1440
-DIAS_BLOQUE = 3
 
 
 def cargar_historicos(symbols: Iterable[str], ruta: str = "datos") -> Dict[str, pd.DataFrame]:
@@ -36,15 +32,6 @@ def cargar_historicos(symbols: Iterable[str], ruta: str = "datos") -> Dict[str, 
         )
         datos[s] = df
     return datos
-
-
-def seleccionar_bloque(df: pd.DataFrame) -> pd.DataFrame:
-    total_velas = len(df)
-    bloque_size = VELAS_POR_DIA * DIAS_BLOQUE
-    if total_velas <= bloque_size:
-        return df.copy()
-    inicio = random.randint(0, total_velas - bloque_size)
-    return df.iloc[inicio:inicio + bloque_size].reset_index(drop=True)
 
 
 async def simular(df: pd.DataFrame, symbol: str, config_symbol: dict, pesos: dict) -> BacktestTrader:
@@ -63,7 +50,6 @@ async def simular(df: pd.DataFrame, symbol: str, config_symbol: dict, pesos: dic
     bot.pesos_por_simbolo[symbol] = pesos
     bot.config_por_simbolo[symbol] = config_symbol.copy()
 
-    resultados_temporales = []
     for i in range(BUFFER_INICIAL, len(df)):
         row = df.iloc[i]
         vela = {
@@ -76,20 +62,6 @@ async def simular(df: pd.DataFrame, symbol: str, config_symbol: dict, pesos: dic
             "volume": row["volume"],
         }
         await bot._procesar_vela(vela)
-
-        # Pruning: tras 30% del bloque, abortar si hay perdidas
-        if i == int(len(df) * 0.3):
-            resultados = bot.resultados.get(symbol, [])
-            if resultados and sum(resultados) < 0:
-                raise TrialPruned("🔪 Ganancia negativa al 30% del trial")
-
-        # Pruning por desempeño temprano
-        resultados = bot.resultados.get(symbol, [])
-        if len(resultados) >= 10:
-            ganancias = [r for r in resultados if r > 0]
-            winrate = len(ganancias) / len(resultados)
-            if np.mean(resultados) < 0 and winrate < 0.4:
-                raise TrialPruned("🔪 Rendimiento inicial deficiente")
 
     orden = bot.orders.obtener(symbol)
     if orden:
@@ -128,8 +100,6 @@ def evaluar(bot: BacktestTrader, symbol: str) -> dict:
 
 
 def optimizar_symbol(symbol: str, df: pd.DataFrame, estrategias: list[str]) -> tuple[dict, dict, dict]:
-    bloque_df = seleccionar_bloque(df)
-
     def objective(trial: optuna.Trial) -> float:
         config_symbol = {
             "factor_umbral": trial.suggest_float("factor_umbral", 0.5, 3.0),
@@ -149,11 +119,7 @@ def optimizar_symbol(symbol: str, df: pd.DataFrame, estrategias: list[str]) -> t
         }
         pesos = {e: trial.suggest_float(e, 0.1, 5.0) for e in estrategias}
 
-        inicio = time.time()
-        bot = asyncio.run(simular(bloque_df, symbol, config_symbol, pesos))
-        if time.time() - inicio > 60:
-            raise TrialPruned("⏱️ Trial excedió el límite de tiempo")
-
+        bot = asyncio.run(simular(df, symbol, config_symbol, pesos))
         metricas = evaluar(bot, symbol)
         trial.set_user_attr("metricas", metricas)
         return metricas["capital"]
