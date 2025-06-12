@@ -155,9 +155,9 @@ class OrderManager:
             self.notificador.enviar(mensaje)
         return True
         
-    def cerrar(self, *args, **kwargs) -> bool:
-        """Versión síncrona de :meth:`cerrar_async`."""
-        return asyncio.run(self.cerrar_async(*args, **kwargs))
+    async def cerrar(self, *args, **kwargs):
+    return await self.cerrar_async(*args, **kwargs)
+
 
     def obtener(self, symbol: str) -> Optional[Orden]:
         return self.ordenes.get(symbol)
