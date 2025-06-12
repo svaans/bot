@@ -5,7 +5,7 @@ from typing import Dict, List
 class PersistenciaTecnica:
     """Conteo de activaciones consecutivas por estrategia y símbolo."""
 
-    minimo: int = 3
+    minimo: int = 1
     peso_extra: float = 0.5
     conteo: Dict[str, Dict[str, int]] = field(default_factory=dict)
 
