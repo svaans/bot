@@ -118,7 +118,7 @@ class OrderManager:
                     self.notificador.enviar(
                         f"❌ Venta fallida en {symbol}: {e}"
                     )
-               try:
+            try:
                 existe = await asyncio.to_thread(
                     ordenes_reales.obtener_orden, symbol
                 )
