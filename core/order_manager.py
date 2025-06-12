@@ -27,7 +27,7 @@ class OrderManager:
     # ------------------------------------------------------------------
     # Operaciones de apertura
     # ------------------------------------------------------------------
-    async def abrir(
+    async def abrir_async(
         self,
         symbol: str,
         precio: float,
@@ -86,10 +86,14 @@ class OrderManager:
                 f"Estrategias: {estrategias_txt}"
             )
             self.notificador.enviar(mensaje)
+            
+    def abrir(self, *args, **kwargs) -> None:
+        """Versión síncrona de :meth:`abrir_async`."""
+        asyncio.run(self.abrir_async(*args, **kwargs))
     # ------------------------------------------------------------------
     # Operaciones de cierre
     # ------------------------------------------------------------------
-    async def cerrar(self, symbol: str, precio: float, motivo: str) -> bool:
+    async def cerrar_async(self, symbol: str, precio: float, motivo: str) -> bool:
         """Cierra la orden indicada y la elimina del registro.
 
         Returns ``True`` si la orden existía y fue cerrada correctamente,
@@ -114,15 +118,14 @@ class OrderManager:
                     self.notificador.enviar(
                         f"❌ Venta fallida en {symbol}: {e}"
                     )
-                return False
-            existe = await asyncio.to_thread(ordenes_reales.obtener_orden, symbol)
-            if existe is not None:
-                await asyncio.to_thread(ordenes_reales.eliminar_orden, symbol)
-            else:
-                await asyncio.to_thread(ordenes_reales.eliminar_orden, symbol)
-            info = asdict(orden)
-            info.update({"precio_cierre": precio, "motivo_cierre": motivo})
-            await asyncio.to_thread(ordenes_reales.registrar_operacion, info)
+               try:
+                existe = await asyncio.to_thread(
+                    ordenes_reales.obtener_orden, symbol
+                )
+            except Exception as e:  # pragma: no cover - conexión externa
+                log.error(f"❌ Error consultando órdenes abiertas: {e}")
+                existe = None
+            await asyncio.to_thread(ordenes_reales.eliminar_orden, symbol)
         
         self.ordenes.pop(symbol, None)
         orden.precio_cierre = precio
@@ -151,6 +154,10 @@ class OrderManager:
             )
             self.notificador.enviar(mensaje)
         return True
+        
+    def cerrar(self, *args, **kwargs) -> bool:
+        """Versión síncrona de :meth:`cerrar_async`."""
+        return asyncio.run(self.cerrar_async(*args, **kwargs))
 
     def obtener(self, symbol: str) -> Optional[Orden]:
         return self.ordenes.get(symbol)
