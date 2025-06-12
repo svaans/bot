@@ -125,7 +125,7 @@ def optimizar(symbols: Iterable[str]) -> tuple[dict, dict]:
 
 def guardar_config(mejores: dict, ruta: str = "config/configuraciones_optimas.json", symbols: Iterable[str] | None = None) -> None:
     if symbols is None:
-        symbols = ["BTC/EUR", "ETH/EUR", "ADA/EUR"]
+        symbols = ["BTC/EUR", "ETH/EUR", "ADA/EUR", "SOL/EUR", "BNB/EUR"]
     try:
         with open(ruta, "r") as f:
             datos = json.load(f)
@@ -146,7 +146,7 @@ def guardar_config(mejores: dict, ruta: str = "config/configuraciones_optimas.js
 
 
 if __name__ == "__main__":
-    symbols = ["BTC/EUR", "ETH/EUR", "ADA/EUR"]
+    symbols = ["BTC/EUR", "ETH/EUR", "ADA/EUR", "SOL/EUR", "BNB/EUR"]
     mejores, metricas = optimizar(symbols)
     print("\nMejor configuración:")
     print(json.dumps(mejores, indent=4))
