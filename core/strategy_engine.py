@@ -12,7 +12,7 @@ from estrategias_salida.gestor_salidas import evaluar_salidas
 from core.tendencia import detectar_tendencia
 from core.estrategias import filtrar_por_regimen
 from core.logger import configurar_logger
-from ml.order_model import order_model
+
 
 log = configurar_logger("engine", modo_silencioso=True)
 
@@ -30,8 +30,8 @@ class StrategyEngine:
             estrategias_activas = filtrar_por_regimen(estrategias_activas, regimen)
             resultado["estrategias_activas"] = estrategias_activas
 
-            probabilidad = order_model.predict_proba(estrategias_activas)
-        resultado["probabilidad"] = round(float(probabilidad), 4)
+        probabilidad = 1.0
+        resultado["probabilidad"] = probabilidad
         resultado["puntaje_total"] = round(
             resultado.get("puntaje_total", 0) * probabilidad, 2
         )
