@@ -156,7 +156,7 @@ class OrderManager:
         return True
         
     async def cerrar(self, *args, **kwargs):
-    return await self.cerrar_async(*args, **kwargs)
+        return await self.cerrar_async(*args, **kwargs)
 
 
     def obtener(self, symbol: str) -> Optional[Orden]:
