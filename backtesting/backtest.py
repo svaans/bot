@@ -51,7 +51,7 @@ class BacktestTrader(Trader):
             if orden.precio_entrada
             else 0.0
         )
-        cerrado = await self.orders.cerrar(orden.symbol, precio, motivo)
+        cerrado = await self.orders.cerrar_async(orden.symbol, precio, motivo)
         if not cerrado:
             return False
         capital_inicial = self.capital_por_simbolo.get(orden.symbol, 0.0)
