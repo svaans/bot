@@ -863,7 +863,7 @@ class Trader:
             )
             return
 
-        ratio_min = config_actual.get("ratio_minimo_beneficio", 1.5)
+        ratio_min = config_actual.get("ratio_minimo_beneficio", 1.2)
         if not validar_ratio_beneficio(precio, sl, tp, ratio_min):
             log.warning(f"⚖️ Ratio riesgo/beneficio insuficiente para {symbol}")
             return
