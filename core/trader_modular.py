@@ -166,7 +166,7 @@ class Trader:
 
     async def cerrar_operacion(self, symbol: str, precio: float, motivo: str) -> None:
         """Cierra una orden y actualiza los pesos si corresponden."""
-       if not await self.orders.cerrar_async(symbol, precio, motivo):
+        if not await self.orders.cerrar_async(symbol, precio, motivo):
             log.debug(f"🔁 Intento duplicado de cierre ignorado para {symbol}")
             return
         actualizar_pesos_estrategias_symbol(symbol)
