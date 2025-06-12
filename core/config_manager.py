@@ -61,7 +61,7 @@ class ConfigManager:
             symbols=symbols,
             umbral_riesgo_diario=float(os.getenv("UMBRAL_RIESGO_DIARIO", 0.03)),
             min_order_eur=float(os.getenv("MIN_ORDER_EUR", 10)),
-            persistencia_minima=int(os.getenv("PERSISTENCIA_MINIMA", 2)),
+            persistencia_minima=int(os.getenv("PERSISTENCIA_MINIMA", 1)),
             peso_extra_persistencia=float(os.getenv("PESO_EXTRA_PERSISTENCIA", 0.5)),
             modo_capital_bajo=os.getenv("MODO_CAPITAL_BAJO", "False").lower() == "true",
             telegram_token=os.getenv("TELEGRAM_TOKEN"),
