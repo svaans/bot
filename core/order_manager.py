@@ -115,7 +115,10 @@ class OrderManager:
                         f"❌ Venta fallida en {symbol}: {e}"
                     )
                 return False
-            if await asyncio.to_thread(ordenes_reales.obtener_orden, symbol) is not None:
+            existe = await asyncio.to_thread(ordenes_reales.obtener_orden, symbol)
+            if existe is not None:
+                await asyncio.to_thread(ordenes_reales.eliminar_orden, symbol)
+            else:
                 await asyncio.to_thread(ordenes_reales.eliminar_orden, symbol)
             info = asdict(orden)
             info.update({"precio_cierre": precio, "motivo_cierre": motivo})

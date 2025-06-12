@@ -16,6 +16,7 @@ else:
 
 UMBRAL_MAXIMO = 15
 UMBRAL_POR_DEFECTO = 10
+UMBRAL_MINIMO = 12
 MIN_LONGITUD_DATA = 30
 
 PESO_VOLATILIDAD = 0.4
@@ -94,15 +95,16 @@ def calcular_umbral_adaptativo(symbol, df, estrategias_activadas, pesos_symbol, 
     # --- Ajuste de riesgo adaptativo ---
     ajuste_riesgo = min(ajuste_riesgo, 1.3)  # cap máximo
     if contexto_score < 4:
-        ajuste_riesgo += 0.7
+        ajuste_riesgo += 0.5
     if potencia_tecnica < 5:
-        ajuste_riesgo += 0.7
+        ajuste_riesgo += 0.5
     if slope < 0:
-        ajuste_riesgo += 0.3
+        ajuste_riesgo += 0.2
 
     # --- Umbral final ---
     umbral_base = min(potencia_tecnica * ajuste_riesgo, UMBRAL_MAXIMO)
     umbral = min(umbral_base * factor_umbral, 30)
+    umbral = max(umbral, UMBRAL_MINIMO)
 
     # --- Log ---
     log.debug(

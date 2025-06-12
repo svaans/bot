@@ -1,4 +1,5 @@
 import pandas as pd
+from indicadores.atr import calcular_atr
 
 def salida_trailing_stop(orden: dict, df: pd.DataFrame, config: dict = None) -> dict:
     """
@@ -23,8 +24,12 @@ def salida_trailing_stop(orden: dict, df: pd.DataFrame, config: dict = None) -> 
         precio_actual = df["close"].iloc[-1]
         direccion = orden.get("direccion", "long")
 
-        # --- Trailing personalizado o por defecto ---
-        trailing_pct = config.get("trailing_pct", 0.015) if config else 0.015
+        # --- Distancia basada en ATR ---
+        atr_mult = config.get("atr_multiplicador", 1.0) if config else 1.0
+        atr = calcular_atr(df)
+        if atr is None:
+            return {"cerrar": False, "razon": "ATR no disponible"}
+        trailing_dist = atr * atr_mult
 
         # --- Inicializa max_precio si no existe ---
         if "max_precio" not in orden:
@@ -34,7 +39,7 @@ def salida_trailing_stop(orden: dict, df: pd.DataFrame, config: dict = None) -> 
         if direccion in ["compra", "long"]:
             if precio_actual > orden["max_precio"]:
                 orden["max_precio"] = precio_actual
-            elif precio_actual < orden["max_precio"] * (1 - trailing_pct):
+            elif precio_actual < orden["max_precio"] - trailing_dist:
                 return {
                     "cerrar": True,
                     "razon": f"Trailing Stop activado (long) → Max: {orden['max_precio']:.2f}, Precio actual: {precio_actual:.2f}"
@@ -43,7 +48,7 @@ def salida_trailing_stop(orden: dict, df: pd.DataFrame, config: dict = None) -> 
         elif direccion in ["venta", "short"]:
             if precio_actual < orden["max_precio"]:
                 orden["max_precio"] = precio_actual
-            elif precio_actual > orden["max_precio"] * (1 + trailing_pct):
+            elif precio_actual > orden["max_precio"] + trailing_dist:
                 return {
                     "cerrar": True,
                     "razon": f"Trailing Stop activado (short) → Min: {orden['max_precio']:.2f}, Precio actual: {precio_actual:.2f}"
@@ -56,7 +61,9 @@ def salida_trailing_stop(orden: dict, df: pd.DataFrame, config: dict = None) -> 
 
 
 
-def verificar_trailing_stop(info: dict, precio_actual: float, config: dict = None) -> tuple[bool, str]:
+def verificar_trailing_stop(
+    info: dict, precio_actual: float, df: pd.DataFrame | None = None, config: dict = None
+) -> tuple[bool, str]:
     """
     Evalúa si debe cerrarse la orden usando lógica de trailing stop.
 
@@ -78,11 +85,15 @@ def verificar_trailing_stop(info: dict, precio_actual: float, config: dict = Non
 
     # ---- Configuración personalizada o por defecto ----
     trailing_start_ratio = config.get("trailing_start_ratio", 1.015) if config else 1.015
-    trailing_distance_ratio = config.get("trailing_distance_ratio", 0.02) if config else 0.02
+    atr_mult = config.get("atr_multiplicador", 1.0) if config else 1.0
+
+    atr = calcular_atr(df) if df is not None else None
+    if atr is None:
+        return False, "ATR no disponible"
 
     trailing_trigger = entrada * trailing_start_ratio  # Solo activa trailing si sube al menos un X%
     if max_price >= trailing_trigger:
-        trailing_stop = max_price * (1 - trailing_distance_ratio)  # Nivel de caída para cerrar
+        trailing_stop = max_price - atr * atr_mult  # Nivel de caída para cerrar
         if precio_actual <= trailing_stop:
             return True, f"Trailing Stop activado — Máximo: {max_price:.2f}, Límite: {trailing_stop:.2f}, Precio actual: {precio_actual:.2f}"
         else:

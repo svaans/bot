@@ -91,7 +91,33 @@ class Trader:
         self.fraccion_kelly = calcular_fraccion_kelly()
         factor_kelly = self.risk.multiplicador_kelly()
         self.fraccion_kelly *= factor_kelly
-        log.info(f"⚖️ Fracción Kelly: {self.fraccion_kelly:.4f} (x{factor_kelly:.3f})")
+        factor_vol = 1.0
+        try:
+            factores = []
+            for sym in config.symbols:
+                archivo = f"datos/{sym.replace('/', '_').lower()}_1m.parquet"
+                df = pd.read_parquet(archivo, columns=["close"])
+                cambios = df["close"].pct_change().dropna()
+                if cambios.empty:
+                    continue
+                volatilidad_actual = cambios.tail(1440).std()
+                volatilidad_media = cambios.std()
+                factores.append(
+                    self.risk.factor_volatilidad(
+                        float(volatilidad_actual),
+                        float(volatilidad_media),
+                    )
+                )
+            if factores:
+                factor_vol = min(factores)
+        except Exception as e:  # noqa: BLE001
+            log.debug(f"No se pudo calcular factor de volatilidad: {e}")
+
+        self.fraccion_kelly *= factor_vol
+        log.info(
+            f"⚖️ Fracción Kelly: {self.fraccion_kelly:.4f}"
+            f" (x{factor_kelly:.3f}, x{factor_vol:.3f})"
+        )
         euros = 0
         if config.api_key and config.api_secret:
             try:
@@ -587,7 +613,7 @@ class Trader:
 
         try:
             cerrar, motivo = verificar_trailing_stop(
-                orden.to_dict(), precio_cierre, config=config_actual
+                orden.to_dict(), precio_cierre, df, config=config_actual
             )
         except Exception as e:
             log.warning(f"⚠️ Error en trailing stop para {symbol}: {e}")

@@ -61,7 +61,7 @@ def evaluar_salida_inteligente(
         resultados.append({"razon": "Stop Loss", "detalle": res_sl.get("motivo")})
 
     cerrar, motivo = verificar_trailing_stop(
-        orden, df["close"].iloc[-1], config=config
+        orden, df["close"].iloc[-1], df, config=config
     )
     if cerrar:
         resultados.append({"razon": "Trailing Stop", "detalle": motivo})

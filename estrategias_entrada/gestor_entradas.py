@@ -90,8 +90,8 @@ def entrada_permitida(
         return True
 
     if (
-        potencia >= umbral * 0.85 and
-        estrategias_activas_count >= 4 and
+        potencia >= umbral * 0.95 and
+        estrategias_activas_count >= 5 and
         rsi > 55 and
         slope > 0 and
         momentum > 0.0004

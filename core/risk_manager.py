@@ -83,3 +83,30 @@ class RiskManager:
         except Exception as e:  # noqa: BLE001
             log.warning(f"⚠️ Error calculando multiplicador Kelly: {e}")
             return 1.0
+
+    def factor_volatilidad(
+        self,
+        volatilidad_actual: float,
+        volatilidad_media: float,
+        umbral: float = 2.0,
+    ) -> float:
+        """Devuelve un factor reductor para la fracción de posición.
+
+        Si ``volatilidad_actual`` supera ``umbral`` veces ``volatilidad_media``
+        se aplica una reducción inversamente proporcional al exceso.
+        """
+        if (
+            not isinstance(volatilidad_actual, (int, float))
+            or not isinstance(volatilidad_media, (int, float))
+            or volatilidad_media <= 0
+            or volatilidad_actual <= 0
+        ):
+            return 1.0
+
+        limite = volatilidad_media * umbral
+        if volatilidad_actual <= limite:
+            return 1.0
+
+        exceso = volatilidad_actual / limite
+        factor = 1 / exceso
+        return max(0.5, min(1.0, round(factor, 3)))

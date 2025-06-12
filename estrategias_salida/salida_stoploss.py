@@ -82,8 +82,8 @@ def salida_stoploss(orden: dict, df: pd.DataFrame, config: dict = None) -> dict:
         activas = [k for k, v in estrategias_activas.items() if v]
 
         # Configuración personalizada
-        factor_umbral = config.get("factor_umbral_sl", 0.5) if config else 0.5
-        min_estrategias_relevantes = config.get("min_estrategias_relevantes_sl", 2) if config else 2
+        factor_umbral = config.get("factor_umbral_sl", 0.7) if config else 0.7
+        min_estrategias_relevantes = config.get("min_estrategias_relevantes_sl", 3) if config else 3
 
         # Carga de pesos para umbral
         pesos_symbol = pesos.get(symbol, {})

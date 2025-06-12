@@ -5,7 +5,7 @@ from typing import Dict, List
 class PersistenciaTecnica:
     """Conteo de activaciones consecutivas por estrategia y símbolo."""
 
-    minimo: int = 2
+    minimo: int = 3
     peso_extra: float = 0.5
     conteo: Dict[str, Dict[str, int]] = field(default_factory=dict)
 
@@ -30,7 +30,7 @@ class PersistenciaTecnica:
         return {e: True for e, act in estrategias.items() if act and self.es_persistente(symbol, e)}
 
 
-def coincidencia_parcial(buffer: List[dict], pesos: Dict[str, float], ventanas: int = 3) -> float:
+def coincidencia_parcial(buffer: List[dict], pesos: Dict[str, float], ventanas: int = 5) -> float:
     """Calcula un puntaje de coincidencia parcial de estrategias en las últimas ``ventanas`` velas."""
     if len(buffer) < ventanas:
         return 0.0
