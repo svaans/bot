@@ -60,6 +60,10 @@ class OrderManager:
                     cantidad = await asyncio.to_thread(
                         ordenes_reales.ejecutar_orden_market, symbol, cantidad
                     )
+                    try:
+                        cantidad = float(cantidad)
+                    except Exception:
+                        cantidad = 0.0
                 await asyncio.to_thread(
                     ordenes_reales.registrar_orden,
                     symbol,
@@ -106,11 +110,16 @@ class OrderManager:
             return False
         if self.modo_real:
             try:
-                if orden.cantidad > 0:
+                cantidad = orden.cantidad or 0
+                try:
+                    cantidad = float(cantidad)
+                except Exception:
+                    cantidad = 0.0
+                if cantidad > 0:
                     await asyncio.to_thread(
                         ordenes_reales.ejecutar_orden_market_sell,
                         symbol,
-                        orden.cantidad,
+                        cantidad,
                     )
             except Exception as e:
                 log.error(f"❌ No se pudo cerrar la orden real para {symbol}: {e}")
@@ -156,8 +165,9 @@ class OrderManager:
             self.notificador.enviar(mensaje)
         return True
         
-    async def cerrar(self, *args, **kwargs):
-        return await self.cerrar_async(*args, **kwargs)
+    def cerrar(self, *args, **kwargs) -> bool:
+        """Versión síncrona de :meth:`cerrar_async`."""
+        return asyncio.run(self.cerrar_async(*args, **kwargs))
 
 
     def obtener(self, symbol: str) -> Optional[Orden]:
