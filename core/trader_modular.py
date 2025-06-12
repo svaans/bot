@@ -166,7 +166,7 @@ class Trader:
 
     async def cerrar_operacion(self, symbol: str, precio: float, motivo: str) -> None:
         """Cierra una orden y actualiza los pesos si corresponden."""
-        if not await self.orders.cerrar(symbol, precio, motivo):
+       if not await self.orders.cerrar_async(symbol, precio, motivo):
             log.debug(f"🔁 Intento duplicado de cierre ignorado para {symbol}")
             return
         actualizar_pesos_estrategias_symbol(symbol)
@@ -195,7 +195,7 @@ class Trader:
                 "retorno_total": retorno_total,
             }
         )
-        if not await self.orders.cerrar(orden.symbol, precio, motivo):
+        if not await self.orders.cerrar_async(orden.symbol, precio, motivo):
             log.warning(
                 f"❌ No se pudo confirmar el cierre de {orden.symbol}. Se omitirá el registro."
             )
@@ -318,7 +318,7 @@ class Trader:
                 self.estado[symbol].ultimo_timestamp = datos[-1][0]
         log.info("📈 Histórico inicial cargado")
     
-    async def _calcular_cantidad(self, symbol: str, precio: float) -> float:
+    async def _calcular_cantidad_async(self, symbol: str, precio: float) -> float:
         """Determina la cantidad de cripto a comprar con capital asignado."""
         balance = await fetch_balance_async(self.cliente)
         euros = balance["total"].get("EUR", 0)
@@ -353,6 +353,10 @@ class Trader:
             )
         )
         return round(cantidad, 6)
+
+    def _calcular_cantidad(self, symbol: str, precio: float) -> float:
+        """Versión síncrona de :meth:`_calcular_cantidad_async`."""
+        return asyncio.run(self._calcular_cantidad_async(symbol, precio))
     
     def _metricas_recientes(self, dias: int = 7) -> dict:
         """Calcula ganancia acumulada y drawdown de los últimos ``dias``."""
@@ -559,10 +563,10 @@ class Trader:
         tendencia: str,
         direccion: str,
     ) -> None:
-        cantidad = await self._calcular_cantidad(symbol, precio)
+        cantidad = await self._calcular_cantidad_async(symbol, precio)
         if cantidad <= 0:
             return
-        await self.orders.abrir(
+        await self.orders.abrir_async(
             symbol, precio, sl, tp, estrategias, tendencia, direccion, cantidad
         )
         log.info(
