@@ -75,6 +75,6 @@ def verificar_filtro_tecnico(symbol, df, estrategias_activas, pesos_symbol):
     puntaje = evaluacion["puntaje_total"]
     umbral = calcular_umbral_adaptativo(symbol, df, evaluacion["estrategias_activas"], pesos_symbol)
 
-    return len(activas) >= 2 and puntaje >= 0.5 * umbral
+    return len(activas) >= 1 and puntaje >= 0.4 * umbral
 
 
