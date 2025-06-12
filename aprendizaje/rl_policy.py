@@ -87,6 +87,12 @@ class RLPolicy:
         return float(np.clip(umbral, 3.0, 20.0))
 
     def sugerir_umbral(self, df: pd.DataFrame) -> Optional[float]:
+        override = os.getenv("RL_ACTION")
+        if override is not None:
+            try:
+                return float(override)
+            except ValueError:
+                log.warning("Valor RL_ACTION inválido, ignorando override")
         features = self._features_from_df(df)
         if features is None:
             return None
