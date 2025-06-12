@@ -392,8 +392,8 @@ class Trader:
     # Helpers de soporte -------------------------------------------------
 
     def _rechazo(self, symbol: str, motivo: str) -> None:
-        """Centraliza los mensajes de rechazo para las entradas."""
-        log.info(f"🚫 Entrada rechazada en {symbol}: {motivo}")
+        """Centraliza los mensajes de descartes de entrada."""
+        log.info(f"🚫 Sin entrada en {symbol}: {motivo}")
 
     def _validar_puntaje(self, symbol: str, puntaje: float, umbral: float) -> bool:
         """Comprueba si ``puntaje`` supera ``umbral``."""

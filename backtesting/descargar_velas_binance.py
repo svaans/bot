@@ -50,7 +50,7 @@ def descargar_historico(symbol="ETH/EUR", filename="eth_eur_1m.parquet", timefra
     print(f"✅ Archivo guardado en {ruta_final} con {len(df)} velas.\n")
 
 if __name__ == "__main__":
-    DIAS_HISTORICO = 30
+    DIAS_HISTORICO = 10
     descargar_historico("BTC/EUR", "btc_eur_1m.parquet", dias_historico=DIAS_HISTORICO)
     descargar_historico("ETH/EUR", "eth_eur_1m.parquet", dias_historico=DIAS_HISTORICO)
     descargar_historico("ADA/EUR", "ada_eur_1m.parquet", dias_historico=DIAS_HISTORICO)

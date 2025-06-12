@@ -45,13 +45,15 @@ class BacktestTrader(Trader):
         self.capital_por_simbolo = {s: capital_unit for s in config.symbols}
         self.capital_inicial_diario = self.capital_por_simbolo.copy()
 
-    def _cerrar_y_reportar(self, orden, precio: float, motivo: str) -> None:
+    async def _cerrar_y_reportar(self, orden, precio: float, motivo: str) -> None:
         retorno_total = (
             (precio - orden.precio_entrada) / orden.precio_entrada
             if orden.precio_entrada
             else 0.0
         )
-        self.orders.cerrar(orden.symbol, precio, motivo)
+        cerrado = await self.orders.cerrar(orden.symbol, precio, motivo)
+        if not cerrado:
+            return False
         capital_inicial = self.capital_por_simbolo.get(orden.symbol, 0.0)
         ganancia = capital_inicial * retorno_total
         self.capital_por_simbolo[orden.symbol] = capital_inicial + ganancia
@@ -62,10 +64,20 @@ class BacktestTrader(Trader):
             "precio": precio,
             "tendencia": None,
         }
+        return True
 
 
-async def backtest_modular(symbols: Iterable[str], ruta_datos: str = "datos") -> BacktestTrader:
-    """Ejecuta el backtesting utilizando el Trader modular."""
+async def backtest_modular(
+    symbols: Iterable[str],
+    ruta_datos: str = "datos",
+    fecha_inicio: datetime | None = None,
+    fecha_fin: datetime | None = None,
+) -> BacktestTrader:
+    """Ejecuta el backtesting utilizando el Trader modular.
+
+    Si ``fecha_inicio`` o ``fecha_fin`` se proporcionan, las velas se filtran
+    para cubrir únicamente ese rango temporal.
+    """
 
     config = Config(
         api_key="",
@@ -80,12 +92,18 @@ async def backtest_modular(symbols: Iterable[str], ruta_datos: str = "datos") ->
 
     bot = BacktestTrader(config)
 
-    total_ticks: Dict[str, pd.DataFrame] = {
-        s: pd.read_parquet(f"{ruta_datos}/{s.replace('/', '_').lower()}_1m.parquet")
-        .dropna()
-        .sort_values("timestamp")
-        for s in bot.config.symbols
-    }
+    total_ticks: Dict[str, pd.DataFrame] = {}
+    for s in bot.config.symbols:
+        df = (
+            pd.read_parquet(f"{ruta_datos}/{s.replace('/', '_').lower()}_1m.parquet")
+            .dropna()
+            .sort_values("timestamp")
+        )
+        if fecha_inicio is not None:
+            df = df[df["timestamp"] >= pd.Timestamp(fecha_inicio)]
+        if fecha_fin is not None:
+            df = df[df["timestamp"] <= pd.Timestamp(fecha_fin)]
+        total_ticks[s] = df.reset_index(drop=True)
 
     max_len = max(len(df) for df in total_ticks.values())
     total_steps = sum(min(max_len, len(df)) for df in total_ticks.values())

@@ -99,7 +99,9 @@ def entrada_permitida(
         log.info(f"🟡 [{symbol}] Entrada validada por criterios técnicos. Potencia: {potencia:.2f} < Umbral: {umbral:.2f}")
         return True
 
-    log.debug(f"🔴 [{symbol}] Entrada rechazada. Potencia: {potencia:.2f} < Umbral: {umbral:.2f}")
+    log.info(
+        f"🔴 [{symbol}] Entrada descartada. Potencia: {potencia:.2f} < Umbral: {umbral:.2f}"
+    )
     return False
 
 

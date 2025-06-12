@@ -4,6 +4,7 @@ import signal
 import traceback
 from pathlib import Path
 from core.hot_reload import start_hot_reload, stop_hot_reload
+from scripts.weekly_tasks import supervisor as supervisor_semanal
 from aprendizaje.reset_configuracion import (
     resetear_configuracion_diaria_si_corresponde,
 )
@@ -51,6 +52,7 @@ async def main():
     tarea_bot = asyncio.create_task(bot.ejecutar())
     stop_event = asyncio.Event()
     tarea_stop = asyncio.create_task(stop_event.wait())
+    tarea_semana = asyncio.create_task(supervisor_semanal())
 
     def detener_bot():
         print("\n🛑 Señal de detención recibida.")
@@ -73,7 +75,8 @@ async def main():
     finally:
         stop_event.set()
         tarea_bot.cancel()
-        await asyncio.gather(tarea_bot, return_exceptions=True)
+        tarea_semana.cancel()
+        await asyncio.gather(tarea_bot, tarea_semana, return_exceptions=True)
         stop_hot_reload(observer)
         await bot.cerrar()
         print("👋 Bot finalizado correctamente.")
