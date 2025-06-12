@@ -76,7 +76,7 @@ def validar_tp(tp: float, precio: float, max_relativo: float = 1.05, max_absolut
         return max_tp
     return tp
 
-def distancia_minima_valida(precio: float, sl: float, tp: float, min_pct: float = 0.001) -> bool:
+def distancia_minima_valida(precio: float, sl: float, tp: float, min_pct: float = 0.0005) -> bool:
     """Comprueba que SL y TP estén a una distancia mínima de ``precio``.
 
     La distancia se evalúa en términos porcentuales de ``precio``. Si
@@ -88,7 +88,7 @@ def distancia_minima_valida(precio: float, sl: float, tp: float, min_pct: float 
     )
 
 
-def margen_tp_sl_valido(tp: float, sl: float, precio_actual: float, min_pct: float = 0.001) -> bool:
+def margen_tp_sl_valido(tp: float, sl: float, precio_actual: float, min_pct: float = 0.0005) -> bool:
     """Valida que la distancia entre TP y SL sea suficiente."""
     return abs(tp - sl) >= precio_actual * min_pct
 
