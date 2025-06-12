@@ -32,7 +32,9 @@ class StrategyEngine:
 
             probabilidad = order_model.predict_proba(estrategias_activas)
         resultado["probabilidad"] = round(float(probabilidad), 4)
-        resultado["puntaje_total"] = round(resultado.get("puntaje_total", 0) * probabilidad, 2)
+        resultado["puntaje_total"] = round(
+            resultado.get("puntaje_total", 0) * probabilidad, 2
+        )
         return resultado
 
     @staticmethod
