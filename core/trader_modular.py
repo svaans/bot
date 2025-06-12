@@ -31,6 +31,7 @@ from aprendizaje.rl_policy import rl_policy
 from core.pesos import cargar_pesos_estrategias
 from core.kelly import calcular_fraccion_kelly
 from core.persistencia_tecnica import PersistenciaTecnica, coincidencia_parcial
+from core.metricas_semanales import metricas_tracker
 from aprendizaje.entrenador_estrategias import actualizar_pesos_estrategias_symbol
 from core.logger import configurar_logger
 from core.monitor_estado_bot import monitorear_estado_periodicamente
@@ -425,6 +426,7 @@ class Trader:
         """Comprueba si ``puntaje`` supera ``umbral``."""
         if puntaje < umbral:
             log.debug(f"🚫 {symbol}: puntaje {puntaje:.2f} < umbral {umbral:.2f}")
+            metricas_tracker.registrar_filtro("umbral")
             return False
         return True
 
@@ -489,6 +491,7 @@ class Trader:
         minimo = self.persistencia.minimo
         if repetidas < minimo:
             self._rechazo(symbol, f"Persistencia {repetidas:.2f} < {minimo}")
+            metricas_tracker.registrar_filtro("persistencia")
             return False
 
         if repetidas < 1 and puntaje < 1.2 * umbral:
@@ -501,6 +504,7 @@ class Trader:
             log.info(
                 f"⚠️ Entrada débil en {symbol}: Coincidencia {repetidas:.2f} insuficiente pero puntaje alto ({puntaje}) > Umbral {umbral} — Permitida."
             )
+            metricas_tracker.registrar_filtro("persistencia")
         return True
     
     def _tendencia_persistente(
@@ -590,6 +594,7 @@ class Trader:
             else:
                 if resultado.get("evitado", False):
                     log.debug("SL evitado correctamente, no se notificará por Telegram")
+                    metricas_tracker.registrar_sl_evitado()
                     log.info(
                         f"🛡️ SL evitado para {symbol} → {resultado.get('motivo', '')}"
                     )
