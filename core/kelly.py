@@ -34,7 +34,11 @@ def calcular_fraccion_kelly(dias_historia: int = 30, fallback: float = 0.20) -> 
             continue
         try:
             df = pd.read_csv(os.path.join(carpeta, archivo))
-        except (pd.errors.EmptyDataError, OSError) as e:
+        except (
+            pd.errors.EmptyDataError,
+            pd.errors.ParserError,
+            OSError,
+        ) as e:
             log.warning(f"⚠️ No se pudo leer reporte {archivo}: {e}")
             continue
         if "retorno_total" in df.columns:
