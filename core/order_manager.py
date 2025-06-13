@@ -37,6 +37,8 @@ class OrderManager:
         tendencia: str,
         direccion: str = "long",
         cantidad: float = 0.0,
+        puntaje: float = 0.0,
+        umbral: float = 0.0,
         
     ) -> None:
         """Registra una nueva orden en memoria y, si ``modo_real`` es ``True``
@@ -53,6 +55,8 @@ class OrderManager:
             timestamp=datetime.utcnow().isoformat(),
             max_price=precio,
             direccion=direccion,
+            puntaje_entrada=puntaje,
+            umbral_entrada=umbral,
         )
         
         if self.modo_real:

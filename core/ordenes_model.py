@@ -20,6 +20,8 @@ class Orden:
     fecha_cierre: Optional[str] = None
     motivo_cierre: Optional[str] = None
     retorno_total: Optional[float] = None
+    puntaje_entrada: float = 0.0
+    umbral_entrada: float = 0.0
 
     @staticmethod
     def from_dict(data: Dict[str, Any]) -> "Orden":
@@ -39,6 +41,8 @@ class Orden:
             data["cantidad_abierta"] = data.get("cantidad", 0.0)
         if "parcial_cerrado" not in data:
             data["parcial_cerrado"] = False
+        data.setdefault("puntaje_entrada", 0.0)
+        data.setdefault("umbral_entrada", 0.0)
 
         return Orden(**data)
 

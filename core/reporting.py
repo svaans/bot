@@ -1,4 +1,5 @@
 import os
+import json
 from datetime import datetime
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -114,9 +115,67 @@ class ReporterDiario:
         winrate = (df["retorno_total"] > 0).mean() * 100
         curva = df["retorno_total"].cumsum()
         drawdown = (curva - curva.cummax()).min()
+
+        total_ops = len(df)
+        ganadas = (df["retorno_total"] > 0).sum()
+        perdidas = total_ops - ganadas
+        beneficio_prom = df[df["retorno_total"] > 0]["retorno_total"].mean()
+        perdida_prom = df[df["retorno_total"] <= 0]["retorno_total"].mean()
+        mejor = df["retorno_total"].max()
+        peor = df["retorno_total"].min()
+        estrategias_usadas = {}
+        if "estrategias" in df.columns:
+            col = df["estrategias"]
+        else:
+            col = df.get("estrategias_activas")
+        if col is not None:
+            for val in col.dropna():
+                if isinstance(val, str):
+                    try:
+                        data = json.loads(val.replace("'", '"'))
+                        if isinstance(data, dict):
+                            val = list(data.keys())
+                    except Exception:
+                        val = [val]
+                if isinstance(val, dict):
+                    val = list(val.keys())
+                if isinstance(val, list):
+                    for e in val:
+                        estrategias_usadas[e] = estrategias_usadas.get(e, 0) + 1
+        mas_usadas = ",".join(sorted(estrategias_usadas, key=estrategias_usadas.get, reverse=True)[:3])
+
+        puntaje_prom = df.get("puntaje_entrada", pd.Series()).mean()
+        capital_inicial = 0.0
+        capital_final = 0.0
+        if "capital_inicial" in df.columns:
+            capital_inicial = df.groupby("symbol")["capital_inicial"].first().sum()
+        if "capital_final" in df.columns:
+            capital_final = df.groupby("symbol")["capital_final"].last().sum()
+
+        resumen = {
+            "fecha": fecha,
+            "operaciones": total_ops,
+            "ganadas": ganadas,
+            "perdidas": perdidas,
+            "beneficio_promedio": round(beneficio_prom or 0, 6),
+            "perdida_promedio": round(perdida_prom or 0, 6),
+            "mejor": round(mejor or 0, 6),
+            "peor": round(peor or 0, 6),
+            "estrategias_top": mas_usadas,
+            "puntaje_promedio": round(puntaje_prom or 0, 4),
+            "capital_inicial": round(capital_inicial, 2),
+            "capital_final": round(capital_final, 2),
+        }
+
         self.log.info(
             f"📊 Informe {fecha}: Ganancia={ganancia_total:.2f}, Winrate={winrate:.2f}%, Drawdown={drawdown:.4f}"
         )
+        resumen_path_txt = os.path.join(self.carpeta, f"{fecha}_resumen.txt")
+        resumen_path_csv = os.path.join(self.carpeta, f"{fecha}_resumen.csv")
+        with open(resumen_path_txt, "w") as f:
+            for k, v in resumen.items():
+                f.write(f"{k}: {v}\n")
+        pd.DataFrame([resumen]).to_csv(resumen_path_csv, index=False)
         self._guardar_pdf(df, fecha, ganancia_total, winrate, drawdown)
 
     def _guardar_pdf(self, df, fecha, ganancia, winrate, drawdown):

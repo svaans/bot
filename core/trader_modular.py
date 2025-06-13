@@ -38,6 +38,7 @@ from core import ordenes_reales
 from core.adaptador_configuracion import configurar_parametros_dinamicos
 from ccxt.base.errors import BaseError
 from core.reporting import reporter_diario
+from core.registro_metrico import registro_metrico
 from aprendizaje.aprendizaje_en_linea import registrar_resultado_trade
 from estrategias_salida.salida_trailing_stop import verificar_trailing_stop
 from estrategias_salida.salida_por_tendencia import verificar_reversion_tendencia
@@ -88,6 +89,7 @@ class Trader:
             config.persistencia_minima,
             config.peso_extra_persistencia,
         )
+        os.makedirs("logs/rechazos", exist_ok=True)
         self.fraccion_kelly = calcular_fraccion_kelly()
         factor_kelly = self.risk.multiplicador_kelly()
         self.fraccion_kelly *= factor_kelly
@@ -192,6 +194,7 @@ class Trader:
                 "fecha_cierre": datetime.utcnow().isoformat(),
                 "motivo_cierre": motivo,
                 "retorno_total": retorno_total,
+                "capital_inicial": self.capital_por_simbolo.get(orden.symbol, 0.0),
             }
         )
         if not await self.orders.cerrar_async(orden.symbol, precio, motivo):
@@ -199,6 +202,12 @@ class Trader:
                 f"❌ No se pudo confirmar el cierre de {orden.symbol}. Se omitirá el registro."
             )
             return False
+        
+        capital_inicial = self.capital_por_simbolo.get(orden.symbol, 0.0)
+        ganancia = capital_inicial * retorno_total
+        capital_final = capital_inicial + ganancia
+        self.capital_por_simbolo[orden.symbol] = capital_final
+        info["capital_final"] = capital_final
         reporter_diario.registrar_operacion(info)
         registrar_resultado_trade(orden.symbol, info, retorno_total)
         actualizar_pesos_estrategias_symbol(orden.symbol)
@@ -207,16 +216,34 @@ class Trader:
         except ValueError as e:
             log.error(f"❌ {e}")
             return False
-        capital_inicial = self.capital_por_simbolo.get(orden.symbol, 0.0)
-        ganancia = capital_inicial * retorno_total
-        self.capital_por_simbolo[orden.symbol] = capital_inicial + ganancia
+        
+        duracion = 0.0
+        try:
+            apertura = datetime.fromisoformat(orden.timestamp)
+            duracion = (datetime.utcnow() - apertura).total_seconds() / 60
+        except Exception:
+            pass
         self.historial_cierres[orden.symbol] = {
             "timestamp": datetime.utcnow().isoformat(),
             "motivo": motivo.lower().strip(),
             "velas": 0,
             "precio": precio,
             "tendencia": tendencia,
+            "duracion": duracion,
+            "retorno_total": retorno_total,
         }
+        log.info(
+            f"✅ CIERRE {motivo.upper()}: {orden.symbol} | Beneficio: {ganancia:.2f} €"
+        )
+        registro_metrico.registrar(
+            "cierre",
+            {
+                "symbol": orden.symbol,
+                "motivo": motivo,
+                "retorno": retorno_total,
+                "beneficio": ganancia,
+            },
+        )
         metricas = self._metricas_recientes()
         self.risk.ajustar_umbral(metricas)
         return True
@@ -246,13 +273,27 @@ class Trader:
                 "motivo_cierre": motivo,
                 "retorno_total": retorno_total,
                 "cantidad_cerrada": cantidad,
+                "capital_inicial": self.capital_por_simbolo.get(orden.symbol, 0.0),
             }
         )
         reporter_diario.registrar_operacion(info)
         registrar_resultado_trade(orden.symbol, info, retorno_total)
         capital_inicial = self.capital_por_simbolo.get(orden.symbol, 0.0)
         ganancia = capital_inicial * retorno_total
-        self.capital_por_simbolo[orden.symbol] = capital_inicial + ganancia
+        capital_final = capital_inicial + ganancia
+        self.capital_por_simbolo[orden.symbol] = capital_final
+        info["capital_final"] = capital_final
+        log.info(
+            f"✅ CIERRE PARCIAL: {orden.symbol} | Beneficio: {ganancia:.2f} €"
+        )
+        registro_metrico.registrar(
+            "cierre_parcial",
+            {
+                "symbol": orden.symbol,
+                "retorno": retorno_total,
+                "beneficio": ganancia,
+            },
+        )
         return True
     
     def es_salida_parcial_valida(
@@ -508,12 +549,44 @@ class Trader:
     
     # Helpers de soporte -------------------------------------------------
 
-    def _rechazo(self, symbol: str, motivo: str) -> None:
+    def _rechazo(
+        self,
+        symbol: str,
+        motivo: str,
+        puntaje: float | None = None,
+        peso_total: float | None = None,
+        estrategias: list[str] | None = None,
+    ) -> None:
         """Centraliza los mensajes de descartes de entrada."""
-        log.info(f"🚫 Sin entrada en {symbol}: {motivo}")
+        mensaje = f"🔴 RECHAZO: {symbol} | Causa: {motivo}"
+        if puntaje is not None:
+            mensaje += f" | Puntaje: {puntaje:.2f}"
+        if peso_total is not None:
+            mensaje += f" | Peso: {peso_total:.2f}"
+        if estrategias:
+            mensaje += f" | Estrategias: {estrategias}"
+        log.info(mensaje)
+
+        registro = {
+            "symbol": symbol,
+            "motivo": motivo,
+            "puntaje": puntaje,
+            "peso_total": peso_total,
+            "estrategias": ",".join(estrategias) if estrategias else "",
+        }
+        fecha = datetime.utcnow().strftime("%Y%m%d")
+        archivo = os.path.join(
+            "logs/rechazos", f"{symbol.replace('/', '_')}_{fecha}.csv"
+        )
+        df = pd.DataFrame([registro])
+        modo = "a" if os.path.exists(archivo) else "w"
+        df.to_csv(archivo, mode=modo, header=not os.path.exists(archivo), index=False)
+        registro_metrico.registrar("rechazo", registro)
 
     def _validar_puntaje(self, symbol: str, puntaje: float, umbral: float) -> bool:
         """Comprueba si ``puntaje`` supera ``umbral``."""
+        diferencia = umbral - puntaje
+        metricas_tracker.registrar_diferencia_umbral(diferencia)
         if puntaje < umbral:
             log.debug(f"🚫 {symbol}: puntaje {puntaje:.2f} < umbral {umbral:.2f}")
             metricas_tracker.registrar_filtro("umbral")
@@ -527,6 +600,7 @@ class Trader:
         peso_min_total: float,
         diversidad: int,
         diversidad_min: int,
+        total_estrategias: int,
     ) -> bool:
         """Verifica que la diversidad y el peso total sean suficientes."""
         if self.modo_capital_bajo:
@@ -538,11 +612,21 @@ class Trader:
             if euros < 500:
                 diversidad_min = min(diversidad_min, 2)
                 peso_min_total *= 0.7
+            ratio_relativa = diversidad / max(total_estrategias, 1)
+        if ratio_relativa < 0.3:
+            log.info(
+                f"🚫 {symbol}: diversidad relativa {ratio_relativa:.2%} < 30%"
+            )
+            metricas_tracker.registrar_filtro("diversidad")
+            return False
+        
         if diversidad < diversidad_min or peso_total < peso_min_total:
             self._rechazo(
                 symbol,
-                f"Diversidad/Peso insuficiente {diversidad}/{diversidad_min}, {peso_total:.2f}/{peso_min_total:.2f}",
+                f"Diversidad {diversidad} < {diversidad_min} o peso {peso_total:.2f} < {peso_min_total:.2f}",
+                peso_total=peso_total,
             )
+            metricas_tracker.registrar_filtro("diversidad")
             return False
         return True
 
@@ -564,6 +648,7 @@ class Trader:
         tendencia_actual: str,
         puntaje: float,
         umbral: float,
+        estrategias: Dict[str, bool],
     ) -> bool:
         """Evalúa si las señales persistentes son suficientes para entrar."""
         ventana_close = df["close"].tail(10)
@@ -574,13 +659,25 @@ class Trader:
         volatilidad_actual = np.std(ventana_close) / media_close
 
         repetidas = coincidencia_parcial(estado.buffer, pesos_symbol, ventanas=5)
+        slope = calcular_slope(df)
+        minimo = self.persistencia.minimo
+        if tendencia_actual == "lateral":
+            minimo += 0.5
+        elif tendencia_actual == "alcista" and slope > 0.002:
+            minimo = max(minimo - 0.2, 0.5)
+
         log.info(
-            f"Persistencia detectada {repetidas:.2f} | Mínimo requerido {self.persistencia.minimo}"
+            f"Persistencia detectada {repetidas:.2f} | Mínimo requerido {minimo:.2f}"
         )
 
-        minimo = self.persistencia.minimo
+        
         if repetidas < minimo:
-            self._rechazo(symbol, f"Persistencia {repetidas:.2f} < {minimo}")
+            self._rechazo(
+                symbol,
+                f"Persistencia {repetidas:.2f} < {minimo}",
+                puntaje=puntaje,
+                estrategias=list(estrategias.keys()),
+            )
             metricas_tracker.registrar_filtro("persistencia")
             return False
 
@@ -588,6 +685,8 @@ class Trader:
             self._rechazo(
                 symbol,
                 f"{repetidas:.2f} coincidencia y puntaje débil ({puntaje:.2f})",
+                puntaje=puntaje,
+                estrategias=list(estrategias.keys()),
             )
             return False
         elif repetidas < 1:
@@ -624,11 +723,18 @@ class Trader:
         if pd.isna(cierre_dt):
             log.warning(f"⚠️ {symbol}: Timestamp de cierre inválido")
             return False
+        duracion = cierre.get("duracion", 0)
+        retorno = abs(cierre.get("retorno_total", 0))
+        velas_requeridas = 3 + min(int(duracion // 30), 3)
+        if retorno > 0.05:
+            velas_requeridas += 1
         df_post = df[pd.to_datetime(df["timestamp"]) > cierre_dt]
-        if len(df_post) < 3:
-            log.info(f"⏳ {symbol}: esperando confirmación de tendencia")
+        if len(df_post) < velas_requeridas:
+            log.info(
+                f"⏳ {symbol}: esperando confirmación de tendencia {len(df_post)}/{velas_requeridas}"
+            )
             return False
-        if not self._tendencia_persistente(symbol, df_post, tendencia, velas=3):
+        if not self._tendencia_persistente(symbol, df_post, tendencia, velas=velas_requeridas):
             log.info(f"⏳ {symbol}: tendencia {tendencia} no persistente tras cierre")
             return False
 
@@ -648,16 +754,36 @@ class Trader:
         estrategias: Dict,
         tendencia: str,
         direccion: str,
+        puntaje: float = 0.0,
+        umbral: float = 0.0,
     ) -> None:
         cantidad = await self._calcular_cantidad_async(symbol, precio)
         if cantidad <= 0:
             return
         await self.orders.abrir_async(
-            symbol, precio, sl, tp, estrategias, tendencia, direccion, cantidad
+            symbol,
+            precio,
+            sl,
+            tp,
+            estrategias,
+            tendencia,
+            direccion,
+            cantidad,
+            puntaje,
+            umbral,
         )
         log.info(
-            "✅ Orden abierta: "
-            f"{symbol} {cantidad} unidades a {precio:.2f}€ SL: {sl:.2f} TP: {tp:.2f}"
+           f"🟢 ENTRADA: {symbol} | Puntaje: {puntaje:.2f} / Umbral: {umbral:.2f} | Estrategias: {list(estrategias.keys())}"
+        )
+        registro_metrico.registrar(
+            "entrada",
+            {
+                "symbol": symbol,
+                "puntaje": puntaje,
+                "umbral": umbral,
+                "estrategias": ",".join(estrategias.keys()),
+                "precio": precio,
+            },
         )
 
     async def _verificar_salidas(self, symbol: str, df: pd.DataFrame) -> None:
@@ -864,8 +990,14 @@ class Trader:
         if not self._validar_puntaje(symbol, puntaje, umbral):
             return None
 
+        total_estrategias = len(pesos_symbol)
         if not await self._validar_diversidad(
-            symbol, peso_total, peso_min_total, diversidad, diversidad_min
+            symbol,
+            peso_total,
+            peso_min_total,
+            diversidad,
+            diversidad_min,
+            total_estrategias,
         ):
             return None
 
@@ -874,7 +1006,7 @@ class Trader:
 
         # Comprueba persistencia y fuerza de las señales
         if not self._evaluar_persistencia(
-            symbol, estado, df, pesos_symbol, tendencia_actual, puntaje, umbral
+            symbol, estado, df, pesos_symbol, tendencia_actual, puntaje, umbral, estrategias
         ):
             return None
         
@@ -896,7 +1028,7 @@ class Trader:
             return None
 
         log.info(
-            f"✅ Entrada confirmada en {symbol}. Puntaje {puntaje:.2f}, Peso {peso_total:.2f}, Diversidad {diversidad}, Persistentes {len(estrategias_persistentes)}, Tendencia {tendencia_actual}, Dirección {direccion}"
+            f"🟢 ENTRADA: {symbol} | Puntaje: {puntaje:.2f} / Umbral: {umbral:.2f} | Estrategias: {estrategias_activas}"
         )
 
         balance = await fetch_balance_async(self.cliente)
@@ -940,6 +1072,8 @@ class Trader:
             "estrategias": estrategias_persistentes,
             "tendencia": tendencia_actual,
             "direccion": direccion,
+            "puntaje": puntaje,
+            "umbral": umbral,
         }
 
     async def ejecutar(self) -> None:

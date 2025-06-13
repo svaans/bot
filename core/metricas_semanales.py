@@ -12,6 +12,8 @@ class MetricasTracker:
         self.data = {
             "filtradas_persistencia": 0,
             "filtradas_umbral": 0,
+            "filtradas_diversidad": 0,
+            "diferencias_umbral": [],
             "sl_evitas": 0,
         }
         self._cargar()
@@ -36,6 +38,13 @@ class MetricasTracker:
             self.data["filtradas_persistencia"] += 1
         elif tipo == "umbral":
             self.data["filtradas_umbral"] += 1
+        elif tipo == "diversidad":
+            self.data["filtradas_diversidad"] += 1
+        self._guardar()
+
+    def registrar_diferencia_umbral(self, diferencia: float) -> None:
+        self.data.setdefault("diferencias_umbral", [])
+        self.data["diferencias_umbral"].append(round(float(diferencia), 4))
         self._guardar()
 
     def registrar_sl_evitado(self) -> None:
@@ -46,6 +55,8 @@ class MetricasTracker:
         self.data = {
             "filtradas_persistencia": 0,
             "filtradas_umbral": 0,
+            "filtradas_diversidad": 0,
+            "diferencias_umbral": [],
             "sl_evitas": 0,
         }
         self._guardar()
