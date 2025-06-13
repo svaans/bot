@@ -120,7 +120,13 @@ def actualizar_pesos_dinamicos(symbol: str, historial: list, factor_ajuste=0.05)
         if isinstance(estrategias, str):
             estrategias = json.loads(estrategias.replace("'", "\""))
         if estrategias:
-            umbral = calcular_umbral_adaptativo(symbol, df_fake, estrategias, nuevos_pesos)
+            umbral = calcular_umbral_adaptativo(
+                symbol,
+                df_fake,
+                estrategias,
+                nuevos_pesos,
+                persistencia=0.0,
+            )
             print(f"📈 Umbral estimado para {symbol}: {umbral:.2f}")
 
             config_actual = cargar_configuracion_simbolo(symbol) or {}
