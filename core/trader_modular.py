@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from typing import Dict, List
 from datetime import datetime
 from datetime import datetime, timedelta
+import json
 import os
 import numpy as np
 
@@ -184,7 +185,12 @@ class Trader:
         log.info(f"✅ Orden cerrada: {symbol} a {precio:.2f}€ por '{motivo}'")
 
     async def _cerrar_y_reportar(
-        self, orden, precio: float, motivo: str, tendencia: str | None = None
+        self,
+        orden,
+        precio: float,
+        motivo: str,
+        tendencia: str | None = None,
+        df: pd.DataFrame | None = None,
     ) -> None:
         """Cierra ``orden`` y registra la operación para el reporte diario."""
         retorno_total = (
@@ -249,12 +255,47 @@ class Trader:
                 "beneficio": ganancia,
             },
         )
+        self._registrar_salida_profesional(
+            orden.symbol,
+            {
+                "tipo_salida": motivo,
+                "estrategias_activas": orden.estrategias_activas,
+                "score_tecnico_al_cierre": self._calcular_score_tecnico(df, calcular_rsi(df), calcular_momentum(df), tendencia or "", orden.direccion)[0] if df is not None else 0.0,
+                "capital_final": capital_final,
+                "configuracion_usada": self.config_por_simbolo.get(orden.symbol, {}),
+                "tiempo_operacion": duracion,
+                "beneficio_relativo": retorno_total,
+            },
+        )
         metricas = self._metricas_recientes()
         self.risk.ajustar_umbral(metricas)
         return True
     
+    def _registrar_salida_profesional(self, symbol: str, info: dict) -> None:
+        archivo = "reportes_diarios/registro_salidas.parquet"
+        os.makedirs(os.path.dirname(archivo), exist_ok=True)
+        data = info.copy()
+        data["symbol"] = symbol
+        data["timestamp"] = datetime.utcnow().isoformat()
+        if isinstance(data.get("estrategias_activas"), dict):
+            data["estrategias_activas"] = json.dumps(data["estrategias_activas"])
+        try:
+            if os.path.exists(archivo):
+                df = pd.read_parquet(archivo)
+                df = pd.concat([df, pd.DataFrame([data])], ignore_index=True)
+            else:
+                df = pd.DataFrame([data])
+            df.to_parquet(archivo, index=False)
+        except Exception as e:
+            log.warning(f"⚠️ Error registrando salida en {archivo}: {e}")
+    
     async def _cerrar_parcial_y_reportar(
-        self, orden, cantidad: float, precio: float, motivo: str
+        self,
+        orden,
+        cantidad: float,
+        precio: float,
+        motivo: str,
+        df: pd.DataFrame | None = None,
     ) -> bool:
         """Cierre parcial de ``orden`` y registro en el reporte."""
         if not await self.orders.cerrar_parcial_async(orden.symbol, cantidad, precio, motivo):
@@ -299,12 +340,31 @@ class Trader:
                 "beneficio": ganancia,
             },
         )
+        self._registrar_salida_profesional(
+            orden.symbol,
+            {
+                "tipo_salida": "parcial",
+                "estrategias_activas": orden.estrategias_activas,
+                "score_tecnico_al_cierre": self._calcular_score_tecnico(df, calcular_rsi(df), calcular_momentum(df), orden.tendencia, orden.direccion)[0] if df is not None else 0.0,
+                "capital_final": capital_final,
+                "configuracion_usada": self.config_por_simbolo.get(orden.symbol, {}),
+                "tiempo_operacion": 0.0,
+                "beneficio_relativo": retorno_total,
+            },
+        )
         return True
     
     def es_salida_parcial_valida(
-        self, orden, precio_tp: float, minimo_retorno: float = 5.0, min_inversion: float = 30.0
+        self,
+        orden,
+        precio_tp: float,
+        config: dict,
+        df: pd.DataFrame,
     ) -> bool:
         """Determina si aplicar TP parcial tiene sentido económico."""
+
+        if not config.get("usar_cierre_parcial", False):
+            return False
         try:
             inversion = (orden.precio_entrada or 0.0) * (orden.cantidad or 0.0)
             retorno_potencial = (precio_tp - (orden.precio_entrada or 0.0)) * (
@@ -313,7 +373,18 @@ class Trader:
         except Exception:
             return False
 
-        return inversion > min_inversion and retorno_potencial > minimo_retorno
+        if inversion <= config.get("umbral_operacion_grande", 30.0):
+            return False
+        if retorno_potencial <= config.get("beneficio_minimo_parcial", 5.0):
+            return False
+
+        pesos_symbol = self.pesos_por_simbolo.get(orden.symbol, {})
+        if not verificar_filtro_tecnico(
+            orden.symbol, df, orden.estrategias_activas, pesos_symbol
+        ):
+            return False
+
+        return True
 
     @property
     def ordenes_abiertas(self):
@@ -929,11 +1000,25 @@ class Trader:
 
         # --- Stop Loss con validación ---
         if precio_min <= orden.stop_loss:
+            rsi = calcular_rsi(df)
+            momentum = calcular_momentum(df)
+            score, _ = self._calcular_score_tecnico(
+                df,
+                rsi,
+                momentum,
+                detectar_tendencia(symbol, df)[0],
+                orden.direccion,
+            )
+            if score >= 3.5:
+                log.info(
+                    f"🛡️ SL evitado por validación técnica — Score: {score:.1f}/5, RSI fuerte, Momentum alcista"
+                )
+                return
             resultado = verificar_salida_stoploss(
                 orden.to_dict(), df, config=config_actual
             )
             if resultado.get("cerrar", False):
-                await self._cerrar_y_reportar(orden, orden.stop_loss, "Stop Loss")
+                await self._cerrar_y_reportar(orden, orden.stop_loss, "Stop Loss", df=df)
             else:
                 if resultado.get("evitado", False):
                     log.debug("SL evitado correctamente, no se notificará por Telegram")
@@ -951,22 +1036,28 @@ class Trader:
                 not getattr(orden, "parcial_cerrado", False)
                 and orden.cantidad_abierta > 0
             ):
-                if self.es_salida_parcial_valida(orden, orden.take_profit):
+                if self.es_salida_parcial_valida(
+                    orden,
+                    orden.take_profit,
+                    config_actual,
+                    df,
+                ):
                     cantidad_parcial = orden.cantidad_abierta * 0.5
                     if await self._cerrar_parcial_y_reportar(
                         orden,
                         cantidad_parcial,
                         orden.take_profit,
                         "Take Profit parcial",
+                        df=df,
                     ):
                         orden.parcial_cerrado = True
                         log.info(
                             "💰 TP parcial alcanzado, se mantiene posición con trailing."
                         )
                 else:
-                    await self._cerrar_y_reportar(orden, orden.take_profit, "Take Profit")
+                    await self._cerrar_y_reportar(orden, orden.take_profit, "Take Profit", df=df)
             elif orden.cantidad_abierta > 0:
-                await self._cerrar_y_reportar(orden, orden.take_profit, "Take Profit")
+                await self._cerrar_y_reportar(orden, orden.take_profit, "Take Profit", df=df)
             return
         
 
@@ -987,7 +1078,7 @@ class Trader:
             log.warning(f"⚠️ Error en trailing stop para {symbol}: {e}")
             cerrar, motivo = False, ""
         if cerrar:
-            if await self._cerrar_y_reportar(orden, precio_cierre, motivo):
+            if await self._cerrar_y_reportar(orden, precio_cierre, motivo, df=df):
                log.info(
                     f"🔄 Trailing Stop activado para {symbol} a {precio_cierre:.2f}€"
                 )
@@ -1005,6 +1096,7 @@ class Trader:
                     precio_cierre,
                     "Cambio de tendencia",
                     tendencia=nueva_tendencia,
+                    df=df,
                 ):
                     log.info(
                         f"🔄 Cambio de tendencia detectado para {symbol}. Cierre recomendado."
@@ -1036,7 +1128,7 @@ class Trader:
                     f"❌ Cierre por '{razon}' evitado: condiciones técnicas aún válidas."
                 )
                 return
-            await self._cerrar_y_reportar(orden, precio_cierre, f"Estrategia: {razon}")
+            await self._cerrar_y_reportar(orden, precio_cierre, f"Estrategia: {razon}", df=df)
 
     async def evaluar_condiciones_de_entrada(
         self, symbol: str, df: pd.DataFrame, estado: EstadoSimbolo

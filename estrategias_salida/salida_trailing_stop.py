@@ -80,24 +80,42 @@ def verificar_trailing_stop(
     """
     entrada = info["precio_entrada"]
     max_price = info.get("max_price", entrada)
-    if precio_actual > max_price:
-        info["max_price"] = precio_actual  # Actualiza el máximo
+    
 
-    # ---- Configuración personalizada o por defecto ----
+    buffer_pct = config.get("trailing_buffer", 0.0) if config else 0.0
+    if precio_actual > max_price * (1 + buffer_pct):
+        info["max_price"] = precio_actual
+        max_price = precio_actual
     trailing_start_ratio = config.get("trailing_start_ratio", 1.015) if config else 1.015
     atr_mult = config.get("atr_multiplicador", 1.0) if config else 1.0
+    usar_atr = config.get("trailing_por_atr", False) if config else False
 
     atr = calcular_atr(df) if df is not None else None
     if atr is None:
         return False, "ATR no disponible"
 
-    trailing_trigger = entrada * trailing_start_ratio  # Solo activa trailing si sube al menos un X%
+    trailing_trigger = entrada * trailing_start_ratio
     if max_price >= trailing_trigger:
-        trailing_stop = max_price - atr * atr_mult  # Nivel de caída para cerrar
-        if precio_actual <= trailing_stop:
-            return True, f"Trailing Stop activado — Máximo: {max_price:.2f}, Límite: {trailing_stop:.2f}, Precio actual: {precio_actual:.2f}"
+        if usar_atr:
+            trailing_stop = max_price - atr * atr_mult
         else:
-            # Trailing activo pero aún no toca el nivel de salida
-            return False, f"Trailing supervisando — Máx {max_price:.2f}, Límite {trailing_stop:.2f}"
+            distancia_ratio = config.get("trailing_distance_ratio", 0.02) if config else 0.02
+            trailing_stop = max_price * (1 - distancia_ratio)
+
+        if config.get("uso_trailing_technico", False) and df is not None and len(df) >= 5:
+            soporte = df["low"].rolling(window=5).min().iloc[-1]
+            resistencia = df["high"].rolling(window=5).max().iloc[-1]
+            if info.get("direccion", "long") in ("long", "compra"):
+                trailing_stop = max(trailing_stop, soporte)
+            else:
+                trailing_stop = min(trailing_stop, resistencia)
+
+        if info.get("direccion", "long") in ("long", "compra"):
+            if precio_actual <= trailing_stop:
+                return True, f"Trailing Stop activado — Máximo: {max_price:.2f}, Límite: {trailing_stop:.2f}, Precio actual: {precio_actual:.2f}"
+        else:
+            if precio_actual >= trailing_stop:
+                return True, f"Trailing Stop activado — Mínimo: {max_price:.2f}, Límite: {trailing_stop:.2f}, Precio actual: {precio_actual:.2f}"
+        return False, f"Trailing supervisando — Máx {max_price:.2f}, Límite {trailing_stop:.2f}"
 
     return False, ""

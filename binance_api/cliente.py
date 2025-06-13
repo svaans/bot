@@ -31,7 +31,7 @@ async def fetch_balance_async(cliente, *args, **kwargs):
     Obtiene el balance de forma asíncrona.
     Si no hay claves API (modo simulado), devuelve un balance ficticio.
     """
-    if not cliente.apiKey or not cliente.secret:
+    if not getattr(cliente, "apiKey", None) or not getattr(cliente, "secret", None):
         return {
             "total": {"EUR": 1000.0},
             "free": {"EUR": 1000.0}

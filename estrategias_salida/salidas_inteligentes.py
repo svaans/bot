@@ -31,14 +31,25 @@ PRIORIDAD = {
 }
 
 
-def verificar_take_profit(orden: Dict, df: pd.DataFrame) -> Dict:
-    """Comprueba si se alcanzó el TP definido en la orden."""
-    if "take_profit" not in orden or "close" not in df.columns:
-        return {"cerrar": False, "razon": "TP no definido"}
+def verificar_take_profit(orden: Dict, df: pd.DataFrame, config: Dict | None = None) -> Dict:
+    """Comprueba si se alcanzó el TP adaptado dinámicamente."""
+    if "close" not in df.columns:
+        return {"cerrar": False, "razon": "Datos insuficientes"}
 
     precio_actual = df["close"].iloc[-1]
     direccion = orden.get("direccion", "long")
-    tp = orden["take_profit"]
+    atr = None
+    if len(df) >= 20:
+        rango = df["high"].tail(20) - df["low"].tail(20)
+        atr = rango.mean()
+
+    ratio = config.get("tp_ratio", 2.5) if config else 2.5
+    if atr is not None:
+        tp_dinamico = orden.get("precio_entrada", precio_actual) + atr * ratio if direccion in ("long", "compra") else orden.get("precio_entrada", precio_actual) - atr * ratio
+    else:
+        tp_dinamico = orden.get("take_profit", precio_actual)
+
+    tp = orden.get("take_profit", tp_dinamico)
 
     if direccion in ("long", "compra") and precio_actual >= tp:
         return {"cerrar": True, "razon": "Take Profit"}
@@ -90,7 +101,7 @@ def evaluar_salida_inteligente(
     if res_time.get("cerrar"):
         resultados.append({"razon": "Tiempo máximo", "detalle": res_time["razon"]})
 
-    res_tp = verificar_take_profit(orden, df)
+    res_tp = verificar_take_profit(orden, df, config=config)
     if res_tp.get("cerrar"):
         resultados.append({"razon": "Take Profit", "detalle": res_tp["razon"]})
 
