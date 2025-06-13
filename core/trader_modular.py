@@ -717,6 +717,163 @@ class Trader:
                 return
             await self._cerrar_y_reportar(orden, precio_cierre, f"Estrategia: {razon}")
 
+    async def evaluar_condiciones_de_entrada(
+        self, symbol: str, df: pd.DataFrame, estado: EstadoSimbolo
+    ) -> dict | None:
+        """Evalúa todas las condiciones de entrada y devuelve info de la operación."""
+        config_actual = configurar_parametros_dinamicos(
+            symbol, df, self.config_por_simbolo.get(symbol, {})
+        )
+        self.config_por_simbolo[symbol] = config_actual
+        
+        regimen = estado.regimen or detectar_regimen(df)
+        evaluacion = self.engine.evaluar_entrada(symbol, df, regimen)
+        estrategias = evaluacion.get("estrategias_activas", {})
+        estado.buffer[-1]["estrategias_activas"] = estrategias
+        self.persistencia.actualizar(symbol, estrategias)
+
+        if len(estado.buffer) < 30:
+            log.debug(f"\U0001f4c9 [{symbol}] Buffer insuficiente ({len(estado.buffer)} velas)")
+            return None
+
+        tendencia_actual, _ = detectar_tendencia(symbol, df)
+        
+        pesos_symbol = self.pesos_por_simbolo.get(symbol, {})
+        umbral = calcular_umbral_adaptativo(symbol, df, estrategias, pesos_symbol)
+        estrategias_persistentes = {
+            e: True
+            for e, act in estrategias.items()
+            if act and self.persistencia.es_persistente(symbol, e)
+        }
+        if not estrategias_persistentes:
+            return None
+        
+        direccion = "short" if tendencia_actual == "bajista" else "long"
+        estrategias_persistentes, incoherentes = filtrar_por_direccion(
+            estrategias_persistentes, direccion
+        )
+        if not estrategias_persistentes:
+            return None
+
+        penalizacion = 0.05 * (len(incoherentes) ** 2) if incoherentes else 0.
+
+        puntaje = sum(pesos_symbol.get(k, 0) for k in estrategias_persistentes)
+        puntaje += self.persistencia.peso_extra * len(estrategias_persistentes)
+        puntaje -= penalizacion
+        estado.ultimo_umbral = umbral
+        
+        cierre = self.historial_cierres.get(symbol)
+        if cierre and cierre.get("motivo") == "stop loss":
+            cooldown_velas = int(config_actual.get("cooldown_tras_perdida", 5))
+            velas = cierre.get("velas", 0)
+            if velas < cooldown_velas:
+                cierre["velas"] = velas + 1
+                restante = cooldown_velas - velas
+                log.info(f"🕒 Cooldown activo para {symbol}. Quedan {restante} velas")
+                return None
+            else:
+                self.historial_cierres.pop(symbol, None)
+
+        cierre = self.historial_cierres.get(symbol)
+        if cierre and cierre.get("motivo") == "cambio de tendencia":
+            precio_actual = float(df["close"].iloc[-1])
+            if not self._validar_reentrada_tendencia(symbol, df, cierre, precio_actual):
+                cierre["velas"] = cierre.get("velas", 0) + 1
+                return None
+            else:
+                self.historial_cierres.pop(symbol, None)
+
+        estrategias_activas = list(estrategias_persistentes.keys())
+        peso_total = sum(pesos_symbol.get(k, 0) for k in estrategias_activas)
+        diversidad = len(estrategias_activas)
+        peso_min_total = config_actual.get("peso_minimo_total", 0.5)
+        diversidad_min = config_actual.get("diversidad_minima", 2)
+        persistencia = coincidencia_parcial(estado.buffer, pesos_symbol, ventanas=5)
+        log.info(
+            f"Puntaje: {puntaje:.2f}, Umbral: {umbral:.2f}, Peso total: {peso_total:.2f}, Persistencia: {persistencia:.2f}"
+        )
+
+        if not self._validar_puntaje(symbol, puntaje, umbral):
+            return None
+
+        if not await self._validar_diversidad(
+            symbol, peso_total, peso_min_total, diversidad, diversidad_min
+        ):
+            return None
+
+        if not self._validar_estrategia(symbol, df, estrategias):
+            return None
+
+        # Comprueba persistencia y fuerza de las señales
+        if not self._evaluar_persistencia(
+            symbol, estado, df, pesos_symbol, tendencia_actual, puntaje, umbral
+        ):
+            return None
+        
+        rsi = calcular_rsi(df)
+        momentum = calcular_momentum(df)
+        slope = calcular_slope(df)
+
+        if not entrada_permitida(
+            symbol,
+            puntaje,
+            umbral,
+            estrategias_persistentes,
+            rsi,
+            slope,
+            momentum,
+            df,
+            direccion,
+        ):
+            return None
+
+        log.info(
+            f"✅ Entrada confirmada en {symbol}. Puntaje {puntaje:.2f}, Peso {peso_total:.2f}, Diversidad {diversidad}, Persistentes {len(estrategias_persistentes)}, Tendencia {tendencia_actual}, Dirección {direccion}"
+        )
+
+        balance = await fetch_balance_async(self.cliente)
+        capital_total = balance["total"].get("EUR", 0)
+        # Verifica el límite de riesgo diario antes de abrir una nueva orden
+        if self.risk.riesgo_superado(capital_total):
+            log.warning(f"🚫 Riesgo diario superado para {symbol}")
+            return None
+
+        capital_symbol = self.capital_por_simbolo.get(symbol, 0)
+        sl, tp = calcular_tp_sl_adaptativos(
+            df,
+            float(df["close"].iloc[-1]),
+            {**config_actual, "modo_capital_bajo": self.modo_capital_bajo},
+            capital_symbol,
+        )
+        precio = float(df["close"].iloc[-1])
+
+        tp = validar_tp(tp, precio)
+        if not distancia_minima_valida(precio, sl, tp):
+            log.warning(
+                f"📏 Distancia SL/TP insuficiente para {symbol}. SL: {sl:.2f} TP: {tp:.2f}"
+            )
+            return None
+        if not margen_tp_sl_valido(tp, sl, precio):
+            log.warning(
+                f"📏 Margen TP/SL inválido para {symbol}. SL: {sl:.2f} TP: {tp:.2f}"
+            )
+            return None
+
+        ratio_min = config_actual.get("ratio_minimo_beneficio", 1.2)
+        if not validar_ratio_beneficio(precio, sl, tp, ratio_min):
+            log.warning(f"⚖️ Ratio riesgo/beneficio insuficiente para {symbol}")
+            return None
+
+        return {
+            "symbol": symbol,
+            "precio": precio,
+            "sl": sl,
+            "tp": tp,
+            "estrategias": estrategias_persistentes,
+            "tendencia": tendencia_actual,
+            "direccion": direccion,
+        }
+
     async def ejecutar(self) -> None:
         """Inicia el procesamiento de todos los símbolos."""
         async def handle(candle: dict) -> None:
@@ -734,181 +891,25 @@ class Trader:
         if datetime.utcnow().date() != self.fecha_actual:
             self.ajustar_capital_diario()
 
-        # Mantiene un buffer de velas reciente por símbolo
         estado.buffer.append(vela)
         if len(estado.buffer) > 30:
             estado.buffer = estado.buffer[-30:]
         if vela.get("timestamp") == estado.ultimo_timestamp:
             return
+        
         estado.ultimo_timestamp = vela.get("timestamp")
         log.info(f"Procesando vela {symbol} | Precio: {vela.get('close')}")
-        
 
         df = pd.DataFrame(estado.buffer)
-        regimen = detectar_regimen(df)
-        estado.regimen = regimen
-        config_actual = configurar_parametros_dinamicos(
-            symbol, df, self.config_por_simbolo.get(symbol, {})
-        )
-        self.config_por_simbolo[symbol] = config_actual
-        
-        evaluacion = self.engine.evaluar_entrada(symbol, df, regimen)
-        estrategias = evaluacion.get("estrategias_activas", {})
-        estado.buffer[-1]["estrategias_activas"] = estrategias
-        self.persistencia.actualizar(symbol, estrategias)
+        estado.regimen = detectar_regimen(df)
 
-        if len(estado.buffer) < 30:
-            log.debug(
-                f"\U0001f4c9 [{symbol}] Buffer insuficiente ({len(estado.buffer)} velas)"
-            )
-            return
-
-        tendencia_actual, _ = detectar_tendencia(symbol, df)
         if self.orders.obtener(symbol):
             await self._verificar_salidas(symbol, df)
             return
 
-        
-        pesos_symbol = self.pesos_por_simbolo.get(symbol, {})
-        umbral = calcular_umbral_adaptativo(symbol, df, estrategias, pesos_symbol)
-        estrategias_persistentes = {
-            e: True
-            for e, act in estrategias.items()
-            if act and self.persistencia.es_persistente(symbol, e)
-        }
-        if not estrategias_persistentes:
-            return
-        
-        direccion = "short" if tendencia_actual == "bajista" else "long"
-        estrategias_persistentes, incoherentes = filtrar_por_direccion(
-            estrategias_persistentes, direccion
-        )
-        if not estrategias_persistentes:
-            return
-
-        penalizacion = 0.0
-        if incoherentes:
-            penalizacion = 0.1 * len(incoherentes)
-
-        puntaje = sum(pesos_symbol.get(k, 0) for k in estrategias_persistentes)
-        puntaje += self.persistencia.peso_extra * len(estrategias_persistentes)
-        puntaje -= penalizacion
-        estado.ultimo_umbral = umbral
-        
-        # Respeta un número de velas tras un Stop Loss
-        cierre = self.historial_cierres.get(symbol)
-        if cierre and cierre.get("motivo") == "stop loss":
-            cooldown_velas = int(config_actual.get("cooldown_tras_perdida", 5))
-            velas = cierre.get("velas", 0)
-            if velas < cooldown_velas:
-                cierre["velas"] = velas + 1
-                restante = cooldown_velas - velas
-                log.info(f"🕒 Cooldown activo para {symbol}. Quedan {restante} velas")
-                return
-            else:
-                self.historial_cierres.pop(symbol, None)
-
-        # Validación de reentrada tras cambio de tendencia
-        cierre = self.historial_cierres.get(symbol)
-        if cierre and cierre.get("motivo") == "cambio de tendencia":
-            precio_actual = float(df["close"].iloc[-1])
-            if not self._validar_reentrada_tendencia(symbol, df, cierre, precio_actual):
-                cierre["velas"] = cierre.get("velas", 0) + 1
-                return
-            else:
-                self.historial_cierres.pop(symbol, None)
-
-        estrategias_activas = list(estrategias_persistentes.keys())
-        peso_total = sum(pesos_symbol.get(k, 0) for k in estrategias_activas)
-        diversidad = len(estrategias_activas)
-        peso_min_total = config_actual.get("peso_minimo_total", 0.5)
-        diversidad_min = config_actual.get("diversidad_minima", 2)
-        persistencia = coincidencia_parcial(estado.buffer, pesos_symbol, ventanas=5)
-        log.info(
-            f"Puntaje: {puntaje:.2f}, Umbral: {umbral:.2f}, Peso total: {peso_total:.2f}, Persistencia: {persistencia:.2f}"
-        )
-
-
-        if not self._validar_puntaje(symbol, puntaje, umbral):
-            return
-
-        if not await self._validar_diversidad(
-            symbol, peso_total, peso_min_total, diversidad, diversidad_min
-        ):
-            return
-
-        if not self._validar_estrategia(symbol, df, estrategias):
-            return
-
-        # Comprueba persistencia y fuerza de las señales
-        if not self._evaluar_persistencia(
-            symbol, estado, df, pesos_symbol, tendencia_actual, puntaje, umbral
-        ):
-            return
-        
-        rsi = calcular_rsi(df)
-        momentum = calcular_momentum(df)
-        slope = calcular_slope(df)
-
-        if not entrada_permitida(
-            symbol,
-            puntaje,
-            umbral,
-            estrategias_persistentes,
-            rsi,
-            slope,
-            momentum,
-            df,
-            direccion,
-        ):
-            return
-
-        log.info(
-            f"✅ Entrada confirmada en {symbol}. Puntaje {puntaje:.2f}, Peso {peso_total:.2f}, Diversidad {diversidad}, Persistentes {len(estrategias_persistentes)}, Tendencia {tendencia_actual}, Dirección {direccion}"
-        )
-
-        balance = await fetch_balance_async(self.cliente)
-        capital_total = balance["total"].get("EUR", 0)
-        # Verifica el límite de riesgo diario antes de abrir una nueva orden
-        if self.risk.riesgo_superado(capital_total):
-            log.warning(f"🚫 Riesgo diario superado para {symbol}")
-            return
-
-        capital_symbol = self.capital_por_simbolo.get(symbol, 0)
-        sl, tp = calcular_tp_sl_adaptativos(
-            df,
-            float(vela["close"]),
-            {**config_actual, "modo_capital_bajo": self.modo_capital_bajo},
-            capital_symbol,
-        )
-        precio = float(vela["close"])
-
-        tp = validar_tp(tp, precio)
-        if not distancia_minima_valida(precio, sl, tp):
-            log.warning(
-                f"📏 Distancia SL/TP insuficiente para {symbol}. SL: {sl:.2f} TP: {tp:.2f}"
-            )
-            return
-        if not margen_tp_sl_valido(tp, sl, precio):
-            log.warning(
-                f"📏 Margen TP/SL inválido para {symbol}. SL: {sl:.2f} TP: {tp:.2f}"
-            )
-            return
-
-        ratio_min = config_actual.get("ratio_minimo_beneficio", 1.2)
-        if not validar_ratio_beneficio(precio, sl, tp, ratio_min):
-            log.warning(f"⚖️ Ratio riesgo/beneficio insuficiente para {symbol}")
-            return
-        
-        await self._abrir_operacion_real(
-            symbol,
-            precio,
-            sl,
-            tp,
-            estrategias_persistentes,
-            tendencia_actual,
-            direccion,
-        )
+        info = await self.evaluar_condiciones_de_entrada(symbol, df, estado)
+        if info:
+            await self._abrir_operacion_real(**info)
         return
 
     async def cerrar(self) -> None:
