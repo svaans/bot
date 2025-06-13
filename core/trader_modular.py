@@ -90,6 +90,11 @@ class Trader:
             config.peso_extra_persistencia,
         )
         os.makedirs("logs/rechazos", exist_ok=True)
+        os.makedirs(os.path.dirname(config.registro_tecnico_csv), exist_ok=True)
+        self.umbral_score_tecnico = config.umbral_score_tecnico
+        self.usar_score_tecnico = config.usar_score_tecnico
+        self.contradicciones_bloquean_entrada = config.contradicciones_bloquean_entrada
+        self.registro_tecnico_csv = config.registro_tecnico_csv
         self.fraccion_kelly = calcular_fraccion_kelly()
         factor_kelly = self.risk.multiplicador_kelly()
         self.fraccion_kelly *= factor_kelly
@@ -744,6 +749,128 @@ class Trader:
             return False
 
         return True
+    
+    def _calcular_score_tecnico(
+        self,
+        df: pd.DataFrame,
+        rsi: float | None,
+        momentum: float | None,
+        tendencia: str,
+        direccion: str,
+    ) -> tuple[float, dict]:
+        """Evalúa indicadores técnicos y suma un punto por cada criterio cumplido."""
+
+        slope_corto = calcular_slope(df, periodo=5)
+        slope_largo = calcular_slope(df, periodo=10)
+
+        puntos = {
+            "RSI": 0,
+            "Momentum": 0,
+            "Slope": 0,
+            "Tendencia": 0,
+        }
+
+        if rsi is not None:
+            if direccion == "long" and rsi < 30:
+                puntos["RSI"] = 1
+            elif direccion == "short" and rsi > 70:
+                puntos["RSI"] = 1
+
+        if momentum is not None:
+            if direccion == "long" and momentum > 0.5:
+                puntos["Momentum"] = 1
+            elif direccion == "short" and momentum < -0.5:
+                puntos["Momentum"] = 1
+
+        if direccion == "long" and slope_corto > 0 and slope_corto > slope_largo:
+            puntos["Slope"] = 1
+        elif direccion == "short" and slope_corto < 0 and slope_corto < slope_largo:
+            puntos["Slope"] = 1
+
+        if (direccion == "long" and tendencia == "alcista") or (
+            direccion == "short" and tendencia == "bajista"
+        ):
+            puntos["Tendencia"] = 1
+
+        score_total = sum(puntos.values())
+        return float(score_total), puntos
+
+    def _hay_contradicciones(
+        self,
+        df: pd.DataFrame,
+        rsi: float | None,
+        momentum: float | None,
+        direccion: str,
+        score: float,
+    ) -> bool:
+        """Detecta si existen contradicciones fuertes en las señales."""
+
+        if direccion == "long":
+            if rsi is not None and rsi > 70:
+                return True
+            if df["close"].iloc[-1] >= df["close"].iloc[-10] * 1.05:
+                return True
+            if momentum is not None and momentum < 0 and score >= self.umbral_score_tecnico:
+                return True
+        else:
+            if rsi is not None and rsi < 30:
+                return True
+            if df["close"].iloc[-1] <= df["close"].iloc[-10] * 0.95:
+                return True
+            if momentum is not None and momentum > 0 and score >= self.umbral_score_tecnico:
+                return True
+        return False
+
+    def _validar_temporalidad(self, df: pd.DataFrame, direccion: str) -> bool:
+        """Verifica que las señales no estén perdiendo fuerza."""
+
+        rsi_series = calcular_rsi(df, serie_completa=True)
+        if rsi_series is None or len(rsi_series) < 3:
+            return True
+        r = rsi_series.iloc[-3:]
+        if direccion == "long" and not (r.iloc[-1] < r.iloc[-2] < r.iloc[-3]):
+            return False
+        if direccion == "short" and not (r.iloc[-1] > r.iloc[-2] > r.iloc[-3]):
+            return False
+
+        slope3 = calcular_slope(df, periodo=3)
+        slope5 = calcular_slope(df, periodo=5)
+        if direccion == "long" and not (slope3 > slope5):
+            return False
+        if direccion == "short" and not (slope3 < slope5):
+            return False
+        return True
+
+    def _registrar_rechazo_tecnico(
+        self,
+        symbol: str,
+        score: float,
+        puntos: dict,
+        tendencia: str,
+        precio: float,
+        motivo: str,
+    ) -> None:
+        """Guarda detalles de rechazos técnicos en un CSV."""
+
+        if not self.registro_tecnico_csv:
+            return
+        fila = {
+            "timestamp": datetime.utcnow().isoformat(),
+            "symbol": symbol,
+            "puntaje_total": score,
+            "indicadores_fallidos": ",".join([k for k, v in puntos.items() if not v]),
+            "estado_mercado": tendencia,
+            "precio": precio,
+            "motivo": motivo,
+        }
+        df = pd.DataFrame([fila])
+        modo = "a" if os.path.exists(self.registro_tecnico_csv) else "w"
+        df.to_csv(
+            self.registro_tecnico_csv,
+            mode=modo,
+            header=not os.path.exists(self.registro_tecnico_csv),
+            index=False,
+        )
 
     async def _abrir_operacion_real(
         self,
@@ -1013,6 +1140,44 @@ class Trader:
         rsi = calcular_rsi(df)
         momentum = calcular_momentum(df)
         slope = calcular_slope(df)
+
+        if self.usar_score_tecnico:
+            score_tecnico, puntos = self._calcular_score_tecnico(
+                df, rsi, momentum, tendencia_actual, direccion
+            )
+            log.info(
+                "📊 Score técnico: %s/4 | RSI: %s (%.2f), Momentum: %s (%.2f), Slope: %s (%.4f), Tendencia: %s",
+                score_tecnico,
+                "✅" if puntos["RSI"] else "❌",
+                rsi or 0,
+                "✅" if puntos["Momentum"] else "❌",
+                momentum or 0,
+                "✅" if puntos["Slope"] else "❌",
+                slope,
+                "✅" if puntos["Tendencia"] else "❌",
+            )
+            if score_tecnico < self.umbral_score_tecnico:
+                log.info(
+                    f"❌ Entrada denegada por score técnico insuficiente: {score_tecnico} < {self.umbral_score_tecnico}"
+                )
+                self._registrar_rechazo_tecnico(
+                    symbol, score_tecnico, puntos, tendencia_actual, float(df["close"].iloc[-1]), "score"
+                )
+                return None
+            if self._hay_contradicciones(df, rsi, momentum, direccion, score_tecnico) and self.contradicciones_bloquean_entrada:
+                log.info(
+                    "⚠️ Contradicción técnica: score alto pero Momentum/Rango contradice la entrada"
+                )
+                self._registrar_rechazo_tecnico(
+                    symbol, score_tecnico, puntos, tendencia_actual, float(df["close"].iloc[-1]), "contradiccion"
+                )
+                return None
+            if not self._validar_temporalidad(df, direccion):
+                log.info("❌ Entrada denegada por señal tardía")
+                self._registrar_rechazo_tecnico(
+                    symbol, score_tecnico, puntos, tendencia_actual, float(df["close"].iloc[-1]), "senal_tardia"
+                )
+                return None
 
         if not entrada_permitida(
             symbol,

@@ -23,6 +23,10 @@ class Config:
     modo_capital_bajo: bool = False
     telegram_token: str | None = None
     telegram_chat_id: str | None = None
+    umbral_score_tecnico: float = 3.0
+    usar_score_tecnico: bool = True
+    contradicciones_bloquean_entrada: bool = True
+    registro_tecnico_csv: str = "logs/rechazos_tecnico.csv"
 
 
 class ConfigManager:
@@ -66,4 +70,8 @@ class ConfigManager:
             modo_capital_bajo=os.getenv("MODO_CAPITAL_BAJO", "False").lower() == "true",
             telegram_token=os.getenv("TELEGRAM_TOKEN"),
             telegram_chat_id=os.getenv("TELEGRAM_CHAT_ID"),
+            umbral_score_tecnico=float(os.getenv("UMBRAL_SCORE_TECNICO", 3)),
+            usar_score_tecnico=os.getenv("USAR_SCORE_TECNICO", "True").lower() == "true",
+            contradicciones_bloquean_entrada=os.getenv("CONTRADICCIONES_BLOQUEAN_ENTRADA", "True").lower() == "true",
+            registro_tecnico_csv=os.getenv("REGISTRO_TECNICO_CSV", "logs/rechazos_tecnico.csv"),
         )
