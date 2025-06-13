@@ -234,18 +234,25 @@ class Trader:
         penalizacion_corr: float = 0.2,
         umbral_corr: float = 0.8,
     ) -> None:
-        """Redistribuye el capital según rendimiento y correlación entre símbolos."""
+        """Redistribuye el capital según múltiples métricas adaptativas."""
         total = sum(self.capital_por_simbolo.values())
-        pesos = {}
+        # Métricas generales de rendimiento (ganancia y drawdown recientes)
+        metricas_globales = self._metricas_recientes()
+
+        pesos: dict[str, float] = {}
+
+        # Conteo de señales válidas en las últimas 60 min por símbolo
         senales = {s: self._contar_senales(s) for s in self.capital_por_simbolo}
+        
         max_senales = max(senales.values()) if senales else 0
         correlaciones = self._calcular_correlaciones()
+        stats = getattr(reporter_diario, "estadisticas", pd.DataFrame())
         for symbol in self.capital_por_simbolo:
             inicio = self.capital_inicial_diario.get(
                 symbol, self.capital_por_simbolo[symbol]
             )
             final = self.capital_por_simbolo[symbol]
-            rendimiento = (final - inicio) / inicio if inicio else 0
+            rendimiento = (final - inicio) / inicio if inicio else 0.0
             peso = 1 + factor * rendimiento
             if max_senales > 0:
                 peso += 0.2 * senales[symbol] / max_senales
@@ -253,12 +260,44 @@ class Trader:
             # Penaliza símbolos altamente correlacionados
             corr_media = None
             if not correlaciones.empty and symbol in correlaciones.columns:
-                corr_series = (
-                    correlaciones[symbol].drop(labels=[symbol], errors="ignore").abs()
-                )
+                corr_series = correlaciones[symbol].drop(labels=[symbol], errors="ignore").abs()
                 corr_media = corr_series.mean()
-            if corr_media and corr_media >= umbral_corr:
-                peso *= 1 - penalizacion_corr * corr_media
+            if corr_media >= umbral_corr:
+                    peso *= 1 - penalizacion_corr * corr_media
+
+            # Extrae métricas previas del reporte para el símbolo actual
+            fila = (
+                stats[stats["symbol"] == symbol]
+                if (isinstance(stats, pd.DataFrame) and "symbol" in stats.columns)
+                else pd.DataFrame()
+            )
+            drawdown = 0.0
+            winrate = 0.0
+            ganancia = 0.0
+            if not fila.empty:
+                drawdown = float(fila["drawdown"].iloc[0])
+                operaciones = float(fila["operaciones"].iloc[0])
+                wins = float(fila["wins"].iloc[0])
+                ganancia = float(fila["retorno_acumulado"].iloc[0])
+                winrate = wins / operaciones if operaciones else 0.0
+
+            # 4️⃣ Penalización por drawdown acumulado negativo
+            if drawdown < 0:
+                peso *= 1 + drawdown
+
+            # 5️⃣ Refuerzo por buen desempeño (winrate alto y ganancias)
+            if winrate > 0.6 and ganancia > 0:
+                refuerzo = min((winrate - 0.6) * ganancia, 0.3)
+                peso *= 1 + refuerzo
+
+            # Ajuste global según las métricas recientes de todo el bot
+            if metricas_globales:
+                ganancia_global = metricas_globales.get("ganancia_semana", 0.0)
+                drawdown_global = metricas_globales.get("drawdown", 0.0)
+                ajuste_global = 1 + ganancia_global + drawdown_global
+                peso *= max(0.5, min(1.5, ajuste_global))
+
+            # Mantiene el peso final dentro del rango establecido
 
             peso = max(1 - limite, min(1 + limite, peso))
             pesos[symbol] = peso
