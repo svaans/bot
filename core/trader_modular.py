@@ -32,6 +32,7 @@ from core.pesos import cargar_pesos_estrategias
 from core.kelly import calcular_fraccion_kelly
 from core.persistencia_tecnica import PersistenciaTecnica, coincidencia_parcial
 from core.metricas_semanales import metricas_tracker
+from core.adaptador_persistencia import calcular_persistencia_minima
 from aprendizaje.entrenador_estrategias import actualizar_pesos_estrategias_symbol
 from core.logger import configurar_logger
 from core.monitor_estado_bot import monitorear_estado_periodicamente
@@ -736,15 +737,14 @@ class Trader:
         if np.isnan(media_close) or media_close == 0:
             log.debug(f"⚠️ {symbol}: Media de cierre inválida para persistencia")
             return False
-        volatilidad_actual = np.std(ventana_close) / media_close
 
         repetidas = coincidencia_parcial(estado.buffer, pesos_symbol, ventanas=5)
-        slope = calcular_slope(df)
-        minimo = self.persistencia.minimo
-        if tendencia_actual == "lateral":
-            minimo += 0.5
-        elif tendencia_actual == "alcista" and slope > 0.002:
-            minimo = max(minimo - 0.2, 0.5)
+        minimo = calcular_persistencia_minima(
+            symbol,
+            df,
+            tendencia_actual,
+            base_minimo=self.persistencia.minimo,
+        )
 
         log.info(
             f"Persistencia detectada {repetidas:.2f} | Mínimo requerido {minimo:.2f}"
