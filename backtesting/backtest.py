@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Backtesting usando el Trader modular sin side effects."""
+"""Backtesting usando el Trader modular con la lógica exacta del bot en producción."""
 
 import asyncio
 import logging
@@ -30,7 +30,7 @@ class DummyRisk:
 
 
 class BacktestTrader(Trader):
-    """Versión simplificada de ``Trader`` para backtesting."""
+    """Versión fiel de ``Trader`` para backtesting."""
 
     def __init__(self, config: Config) -> None:
         super().__init__(config)
@@ -45,7 +45,7 @@ class BacktestTrader(Trader):
         self.capital_por_simbolo = {s: capital_unit for s in config.symbols}
         self.capital_inicial_diario = self.capital_por_simbolo.copy()
 
-    async def _cerrar_y_reportar(self, orden, precio: float, motivo: str) -> None:
+    async def _cerrar_y_reportar(self, orden, precio: float, motivo: str, **kwargs) -> None:
         retorno_total = (
             (precio - orden.precio_entrada) / orden.precio_entrada
             if orden.precio_entrada
@@ -73,12 +73,6 @@ async def backtest_modular(
     fecha_inicio: datetime | None = None,
     fecha_fin: datetime | None = None,
 ) -> BacktestTrader:
-    """Ejecuta el backtesting utilizando el Trader modular.
-
-    Si ``fecha_inicio`` o ``fecha_fin`` se proporcionan, las velas se filtran
-    para cubrir únicamente ese rango temporal.
-    """
-
     config = Config(
         api_key="",
         api_secret="",
@@ -91,6 +85,7 @@ async def backtest_modular(
     )
 
     bot = BacktestTrader(config)
+    await bot._precargar_historico(velas=BUFFER_INICIAL)
 
     total_ticks: Dict[str, pd.DataFrame] = {}
     for s in bot.config.symbols:
@@ -125,6 +120,11 @@ async def backtest_modular(
                     "close": row["close"],
                     "volume": row["volume"],
                 }
+
+                fecha = pd.to_datetime(vela["timestamp"]).date()
+                if fecha != bot.fecha_actual:
+                    bot.ajustar_capital_diario()
+
                 tareas.append(bot._procesar_vela(vela))
             if tareas:
                 await asyncio.gather(*tareas)
