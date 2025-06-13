@@ -218,7 +218,17 @@ class TraderSimulado:
             )
 
             config_actual = self.config_por_simbolo.get(symbol, {})
-            umbral = calcular_umbral_adaptativo(symbol, df, estrategias_detectadas, pesos_symbol, config_actual)
+            repetidas = señales_repetidas(
+                self.buffer[symbol], pesos_symbol, tendencia, volatilidad, ventanas=3
+            )
+            umbral = calcular_umbral_adaptativo(
+                symbol,
+                df,
+                estrategias_detectadas,
+                pesos_symbol,
+                persistencia=repetidas,
+                config=config_actual,
+            )
             self.ultimo_umbral[symbol] = umbral
             self.ultimas_estrategias[symbol] = estrategias_detectadas
             self.ultima_tendencia[symbol] = tendencia
@@ -430,7 +440,14 @@ class TraderSimulado:
             estrategias_activas = evaluacion.get("estrategias_activas", {})
             puntaje = evaluacion.get("puntaje_total", 0)
             pesos_symbol = self.pesos_por_simbolo.get(symbol, {})
-            umbral = calcular_umbral_adaptativo(symbol, df, estrategias_activas, pesos_symbol, config=config_actual)
+            umbral = calcular_umbral_adaptativo(
+                symbol,
+                df,
+                estrategias_activas,
+                pesos_symbol,
+                persistencia=0.0,
+                config=config_actual,
+            )
 
             if not validar_necesidad_de_salida(df, orden.__dict__, estrategias_activas, puntaje=puntaje, umbral=umbral, config=config_actual):
                 log.warning(f"❌ [{symbol}] Cierre por '{razon}' evitado: condiciones técnicas aún válidas.")
