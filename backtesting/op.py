@@ -24,6 +24,9 @@ def cargar_historicos(symbols: Iterable[str], ruta: str = "datos") -> Dict[str, 
     datos = {}
     for s in symbols:
         archivo = f"{ruta}/{s.replace('/', '_').lower()}_1m.parquet"
+        if not os.path.isfile(archivo):
+            print(f"\u26a0\ufe0f Archivo no encontrado para {s}. Se omite.")
+            continue
         df = (
             pd.read_parquet(archivo)
             .dropna()
@@ -147,11 +150,13 @@ def guardar_resultados(configs: dict, pesos: dict, metricas: dict):
 
 if __name__ == "__main__":
     datos = cargar_historicos(SIMBOLOS)
+    if not datos:
+        raise SystemExit("No se encontraron datos de historicos para los simbolos especificados")
     estrategias = cargar_estrategias().keys()
     configuraciones, pesos_optimos, metricas_finales = {}, {}, {}
-    for symbol in SIMBOLOS:
+    for symbol, df in datos.items():
         print(f"\n🔍 Optimizando {symbol}...")
-        config, metricas, pesos = optimizar_symbol(symbol, datos[symbol], list(estrategias))
+        config, metricas, pesos = optimizar_symbol(symbol, df, list(estrategias))
         configuraciones[symbol] = config
         pesos_optimos[symbol] = {k: v for k, v in pesos.items() if k in estrategias}
         metricas_finales[symbol] = metricas
