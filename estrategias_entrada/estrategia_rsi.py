@@ -2,7 +2,6 @@ import pandas as pd
 from indicadores.rsi import calcular_rsi
 
 def estrategia_rsi(df: pd.DataFrame) -> dict:
-    print("✅ RSI cargado/reload OK")
     if len(df) < 15:
         return {"activo": False, "mensaje": "Insuficientes datos"}
 
