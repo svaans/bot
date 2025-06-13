@@ -14,6 +14,8 @@ class Orden:
     tendencia: str
     max_price: float
     direccion: str = "long"
+    cantidad_abierta: float = 0.0
+    parcial_cerrado: bool = False
     precio_cierre: Optional[float] = None
     fecha_cierre: Optional[str] = None
     motivo_cierre: Optional[str] = None
@@ -32,6 +34,11 @@ class Orden:
         tendencia = data.get("tendencia")
         if isinstance(tendencia, (list, tuple)):
             data["tendencia"] = tendencia[0] if tendencia else ""
+        
+        if "cantidad_abierta" not in data:
+            data["cantidad_abierta"] = data.get("cantidad", 0.0)
+        if "parcial_cerrado" not in data:
+            data["parcial_cerrado"] = False
 
         return Orden(**data)
 

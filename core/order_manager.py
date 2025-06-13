@@ -45,6 +45,7 @@ class OrderManager:
             symbol=symbol,
             precio_entrada=precio,
             cantidad=cantidad,
+            cantidad_abierta=cantidad,
             stop_loss=sl,
             take_profit=tp,
             estrategias_activas=estrategias,
@@ -164,6 +165,52 @@ class OrderManager:
             )
             self.notificador.enviar(mensaje)
         return True
+    
+    async def cerrar_parcial_async(
+        self, symbol: str, cantidad: float, precio: float, motivo: str
+    ) -> bool:
+        """Cierra parcialmente la orden indicada."""
+        orden = self.ordenes.get(symbol)
+        if not orden or orden.cantidad_abierta <= 0:
+            log.warning(
+                f"⚠️ Se intentó cierre parcial sin orden activa en {symbol}"
+            )
+            return False
+
+        cantidad = min(cantidad, orden.cantidad_abierta)
+
+        if self.modo_real:
+            try:
+                if cantidad > 0:
+                    await asyncio.to_thread(
+                        ordenes_reales.ejecutar_orden_market_sell, symbol, cantidad
+                    )
+            except Exception as e:
+                log.error(f"❌ No se pudo cerrar parcialmente la orden real para {symbol}: {e}")
+                if self.notificador:
+                    self.notificador.enviar(
+                        f"❌ Venta parcial fallida en {symbol}: {e}"
+                    )
+                return False
+
+        orden.cantidad_abierta -= cantidad
+        log.info(f"📤 Cierre parcial de {symbol}: {cantidad} @ {precio:.2f} | {motivo}")
+        if self.notificador:
+            mensaje = (
+                f"📤 Venta parcial {symbol}\n"
+                f"Cantidad: {cantidad}\n"
+                f"Precio: {precio:.2f}\n"
+                f"Motivo: {motivo}"
+            )
+            self.notificador.enviar(mensaje)
+
+        if orden.cantidad_abierta <= 0:
+            self.ordenes.pop(symbol, None)
+        return True
+
+    def cerrar_parcial(self, *args, **kwargs) -> bool:
+        """Versión síncrona de :meth:`cerrar_parcial_async`."""
+        return asyncio.run(self.cerrar_parcial_async(*args, **kwargs))
         
     def cerrar(self, *args, **kwargs) -> bool:
         """Versión síncrona de :meth:`cerrar_async`."""

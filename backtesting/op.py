@@ -1,4 +1,4 @@
-# optimizador_completo.py (sin aceleración, con estrategias y configuración)
+# op.py — Optimizador usando Trader modular real
 import asyncio
 import json
 import os
@@ -9,10 +9,10 @@ import numpy as np
 import optuna
 import pandas as pd
 
-from backtesting.backtest import BacktestTrader
 from core.config_manager import Config
 from core.pesos import gestor_pesos
 from estrategias_entrada.loader import cargar_estrategias
+from core.trader_modular import Trader
 
 BUFFER_INICIAL = 30
 N_TRIALS = 60
@@ -34,7 +34,7 @@ def cargar_historicos(symbols: Iterable[str], ruta: str = "datos") -> Dict[str, 
     return datos
 
 
-async def simular(df: pd.DataFrame, symbol: str, config_symbol: dict, pesos: dict) -> BacktestTrader:
+async def simular(df: pd.DataFrame, symbol: str, config_symbol: dict, pesos: dict) -> Trader:
     config = Config(
         api_key="",
         api_secret="",
@@ -46,7 +46,7 @@ async def simular(df: pd.DataFrame, symbol: str, config_symbol: dict, pesos: dic
         persistencia_minima=config_symbol["persistencia_minima"],
         peso_extra_persistencia=config_symbol["peso_extra_persistencia"],
     )
-    bot = BacktestTrader(config)
+    bot = Trader(config)
     bot.pesos_por_simbolo[symbol] = pesos
     bot.config_por_simbolo[symbol] = config_symbol.copy()
 
@@ -71,10 +71,10 @@ async def simular(df: pd.DataFrame, symbol: str, config_symbol: dict, pesos: dic
     return bot
 
 
-def evaluar(bot: BacktestTrader, symbol: str) -> dict:
-    resultados = bot.resultados.get(symbol, [])
+def evaluar(bot: Trader, symbol: str) -> dict:
+    historial = bot.orders.historial.get(symbol, [])
     capital = bot.capital_por_simbolo.get(symbol, 0)
-    if not resultados:
+    if not historial:
         return {
             "capital": capital,
             "ganancia": 0,
@@ -84,17 +84,17 @@ def evaluar(bot: BacktestTrader, symbol: str) -> dict:
             "num_ops": 0,
             "sharpe": 0
         }
-    arr = np.array(resultados)
-    ganancias = arr[arr > 0]
-    perdidas = arr[arr <= 0]
-    sharpe = arr.mean() / arr.std() * np.sqrt(len(arr)) if arr.std() > 0 else 0
+    resultados = np.array([op["retorno_total"] for op in historial])
+    ganancias = resultados[resultados > 0]
+    perdidas = resultados[resultados <= 0]
+    sharpe = resultados.mean() / resultados.std() * np.sqrt(len(resultados)) if resultados.std() > 0 else 0
     return {
         "capital": capital,
         "ganancia": capital - 100,
-        "winrate": len(ganancias) / len(arr) * 100,
-        "mejor": arr.max(),
-        "peor": arr.min(),
-        "num_ops": len(arr),
+        "winrate": len(ganancias) / len(resultados) * 100,
+        "mejor": resultados.max(),
+        "peor": resultados.min(),
+        "num_ops": len(resultados),
         "sharpe": sharpe
     }
 

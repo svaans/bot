@@ -220,6 +220,54 @@ class Trader:
         metricas = self._metricas_recientes()
         self.risk.ajustar_umbral(metricas)
         return True
+    
+    async def _cerrar_parcial_y_reportar(
+        self, orden, cantidad: float, precio: float, motivo: str
+    ) -> bool:
+        """Cierre parcial de ``orden`` y registro en el reporte."""
+        if not await self.orders.cerrar_parcial_async(orden.symbol, cantidad, precio, motivo):
+            log.warning(
+                f"❌ No se pudo confirmar el cierre parcial de {orden.symbol}. Se omitirá el registro."
+            )
+            return False
+
+        retorno_unitario = (
+            (precio - orden.precio_entrada) / orden.precio_entrada
+            if orden.precio_entrada
+            else 0.0
+        )
+        fraccion = cantidad / orden.cantidad if orden.cantidad else 0.0
+        retorno_total = retorno_unitario * fraccion
+        info = orden.to_dict()
+        info.update(
+            {
+                "precio_cierre": precio,
+                "fecha_cierre": datetime.utcnow().isoformat(),
+                "motivo_cierre": motivo,
+                "retorno_total": retorno_total,
+                "cantidad_cerrada": cantidad,
+            }
+        )
+        reporter_diario.registrar_operacion(info)
+        registrar_resultado_trade(orden.symbol, info, retorno_total)
+        capital_inicial = self.capital_por_simbolo.get(orden.symbol, 0.0)
+        ganancia = capital_inicial * retorno_total
+        self.capital_por_simbolo[orden.symbol] = capital_inicial + ganancia
+        return True
+    
+    def es_salida_parcial_valida(
+        self, orden, precio_tp: float, minimo_retorno: float = 5.0, min_inversion: float = 30.0
+    ) -> bool:
+        """Determina si aplicar TP parcial tiene sentido económico."""
+        try:
+            inversion = (orden.precio_entrada or 0.0) * (orden.cantidad or 0.0)
+            retorno_potencial = (precio_tp - (orden.precio_entrada or 0.0)) * (
+                orden.cantidad or 0.0
+            )
+        except Exception:
+            return False
+
+        return inversion > min_inversion and retorno_potencial > minimo_retorno
 
     @property
     def ordenes_abiertas(self):
@@ -646,12 +694,32 @@ class Trader:
 
         # --- Take Profit ---
         if precio_max >= orden.take_profit:
-            if await self._cerrar_y_reportar(orden, precio_max, "Take Profit"):
-                log.info(f"💰 TP alcanzado para {symbol} a {precio_max:.2f}€")
+            if (
+                not getattr(orden, "parcial_cerrado", False)
+                and orden.cantidad_abierta > 0
+            ):
+                if self.es_salida_parcial_valida(orden, orden.take_profit):
+                    cantidad_parcial = orden.cantidad_abierta * 0.5
+                    if await self._cerrar_parcial_y_reportar(
+                        orden,
+                        cantidad_parcial,
+                        orden.take_profit,
+                        "Take Profit parcial",
+                    ):
+                        orden.parcial_cerrado = True
+                        log.info(
+                            "💰 TP parcial alcanzado, se mantiene posición con trailing."
+                        )
+                else:
+                    await self._cerrar_y_reportar(orden, orden.take_profit, "Take Profit")
+            elif orden.cantidad_abierta > 0:
+                await self._cerrar_y_reportar(orden, orden.take_profit, "Take Profit")
             return
         
 
         # --- Trailing Stop ---
+        if orden.cantidad_abierta <= 0:
+            return
         if precio_cierre > orden.max_price:
             orden.max_price = precio_cierre
 
