@@ -27,9 +27,18 @@ def crear_cliente(config: Config | None = None):
 obtener_cliente = crear_cliente
 
 async def fetch_balance_async(cliente, *args, **kwargs):
-    """Versión asíncrona de ``fetch_balance``."""
+    """
+    Obtiene el balance de forma asíncrona.
+    Si no hay claves API (modo simulado), devuelve un balance ficticio.
+    """
+    if not cliente.apiKey or not cliente.secret:
+        return {
+            "total": {"EUR": 1000.0},
+            "free": {"EUR": 1000.0}
+        }
     loop = asyncio.get_running_loop()
     return await loop.run_in_executor(None, cliente.fetch_balance, *args, **kwargs)
+
 
 
 async def create_order_async(cliente, *args, **kwargs):
