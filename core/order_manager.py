@@ -21,6 +21,7 @@ class OrderManager:
     def __init__(self, modo_real: bool, risk=None, notificador=None) -> None:
         self.modo_real = modo_real
         self.ordenes: Dict[str, Orden] = {}
+        self.historial: Dict[str, list] = {}
         self.risk = risk
         self.notificador = notificador
 
@@ -151,6 +152,8 @@ class OrderManager:
             if orden.precio_entrada
             else 0.0
         )
+        orden.retorno_total = retorno
+        self.historial.setdefault(symbol, []).append(orden.to_dict())
         if retorno < 0 and self.risk is not None:
             try:
                 self.risk.registrar_perdida(symbol, retorno)
