@@ -61,6 +61,7 @@ from indicadores.rsi import calcular_rsi
 from indicadores.momentum import calcular_momentum
 from indicadores.slope import calcular_slope
 from core.market_regime import detectar_regimen, umbral_diversidad_relativa
+from core.categorias_tecnicas import categorias_estrategias
 
 
 
@@ -680,13 +681,16 @@ class Trader:
         symbol: str,
         peso_total: float,
         peso_min_total: float,
-        diversidad: int,
+        estrategias_activas: list[str],
         diversidad_min: int,
-        total_estrategias: int,
+        estrategias_disponibles: dict,
         df: pd.DataFrame,
     ) -> bool:
         """Verifica que la diversidad y el peso total sean suficientes."""
-        ratio_relativa = diversidad / max(total_estrategias, 1)
+        diversidad = len(estrategias_activas)
+        cat_activas = categorias_estrategias(estrategias_activas)
+        cat_totales = categorias_estrategias(estrategias_disponibles.keys())
+        ratio_relativa = len(cat_activas) / max(len(cat_totales), 1)
         ratio_objetivo = umbral_diversidad_relativa(df)
         if self.modo_capital_bajo:
             try:
@@ -1218,7 +1222,6 @@ class Trader:
 
         estrategias_activas = list(estrategias_persistentes.keys())
         peso_total = sum(pesos_symbol.get(k, 0) for k in estrategias_activas)
-        diversidad = len(estrategias_activas)
         peso_min_total = config_actual.get("peso_minimo_total", 0.5)
         diversidad_min = config_actual.get("diversidad_minima", 2)
         persistencia = coincidencia_parcial(estado.buffer, pesos_symbol, ventanas=5)
@@ -1229,14 +1232,13 @@ class Trader:
         if not self._validar_puntaje(symbol, puntaje, umbral):
             return None
 
-        total_estrategias = len(pesos_symbol)
         if not await self._validar_diversidad(
             symbol,
             peso_total,
             peso_min_total,
-            diversidad,
+            estrategias_activas,
             diversidad_min,
-            total_estrategias,
+            pesos_symbol,
             df,
         ):
             return None
