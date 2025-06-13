@@ -573,22 +573,27 @@ class Trader:
         fecha_limite = datetime.utcnow().date() - timedelta(days=dias)
         retornos: list[float] = []
 
-        for archivo in os.listdir(carpeta):
-            if not archivo.endswith(".csv"):
-                continue
+        archivos = sorted(
+            [f for f in os.listdir(carpeta) if f.endswith(".csv")],
+            reverse=True
+        )[:20]  # solo los 20 archivos más recientes
+
+        for archivo in archivos:
             try:
                 fecha = datetime.fromisoformat(archivo.replace(".csv", "")).date()
             except ValueError:
                 continue
             if fecha < fecha_limite:
                 continue
+            ruta_archivo = os.path.join(carpeta, archivo)
             try:
-                df = pd.read_csv(os.path.join(carpeta, archivo))
+                df = pd.read_csv(ruta_archivo)
             except (
                 pd.errors.EmptyDataError,
                 pd.errors.ParserError,
                 OSError,
-            ):
+            ) as e:
+                log.warning(f"⚠️ Error leyendo archivo {ruta_archivo}: {e}")
                 continue
             if "retorno_total" in df.columns:
                 retornos.extend(df["retorno_total"].dropna().tolist())
@@ -610,8 +615,9 @@ class Trader:
         return sum(
             1
             for v in estado.buffer
-            if v.get("timestamp", 0) >= limite and v.get("estrategias_activas")
+            if pd.to_datetime(v.get("timestamp")).timestamp() * 1000 >= limite and v.get("estrategias_activas")
         )
+
     
     def _calcular_correlaciones(self, periodos: int = 1440) -> pd.DataFrame:
         """Calcula correlación histórica de cierres entre símbolos."""
@@ -1163,8 +1169,13 @@ class Trader:
         self.persistencia.actualizar(symbol, estrategias)
 
         if len(estado.buffer) < 30:
-            log.debug(f"\U0001f4c9 [{symbol}] Buffer insuficiente ({len(estado.buffer)} velas)")
-            return None
+            persistencia = coincidencia_parcial(estado.buffer, pesos_symbol, ventanas=5)
+            if persistencia < 1:
+                log.debug(
+                    f"\U0001f4c9 [{symbol}] Buffer insuficiente (len={len(estado.buffer)}), persistencia: {persistencia:.2f} < 1"
+                )
+                return None
+
 
         tendencia_actual, _ = detectar_tendencia(symbol, df)
         
@@ -1200,25 +1211,27 @@ class Trader:
         estado.ultimo_umbral = umbral
         
         cierre = self.historial_cierres.get(symbol)
-        if cierre and cierre.get("motivo") == "stop loss":
-            cooldown_velas = int(config_actual.get("cooldown_tras_perdida", 5))
-            velas = cierre.get("velas", 0)
-            if velas < cooldown_velas:
-                cierre["velas"] = velas + 1
-                restante = cooldown_velas - velas
-                log.info(f"🕒 Cooldown activo para {symbol}. Quedan {restante} velas")
-                return None
-            else:
-                self.historial_cierres.pop(symbol, None)
+        if cierre:
+            motivo = cierre.get("motivo")
 
-        cierre = self.historial_cierres.get(symbol)
-        if cierre and cierre.get("motivo") == "cambio de tendencia":
-            precio_actual = float(df["close"].iloc[-1])
-            if not self._validar_reentrada_tendencia(symbol, df, cierre, precio_actual):
-                cierre["velas"] = cierre.get("velas", 0) + 1
-                return None
-            else:
-                self.historial_cierres.pop(symbol, None)
+            if motivo == "stop loss":
+                cooldown_velas = int(config_actual.get("cooldown_tras_perdida", 5))
+                velas = cierre.get("velas", 0)
+                if velas < cooldown_velas:
+                    cierre["velas"] = velas + 1
+                    restante = cooldown_velas - velas
+                    log.info(f"🕒 Cooldown activo para {symbol}. Quedan {restante} velas")
+                    return None
+                else:
+                    self.historial_cierres.pop(symbol, None)
+
+            elif motivo == "cambio de tendencia":
+                precio_actual = float(df["close"].iloc[-1])
+                if not self._validar_reentrada_tendencia(symbol, df, cierre, precio_actual):
+                    cierre["velas"] = cierre.get("velas", 0) + 1
+                    return None
+                else:
+                    self.historial_cierres.pop(symbol, None)
 
         estrategias_activas = list(estrategias_persistentes.keys())
         peso_total = sum(pesos_symbol.get(k, 0) for k in estrategias_activas)
