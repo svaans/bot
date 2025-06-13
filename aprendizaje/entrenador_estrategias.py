@@ -74,6 +74,13 @@ def actualizar_pesos_estrategias_symbol(symbol: str):
 
     train_df, test_df = dividir_train_test(ordenes)
 
+    # FACTOR_SUAVIZADO adaptativo según la volatilidad de los retornos
+    if "retorno_total" in train_df.columns:
+        vol_ret = train_df["retorno_total"].std() or 0.0
+    else:
+        vol_ret = 0.0
+    FACTOR_SUAVIZADO = max(0.01, min(0.05, 0.02 + vol_ret * 0.1))
+
     datos_estrategias = evaluar_estrategias(train_df)
     nuevos_scores = {}
 
