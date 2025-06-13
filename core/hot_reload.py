@@ -1,5 +1,6 @@
 import importlib
 import sys
+import time
 from pathlib import Path
 from typing import Iterable
 import threading
@@ -26,7 +27,8 @@ class _ReloadHandler(PatternMatchingEventHandler):
         self.base = base.resolve()
         self.modules = list(modules)
         self.exclude = list(exclude) if exclude else []
-
+        self._last_reload: dict[Path, float] = {}
+        
     def _should_reload(self, module_name: str) -> bool:
         if any(module_name.startswith(e) for e in self.exclude):
             return False
@@ -48,6 +50,22 @@ class _ReloadHandler(PatternMatchingEventHandler):
     def on_created(self, event):
         self._reload_path(Path(event.src_path))
 
+    def on_moved(self, event):
+        dest = getattr(event, "dest_path", None)
+        if dest:
+            self._reload_path(Path(dest))
+        self._remove_module(Path(event.src_path))
+
+    def on_deleted(self, event):
+        self._remove_module(Path(event.src_path))
+
+    def _remove_module(self, path: Path) -> None:
+        if path.suffix != ".py":
+            return
+        module_name = self._module_from_path(path)
+        if module_name and module_name in sys.modules:
+            del sys.modules[module_name]
+
     def _reload_path(self, path: Path) -> None:
         if path.suffix != ".py":
             return
@@ -56,6 +74,12 @@ class _ReloadHandler(PatternMatchingEventHandler):
             log.debug(f"🔍 Ignorando recarga para {path.name} ({module_name})")
             return
         try:
+            mtime = path.stat().st_mtime
+            last = self._last_reload.get(path)
+            if last and mtime - last < 1:
+                time.sleep(1 - (mtime - last))
+            self._last_reload[path] = time.time()
+            importlib.invalidate_caches()
             module = sys.modules.get(module_name)
             if module:
                 importlib.reload(module)
