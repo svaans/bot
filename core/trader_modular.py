@@ -60,7 +60,8 @@ from core.estrategias import filtrar_por_direccion
 from indicadores.rsi import calcular_rsi
 from indicadores.momentum import calcular_momentum
 from indicadores.slope import calcular_slope
-from core.market_regime import detectar_regimen
+from core.market_regime import detectar_regimen, umbral_diversidad_relativa
+
 
 
 log = configurar_logger("trader")
@@ -682,9 +683,11 @@ class Trader:
         diversidad: int,
         diversidad_min: int,
         total_estrategias: int,
+        df: pd.DataFrame,
     ) -> bool:
         """Verifica que la diversidad y el peso total sean suficientes."""
         ratio_relativa = diversidad / max(total_estrategias, 1)
+        ratio_objetivo = umbral_diversidad_relativa(df)
         if self.modo_capital_bajo:
             try:
                 balance = await fetch_balance_async(self.cliente)
@@ -694,9 +697,9 @@ class Trader:
             if euros < 500:
                 diversidad_min = min(diversidad_min, 2)
                 peso_min_total *= 0.7
-        if ratio_relativa < 0.3:
+        if ratio_relativa < ratio_objetivo:
             log.info(
-                f"🚫 {symbol}: diversidad relativa {ratio_relativa:.2%} < 30%"
+                f"🚫 {symbol}: diversidad relativa {ratio_relativa:.2%} < {ratio_objetivo:.0%}"
             )
             metricas_tracker.registrar_filtro("diversidad")
             return False
@@ -1234,6 +1237,7 @@ class Trader:
             diversidad,
             diversidad_min,
             total_estrategias,
+            df,
         ):
             return None
 

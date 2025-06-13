@@ -37,3 +37,20 @@ def detectar_regimen(df: pd.DataFrame) -> str:
     if abs(slope) > 0.001:
         return "tendencial"
     return "lateral"
+
+
+def umbral_diversidad_relativa(df: pd.DataFrame) -> float:
+    """Calcula un umbral dinámico para la diversidad relativa.
+
+    El umbral se ajusta en función de la volatilidad y de la pendiente del
+    precio. En mercados con alta volatilidad o con fuerte tendencia se permite
+    menor diversidad relativa. En entornos tranquilos se exige una mayor
+    diversificación.
+    """
+    vol = medir_volatilidad(df)
+    slope = pendiente_medias(df)
+    if vol > 0.02 or abs(slope) > 0.002:
+        return 0.2
+    if vol < 0.01 and abs(slope) < 0.0005:
+        return 0.4
+    return 0.3
