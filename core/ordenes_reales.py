@@ -343,32 +343,37 @@ def ejecutar_orden_market_sell(symbol: str, cantidad: float) -> float:
         balance = cliente.fetch_balance()
         base = symbol.split("/")[0]
         disponible = esperar_balance(cliente, symbol, cantidad)
+
         log.debug(
             f"{symbol}: saldo disponible {base} {disponible}, intento vender {cantidad}"
         )
 
-        if disponible <= 0 or disponible < cantidad:
-            log.error(
-                f"Saldo insuficiente para vender {symbol}. Disponible {disponible}, solicitado {cantidad}"
-            )
-            _VENTAS_FALLIDAS.add(symbol)
-            raise InsufficientFunds("saldo insuficiente")
+        if disponible <= 0:
+            raise InsufficientFunds(f"Saldo 0 disponible para {symbol}")
+
+        # Aplica margen de seguridad
+        cantidad_vender = min(cantidad, disponible * 0.999)  # evita vender de más
+
+        if cantidad_vender <= 0:
+            raise ValueError(f"Cantidad inválida ({cantidad_vender}) para vender en {symbol}")
 
         markets = cliente.load_markets()
         info = markets.get(symbol.replace("/", ""), {})
         min_amount = float(info.get("limits", {}).get("amount", {}).get("min") or 0)
         min_cost = float(info.get("limits", {}).get("cost", {}).get("min") or 0)
 
-        cantidad_vender = min(cantidad, disponible) * 0.999  # descuenta comisión
         ticker = cliente.fetch_ticker(symbol.replace("/", ""))
         precio = float(ticker.get("last") or ticker.get("close") or 0)
 
         if cantidad_vender < min_amount or (precio and cantidad_vender * precio < min_cost):
             log.error(
-                f"Cantidad inválida {cantidad_vender} para {symbol}. Mínimos -> amount: {min_amount}, notional: {min_cost}"
+                f"Cantidad inválida {cantidad_vender} para {symbol}. "
+                f"Mínimos → amount: {min_amount}, notional: {min_cost}"
             )
             _VENTAS_FALLIDAS.add(symbol)
             raise ValueError("cantidad invalida")
+
+        log.info(f"💱 Ejecutando venta real en {symbol}: {cantidad_vender} unidades (precio estimado: {precio:.2f})")
 
         response = cliente.create_market_sell_order(
             symbol.replace("/", ""), cantidad_vender
@@ -382,7 +387,7 @@ def ejecutar_orden_market_sell(symbol: str, cantidad: float) -> float:
         _VENTAS_FALLIDAS.discard(symbol)
         return ejecutado
     except InsufficientFunds as e:
-        log.error(f"❌ Venta rechazada por saldo insuficiente en  {symbol}: {e}")
+        log.error(f"❌ Venta rechazada por saldo insuficiente en {symbol}: {e}")
         _VENTAS_FALLIDAS.add(symbol)
         raise
     except BaseError as e:
@@ -391,6 +396,7 @@ def ejecutar_orden_market_sell(symbol: str, cantidad: float) -> float:
     except Exception as e:
         log.error(f"❌ Error estructural al ejecutar venta para {symbol}: {e}")
         raise
+
 
 
 def flush_operaciones() -> None:
