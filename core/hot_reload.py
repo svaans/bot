@@ -38,11 +38,21 @@ class _ReloadHandler(PatternMatchingEventHandler):
 
     def _module_from_path(self, path: Path) -> str | None:
         try:
-            rel = path.resolve().relative_to(self.base)
-        except ValueError:
+            # Busca el primer directorio con __init__.py hacia atrás para formar el nombre de módulo
+            path = path.resolve()
+            parts = []
+            while path != self.base and path != path.parent:
+                if (path.parent / "__init__.py").exists():
+                    parts.insert(0, path.stem)
+                    path = path.parent
+                else:
+                    break
+            if not parts:
+                return None
+            return ".".join(parts)
+        except Exception as e:
+            log.debug(f"⚠️ No se pudo obtener el módulo desde {path}: {e}")
             return None
-        module_name = rel.with_suffix("").as_posix().replace("/", ".")
-        return module_name
 
     def on_modified(self, event):
         self._reload_path(Path(event.src_path))
@@ -79,16 +89,31 @@ class _ReloadHandler(PatternMatchingEventHandler):
             if last and mtime - last < 1:
                 time.sleep(1 - (mtime - last))
             self._last_reload[path] = time.time()
+
             importlib.invalidate_caches()
-            module = sys.modules.get(module_name)
-            if module:
-                importlib.reload(module)
+            old_module = sys.modules.get(module_name)
+            if old_module:
+                log.warning(f"🔄 Recargando módulo {module_name}...")
+                new_module = importlib.reload(old_module)
+                self._actualizar_referencias_importadas(module_name, new_module)
             else:
-                module = importlib.import_module(module_name)
-            log.warning(f"🔄 Cambio detectado en {path.name}, recargando módulo {module_name}...")
+                new_module = importlib.import_module(module_name)
+
             log.warning(f"✅ Recarga completada con éxito: {module_name}")
         except Exception as exc:
             log.info(f"❌ Error al recargar {module_name}: {exc}")
+    
+    def _actualizar_referencias_importadas(self, module_name: str, new_module):
+        for nombre_mod, mod in sys.modules.items():
+            if not mod or not hasattr(mod, "__dict__"):
+                continue
+            for key, val in list(mod.__dict__.items()):
+                if hasattr(val, "__module__") and val.__module__ == module_name:
+                    nuevo_val = getattr(new_module, key, None)
+                    if nuevo_val and nuevo_val is not val:
+                        setattr(mod, key, nuevo_val)
+                        log.debug(f"🔁 Actualizado {key} en {nombre_mod} desde {module_name}")
+
 
 
 def start_hot_reload(
