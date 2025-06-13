@@ -581,7 +581,11 @@ class Trader:
                 continue
             try:
                 df = pd.read_csv(os.path.join(carpeta, archivo))
-            except (pd.errors.EmptyDataError, OSError):
+            except (
+                pd.errors.EmptyDataError,
+                pd.errors.ParserError,
+                OSError,
+            ):
                 continue
             if "retorno_total" in df.columns:
                 retornos.extend(df["retorno_total"].dropna().tolist())
@@ -679,6 +683,7 @@ class Trader:
         total_estrategias: int,
     ) -> bool:
         """Verifica que la diversidad y el peso total sean suficientes."""
+        ratio_relativa = diversidad / max(total_estrategias, 1)
         if self.modo_capital_bajo:
             try:
                 balance = await fetch_balance_async(self.cliente)
