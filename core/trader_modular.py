@@ -693,7 +693,6 @@ class Trader:
             if euros < 500:
                 diversidad_min = min(diversidad_min, 2)
                 peso_min_total *= 0.7
-            ratio_relativa = diversidad / max(total_estrategias, 1)
         if ratio_relativa < 0.3:
             log.info(
                 f"🚫 {symbol}: diversidad relativa {ratio_relativa:.2%} < 30%"
