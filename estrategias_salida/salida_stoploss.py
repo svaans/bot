@@ -115,7 +115,10 @@ def salida_stoploss(orden: dict, df: pd.DataFrame, config: dict = None) -> dict:
 def verificar_salida_stoploss(
     orden: dict, df: pd.DataFrame, config: dict | None = None
 ) -> dict:
-    """Determina si el SL debe ejecutarse tras validar condiciones técnicas."""
+    """Determina si el SL debe ejecutarse tras validar condiciones técnicas.
+
+    El nivel de SL se adapta dinámicamente según la volatilidad reciente.
+    """
 
     if not validar_sl_tecnico(df, orden.get("direccion", "long")):
         return {
@@ -123,6 +126,24 @@ def verificar_salida_stoploss(
             "motivo": "SL tocado pero indicadores válidos para mantener",
             "evitado": True,
         }
+     # --- Cálculo dinámico del SL ---
+    precio_entrada = orden.get("precio_entrada", df["close"].iloc[-1])
+    direccion = orden.get("direccion", "long")
+    sl_config = orden.get("stop_loss")
+    atr = None
+    if len(df) >= 20:
+        atr = (df["high"].tail(20) - df["low"].tail(20)).mean()
+
+    ratio = config.get("sl_ratio", 1.5) if config else 1.5
+    if atr is not None:
+        sl_dinamico = precio_entrada - atr * ratio if direccion in ("long", "compra") else precio_entrada + atr * ratio
+        if direccion in ("long", "compra"):
+            sl_config = max(sl_config, sl_dinamico)
+        else:
+            sl_config = min(sl_config, sl_dinamico)
+
+    orden["stop_loss"] = sl_config
+
     resultado = salida_stoploss(orden, df, config=config)
     cerrar = resultado.get("cerrar", False)
     motivo = resultado.get("razon", "")
