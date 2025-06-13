@@ -1119,7 +1119,13 @@ class Trader:
             estrategias = evaluacion.get("estrategias_activas", {})
             puntaje = evaluacion.get("puntaje_total", 0)
             pesos_symbol = self.pesos_por_simbolo.get(symbol, {})
-            umbral = calcular_umbral_adaptativo(symbol, df, estrategias, pesos_symbol)
+            umbral = calcular_umbral_adaptativo(
+                symbol,
+                df,
+                estrategias,
+                pesos_symbol,
+                persistencia=0.0,
+            )
             if not validar_necesidad_de_salida(
                 df,
                 orden.to_dict(),
@@ -1156,7 +1162,14 @@ class Trader:
         tendencia_actual, _ = detectar_tendencia(symbol, df)
         
         pesos_symbol = self.pesos_por_simbolo.get(symbol, {})
-        umbral = calcular_umbral_adaptativo(symbol, df, estrategias, pesos_symbol)
+        persistencia_score = coincidencia_parcial(estado.buffer, pesos_symbol, ventanas=5)
+        umbral = calcular_umbral_adaptativo(
+            symbol,
+            df,
+            estrategias,
+            pesos_symbol,
+            persistencia=persistencia_score,
+        )
         estrategias_persistentes = {
             e: True
             for e, act in estrategias.items()
