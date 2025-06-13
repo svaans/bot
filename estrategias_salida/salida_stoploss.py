@@ -87,7 +87,14 @@ def salida_stoploss(orden: dict, df: pd.DataFrame, config: dict = None) -> dict:
 
         # Carga de pesos para umbral
         pesos_symbol = pesos.get(symbol, {})
-        umbral = calcular_umbral_adaptativo(symbol, df, estrategias_activas, pesos_symbol, config=config)
+        umbral = calcular_umbral_adaptativo(
+            symbol,
+            df,
+            estrategias_activas,
+            pesos_symbol,
+            persistencia=0.0,
+            config=config,
+        )
 
         # Concordancia con la tendencia actual
         esperadas = ESTRATEGIAS_POR_TENDENCIA.get(tendencia, [])

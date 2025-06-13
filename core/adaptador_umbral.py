@@ -14,16 +14,30 @@ else:
     log.warning("❌ Archivo de configuración no encontrado. Se usará configuración por defecto.")
     CONFIGS_OPTIMAS = {}
 
-UMBRAL_MAXIMO = 15
-UMBRAL_POR_DEFECTO = 10
-UMBRAL_MINIMO = 2
+UMBRAL_POR_DEFECTO = 10  # se usa solo como reserva si falta contexto
 MIN_LONGITUD_DATA = 30
 
 PESO_VOLATILIDAD = 0.4
 PESO_RANGO = 0.4
 PESO_VOLUMEN = 0.2
 
-def calcular_umbral_adaptativo(symbol, df, estrategias_activadas, pesos_symbol, config=None):
+def _limites_adaptativos(contexto_score: float) -> tuple[float, float]:
+    """Devuelve el máximo y mínimo del umbral de forma dinámica."""
+    umbral_max = max(8.0, min(30.0, 10.0 + contexto_score))
+    umbral_min = max(1.0, contexto_score * 0.3)
+    if umbral_max < umbral_min:
+        umbral_max = umbral_min + 1.0
+    return umbral_max, umbral_min
+
+def calcular_umbral_adaptativo(
+    symbol,
+    df,
+    estrategias_activadas,
+    pesos_symbol,
+    persistencia: float = 0.0,
+    config=None,
+):
+    """Calcula un umbral técnico adaptativo basado en contexto y persistencia."""
     if df is None or len(df) < 30 or not estrategias_activadas:
         log.warning(f"⚠️ [{symbol}] Datos insuficientes o sin estrategias activas. Umbral: {UMBRAL_POR_DEFECTO}")
         return UMBRAL_POR_DEFECTO
@@ -101,17 +115,25 @@ def calcular_umbral_adaptativo(symbol, df, estrategias_activadas, pesos_symbol, 
     if slope < 0:
         ajuste_riesgo += 0.2
 
+    # --- Ajuste por persistencia ---
+    factor_persistencia = 1 - min(persistencia * 0.05, 0.2)
+
     # --- Umbral final ---
-    umbral_base = min(potencia_tecnica * ajuste_riesgo, UMBRAL_MAXIMO)
-    umbral = min(umbral_base * factor_umbral, 30)
-    umbral = max(umbral, UMBRAL_MINIMO)
+    max_dinamico, min_dinamico = _limites_adaptativos(contexto_score)
+    umbral_base = min(potencia_tecnica * ajuste_riesgo, max_dinamico)
+    umbral = max(
+        min(umbral_base * factor_umbral * factor_persistencia, max_dinamico),
+        min_dinamico,
+    )
 
     # --- Log ---
     log.debug(
-        f"📊 [{symbol}] Umbral: {umbral:.2f} | Base: {umbral_base:.2f} | Contexto: {contexto_score:.2f} | "
+        f"📊 [{symbol}] Umbral: {umbral:.2f} | Base: {umbral_base:.2f} | "
+        f"Limites({min_dinamico:.2f}-{max_dinamico:.2f}) | Contexto: {contexto_score:.2f} | "
         f"Potencia: {potencia_tecnica:.2f} | Slope: {slope:.4f} | RSI: {rsi:.2f} | "
         f"Momentum: {momentum_std:.4f} | VolAdj: {ajuste_volatilidad:.2f} | "
-        f"FactorUmbral: {factor_umbral:.2f} | Riesgo: {ajuste_riesgo:.2f}"
+        f"FactorUmbral: {factor_umbral:.2f} | Riesgo: {ajuste_riesgo:.2f} | "
+        f"Persistencia: {persistencia:.2f}"
     )
 
     return umbral
