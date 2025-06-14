@@ -1215,21 +1215,6 @@ class Trader:
                 else:
                     self.historial_cierres.pop(symbol, None)
 
-                    # Revalidación técnica tras cooldown
-                    rsi = calcular_rsi(df)
-                    momentum = calcular_momentum(df)
-                    score_tecnico, puntos = self._calcular_score_tecnico(df, rsi, momentum, tendencia_actual, direccion)
-
-                    if score_tecnico < self.umbral_score_tecnico:
-                        log.info(f"🚫 Reentrada denegada por score técnico débil: {score_tecnico:.1f}")
-                        self._registrar_rechazo_tecnico(symbol, score_tecnico, puntos, tendencia_actual, float(df['close'].iloc[-1]), "reentrada_score")
-                        return None
-
-                    if self._hay_contradicciones(df, rsi, momentum, direccion, score_tecnico) and self.contradicciones_bloquean_entrada:
-                        log.info("⚠️ Reentrada denegada por contradicción técnica post-SL")
-                        self._registrar_rechazo_tecnico(symbol, score_tecnico, puntos, tendencia_actual, float(df['close'].iloc[-1]), "reentrada_contradiccion")
-                        return None
-
             elif motivo == "cambio de tendencia":
                 precio_actual = float(df["close"].iloc[-1])
                 if not self._validar_reentrada_tendencia(symbol, df, cierre, precio_actual):
@@ -1237,21 +1222,6 @@ class Trader:
                     return None
                 else:
                     self.historial_cierres.pop(symbol, None)
-
-                    # Revalidación técnica tras cambio de tendencia
-                    rsi = calcular_rsi(df)
-                    momentum = calcular_momentum(df)
-                    score_tecnico, puntos = self._calcular_score_tecnico(df, rsi, momentum, tendencia_actual, direccion)
-
-                    if score_tecnico < self.umbral_score_tecnico:
-                        log.info(f"🚫 Reentrada denegada por score técnico débil: {score_tecnico:.1f}")
-                        self._registrar_rechazo_tecnico(symbol, score_tecnico, puntos, tendencia_actual, float(df['close'].iloc[-1]), "reentrada_score")
-                        return None
-
-                    if self._hay_contradicciones(df, rsi, momentum, direccion, score_tecnico) and self.contradicciones_bloquean_entrada:
-                        log.info("⚠️ Reentrada denegada por contradicción técnica post-tendencia")
-                        self._registrar_rechazo_tecnico(symbol, score_tecnico, puntos, tendencia_actual, float(df['close'].iloc[-1]), "reentrada_contradiccion")
-                        return None
                 
 
         estrategias_activas = list(estrategias_persistentes.keys())
@@ -1305,29 +1275,7 @@ class Trader:
                 slope,
                 "✅" if puntos["Tendencia"] else "❌",
             )
-            if score_tecnico < self.umbral_score_tecnico:
-                log.info(
-                    f"❌ Entrada denegada por score técnico insuficiente: {score_tecnico} < {self.umbral_score_tecnico}"
-                )
-                self._registrar_rechazo_tecnico(
-                    symbol, score_tecnico, puntos, tendencia_actual, float(df["close"].iloc[-1]), "score"
-                )
-                return None
-            if self._hay_contradicciones(df, rsi, momentum, direccion, score_tecnico) and self.contradicciones_bloquean_entrada:
-                log.info(
-                    "⚠️ Contradicción técnica: score alto pero Momentum/Rango contradice la entrada"
-                )
-                self._registrar_rechazo_tecnico(
-                    symbol, score_tecnico, puntos, tendencia_actual, float(df["close"].iloc[-1]), "contradiccion"
-                )
-                return None
-            if not self._validar_temporalidad(df, direccion):
-                log.info("❌ Entrada denegada por señal tardía")
-                self._registrar_rechazo_tecnico(
-                    symbol, score_tecnico, puntos, tendencia_actual, float(df["close"].iloc[-1]), "senal_tardia"
-                )
-                return None
-
+    
         if not entrada_permitida(
             symbol,
             puntaje,
