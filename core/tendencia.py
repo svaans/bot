@@ -16,7 +16,7 @@ log = configurar_logger("tendencia")
 
 def detectar_tendencia(symbol: str, df: pd.DataFrame) -> tuple[str, dict[str, bool]]:
     """Determina la tendencia del mercado basándose en SMA, slope y RSI."""
-    if df is None or df.empty or "close" not in df.columns or len(df) < 50:
+    if df is None or df.empty or "close" not in df.columns or len(df) < 60:
         log.warning(f"⚠️ Datos insuficientes para detectar tendencia en {symbol}")
         return "lateral", {}
 
