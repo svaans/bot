@@ -36,6 +36,7 @@ from core.adaptador_persistencia import calcular_persistencia_minima
 from aprendizaje.entrenador_estrategias import actualizar_pesos_estrategias_symbol
 from core.logger import configurar_logger
 from core.monitor_estado_bot import monitorear_estado_periodicamente
+from core.contexto_externo import StreamContexto
 from core import ordenes_reales
 from core.adaptador_configuracion import configurar_parametros_dinamicos
 from ccxt.base.errors import BaseError
@@ -156,6 +157,8 @@ class Trader:
         self.historial_cierres: Dict[str, dict] = {}
         self._task: asyncio.Task | None = None
         self._task_estado: asyncio.Task | None = None
+        self._task_contexto: asyncio.Task | None = None
+        self.context_stream = StreamContexto()
 
         try:
             self.orders.ordenes = ordenes_reales.obtener_todas_las_ordenes()
@@ -1343,6 +1346,9 @@ class Trader:
         async def handle(candle: dict) -> None:
             await self._procesar_vela(candle)
 
+        async def handle_context(symbol: str, score: float) -> None:
+            log.info(f"🔁 Contexto actualizado {symbol}: {score:.2f}")
+
         symbols = list(self.estado.keys())
         await self._precargar_historico(velas=30)
 
@@ -1358,12 +1364,15 @@ class Trader:
         self._task_estado = asyncio.create_task(monitorear_estado_periodicamente(self))
         self._task_estado.add_done_callback(_log_fallo_task)
 
+        self._task_contexto = asyncio.create_task(self.context_stream.escuchar(symbols, handle_context))
+        self._task_contexto.add_done_callback(_log_fallo_task)
+
         try:
-            await asyncio.gather(self._task, self._task_estado)
+            await asyncio.gather(self._task, self._task_estado, self._task_contexto)
         except Exception as e:
             log.error(f"❌ Error inesperado en ejecución de tareas: {e}")
             
-        await asyncio.gather(self._task, self._task_estado)
+        await asyncio.gather(self._task, self._task_estado, self._task_contexto)
 
     async def _procesar_vela(self, vela: dict) -> None:
         symbol = vela["symbol"]
@@ -1404,6 +1413,14 @@ class Trader:
             self._task_estado.cancel()
             try:
                 await self._task_estado
+            except asyncio.CancelledError:
+                pass
+
+        if self._task_contexto:
+            await self.context_stream.detener()
+            self._task_contexto.cancel()
+            try:
+                await self._task_contexto
             except asyncio.CancelledError:
                 pass
 

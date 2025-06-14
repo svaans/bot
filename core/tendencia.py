@@ -1,72 +1,110 @@
+"""Detección de tendencia del mercado y evaluación de señales persistentes."""
+
 import pandas as pd
+import numpy as np
+
+from indicadores.rsi import calcular_rsi
+from indicadores.slope import calcular_slope
 from estrategias_entrada.gestor_entradas import evaluar_estrategias
 from core.estrategias import obtener_estrategias_por_tendencia
 from core.logger import configurar_logger
 
 log = configurar_logger("tendencia")
 
-# ------------------ DETECCIÓN DE TENDENCIA ------------------
 
-def detectar_tendencia(symbol, df: pd.DataFrame):
-    if len(df) < 50:
+# -------------------- DETECCIÓN DE TENDENCIA --------------------
+
+def detectar_tendencia(symbol: str, df: pd.DataFrame) -> tuple[str, dict[str, bool]]:
+    """Determina la tendencia del mercado basándose en SMA, slope y RSI."""
+    if df is None or df.empty or "close" not in df.columns or len(df) < 50:
+        log.warning(f"⚠️ Datos insuficientes para detectar tendencia en {symbol}")
+        return "lateral", {}
+
+    df = df.copy()
+    df["sma_fast"] = df["close"].rolling(window=10).mean()
+    df["sma_slow"] = df["close"].rolling(window=30).mean()
+
+    sma_fast = df["sma_fast"].iloc[-1]
+    sma_slow = df["sma_slow"].iloc[-1]
+    close_std = df["close"].std()
+
+    umbral = max(close_std * 0.02, 0.1)
+    delta = sma_fast - sma_slow
+    slope = calcular_slope(df)
+    rsi = calcular_rsi(df)
+
+    # Clasificación de tendencia
+    if abs(delta) < umbral and abs(slope) < 0.05:
         tendencia = "lateral"
+    elif delta > umbral and slope > 0:
+        tendencia = "alcista"
+    elif delta < -umbral and slope < 0:
+        tendencia = "bajista"
     else:
-        df = df.copy()
-        df["sma_fast"] = df["close"].rolling(window=10).mean()
-        df["sma_slow"] = df["close"].rolling(window=30).mean()
-
-        sma_fast = df["sma_fast"].iloc[-1]
-        sma_slow = df["sma_slow"].iloc[-1]
-
-        delta = sma_fast - sma_slow
-        umbral = df["close"].std() * 0.05
-
-        if abs(delta) < umbral:
-            tendencia = "lateral"
-        elif delta > 0:
-            tendencia = "alcista"
+        # RSI como criterio de desempate
+        if rsi is not None:
+            if rsi > 60:
+                tendencia = "alcista"
+            elif rsi < 40:
+                tendencia = "bajista"
+            else:
+                tendencia = "lateral"
         else:
-            tendencia = "bajista"
+            tendencia = "lateral"
 
     estrategias = obtener_estrategias_por_tendencia(tendencia)
 
-    # 🔧 Asegurar que siempre sea dict[str, bool]
-    if isinstance(estrategias, list):
-        estrategias_activas = {nombre: True for nombre in estrategias}
-    elif isinstance(estrategias, dict):
-        estrategias_activas = estrategias
-    else:
-        estrategias_activas = {}
+    estrategias_activas = {
+        nombre: True for nombre in estrategias
+    } if isinstance(estrategias, list) else (
+        estrategias if isinstance(estrategias, dict) else {}
+    )
+
+    log.info({
+        "evento": "deteccion_tendencia",
+        "symbol": symbol,
+        "tendencia": tendencia,
+        "delta_sma": round(delta, 6),
+        "slope": round(slope, 6),
+        "rsi": round(rsi, 2) if rsi else None,
+    })
 
     return tendencia, estrategias_activas
 
 
-def obtener_parametros_persistencia(tendencia: str, volatilidad: float):
-    """
-    Ajusta los requisitos de persistencia según la tendencia y volatilidad actual.
-    """
+# -------------------- AJUSTE DE PERSISTENCIA --------------------
+
+def obtener_parametros_persistencia(tendencia: str, volatilidad: float) -> tuple[float, int]:
+    """Define los requisitos de persistencia según la tendencia y la volatilidad."""
     if tendencia == "lateral":
         return 0.6, 3
     elif volatilidad > 0.02:
         return 0.4, 1
-    elif tendencia in ["alcista", "bajista"] and volatilidad > 0.01:
+    elif tendencia in {"alcista", "bajista"} and volatilidad > 0.01:
         return 0.45, 2
     else:
         return 0.5, 2
 
-def señales_repetidas(buffer, estrategias_func, tendencia_actual, volatilidad_actual, ventanas=3):
+
+# -------------------- DETECCIÓN DE SEÑALES REPETIDAS --------------------
+
+def señales_repetidas(
+    buffer: list[dict],
+    estrategias_func: dict[str, float],
+    tendencia_actual: str,
+    volatilidad_actual: float,
+    ventanas: int = 3,
+) -> int:
     """
-    Evalúa cuántas de las últimas `ventanas` velas tienen estrategias activas con buen peso,
-    ajustando los requisitos según la tendencia y la volatilidad.
+    Evalúa la cantidad de ventanas recientes con activaciones técnicas consistentes.
     """
     if len(buffer) < ventanas + 30:
         return 0
 
     peso_minimo, min_estrategias = obtener_parametros_persistencia(tendencia_actual, volatilidad_actual)
-
-    contador = 0
     df = pd.DataFrame(buffer[-(ventanas + 30):])
-    peso_max = sum(estrategias_func.values()) or 1
+    peso_max = sum(estrategias_func.values()) or 1.0
+    contador = 0
 
     for i in range(-ventanas, 0):
         try:
@@ -80,17 +118,17 @@ def señales_repetidas(buffer, estrategias_func, tendencia_actual, volatilidad_a
             if not evaluacion:
                 continue
 
-            estrategias_activas = evaluacion["estrategias_activas"]
+            estrategias_activas = evaluacion.get("estrategias_activas", {})
             estrategias_validas = [
-                k for k, v in estrategias_activas.items()
-                if v and estrategias_func.get(k, 0) >= peso_minimo * peso_max
+                nombre for nombre, activa in estrategias_activas.items()
+                if activa and estrategias_func.get(nombre, 0) >= peso_minimo * peso_max
             ]
 
             if len(estrategias_validas) >= min_estrategias:
                 contador += 1
 
-        except (KeyError, ValueError, TypeError) as e:
-            log.warning(f"⚠️ Evaluación de tendencia falló para {symbol}: {e}")
+        except Exception as e:
+            log.warning(f"⚠️ Fallo al evaluar repetición de señales en {symbol}: {e}")
             continue
 
     return contador

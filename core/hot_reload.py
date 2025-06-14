@@ -1,4 +1,5 @@
 import importlib
+import os
 import sys
 import time
 from pathlib import Path
@@ -12,14 +13,16 @@ from watchdog.events import PatternMatchingEventHandler
 log = configurar_logger("hot_reload")
 
 DEFAULT_MODULES: list[str] = [
-    "core",
-    "estrategias_entrada",
-    "estrategias_salida",
-    "filtros",
-    "indicadores",
-    "config",
+    "bot",
+    
 
 ]
+
+def restart_bot() -> None:
+    """Reinicia por completo el proceso actual para aplicar cambios."""
+    log.warning("\u267b\ufe0f Reiniciando bot por cambios en el c\xf3digo...")
+    python = sys.executable
+    os.execl(python, python, *sys.argv)
 
 class _ReloadHandler(PatternMatchingEventHandler):
     def __init__(self, base: Path, modules: Iterable[str], exclude: Iterable[str] | None = None):
@@ -87,18 +90,9 @@ class _ReloadHandler(PatternMatchingEventHandler):
                 time.sleep(1 - (mtime - last))
             self._last_reload[path] = time.time()
 
-            importlib.invalidate_caches()
-            old_module = sys.modules.get(module_name)
-            if old_module:
-                log.warning(f"🔄 Recargando módulo {module_name}...")
-                new_module = importlib.reload(old_module)
-                self._actualizar_referencias_importadas(module_name, new_module)
-            else:
-                new_module = importlib.import_module(module_name)
-
-            log.warning(f"✅ Recarga completada con éxito: {module_name}")
+            restart_bot()
         except Exception as exc:
-            log.info(f"❌ Error al recargar {module_name}: {exc}")
+            log.info(f"❌ Error al intentar reiniciar por {module_name}: {exc}")
     
     def _actualizar_referencias_importadas(self, module_name: str, new_module):
         for nombre_mod, mod in sys.modules.items():
@@ -118,10 +112,12 @@ def start_hot_reload(
     modules: Iterable[str] | None = DEFAULT_MODULES,
     exclude: Iterable[str] | None = None,
 ) -> Observer:
-    """Inicia un observador en ``path`` para recargar ``modules`` en caliente.
+    """Inicia un observador en ``path``.
 
-    Si ``modules`` es ``None`` o una lista vacía, se intentarán recargar todos los
-    paquetes dentro de ``path`` salvo los indicados en ``exclude``.
+    Cuando se detecta un cambio en un archivo ``.py`` se reinicia el proceso para
+    cargar el código actualizado. Si ``modules`` es ``None`` o una lista vacía,
+    se vigilarán todos los paquetes dentro de ``path`` salvo los indicados en
+    ``exclude``.
     """
     base = Path(path or Path.cwd())
     mods = list(modules) if modules is not None else []
