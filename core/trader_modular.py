@@ -60,23 +60,8 @@ from core.estrategias import filtrar_por_direccion
 from indicadores.rsi import calcular_rsi
 from indicadores.momentum import calcular_momentum
 from indicadores.slope import calcular_slope
-from core.market_regime import detectar_regimen, umbral_diversidad_relativa
-from core.categorias_tecnicas import categorias_estrategias
-
-
-def categorias_historicas(df: pd.DataFrame, ventanas: int = 5) -> set[str]:
-    """Obtiene las categorías activas en las últimas ``ventanas`` velas."""
-    if "estrategias_activas" not in df:
-        return set()
-
-    categorias: set[str] = set()
-    for estrategias in df["estrategias_activas"].tail(ventanas):
-        if isinstance(estrategias, dict):
-            activas = [e for e, ok in estrategias.items() if ok]
-            categorias.update(categorias_estrategias(activas))
-
-    return categorias
-
+from core.market_regime import detectar_regimen
+   
 
 log = configurar_logger("trader")
 
@@ -692,7 +677,7 @@ class Trader:
         diferencia = umbral - puntaje
         metricas_tracker.registrar_diferencia_umbral(diferencia)
         if puntaje < umbral:
-            log.debug(f"🚫 {symbol}: puntaje {puntaje:.2f} < umbral {umbral:.2f} tendencia: {detectar_tendencia}")
+            log.debug(f"🚫 {symbol}: puntaje {puntaje:.2f} < umbral {umbral:.2f}")
             metricas_tracker.registrar_filtro("umbral")
             return False
         return True
@@ -710,12 +695,6 @@ class Trader:
         """Verifica que la diversidad y el peso total sean suficientes."""
         diversidad = len(estrategias_activas)
         
-        cat_totales = categorias_estrategias(estrategias_disponibles.keys())
-        cat_hist = categorias_historicas(df)
-        if not cat_hist:
-            cat_hist = categorias_estrategias(estrategias_activas)
-        ratio_relativa = len(cat_hist) / max(len(cat_totales), 1)
-        ratio_objetivo = umbral_diversidad_relativa(df)
         if self.modo_capital_bajo:
             try:
                 balance = await fetch_balance_async(self.cliente)
@@ -725,12 +704,6 @@ class Trader:
             if euros < 500:
                 diversidad_min = min(diversidad_min, 2)
                 peso_min_total *= 0.7
-        if ratio_relativa < ratio_objetivo:
-            log.info(
-                f"🚫 {symbol}: diversidad relativa {ratio_relativa:.2%} < {ratio_objetivo:.0%} | Categorías recientes: {sorted(cat_hist)}"
-            )
-            metricas_tracker.registrar_filtro("diversidad")
-            return False
         
         if diversidad < diversidad_min or peso_total < peso_min_total:
             self._rechazo(
