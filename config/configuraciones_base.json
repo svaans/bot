@@ -27,7 +27,7 @@
       "modo_agresivo": false,
       "multiplicador_estrategias_recurrentes": 1.5,
       "peso_minimo_total": 2.0,
-      "diversidad_minima": 2,
+      "diversidad_minima": 3,
       "cooldown_tras_perdida": 3,
       "sl_ratio": 1.5,
       "tp_ratio": 3.0,

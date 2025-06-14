@@ -3,6 +3,7 @@
 
 import asyncio
 import logging
+import os
 from datetime import datetime, timezone
 from typing import Iterable, Dict
 
@@ -73,12 +74,29 @@ async def backtest_modular(
     fecha_inicio: datetime | None = None,
     fecha_fin: datetime | None = None,
 ) -> BacktestTrader:
+    symbols = list(symbols)
+    datos: Dict[str, pd.DataFrame] = {}
+    for s in symbols:
+        archivo = f"{ruta_datos}/{s.replace('/', '_').lower()}_1m.parquet"
+        if not os.path.isfile(archivo):
+            print(f"⚠️ Datos no encontrados para {s}. Se omite.")
+            continue
+        df = pd.read_parquet(archivo).dropna().sort_values("timestamp")
+        if fecha_inicio is not None:
+            df = df[df["timestamp"] >= pd.Timestamp(fecha_inicio)]
+        if fecha_fin is not None:
+            df = df[df["timestamp"] <= pd.Timestamp(fecha_fin)]
+        datos[s] = df.reset_index(drop=True)
+
+    if not datos:
+        raise FileNotFoundError("No se encontraron datos de históricos para los símbolos especificados")
+    
     config = Config(
         api_key="",
         api_secret="",
         modo_real=False,
         intervalo_velas="1m",
-        symbols=list(symbols),
+        symbols=list(datos.keys()),
         umbral_riesgo_diario=0.03,
         min_order_eur=10.0,
         persistencia_minima=1,
@@ -87,18 +105,7 @@ async def backtest_modular(
     bot = BacktestTrader(config)
     await bot._precargar_historico(velas=BUFFER_INICIAL)
 
-    total_ticks: Dict[str, pd.DataFrame] = {}
-    for s in bot.config.symbols:
-        df = (
-            pd.read_parquet(f"{ruta_datos}/{s.replace('/', '_').lower()}_1m.parquet")
-            .dropna()
-            .sort_values("timestamp")
-        )
-        if fecha_inicio is not None:
-            df = df[df["timestamp"] >= pd.Timestamp(fecha_inicio)]
-        if fecha_fin is not None:
-            df = df[df["timestamp"] <= pd.Timestamp(fecha_fin)]
-        total_ticks[s] = df.reset_index(drop=True)
+    total_ticks: Dict[str, pd.DataFrame] = datos
 
     max_len = max(len(df) for df in total_ticks.values())
     total_steps = sum(min(max_len, len(df)) for df in total_ticks.values())
