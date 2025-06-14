@@ -1,0 +1,11 @@
+{
+  "ADA/EUR": {
+    "timestamp": "2025-06-14T18:56:07.180242",
+    "motivo": "take profit",
+    "velas": 0,
+    "precio": 0.537143,
+    "tendencia": null,
+    "duracion": 17.104121616666664,
+    "retorno_total": 0.003630418535127108
+  }
+}
