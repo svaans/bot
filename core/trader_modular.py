@@ -1159,6 +1159,10 @@ class Trader:
         regimen = estado.regimen or detectar_regimen(df)
         evaluacion = self.engine.evaluar_entrada(symbol, df, regimen)
         estrategias = evaluacion.get("estrategias_activas", {})
+        if not estrategias:
+            log.warning(f"⚠️ [{symbol}] Sin estrategias activas tras evaluación para {regimen}. Tendencia actual detectada previamente.")
+        else:
+            log.info(f"🧪 [{symbol}] Estrategias activas: {list(estrategias.keys())}")
         estado.buffer[-1]["estrategias_activas"] = estrategias
         self.persistencia.actualizar(symbol, estrategias)
 
