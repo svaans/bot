@@ -1381,8 +1381,8 @@ class Trader:
             self.ajustar_capital_diario()
 
         estado.buffer.append(vela)
-        if len(estado.buffer) > 30:
-            estado.buffer = estado.buffer[-30:]
+        if len(estado.buffer) > 120:
+            estado.buffer = estado.buffer[-120:]
         if vela.get("timestamp") == estado.ultimo_timestamp:
             return
         
