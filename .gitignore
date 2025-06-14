@@ -11,7 +11,6 @@ ordenes_simuladas/
 
 # Configuraciones sensibles
 .env
-config/credenciales.json
 
 # Entornos virtuales
 venv/
@@ -31,8 +30,6 @@ logs/
 # Reportes diarios
 reportes_diarios/
 
-# Local environment variables
-config/
 
 # Archivos de informes generados
 informes/
