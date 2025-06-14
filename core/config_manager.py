@@ -23,7 +23,7 @@ class Config:
     modo_capital_bajo: bool = False
     telegram_token: str | None = None
     telegram_chat_id: str | None = None
-    umbral_score_tecnico: float = 3.0
+    umbral_score_tecnico: float = 2.0
     usar_score_tecnico: bool = True
     contradicciones_bloquean_entrada: bool = True
     registro_tecnico_csv: str = "logs/rechazos_tecnico.csv"

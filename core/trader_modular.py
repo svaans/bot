@@ -64,6 +64,19 @@ from core.market_regime import detectar_regimen, umbral_diversidad_relativa
 from core.categorias_tecnicas import categorias_estrategias
 
 
+def categorias_historicas(df: pd.DataFrame, ventanas: int = 5) -> set[str]:
+    """Obtiene las categorías activas en las últimas ``ventanas`` velas."""
+    if "estrategias_activas" not in df:
+        return set()
+
+    categorias: set[str] = set()
+    for estrategias in df["estrategias_activas"].tail(ventanas):
+        if isinstance(estrategias, dict):
+            activas = [e for e, ok in estrategias.items() if ok]
+            categorias.update(categorias_estrategias(activas))
+
+    return categorias
+
 
 log = configurar_logger("trader")
 
@@ -173,6 +186,8 @@ class Trader:
             log.warning(
                 "⚠️ Órdenes abiertas encontradas al iniciar. Serán monitoreadas."
             )
+
+        self._cargar_estado_persistente()
 
     async def cerrar_operacion(self, symbol: str, precio: float, motivo: str) -> None:
         """Cierra una orden y actualiza los pesos si corresponden."""
@@ -560,10 +575,6 @@ class Trader:
         )
         return round(cantidad, 6)
 
-    def _calcular_cantidad(self, symbol: str, precio: float) -> float:
-        """Versión síncrona de :meth:`_calcular_cantidad_async`."""
-        return asyncio.run(self._calcular_cantidad_async(symbol, precio))
-    
     def _metricas_recientes(self, dias: int = 7) -> dict:
         """Calcula ganancia acumulada y drawdown de los últimos ``dias``."""
         carpeta = reporter_diario.carpeta
@@ -694,9 +705,12 @@ class Trader:
     ) -> bool:
         """Verifica que la diversidad y el peso total sean suficientes."""
         diversidad = len(estrategias_activas)
-        cat_activas = categorias_estrategias(estrategias_activas)
+        
         cat_totales = categorias_estrategias(estrategias_disponibles.keys())
-        ratio_relativa = len(cat_activas) / max(len(cat_totales), 1)
+        cat_hist = categorias_historicas(df)
+        if not cat_hist:
+            cat_hist = categorias_estrategias(estrategias_activas)
+        ratio_relativa = len(cat_hist) / max(len(cat_totales), 1)
         ratio_objetivo = umbral_diversidad_relativa(df)
         if self.modo_capital_bajo:
             try:
@@ -709,7 +723,7 @@ class Trader:
                 peso_min_total *= 0.7
         if ratio_relativa < ratio_objetivo:
             log.info(
-                f"🚫 {symbol}: diversidad relativa {ratio_relativa:.2%} < {ratio_objetivo:.0%}"
+                f"🚫 {symbol}: diversidad relativa {ratio_relativa:.2%} < {ratio_objetivo:.0%} | Categorías recientes: {sorted(cat_hist)}"
             )
             metricas_tracker.registrar_filtro("diversidad")
             return False
@@ -916,9 +930,9 @@ class Trader:
         if rsi_series is None or len(rsi_series) < 3:
             return True
         r = rsi_series.iloc[-3:]
-        if direccion == "long" and not (r.iloc[-1] < r.iloc[-2] < r.iloc[-3]):
+        if direccion == "long" and not (r.iloc[-1] > r.iloc[-2] > r.iloc[-3]):
             return False
-        if direccion == "short" and not (r.iloc[-1] > r.iloc[-2] > r.iloc[-3]):
+        if direccion == "short" and not (r.iloc[-1] < r.iloc[-2] < r.iloc[-3]):
             return False
 
         slope3 = calcular_slope(df, periodo=3)
@@ -1168,6 +1182,8 @@ class Trader:
         estado.buffer[-1]["estrategias_activas"] = estrategias
         self.persistencia.actualizar(symbol, estrategias)
 
+        pesos_symbol = self.pesos_por_simbolo.get(symbol, {})
+        
         if len(estado.buffer) < 30:
             persistencia = coincidencia_parcial(estado.buffer, pesos_symbol, ventanas=5)
             if persistencia < 1:
@@ -1178,8 +1194,6 @@ class Trader:
 
 
         tendencia_actual, _ = detectar_tendencia(symbol, df)
-        
-        pesos_symbol = self.pesos_por_simbolo.get(symbol, {})
         persistencia_score = coincidencia_parcial(estado.buffer, pesos_symbol, ventanas=5)
         umbral = calcular_umbral_adaptativo(
             symbol,
@@ -1213,7 +1227,6 @@ class Trader:
         cierre = self.historial_cierres.get(symbol)
         if cierre:
             motivo = cierre.get("motivo")
-
             if motivo == "stop loss":
                 cooldown_velas = int(config_actual.get("cooldown_tras_perdida", 5))
                 velas = cierre.get("velas", 0)
@@ -1225,6 +1238,21 @@ class Trader:
                 else:
                     self.historial_cierres.pop(symbol, None)
 
+                    # Revalidación técnica tras cooldown
+                    rsi = calcular_rsi(df)
+                    momentum = calcular_momentum(df)
+                    score_tecnico, puntos = self._calcular_score_tecnico(df, rsi, momentum, tendencia_actual, direccion)
+
+                    if score_tecnico < self.umbral_score_tecnico:
+                        log.info(f"🚫 Reentrada denegada por score técnico débil: {score_tecnico:.1f}")
+                        self._registrar_rechazo_tecnico(symbol, score_tecnico, puntos, tendencia_actual, float(df['close'].iloc[-1]), "reentrada_score")
+                        return None
+
+                    if self._hay_contradicciones(df, rsi, momentum, direccion, score_tecnico) and self.contradicciones_bloquean_entrada:
+                        log.info("⚠️ Reentrada denegada por contradicción técnica post-SL")
+                        self._registrar_rechazo_tecnico(symbol, score_tecnico, puntos, tendencia_actual, float(df['close'].iloc[-1]), "reentrada_contradiccion")
+                        return None
+
             elif motivo == "cambio de tendencia":
                 precio_actual = float(df["close"].iloc[-1])
                 if not self._validar_reentrada_tendencia(symbol, df, cierre, precio_actual):
@@ -1232,6 +1260,22 @@ class Trader:
                     return None
                 else:
                     self.historial_cierres.pop(symbol, None)
+
+                    # Revalidación técnica tras cambio de tendencia
+                    rsi = calcular_rsi(df)
+                    momentum = calcular_momentum(df)
+                    score_tecnico, puntos = self._calcular_score_tecnico(df, rsi, momentum, tendencia_actual, direccion)
+
+                    if score_tecnico < self.umbral_score_tecnico:
+                        log.info(f"🚫 Reentrada denegada por score técnico débil: {score_tecnico:.1f}")
+                        self._registrar_rechazo_tecnico(symbol, score_tecnico, puntos, tendencia_actual, float(df['close'].iloc[-1]), "reentrada_score")
+                        return None
+
+                    if self._hay_contradicciones(df, rsi, momentum, direccion, score_tecnico) and self.contradicciones_bloquean_entrada:
+                        log.info("⚠️ Reentrada denegada por contradicción técnica post-tendencia")
+                        self._registrar_rechazo_tecnico(symbol, score_tecnico, puntos, tendencia_actual, float(df['close'].iloc[-1]), "reentrada_contradiccion")
+                        return None
+                
 
         estrategias_activas = list(estrategias_persistentes.keys())
         peso_total = sum(pesos_symbol.get(k, 0) for k in estrategias_activas)
@@ -1376,8 +1420,24 @@ class Trader:
 
         symbols = list(self.estado.keys())
         await self._precargar_historico()
+
+        def _log_fallo_task(task: asyncio.Task):
+            if task.cancelled():
+                log.warning("⚠️ Una tarea fue cancelada.")
+            elif task.exception():
+                log.error(f"❌ Error en tarea asincrónica: {task.exception()}")
+
         self._task = asyncio.create_task(self.data_feed.escuchar(symbols, handle))
+        self._task.add_done_callback(_log_fallo_task)
+
         self._task_estado = asyncio.create_task(monitorear_estado_periodicamente(self))
+        self._task_estado.add_done_callback(_log_fallo_task)
+
+        try:
+            await asyncio.gather(self._task, self._task_estado)
+        except Exception as e:
+            log.error(f"❌ Error inesperado en ejecución de tareas: {e}")
+            
         await asyncio.gather(self._task, self._task_estado)
 
     async def _procesar_vela(self, vela: dict) -> None:
@@ -1421,3 +1481,34 @@ class Trader:
                 await self._task_estado
             except asyncio.CancelledError:
                 pass
+
+        self._guardar_estado_persistente()
+
+
+    def _guardar_estado_persistente(self) -> None:
+        """Guarda historial de cierres y capital en ``estado/``."""
+        try:
+            os.makedirs("estado", exist_ok=True)
+            with open("estado/historial_cierres.json", "w") as f:
+                json.dump(self.historial_cierres, f, indent=2)
+            with open("estado/capital.json", "w") as f:
+                json.dump(self.capital_por_simbolo, f, indent=2)
+        except Exception as e:  # noqa: BLE001
+            log.warning(f"⚠️ Error guardando estado persistente: {e}")
+
+
+    def _cargar_estado_persistente(self) -> None:
+        """Carga el estado previo de ``estado/`` si existe."""
+        try:
+            if os.path.exists("estado/historial_cierres.json"):
+                with open("estado/historial_cierres.json") as f:
+                    data = json.load(f)
+                    if isinstance(data, dict):
+                        self.historial_cierres.update(data)
+            if os.path.exists("estado/capital.json"):
+                with open("estado/capital.json") as f:
+                    data = json.load(f)
+                    if isinstance(data, dict):
+                        self.capital_por_simbolo.update({k: float(v) for k, v in data.items()})
+        except Exception as e:  # noqa: BLE001
+            log.warning(f"⚠️ Error cargando estado persistente: {e}")
