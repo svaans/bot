@@ -44,7 +44,7 @@ def configurar_parametros_dinamicos(symbol: str, df: pd.DataFrame, base_config: 
 
     # === Diversidad mínima adaptativa ===
     if slope < -0.002:  # mercado muy bajista
-        config["diversidad_minima"] = 3
+        config["diversidad_minima"] = 2
     elif slope > 0.002:
         config["diversidad_minima"] = 1
     else:
