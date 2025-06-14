@@ -692,7 +692,7 @@ class Trader:
         diferencia = umbral - puntaje
         metricas_tracker.registrar_diferencia_umbral(diferencia)
         if puntaje < umbral:
-            log.debug(f"🚫 {symbol}: puntaje {puntaje:.2f} < umbral {umbral:.2f}")
+            log.debug(f"🚫 {symbol}: puntaje {puntaje:.2f} < umbral {umbral:.2f} tendencia: {detectar_tendencia}")
             metricas_tracker.registrar_filtro("umbral")
             return False
         return True
