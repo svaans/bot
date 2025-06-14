@@ -574,6 +574,10 @@ class Trader:
             )
         )
         return round(cantidad, 6)
+    
+    def _calcular_cantidad(self, symbol: str, precio: float) -> float:
+        """Versión síncrona de :meth:`_calcular_cantidad_async`."""
+        return asyncio.run(self._calcular_cantidad_async(symbol, precio))
 
     def _metricas_recientes(self, dias: int = 7) -> dict:
         """Calcula ganancia acumulada y drawdown de los últimos ``dias``."""
@@ -1419,7 +1423,7 @@ class Trader:
             await self._procesar_vela(candle)
 
         symbols = list(self.estado.keys())
-        await self._precargar_historico()
+        await self._precargar_historico(velas=30)
 
         def _log_fallo_task(task: asyncio.Task):
             if task.cancelled():
