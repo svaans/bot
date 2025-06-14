@@ -8,6 +8,23 @@ from core.logger import configurar_logger
 
 log = configurar_logger("config_manager")
 
+
+def _cargar_float(clave, valor_defecto):
+    try:
+        return float(os.getenv(clave, valor_defecto))
+    except ValueError:
+        log.warning(f"⚠️ Valor inválido para {clave}. Usando valor por defecto {valor_defecto}")
+        return float(valor_defecto)
+
+
+def _cargar_int(clave, valor_defecto):
+    try:
+        return int(os.getenv(clave, valor_defecto))
+    except ValueError:
+        log.warning(f"⚠️ Valor inválido para {clave}. Usando valor por defecto {valor_defecto}")
+        return int(valor_defecto)
+
+
 @dataclass(frozen=True)
 class Config:
     """Configuración inmutable cargada desde el entorno."""
@@ -23,7 +40,7 @@ class Config:
     modo_capital_bajo: bool = False
     telegram_token: str | None = None
     telegram_chat_id: str | None = None
-    umbral_score_tecnico: float = 1
+    umbral_score_tecnico: float = 1.0
     usar_score_tecnico: bool = True
     contradicciones_bloquean_entrada: bool = True
     registro_tecnico_csv: str = "logs/rechazos_tecnico.csv"
@@ -36,14 +53,12 @@ class ConfigManager:
     def load_from_env() -> Config:
         env_path = Path(__file__).resolve().parent.parent / "config" / "claves.env"
         load_dotenv(env_path)
-        symbols_env = os.getenv(
-            "SYMBOLS",
-            "BTC/EUR,ETH/EUR,ADA/EUR,SOL/EUR,BNB/EUR",
-        )
+
+        symbols_env = os.getenv("SYMBOLS", "BTC/EUR,ETH/EUR,ADA/EUR,SOL/EUR,BNB/EUR")
+        symbols = [s.strip().upper() for s in symbols_env.split(",") if s.strip()]
 
         api_key = os.environ.get("BINANCE_API_KEY")
         api_secret = os.environ.get("BINANCE_API_SECRET")
-        symbols = [s.strip().upper() for s in symbols_env.split(",") if s.strip()]
 
         missing = []
         if not api_key:
@@ -57,20 +72,21 @@ class ConfigManager:
             datos = ", ".join(missing)
             log.error(f"❌ Faltan variables de entorno requeridas: {datos}")
             raise ValueError(f"Faltan datos de configuración: {datos}")
+
         return Config(
             api_key=api_key,
             api_secret=api_secret,
             modo_real=os.getenv("MODO_REAL", "False").lower() == "true",
             intervalo_velas=os.getenv("INTERVALO_VELAS", "1m"),
             symbols=symbols,
-            umbral_riesgo_diario=float(os.getenv("UMBRAL_RIESGO_DIARIO", 0.03)),
-            min_order_eur=float(os.getenv("MIN_ORDER_EUR", 10)),
-            persistencia_minima=int(os.getenv("PERSISTENCIA_MINIMA", 1)),
-            peso_extra_persistencia=float(os.getenv("PESO_EXTRA_PERSISTENCIA", 0.5)),
+            umbral_riesgo_diario=_cargar_float("UMBRAL_RIESGO_DIARIO", 0.03),
+            min_order_eur=_cargar_float("MIN_ORDER_EUR", 10),
+            persistencia_minima=_cargar_int("PERSISTENCIA_MINIMA", 2),
+            peso_extra_persistencia=_cargar_float("PESO_EXTRA_PERSISTENCIA", 0.5),
             modo_capital_bajo=os.getenv("MODO_CAPITAL_BAJO", "False").lower() == "true",
             telegram_token=os.getenv("TELEGRAM_TOKEN"),
             telegram_chat_id=os.getenv("TELEGRAM_CHAT_ID"),
-            umbral_score_tecnico=float(os.getenv("UMBRAL_SCORE_TECNICO", 1)),
+            umbral_score_tecnico=_cargar_float("UMBRAL_SCORE_TECNICO", 1.0),
             usar_score_tecnico=os.getenv("USAR_SCORE_TECNICO", "True").lower() == "true",
             contradicciones_bloquean_entrada=os.getenv("CONTRADICCIONES_BLOQUEAN_ENTRADA", "True").lower() == "true",
             registro_tecnico_csv=os.getenv("REGISTRO_TECNICO_CSV", "logs/rechazos_tecnico.csv"),

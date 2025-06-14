@@ -2,17 +2,16 @@
 
 from __future__ import annotations
 
-from core.riesgo import riesgo_superado as _riesgo_superado, actualizar_perdida
-from core.reporting import reporter_diario
 import numpy as np
 from core.logger import configurar_logger
-
+from core.riesgo import riesgo_superado as _riesgo_superado, actualizar_perdida
+from core.reporting import reporter_diario
 
 log = configurar_logger("risk", modo_silencioso=True)
 
 
 class RiskManager:
-    """Encapsula la lógica de control de riesgo."""
+    """Encapsula la lógica de control de riesgo del bot."""
 
     def __init__(self, umbral: float) -> None:
         self.umbral = umbral
@@ -23,64 +22,75 @@ class RiskManager:
 
     def registrar_perdida(self, symbol: str, perdida: float) -> None:
         """Registra una pérdida para ``symbol``."""
-        actualizar_perdida(symbol, perdida)
+        if perdida > 0:
+            actualizar_perdida(symbol, perdida)
 
     def ajustar_umbral(self, segun_metricas: dict) -> None:
-        """Modifica ``self.umbral`` de acuerdo al desempeño reciente.
+        """
+        Modifica ``self.umbral`` de acuerdo al desempeño reciente.
 
-        ``segun_metricas`` debe contener ``ganancia_semana`` y ``drawdown``.
-        Si la ganancia semanal es mayor a 5% se incrementa ligeramente el
-        umbral. Si el drawdown es negativo por debajo de -5%, se reduce.
+        Espera un diccionario con las claves:
+        - ganancia_semana (float): ganancia semanal acumulada
+        - drawdown (float): pérdida máxima registrada en la semana
+
+        Lógica:
+        - Si ganancia semanal > 5%, aumenta el umbral hasta un máximo del 0.5
+        - Si drawdown < -5%, reduce el umbral hasta un mínimo del 0.01
         """
         if not isinstance(segun_metricas, dict):
+            log.warning("⚠️ Métricas de riesgo no proporcionadas como diccionario")
             return
 
         ganancia = segun_metricas.get("ganancia_semana", 0.0)
         drawdown = segun_metricas.get("drawdown", 0.0)
+
         if not isinstance(ganancia, (int, float)) or not isinstance(drawdown, (int, float)):
             log.warning("⚠️ Métricas inválidas para ajuste de riesgo")
             return
         if np.isnan(ganancia) or np.isnan(drawdown):
-            log.warning("⚠️ Métricas NaN para ajuste de riesgo")
+            log.warning("⚠️ Métricas NaN detectadas")
             return
 
-        anterior = self.umbral
+        umbral_anterior = self.umbral
 
         if ganancia > 0.05:
             self.umbral = round(min(0.5, self.umbral * 1.05), 4)
         elif drawdown < -0.05:
             self.umbral = round(max(0.01, self.umbral * 0.9), 4)
 
-        if self.umbral != anterior:
-            log.info(f"🔧 Umbral ajustado de {anterior:.4f} a {self.umbral:.4f}")
+        if self.umbral != umbral_anterior:
+            log.info(f"🔧 Umbral ajustado de {umbral_anterior:.4f} → {self.umbral:.4f}")
 
     def multiplicador_kelly(self, n_trades: int = 10) -> float:
-        """Calcula un multiplicador para la fracción Kelly basándose en los
-        últimos ``n_trades`` registrados.
+        """
+        Calcula un factor de ajuste para la fracción de Kelly.
 
-        Retorna ``1.0`` si no hay datos suficientes o si ocurre algún error.
+        Se basa en los últimos ``n_trades`` y su retorno.
+        - Si no hay datos o fallan los cálculos, retorna 1.0 (sin ajuste).
+        - El resultado se limita entre 0.5 y 1.5 para evitar extremos.
         """
         try:
-            operaciones: list[dict] = []
-            for ops in reporter_diario.ultimas_operaciones.values():
-                operaciones.extend(ops[-n_trades:])
+            operaciones = []
+            for trades in reporter_diario.ultimas_operaciones.values():
+                operaciones.extend(trades[-n_trades:])
+
+            operaciones = operaciones[-n_trades:]
             if not operaciones:
                 return 1.0
-            operaciones = operaciones[-n_trades:]
+
             retornos = [
                 float(o.get("retorno_total", 0.0))
                 for o in operaciones
-                if isinstance(o.get("retorno_total"), (int, float))
-                and not np.isnan(o.get("retorno_total"))
+                if isinstance(o.get("retorno_total"), (int, float)) and not np.isnan(o.get("retorno_total"))
             ]
             if not retornos:
                 return 1.0
+
             promedio = sum(retornos) / len(retornos)
-            factor = 1 + promedio
-            factor = round(max(0.5, min(1.5, factor)), 3)
+            factor = round(max(0.5, min(1.5, 1 + promedio)), 3)
             log.debug(f"🔧 Multiplicador Kelly calculado: {factor:.3f}")
             return factor
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             log.warning(f"⚠️ Error calculando multiplicador Kelly: {e}")
             return 1.0
 
@@ -90,23 +100,24 @@ class RiskManager:
         volatilidad_media: float,
         umbral: float = 2.0,
     ) -> float:
-        """Devuelve un factor reductor para la fracción de posición.
+        """
+        Devuelve un factor reductor si la volatilidad actual es anómala.
 
-        Si ``volatilidad_actual`` supera ``umbral`` veces ``volatilidad_media``
-        se aplica una reducción inversamente proporcional al exceso.
+        Si la volatilidad actual excede en más de ``umbral`` veces a la media,
+        se penaliza la exposición reduciendo el tamaño de la posición.
         """
         if (
-            not isinstance(volatilidad_actual, (int, float))
-            or not isinstance(volatilidad_media, (int, float))
-            or volatilidad_media <= 0
-            or volatilidad_actual <= 0
+            not isinstance(volatilidad_actual, (int, float)) or
+            not isinstance(volatilidad_media, (int, float)) or
+            volatilidad_actual <= 0 or volatilidad_media <= 0
         ):
             return 1.0
 
-        limite = volatilidad_media * umbral
-        if volatilidad_actual <= limite:
+        exceso = volatilidad_actual / (volatilidad_media * umbral)
+        if exceso <= 1.0:
             return 1.0
 
-        exceso = volatilidad_actual / limite
-        factor = 1 / exceso
-        return max(0.5, min(1.0, round(factor, 3)))
+        factor = 1.0 / exceso
+        factor = round(max(0.5, min(1.0, factor)), 3)
+        log.info(f"🌪️ Volatilidad excesiva, aplicando factor de reducción: {factor}")
+        return factor

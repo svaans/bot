@@ -1,24 +1,48 @@
 import os
 import requests
 from core.logger import configurar_logger
+from dotenv import load_dotenv
 
 log = configurar_logger("notificador")
 
 class Notificador:
-    """Envía mensajes de texto mediante la API de Telegram."""
+    def __init__(self, token: str = "", chat_id: str = "", modo_test: bool = False, parse_mode: str = "Markdown"):
+        self.token = token
+        self.chat_id = chat_id
+        self.modo_test = modo_test
+        self.parse_mode = parse_mode
 
-    def __init__(self, token: str | None, chat_id: str | None) -> None:
-        self.token = token or ""
-        self.chat_id = chat_id or ""
+        if not self.token or not self.chat_id:
+            log.warning("❌ Token o Chat ID no configurados. Notificaciones deshabilitadas.")
 
-    def enviar(self, mensaje: str) -> None:
+    def enviar(self, mensaje: str, tipo: str = "INFO") -> None:
         if not self.token or not self.chat_id:
             return
+
+        mensaje = f"[{tipo.upper()}] {mensaje}"
+
+        if self.modo_test:
+            print(f"🧪 [TEST] {mensaje}")
+            return
+
+        url = f"https://api.telegram.org/bot{self.token}/sendMessage"
+        payload = {
+            "chat_id": self.chat_id,
+            "text": mensaje,
+            "parse_mode": self.parse_mode
+        }
+
         try:
-            url = f"https://api.telegram.org/bot{self.token}/sendMessage"
-            resp = requests.post(url, json={"chat_id": self.chat_id, "text": mensaje})
-            if resp.status_code != 200:
-                log.warning(f"⚠️ Error al enviar notificación: {resp.text}")
-        except requests.RequestException as e:
-            log.warning(f"⚠️ No se pudo enviar notificación: {e}")
-            
+            response = requests.post(url, json=payload, timeout=10)
+            if response.status_code != 200:
+                log.warning(f"⚠️ Error enviando notificación: {response.text}")
+        except Exception as e:
+            log.error(f"❌ Excepción al enviar notificación: {e}")
+
+def crear_notificador_desde_env() -> Notificador:
+    load_dotenv("config/claves.env")
+    token = os.getenv("TELEGRAM_TOKEN", "")
+    chat_id = os.getenv("TELEGRAM_CHAT_ID", "")
+    modo_test = os.getenv("MODO_TEST_NOTIFICADOR", "false").lower() == "true"
+    parse_mode = os.getenv("TELEGRAM_PARSE_MODE", "Markdown")
+    return Notificador(token=token, chat_id=chat_id, modo_test=modo_test, parse_mode=parse_mode)

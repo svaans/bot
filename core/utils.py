@@ -8,6 +8,7 @@ import pandas as pd
 from datetime import datetime
 from core.ordenes_model import Orden
 from core.logger import configurar_logger
+from decimal import Decimal, InvalidOperation
 
 log = configurar_logger("trader_simulado", modo_silencioso=True)
 
@@ -16,6 +17,14 @@ def respaldar_archivo(ruta):
     if os.path.exists(ruta):
         backup = ruta.replace(".json", "_backup.json")
         shutil.copy(ruta, backup)
+
+def is_valid_number(value) -> bool:
+    """Verifica si un valor es un número finito y válido."""
+    try:
+        num = float(value)
+        return not (pd.isna(num) or pd.isnull(num) or num != num or num in [float("inf"), float("-inf")])
+    except (ValueError, TypeError):
+        return False
 
 
 def guardar_operacion_en_csv(symbol, info, ruta="ordenes_reales"):
@@ -177,13 +186,34 @@ def guardar_orden_simulada(symbol: str, nueva_orden: dict):
     log.error(f"❌ No se pudo guardar la orden simulada para {symbol} tras 3 intentos.")
 
 def guardar_orden_real(symbol: str, orden: dict | Orden):
-    """Guarda una orden real en formato Parquet por símbolo."""
-    data = orden.to_parquet_record() if hasattr(orden, "to_parquet_record") else orden
+    """
+    Guarda una orden real en un archivo Parquet por símbolo de forma segura, eficiente y precisa.
+    """
+    try:
+        data = orden.to_parquet_record() if hasattr(orden, "to_parquet_record") else orden.copy()
+    except Exception as e:
+        log.error(f"❌ No se pudo convertir la orden a formato Parquet: {e}")
+        return
+
     archivo = f"ordenes_reales/{symbol.replace('/', '_').lower()}.parquet"
     os.makedirs(os.path.dirname(archivo), exist_ok=True)
 
+    # Validación y normalización de campos numéricos
+    campos_flotantes = ["precio_entrada", "precio_cierre", "cantidad", "stop_loss", "take_profit", "retorno_total"]
+    for campo in campos_flotantes:
+        try:
+            valor = data.get(campo)
+            if valor is not None:
+                data[campo] = float(round(Decimal(str(valor)), 8))
+        except (InvalidOperation, TypeError):
+            log.warning(f"⚠️ Valor inválido en campo {campo}: {valor}. Se asignará 0.0")
+            data[campo] = 0.0
+
     if isinstance(data.get("timestamp"), (pd.Timestamp, datetime)):
         data["timestamp"] = data["timestamp"].timestamp()
+
+    if isinstance(data.get("estrategias_activas"), dict):
+        data["estrategias_activas"] = json.dumps(data["estrategias_activas"])
 
     try:
         with lock_archivo:
@@ -191,7 +221,13 @@ def guardar_orden_real(symbol: str, orden: dict | Orden):
             if os.path.exists(archivo):
                 try:
                     df = pd.read_parquet(archivo)
-                    ordenes = df.to_dict("records")
+
+                    # ✅ Protección contra duplicados exactos
+                    data_set = {json.dumps(data, sort_keys=True)}
+                    ordenes = [
+                        o for o in df.to_dict("records")
+                        if json.dumps(o, sort_keys=True) not in data_set
+                    ]
                 except (OSError, ValueError) as e:
                     backup = archivo.replace(
                         ".parquet", f"_corrupto_{int(datetime.now().timestamp())}.parquet"
@@ -203,7 +239,8 @@ def guardar_orden_real(symbol: str, orden: dict | Orden):
             ordenes.append(data)
             pd.DataFrame(ordenes).to_parquet(archivo, index=False)
             log.info(f"💾 Orden REAL registrada en {archivo}")
-    except (OSError, ValueError) as e:
-        log.error(f"❌ Error guardando orden real: {e}")
+
+    except Exception as e:
+        log.error(f"❌ Error guardando orden real en {archivo}: {e}")
         raise
         
