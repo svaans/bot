@@ -1350,7 +1350,7 @@ class Trader:
             log.info(f"🔁 Contexto actualizado {symbol}: {score:.2f}")
 
         symbols = list(self.estado.keys())
-        await self._precargar_historico(velas=30)
+        await self._precargar_historico(velas=60)
 
         def _log_fallo_task(task: asyncio.Task):
             if task.cancelled():
