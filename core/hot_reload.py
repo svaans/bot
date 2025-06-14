@@ -38,15 +38,12 @@ class _ReloadHandler(PatternMatchingEventHandler):
 
     def _module_from_path(self, path: Path) -> str | None:
         try:
-            # Busca el primer directorio con __init__.py hacia atrás para formar el nombre de módulo
+            # Obtiene el módulo relativo a la carpeta base sin exigir __init__.py
             path = path.resolve()
-            parts = []
-            while path != self.base and path != path.parent:
-                if (path.parent / "__init__.py").exists():
-                    parts.insert(0, path.stem)
-                    path = path.parent
-                else:
-                    break
+            if not path.is_file():
+                return None
+            relative = path.relative_to(self.base)
+            parts = list(relative.with_suffix("").parts)
             if not parts:
                 return None
             return ".".join(parts)
