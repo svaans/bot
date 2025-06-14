@@ -46,9 +46,9 @@ def normalizar_pesos(
 
     factor = total / suma_actual
     return {
-        estrategia: round(valor * factor, 4)
-        for estrategia, valor in pesos_min.items()
+        estrategia: round(valor * factor, 4) for estrategia, valor in pesos_min.items()
     }
+
 
 @dataclass
 class GestorPesos:
@@ -71,7 +71,17 @@ class GestorPesos:
                 datos = json.load(f)
             except json.JSONDecodeError as e:
                 log.error(f"❌ Error cargando pesos desde JSON: {e}")
-                raise
+                # Intentar recuperar desde archivo base si existe
+                ruta_base = "config/estrategias_pesos_base.json"
+                if os.path.exists(ruta_base):
+                    log.info("🔄 Restaurando pesos desde copia base")
+                    with open(ruta_base, "r") as base:
+                        datos = json.load(base)
+                    # Sobrescribir archivo dañado
+                    with open(self.ruta, "w") as reparado:
+                        json.dump(datos, reparado, indent=4)
+                else:
+                    raise
 
         if not isinstance(datos, dict) or not datos:
             log.error("❌ Archivo de pesos vacío o con formato inválido")
@@ -106,7 +116,9 @@ class GestorPesos:
     def obtener_pesos_symbol(self, symbol: str) -> Dict[str, float]:
         return self.pesos.get(symbol, {})
 
-    def calcular_desde_backtest(self, simbolos, carpeta="backtesting", escala=20) -> None:
+    def calcular_desde_backtest(
+        self, simbolos, carpeta="backtesting", escala=20
+    ) -> None:
         pesos_por_symbol = {}
         for symbol in simbolos:
             ruta = f"{carpeta}/ordenes_{symbol.replace('/', '_')}_resultado.csv"
@@ -124,9 +136,13 @@ class GestorPesos:
                 if fila.get("resultado") != "ganancia":
                     continue
                 try:
-                    estrategias = json.loads(fila["estrategias_activas"].replace("'", "\"") )
+                    estrategias = json.loads(
+                        fila["estrategias_activas"].replace("'", '"')
+                    )
                 except json.JSONDecodeError:
-                    log.warning(f"❌ JSON inválido en fila: {fila['estrategias_activas']}")
+                    log.warning(
+                        f"❌ JSON inválido en fila: {fila['estrategias_activas']}"
+                    )
                     continue
 
                 for estrategia, activa in estrategias.items():
