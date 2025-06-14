@@ -94,18 +94,6 @@ class GestorPesos:
         pesos: Dict[str, Dict[str, float]],
         factor_temporal: Optional[float] = None,
     ) -> None:
-        """Guarda los pesos normalizados en disco."""
-
-        pesos_normalizados = {}
-        for symbol, datos in pesos.items():
-            pesos_normalizados[symbol] = normalizar_pesos(
-                datos,
-                total=100,
-                peso_min=0.5,
-                factor_temporal=factor_temporal,
-            )
-
-        self.pesos = pesos_normalizados
         with open(self.ruta, "w") as f:
             json.dump(self.pesos, f, indent=4)
         log.info("✅ Pesos guardados.")
