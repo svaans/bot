@@ -1,63 +1,79 @@
-
 from core.pesos import gestor_pesos
 from estrategias_entrada.loader import cargar_estrategias
 from core.estrategias import obtener_estrategias_por_tendencia
 from indicadores.volumen import verificar_volumen_suficiente
 from indicadores.divergencia_rsi import detectar_divergencia_alcista
+from core.logger import configurar_logger
 import traceback
 
+log = configurar_logger("entradas")
+
+# Cache de funciones cargadas
 ESTRATEGIAS_DISPONIBLES = cargar_estrategias()
 
-
 def evaluar_estrategias(symbol, df, tendencia):
+    """
+    Evalúa todas las estrategias activas según la tendencia y calcula:
+    - Puntaje total (suma de pesos de estrategias activadas)
+    - Diversidad (cantidad de estrategias activadas con peso > 0)
+    - Diccionario de estrategias activas
+
+    Retorna un dict con: puntaje_total, estrategias_activas, diversidad
+    """
 
     global ESTRATEGIAS_DISPONIBLES
     if not ESTRATEGIAS_DISPONIBLES:
         ESTRATEGIAS_DISPONIBLES = cargar_estrategias()
 
-    activas = obtener_estrategias_por_tendencia(tendencia)
-
-    puntaje_total = 0
+    estrategias_candidatas = obtener_estrategias_por_tendencia(tendencia)
     estrategias_activadas = {}
+    puntaje_total = 0.0
 
-    for nombre in activas:
+    for nombre in estrategias_candidatas:
         funcion = ESTRATEGIAS_DISPONIBLES.get(nombre)
-        if funcion is None:
-            print(f"⚠️ Estrategia no encontrada: {nombre}")
+
+        if not funcion:
+            log.warning(f"⚠️ Estrategia no encontrada: {nombre}")
             continue
+
         try:
             resultado = funcion(df)
 
             if resultado is None:
-                print(f"🛑 {nombre} devolvió None.")
-                print(f"   Última fila del df:\n{df.tail(1)}")
+                log.warning(f"🛑 {nombre} devolvió None.")
                 continue
             if not isinstance(resultado, dict):
-                print(f"🟡 {nombre} devolvió un tipo inválido: {type(resultado)} – Valor: {resultado}")
+                log.warning(f"🟡 {nombre} devolvió tipo inválido: {type(resultado)} — Valor: {resultado}")
                 continue
             if "activo" not in resultado:
-                print(f"🔴 {nombre} no contiene clave 'activo'. Resultado: {resultado}")
+                log.warning(f"🔴 {nombre} no contiene clave 'activo'. Resultado: {resultado}")
                 continue
 
             activo = resultado.get("activo", False)
             estrategias_activadas[nombre] = activo
+
             if activo:
                 peso = gestor_pesos.obtener_peso(nombre, symbol)
                 puntaje_total += peso
 
         except Exception as e:
-            print(f"❌ Excepción en {nombre}: {e}")
-            print(traceback.format_exc())
+            log.error(f"❌ Excepción al evaluar {nombre}: {e}")
+            log.debug(traceback.format_exc())
             continue
+
+    # Calcular diversidad real: estrategias activas con peso > 0
+    estrategias_con_peso = [
+        nombre for nombre, activo in estrategias_activadas.items()
+        if activo and gestor_pesos.obtener_peso(nombre, symbol) > 0
+    ]
+    diversidad = len(estrategias_con_peso)
 
     return {
         "puntaje_total": round(puntaje_total, 2),
-        "estrategias_activas": estrategias_activadas
+        "estrategias_activas": estrategias_activadas,
+        "diversidad": diversidad
     }
 
-from core.logger import configurar_logger
-
-log = configurar_logger("entradas")
 
 def entrada_permitida(
     symbol,
@@ -71,7 +87,10 @@ def entrada_permitida(
     direccion="long",
 ):
     """
-    Evalúa si una entrada debe permitirse según potencia, umbral y criterios técnicos.
+    Evalúa si se permite una entrada con base en:
+    - Potencia vs Umbral
+    - Diversidad de estrategias activas
+    - Condiciones técnicas adicionales
     """
     estrategias_activas_count = sum(1 for v in estrategias_activas.values() if v)
 
@@ -80,11 +99,9 @@ def entrada_permitida(
             log.info(f"📉 Entrada evitada por volumen insuficiente en {symbol}")
             return False
         if detectar_divergencia_alcista(df):
-            log.warning(
-                f"⚠️ Entrada short bloqueada por divergencia alcista detectada en {symbol}"
-            )
+            log.warning(f"⚠️ Entrada short bloqueada por divergencia alcista en {symbol}")
             return False
-        
+
     if potencia >= umbral:
         log.info(f"🟢 [{symbol}] Entrada directa permitida: {potencia:.2f} >= {umbral:.2f}")
         return True
@@ -99,10 +116,9 @@ def entrada_permitida(
         log.info(f"🟡 [{symbol}] Entrada validada por criterios técnicos. Potencia: {potencia:.2f} < Umbral: {umbral:.2f}")
         return True
 
-    log.info(
-        f"🔴 [{symbol}] Entrada descartada. Potencia: {potencia:.2f} < Umbral: {umbral:.2f}"
-    )
+    log.info(f"🔴 [{symbol}] Entrada descartada. Potencia: {potencia:.2f} < Umbral: {umbral:.2f}")
     return False
+
 
 
 
