@@ -66,8 +66,6 @@ class StreamContexto:
                             puntaje = variacion_pct * vol
 
                             _PUNTAJES[symbol] = puntaje
-                            log.info(f"🔁 Contexto actualizado {symbol}: {puntaje:.4f}")
-
                             try:
                                 await handler(symbol, puntaje)
                             except Exception as e:
