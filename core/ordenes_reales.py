@@ -195,9 +195,7 @@ def sincronizar_ordenes_binance(simbolos: list[str] | None = None) -> dict[str, 
         ordenes_api = []
         if simbolos:
             for s in simbolos:
-                ordenes_api.extend(
-                    cliente.fetch_open_orders(s.replace("/", ""))
-                )
+                ordenes_api.extend(cliente.fetch_open_orders(s))
         else:
             ordenes_api = cliente.fetch_open_orders()
     except BaseError as e:
