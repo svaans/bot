@@ -1202,6 +1202,9 @@ class Trader:
         regimen = estado.regimen or detectar_regimen(df)
         log.debug(f"[{symbol}] Régimen detectado: {regimen}")
 
+        tendencia_actual, _ = detectar_tendencia(symbol, df)
+        log.debug(f"[{symbol}] Tendencia detectada: {tendencia_actual}")
+
         # Evaluar entrada: estrategias activadas por el engine
         evaluacion = self.engine.evaluar_entrada(symbol, df, regimen)
         estrategias = evaluacion.get("estrategias_activas", {})
@@ -1223,8 +1226,6 @@ class Trader:
             if persistencia < 1:
                 return None
 
-        tendencia_actual, _ = detectar_tendencia(symbol, df)
-        log.debug(f"[{symbol}] Tendencia detectada: {tendencia_actual}")
 
         persistencia_score = coincidencia_parcial(estado.buffer, pesos_symbol, ventanas=5)
         umbral = calcular_umbral_adaptativo(
