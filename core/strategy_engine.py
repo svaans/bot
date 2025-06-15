@@ -49,20 +49,38 @@ class StrategyEngine:
             }
 
         try:
+            # Detectar tendencia
             tendencia, _ = detectar_tendencia(symbol, df)
+            log.info(f"📊 [{symbol}] Tendencia detectada: {tendencia}")
+
+            # Evaluar estrategias
             resultado = evaluar_estrategias(symbol, df, tendencia)
-
             estrategias_activas = resultado.get("estrategias_activas", {})
-            if regimen:
-                estrategias_activas = filtrar_por_regimen(estrategias_activas, regimen)
-                resultado["estrategias_activas"] = estrategias_activas
 
+            log.info(f"🔍 [{symbol}] Estrategias activas antes de filtro de régimen: {list(estrategias_activas.keys())}")
+
+            # Filtro por régimen (alta/baja volatilidad, lateral, etc.)
+            if regimen:
+                estrategias_filtradas = filtrar_por_regimen(estrategias_activas, regimen)
+                resultado["estrategias_activas"] = estrategias_filtradas
+
+                desactivadas = set(estrategias_activas.keys()) - set(estrategias_filtradas.keys())
+                if desactivadas:
+                    log.debug(f"🚫 [{symbol}] Estrategias eliminadas por régimen '{regimen}': {list(desactivadas)}")
+                log.info(f"✅ [{symbol}] Estrategias finales tras régimen '{regimen}': {list(estrategias_filtradas.keys())}")
+            else:
+                log.info(f"✅ [{symbol}] Estrategias usadas sin filtro de régimen: {list(estrategias_activas.keys())}")
+
+            # Asignación de metadatos de salida
             resultado["tendencia"] = tendencia
-            resultado["probabilidad"] = 1.0  # valor fijo por ahora
+            resultado["probabilidad"] = 1.0  # Fijo por ahora
 
             resultado["puntaje_total"] = round(
                 resultado.get("puntaje_total", 0.0) * resultado["probabilidad"], 2
             )
+
+            log.info(f"📈 [{symbol}] Puntaje total calculado: {resultado['puntaje_total']}")
+
             return resultado
 
         except Exception as e:
@@ -73,6 +91,7 @@ class StrategyEngine:
                 "probabilidad": 0.0,
                 "tendencia": "desconocida",
             }
+
 
     @staticmethod
     def evaluar_salida(df: pd.DataFrame, orden: Dict) -> Dict:

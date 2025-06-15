@@ -60,13 +60,30 @@ ESTRATEGIAS_POR_REGIMEN = {
         'estrategia_ichimoku_breakout',
         'estrategia_vwap_breakout',
         'volatility_breakout',
-        'estrategia_rango'
+        'estrategia_rango',
+        'estrategia_momentum',
+        'flag_alcista',
+        'flag_bajista',
+        'measured_move_up',
+        'measured_move_down',
+        'three_rising_valleys',
+        'three_descending_peaks',
     ],
     "baja_volatilidad": [
         'pennant',
         'pennant_bajista',
         'flag_alcista',
-        'flag_bajista'
+        'flag_bajista',
+        'cup_with_handle',
+        'double_bottom',
+        'triple_bottom',
+        'triple_top',
+        'wedge_breakout',
+        'ascending_scallop',
+        'descending_scallop',
+        'diamond_bottom',
+        'inverted_cup_with_handle',
+        'tops_rectangle'
     ],
     "tendencial": [
         'estrategia_cruce_medias',
@@ -75,12 +92,30 @@ ESTRATEGIAS_POR_REGIMEN = {
         'estrategia_macd_hist_inversion',
         'estrategia_sma',
         'estrategia_sma_bajista',
-        'estrategia_adx'
+        'estrategia_adx',
+        'estrategia_ema',
+        'ascending_triangle',
+        'descending_triangle',
+        'symmetrical_triangle_up',
+        'symmetrical_triangle_down',
+        'measured_move_up',
+        'measured_move_down',
+        'three_rising_valleys',
+        'three_descending_peaks',
     ],
     "lateral": [
         'estrategia_rsi',
         'estrategia_divergencia_rsi',
-        'estrategia_estocastico'
+        'estrategia_estocastico',
+        'estrategia_cruce_ema_stochrsi',
+        'estrategia_momentum',
+        'estrategia_sma',
+        'estrategia_volumen_alto',
+        'head_and_shoulders',
+        'estrategia_rango',
+        'estrategia_vwap_breakout',
+        'estrategia_ichimoku_breakout',
+        'tops_rectangle'
     ]
 }
 
