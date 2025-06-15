@@ -95,7 +95,7 @@ class Trader:
         os.makedirs("logs/rechazos", exist_ok=True)
         os.makedirs(os.path.dirname(config.registro_tecnico_csv), exist_ok=True)
         self.umbral_score_tecnico = config.umbral_score_tecnico
-        self.usar_score_tecnico = config.usar_score_tecnico
+        self.usar_score_tecnico = getattr(config, "usar_score_tecnico", True)
         self.contradicciones_bloquean_entrada = config.contradicciones_bloquean_entrada
         self.registro_tecnico_csv = config.registro_tecnico_csv
         self.fraccion_kelly = calcular_fraccion_kelly()
@@ -128,6 +128,9 @@ class Trader:
             f"⚖️ Fracción Kelly: {self.fraccion_kelly:.4f}"
             f" (x{factor_kelly:.3f}, x{factor_vol:.3f})"
         )
+        self.piramide_fracciones = max(1, config.fracciones_piramide)
+        self.reserva_piramide = max(0.0, min(1.0, config.reserva_piramide))
+        self.umbral_piramide = max(0.0, config.umbral_piramide)
         euros = 0
         if config.api_key and config.api_secret:
             try:
@@ -144,6 +147,7 @@ class Trader:
             s: inicial for s in config.symbols
         }
         self.capital_inicial_diario = self.capital_por_simbolo.copy()
+        self.reservas_piramide: Dict[str, float] = {s: 0.0 for s in config.symbols}
         self.fecha_actual = datetime.utcnow().date()
         self.estado: Dict[str, EstadoSimbolo] = {
             s: EstadoSimbolo([]) for s in config.symbols
@@ -391,6 +395,18 @@ class Trader:
             return False
 
         return True
+    
+    async def _piramidar(self, symbol: str, orden, df: pd.DataFrame) -> None:
+        """Añade posiciones si el precio avanza a favor."""
+        if orden.fracciones_restantes <= 0:
+            return
+        precio_actual = float(df["close"].iloc[-1])
+        if precio_actual >= orden.precio_ultima_piramide * (1 + self.umbral_piramide):
+            cantidad = orden.cantidad / orden.fracciones_totales
+            if await self.orders.agregar_parcial_async(symbol, precio_actual, cantidad):
+                orden.fracciones_restantes -= 1
+                orden.precio_ultima_piramide = precio_actual
+                log.info(f"🔼 Pirámide ejecutada en {symbol} @ {precio_actual:.2f}")
 
     @property
     def ordenes_abiertas(self):
@@ -476,6 +492,19 @@ class Trader:
         suma = sum(pesos.values()) or 1
         for symbol in self.capital_por_simbolo:
             self.capital_por_simbolo[symbol] = round(total * pesos[symbol] / suma, 2)
+        for symbol in self.capital_por_simbolo:
+            orden = self.orders.obtener(symbol)
+            reserva = 0.0
+            if (
+                orden
+                and orden.cantidad_abierta > 0
+                and self.estado[symbol].buffer
+            ):
+                precio_actual = float(self.estado[symbol].buffer[-1].get("close", 0))
+                if precio_actual > orden.precio_entrada:
+                    reserva = self.capital_por_simbolo[symbol] * self.reserva_piramide
+            self.capital_por_simbolo[symbol] -= reserva
+            self.reservas_piramide[symbol] = round(reserva, 2)
 
         self.capital_inicial_diario = self.capital_por_simbolo.copy()
         self.fecha_actual = datetime.utcnow().date()
@@ -840,42 +869,48 @@ class Trader:
         tendencia: str,
         direccion: str,
     ) -> tuple[float, dict]:
-        """Evalúa indicadores técnicos y suma un punto por cada criterio cumplido."""
+        """Calcula un puntaje técnico simple a partir de varios indicadores."""
 
-        slope_corto = calcular_slope(df, periodo=5)
-        slope_largo = calcular_slope(df, periodo=10)
+        slope = calcular_slope(df)
 
-        puntos = {
-            "RSI": 0,
-            "Momentum": 0,
-            "Slope": 0,
-            "Tendencia": 0,
+        resultados = {
+            "RSI": False,
+            "Momentum": False,
+            "Slope": False,
+            "Tendencia": False,
         }
 
         if rsi is not None:
-            if direccion == "long" and rsi < 30:
-                puntos["RSI"] = 1
-            elif direccion == "short" and rsi > 70:
-                puntos["RSI"] = 1
+            if direccion == "long":
+                resultados["RSI"] = rsi > 50
+            else:
+                resultados["RSI"] = rsi < 50
 
         if momentum is not None:
-            if direccion == "long" and momentum > 0.5:
-                puntos["Momentum"] = 1
-            elif direccion == "short" and momentum < -0.5:
-                puntos["Momentum"] = 1
+            resultados["Momentum"] = abs(momentum) > 0.001
 
-        if direccion == "long" and slope_corto > 0 and slope_corto > slope_largo:
-            puntos["Slope"] = 1
-        elif direccion == "short" and slope_corto < 0 and slope_corto < slope_largo:
-            puntos["Slope"] = 1
+        resultados["Slope"] = slope > 0.01
 
-        if (direccion == "long" and tendencia == "alcista") or (
-            direccion == "short" and tendencia == "bajista"
-        ):
-            puntos["Tendencia"] = 1
+        if direccion == "long":
+            resultados["Tendencia"] = tendencia in {"alcista", "lateral"}
+        else:
+            resultados["Tendencia"] = tendencia in {"bajista", "lateral"}
 
-        score_total = sum(puntos.values())
-        return float(score_total), puntos
+        score_total = sum(1 for v in resultados.values() if v)
+
+        log.info(
+            "📊 Score técnico: %s/4 | RSI: %s (%.2f), Momentum: %s (%.4f), Slope: %s (%.4f), Tendencia: %s",
+            score_total,
+            "✅" if resultados["RSI"] else "❌",
+            rsi if rsi is not None else 0.0,
+            "✅" if resultados["Momentum"] else "❌",
+            momentum if momentum is not None else 0.0,
+            "✅" if resultados["Slope"] else "❌",
+            slope,
+            "✅" if resultados["Tendencia"] else "❌",
+        )
+
+        return float(score_total), resultados
 
     def _hay_contradicciones(
         self,
@@ -966,9 +1001,11 @@ class Trader:
         puntaje: float = 0.0,
         umbral: float = 0.0,
     ) -> None:
-        cantidad = await self._calcular_cantidad_async(symbol, precio)
-        if cantidad <= 0:
+        cantidad_total = await self._calcular_cantidad_async(symbol, precio)
+        if cantidad_total <= 0:
             return
+        fracciones = self.piramide_fracciones
+        cantidad = cantidad_total / fracciones
         await self.orders.abrir_async(
             symbol,
             precio,
@@ -980,6 +1017,8 @@ class Trader:
             cantidad,
             puntaje,
             umbral,
+            objetivo=cantidad_total,
+            fracciones=fracciones,
         )
         log.info(
            f"🟢 ENTRADA: {symbol} | Puntaje: {puntaje:.2f} / Umbral: {umbral:.2f} | Estrategias: {list(estrategias.keys())}"
@@ -1001,6 +1040,8 @@ class Trader:
         if not orden:
             log.warning(f"⚠️ Se intentó verificar TP/SL sin orden activa en {symbol}")
             return
+        
+        await self._piramidar(symbol, orden, df)
 
         precio_min = float(df["low"].iloc[-1])
         precio_max = float(df["high"].iloc[-1])
@@ -1271,17 +1312,7 @@ class Trader:
             score_tecnico, puntos = self._calcular_score_tecnico(
                 df, rsi, momentum, tendencia_actual, direccion
             )
-            log.info(
-                "📊 Score técnico: %s/4 | RSI: %s (%.2f), Momentum: %s (%.2f), Slope: %s (%.4f), Tendencia: %s",
-                score_tecnico,
-                "✅" if puntos["RSI"] else "❌",
-                rsi or 0,
-                "✅" if puntos["Momentum"] else "❌",
-                momentum or 0,
-                "✅" if puntos["Slope"] else "❌",
-                slope,
-                "✅" if puntos["Tendencia"] else "❌",
-            )
+            
     
         if not entrada_permitida(
             symbol,
