@@ -7,7 +7,9 @@ from ccxt.base.errors import AuthenticationError, NetworkError
 from core.logger import configurar_logger
 from core import ordenes_reales
 
-ORDENES_DB_PATH = os.path.join("ordenes_reales", "ordenes.db")
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+ORDENES_DB_PATH = os.path.join(BASE_DIR, "ordenes_reales", "ordenes.db")
+
 ESTADOS_EMOCION = {
     "ganancia": "😄 Eufórico",
     "perdida": "😢 Frustrado",

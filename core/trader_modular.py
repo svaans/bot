@@ -1452,7 +1452,10 @@ class Trader:
         df = pd.DataFrame(estado.buffer)
 
         if self.orders.obtener(symbol):
-            await self._verificar_salidas(symbol, df)
+            try:
+                await asyncio.wait_for(self._verificar_salidas(symbol, df), timeout=5)
+            except asyncio.TimeoutError:
+                log.error(f"Timeout verificando salidas de {symbol}")
             return
 
         info = await self.evaluar_condiciones_de_entrada(symbol, df, estado)
