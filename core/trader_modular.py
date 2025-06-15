@@ -1015,7 +1015,7 @@ class Trader:
         precio: float,
         sl: float,
         tp: float,
-        estrategias: Dict,
+        estrategias: Dict | List,
         tendencia: str,
         direccion: str,
         puntaje: float = 0.0,
@@ -1041,8 +1041,11 @@ class Trader:
             objetivo=cantidad_total,
             fracciones=fracciones,
         )
+        estrategias_list = (
+            list(estrategias.keys()) if isinstance(estrategias, dict) else list(estrategias)
+        )
         log.info(
-            f"🟢 ENTRADA: {symbol} | Puntaje: {puntaje:.2f} / Umbral: {umbral:.2f} | Estrategias: {list(estrategias.keys())}"
+            f"🟢 ENTRADA: {symbol} | Puntaje: {puntaje:.2f} / Umbral: {umbral:.2f} | Estrategias: {estrategias_list}"
         )
         registro_metrico.registrar(
             "entrada",
@@ -1050,7 +1053,7 @@ class Trader:
                 "symbol": symbol,
                 "puntaje": puntaje,
                 "umbral": umbral,
-                "estrategias": ",".join(estrategias.keys()),
+                "estrategias": ",".join(estrategias_list),
                 "precio": precio,
             },
         )
