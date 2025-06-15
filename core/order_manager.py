@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-from dataclasses import asdict
 from typing import Dict, Optional
 from datetime import datetime
 
@@ -166,12 +165,11 @@ class OrderManager:
                 log.error(f"❌ No se pudo cerrar la orden real para {symbol}: {e}")
                 if self.notificador:
                     self.notificador.enviar(f"❌ Venta fallida en {symbol}: {e}")
-                return False
-
-            try:
-                await asyncio.to_thread(ordenes_reales.eliminar_orden, symbol)
-            except Exception as e:
-                log.error(f"❌ Error consultando o eliminando orden abierta: {e}")
+            finally:
+                try:
+                    await asyncio.to_thread(ordenes_reales.eliminar_orden, symbol)
+                except Exception as e:
+                    log.error(f"❌ Error consultando o eliminando orden abierta: {e}")
 
         self.ordenes.pop(symbol, None)
         orden.precio_cierre = precio

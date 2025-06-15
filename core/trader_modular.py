@@ -4,7 +4,6 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass
 from typing import Dict, List
-from datetime import datetime
 from datetime import datetime, timedelta
 import json
 import os
@@ -25,9 +24,10 @@ from binance_api.cliente import (
     fetch_ohlcv_async,
 )
 from core.adaptador_umbral import (
-    calcular_tp_sl_adaptativos,
     calcular_umbral_adaptativo,
+    calcular_tp_sl_adaptativos
 )
+from core.utils import distancia_minima_valida
 from core.pesos import cargar_pesos_estrategias
 from core.kelly import calcular_fraccion_kelly
 from core.persistencia_tecnica import PersistenciaTecnica, coincidencia_parcial
@@ -48,12 +48,6 @@ from estrategias_salida.salida_por_tendencia import verificar_reversion_tendenci
 from estrategias_salida.gestor_salidas import evaluar_salidas, verificar_filtro_tecnico
 from estrategias_salida.salida_stoploss import verificar_salida_stoploss
 from filtros.filtro_salidas import validar_necesidad_de_salida
-from core.utils import (
-    validar_tp,
-    distancia_minima_valida,
-    margen_tp_sl_valido,
-    validar_ratio_beneficio,
-)
 from core.tendencia import detectar_tendencia
 from filtros.validador_entradas import evaluar_validez_estrategica
 from estrategias_entrada.gestor_entradas import entrada_permitida
@@ -554,16 +548,16 @@ class Trader:
                 log.warning(f"⚠️ Error inesperado cargando histórico para {symbol}: {e}")
                 continue
 
-            for ts, o, h, l, c, v in datos:
+            for ts, open_, high_, low_, close_, vol in datos:
                 self.estado[symbol].buffer.append(
                     {
                         "symbol": symbol,
                         "timestamp": ts,
-                        "open": float(o),
-                        "high": float(h),
-                        "low": float(l),
-                        "close": float(c),
-                        "volume": float(v),
+                        "open": float(open_),
+                        "high": float(high_),
+                        "low": float(low_),
+                        "close": float(close_),
+                        "volume": float(vol),
                     }
                 )
 
@@ -834,7 +828,6 @@ class Trader:
     ) -> bool:
         if len(df) < 30 + velas:
             return False
-        tiempos = pd.to_datetime(df["timestamp"])
         for i in range(velas):
             sub_df = df.iloc[: -(velas - 1 - i)] if velas - 1 - i > 0 else df
             t, _ = detectar_tendencia(symbol, sub_df)
@@ -1376,8 +1369,25 @@ class Trader:
             return None
 
         log.info(f"✅ [{symbol}] Señal de entrada generada con {len(estrategias_activas)} estrategias.")
+        precio = float(df["close"].iloc[-1])
+        sl, tp = calcular_tp_sl_adaptativos(
+            df,
+            precio,
+            config_actual,
+            self.capital_por_simbolo.get(symbol, 0),
+            symbol,
+        )
+
+        if not distancia_minima_valida(precio, sl, tp):
+            log.warning(
+                f"📏 [{symbol}] Distancia SL/TP insuficiente. SL: {sl:.2f} TP: {tp:.2f}"
+            )
+            return None
         return {
             "symbol": symbol,
+            "precio": precio,
+            "sl": sl,
+            "tp": tp,
             "estrategias": estrategias_activas,
             "puntaje": puntaje,
             "umbral": umbral,

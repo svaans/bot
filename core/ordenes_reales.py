@@ -555,7 +555,8 @@ def _handle_exit(signum, frame) -> None:
     except Exception as e:
         log.error(f"❌ Error al guardar operaciones en la salida: {e}")
     finally:
-        sys.exit(0)
+        if "PYTEST_CURRENT_TEST" not in os.environ:
+            sys.exit(0)
 
 # Registrar señales de salida seguras
 for _sig in (signal.SIGTERM, signal.SIGINT):
