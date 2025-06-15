@@ -102,7 +102,10 @@ class OrderManager:
                 f"SL: {sl:.2f} TP: {tp:.2f}\n"
                 f"Estrategias: {estrategias_txt}"
             )
-            self.notificador.enviar(mensaje)
+            try:
+                self.notificador.enviar(mensaje)
+            except Exception as e:
+                log.error(f"❌ Error enviando notificación: {e}")
 
     def abrir(self, *args, **kwargs) -> None:
         """Versión síncrona de :meth:`abrir_async`."""
@@ -164,7 +167,10 @@ class OrderManager:
             except Exception as e:
                 log.error(f"❌ No se pudo cerrar la orden real para {symbol}: {e}")
                 if self.notificador:
-                    self.notificador.enviar(f"❌ Venta fallida en {symbol}: {e}")
+                    try:
+                        self.notificador.enviar(f"❌ Venta fallida en {symbol}: {e}")
+                    except Exception as err:
+                        log.error(f"❌ Error enviando notificación: {err}")
             finally:
                 try:
                     await asyncio.to_thread(ordenes_reales.eliminar_orden, symbol)
@@ -198,7 +204,10 @@ class OrderManager:
                 f"Retorno: {retorno * 100:.2f}%\n"
                 f"Motivo: {motivo}"
             )
-            self.notificador.enviar(mensaje)
+            try:
+                self.notificador.enviar(mensaje)
+            except Exception as e:
+                log.error(f"❌ Error enviando notificación: {e}")
         return True
 
     def cerrar(self, *args, **kwargs) -> bool:
@@ -232,7 +241,10 @@ class OrderManager:
             except Exception as e:
                 log.error(f"❌ Error en venta parcial de {symbol}: {e}")
                 if self.notificador:
-                    self.notificador.enviar(f"❌ Venta parcial fallida en {symbol}: {e}")
+                    try:
+                        self.notificador.enviar(f"❌ Venta parcial fallida en {symbol}: {e}")
+                    except Exception as err:
+                        log.error(f"❌ Error enviando notificación: {err}")
                 return False
 
         orden.cantidad_abierta -= cantidad
@@ -256,7 +268,10 @@ class OrderManager:
                 f"Precio: {precio:.2f}\n"
                 f"Motivo: {motivo}"
             )
-            self.notificador.enviar(mensaje)
+            try:
+                self.notificador.enviar(mensaje)
+            except Exception as e:
+                log.error(f"❌ Error enviando notificación: {e}")
 
         if orden.cantidad_abierta <= 0:
             self.ordenes.pop(symbol, None)
