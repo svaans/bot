@@ -1,10 +1,8 @@
 """Detección de tendencia del mercado y evaluación de señales persistentes."""
 
 import pandas as pd
-import numpy as np
 
 from indicadores.rsi import calcular_rsi
-from indicadores.slope import calcular_slope
 from indicadores.adx import calcular_adx
 from estrategias_entrada.gestor_entradas import evaluar_estrategias
 from core.estrategias import obtener_estrategias_por_tendencia

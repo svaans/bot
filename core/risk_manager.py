@@ -22,7 +22,7 @@ class RiskManager:
 
     def registrar_perdida(self, symbol: str, perdida: float) -> None:
         """Registra una pérdida para ``symbol``."""
-        if perdida > 0:
+        if perdida < 0:
             actualizar_perdida(symbol, perdida)
 
     def ajustar_umbral(self, segun_metricas: dict) -> None:
