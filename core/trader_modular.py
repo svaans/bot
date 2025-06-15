@@ -1407,7 +1407,7 @@ class Trader:
             await self._procesar_vela(candle)
 
         async def handle_context(symbol: str, score: float) -> None:
-            log.info(f"🔁 Contexto actualizado {symbol}: {score:.2f}")
+            log.debug(f"🔁 Contexto actualizado {symbol}: {score:.2f}")
 
         symbols = list(self.estado.keys())
         await self._precargar_historico(velas=60)
