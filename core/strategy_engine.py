@@ -2,14 +2,13 @@
 
 from __future__ import annotations
 
-from typing import Dict, Optional
+from typing import Dict
 
 import pandas as pd
 
 from estrategias_entrada.gestor_entradas import evaluar_estrategias
 from estrategias_salida.gestor_salidas import evaluar_salidas
 from core.tendencia import detectar_tendencia
-from core.estrategias import filtrar_por_regimen
 from core.logger import configurar_logger
 
 log = configurar_logger("engine", modo_silencioso=True)
@@ -22,7 +21,6 @@ class StrategyEngine:
     def evaluar_entrada(
         symbol: str,
         df: pd.DataFrame,
-        regimen: Optional[str] = None
     ) -> Dict:
         """
         Evalúa si se cumplen condiciones para abrir una posición.
@@ -30,7 +28,6 @@ class StrategyEngine:
         Args:
             symbol: Símbolo del mercado (ej. "BTC/EUR").
             df: DataFrame con datos OHLCV.
-            regimen: Tipo de régimen actual (lateral, alcista, bajista).
 
         Returns:
             Diccionario con información de entrada:
@@ -57,21 +54,9 @@ class StrategyEngine:
             resultado = evaluar_estrategias(symbol, df, tendencia)
             estrategias_activas = resultado.get("estrategias_activas", {})
 
-            log.info(f"🔍 [{symbol}] Estrategias activas antes de filtro de régimen: {list(estrategias_activas.keys())}")
+            log.info(f"🔍 [{symbol}] Estrategias activas antes del filtro: {list(estrategias_activas.keys())}")
 
-            # Filtro por régimen (alta/baja volatilidad, lateral, etc.)
-            if regimen:
-                estrategias_filtradas = filtrar_por_regimen(estrategias_activas, regimen)
-                resultado["estrategias_activas"] = estrategias_filtradas
-
-                desactivadas = set(estrategias_activas.keys()) - set(estrategias_filtradas.keys())
-                if desactivadas:
-                    log.debug(f"🚫 [{symbol}] Estrategias eliminadas por régimen '{regimen}': {list(desactivadas)}")
-                log.info(f"✅ [{symbol}] Estrategias finales tras régimen '{regimen}': {list(estrategias_filtradas.keys())}")
-            else:
-                log.info(f"✅ [{symbol}] Estrategias usadas sin filtro de régimen: {list(estrategias_activas.keys())}")
-
-            # Asignación de metadatos de salida
+            # Asignar metadatos
             resultado["tendencia"] = tendencia
             resultado["probabilidad"] = 1.0  # Fijo por ahora
 
@@ -80,6 +65,7 @@ class StrategyEngine:
             )
 
             log.info(f"📈 [{symbol}] Puntaje total calculado: {resultado['puntaje_total']}")
+            log.info(f"✅ [{symbol}] Estrategias finales: {list(estrategias_activas.keys())}")
 
             return resultado
 
