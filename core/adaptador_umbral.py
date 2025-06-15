@@ -160,7 +160,7 @@ def calcular_tp_sl_adaptativos(df, precio_actual, config=None, capital_actual=No
         margen = precio_actual * 0.01
         return precio_actual - margen, precio_actual + margen
 
-    df = df.fillna(method="ffill").fillna(method="bfill")
+    df = df.ffill().bfill()
     df["hl"] = df["high"] - df["low"]
     df["hc"] = abs(df["high"] - df["close"].shift(1))
     df["lc"] = abs(df["low"] - df["close"].shift(1))
