@@ -61,12 +61,10 @@ def evaluar_estrategias(symbol, df, tendencia):
             log.debug(traceback.format_exc())
             continue
 
-    # Calcular diversidad real: estrategias activas con peso > 0
-    estrategias_con_peso = [
-        nombre for nombre, activo in estrategias_activadas.items()
-        if activo and gestor_pesos.obtener_peso(nombre, symbol) > 0
-    ]
-    diversidad = len(estrategias_con_peso)
+    # Calcular diversidad real ignorando los pesos para evitar que la falta de
+    # datos en ``estrategias_pesos.json`` reduzca la cuenta a 1
+    diversidad = sum(1 for activo in estrategias_activadas.values() if activo)
+    
 
     return {
         "puntaje_total": round(puntaje_total, 2),

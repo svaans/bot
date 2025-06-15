@@ -13,7 +13,7 @@ from tqdm import tqdm
 from core.config_manager import Config
 from core.trader_modular import Trader
 
-BUFFER_INICIAL = 30
+BUFFER_INICIAL = 120
 CAPITAL_INICIAL = 300.0  # Capital inicial para el backtest
 
 
@@ -112,12 +112,15 @@ async def backtest_modular(
 
     with tqdm(total=total_steps, desc="⏳ Procesando velas") as bar:
         for i in range(BUFFER_INICIAL, max_len):
+            print(f"\n🟡 Iteración {i}/{max_len}")  # <-- NUEVO: progreso crudo
             tareas = []
             for symbol in bot.config.symbols:
                 df = total_ticks[symbol]
                 if i >= len(df):
                     continue
                 row = df.iloc[i]
+                print(f"📊 Procesando vela {symbol} | Timestamp: {row['timestamp']}")  # <-- NUEVO: símbolo y tiempo
+
                 vela = {
                     "symbol": symbol,
                     "timestamp": row["timestamp"],
@@ -130,11 +133,14 @@ async def backtest_modular(
 
                 fecha = pd.to_datetime(vela["timestamp"]).date()
                 if fecha != bot.fecha_actual:
+                    print(f"📅 Cambio de día detectado: {bot.fecha_actual} → {fecha}")  # <-- NUEVO
                     bot.ajustar_capital_diario()
 
                 tareas.append(bot._procesar_vela(vela))
+
             if tareas:
                 await asyncio.gather(*tareas)
+                print(f"✅ Iteración {i} completada con {len(tareas)} velas")  # <-- NUEVO
                 bar.update(len(tareas))
 
     await bot.cerrar()
