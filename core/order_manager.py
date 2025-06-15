@@ -41,12 +41,15 @@ class OrderManager:
         cantidad: float = 0.0,
         puntaje: float = 0.0,
         umbral: float = 0.0,
+        objetivo: float | None = None,
+        fracciones: int = 1,
     ) -> None:
         """Registra una nueva orden en memoria y/o en Binance."""
+        objetivo = objetivo if objetivo is not None else cantidad
         orden = Orden(
             symbol=symbol,
             precio_entrada=precio,
-            cantidad=cantidad,
+            cantidad=objetivo,
             cantidad_abierta=cantidad,
             stop_loss=sl,
             take_profit=tp,
@@ -55,6 +58,10 @@ class OrderManager:
             timestamp=datetime.utcnow().isoformat(),
             max_price=precio,
             direccion=direccion,
+            entradas=[{"precio": precio, "cantidad": cantidad}],
+            fracciones_totales=fracciones,
+            fracciones_restantes=max(fracciones - 1, 0),
+            precio_ultima_piramide=precio,
             puntaje_entrada=puntaje,
             umbral_entrada=umbral,
         )
@@ -80,7 +87,8 @@ class OrderManager:
                     tendencia,
                     direccion,
                 )
-                orden.cantidad = cantidad
+                orden.cantidad_abierta = cantidad
+                orden.entradas[0]["cantidad"] = cantidad
             except Exception as e:
                 log.error(f"❌ No se pudo abrir la orden real para {symbol}: {e}")
                 return
@@ -100,6 +108,39 @@ class OrderManager:
     def abrir(self, *args, **kwargs) -> None:
         """Versión síncrona de :meth:`abrir_async`."""
         asyncio.run(self.abrir_async(*args, **kwargs))
+
+    async def agregar_parcial_async(self, symbol: str, precio: float, cantidad: float) -> bool:
+        """Aumenta la posición abierta agregando una compra parcial."""
+        orden = self.ordenes.get(symbol)
+        if not orden:
+            return False
+
+        if self.modo_real:
+            try:
+                if cantidad > 0:
+                    await asyncio.to_thread(
+                        ordenes_reales.ejecutar_orden_market,
+                        symbol,
+                        cantidad,
+                    )
+            except Exception as e:
+                log.error(f"❌ No se pudo agregar posición real para {symbol}: {e}")
+                return False
+
+        total_prev = orden.cantidad_abierta + 0.0
+        orden.cantidad_abierta += cantidad
+        orden.cantidad += cantidad
+        orden.precio_entrada = (
+            orden.precio_entrada * total_prev + precio * cantidad
+        ) / orden.cantidad
+        orden.max_price = max(orden.max_price, precio)
+        if orden.entradas is None:
+            orden.entradas = []
+        orden.entradas.append({"precio": precio, "cantidad": cantidad})
+        return True
+
+    def agregar_parcial(self, *args, **kwargs) -> bool:
+        return asyncio.run(self.agregar_parcial_async(*args, **kwargs))
 
     # ------------------------------------------------------------------
     # Operaciones de cierre completo
@@ -197,6 +238,18 @@ class OrderManager:
                 return False
 
         orden.cantidad_abierta -= cantidad
+        retorno_unitario = (
+            (precio - orden.precio_entrada) / orden.precio_entrada
+            if orden.precio_entrada
+            else 0.0
+        )
+        fraccion = cantidad / orden.cantidad if orden.cantidad else 0.0
+        retorno_total = retorno_unitario * fraccion
+        if retorno_total < 0 and self.risk is not None:
+            try:
+                self.risk.registrar_perdida(symbol, retorno_total)
+            except Exception as e:
+                log.warning(f"⚠️ No se pudo registrar pérdida parcial para {symbol}: {e}")
         log.info(f"📤 Cierre parcial de {symbol}: {cantidad} @ {precio:.2f} | {motivo}")
         if self.notificador:
             mensaje = (

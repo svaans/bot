@@ -16,6 +16,10 @@ class Orden:
     direccion: str = "long"
     cantidad_abierta: float = 0.0
     parcial_cerrado: bool = False
+    entradas: list | None = None
+    fracciones_totales: int = 1
+    fracciones_restantes: int = 0
+    precio_ultima_piramide: float = 0.0
     precio_cierre: Optional[float] = None
     fecha_cierre: Optional[str] = None
     motivo_cierre: Optional[str] = None
@@ -41,6 +45,10 @@ class Orden:
             data["cantidad_abierta"] = data.get("cantidad", 0.0)
         if "parcial_cerrado" not in data:
             data["parcial_cerrado"] = False
+        data.setdefault("entradas", [])
+        data.setdefault("fracciones_totales", 1)
+        data.setdefault("fracciones_restantes", 0)
+        data.setdefault("precio_ultima_piramide", data.get("precio_entrada", 0.0))
         data.setdefault("puntaje_entrada", 0.0)
         data.setdefault("umbral_entrada", 0.0)
 

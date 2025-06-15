@@ -34,18 +34,18 @@ def detectar_tendencia(symbol: str, df: pd.DataFrame) -> tuple[str, dict[str, bo
     rsi = calcular_rsi(df)
 
     # Clasificación de tendencia
-    if abs(delta) < umbral and abs(slope) < 0.05:
+    if abs(delta) < umbral and abs(slope) < 0.015:
         tendencia = "lateral"
-    elif delta > umbral and slope > 0:
+    elif delta > umbral and slope > 0.01:
         tendencia = "alcista"
-    elif delta < -umbral and slope < 0:
+    elif delta < -umbral and slope < 0.01:
         tendencia = "bajista"
     else:
         # RSI como criterio de desempate
         if rsi is not None:
-            if rsi > 60:
+            if rsi > 58:
                 tendencia = "alcista"
-            elif rsi < 40:
+            elif rsi < 42:
                 tendencia = "bajista"
             else:
                 tendencia = "lateral"
