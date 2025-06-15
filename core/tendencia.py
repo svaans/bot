@@ -5,6 +5,7 @@ import numpy as np
 
 from indicadores.rsi import calcular_rsi
 from indicadores.slope import calcular_slope
+from indicadores.adx import calcular_adx
 from estrategias_entrada.gestor_entradas import evaluar_estrategias
 from core.estrategias import obtener_estrategias_por_tendencia
 from core.logger import configurar_logger
@@ -15,58 +16,68 @@ log = configurar_logger("tendencia")
 # -------------------- DETECCIÓN DE TENDENCIA --------------------
 
 def detectar_tendencia(symbol: str, df: pd.DataFrame) -> tuple[str, dict[str, bool]]:
-    """Determina la tendencia del mercado basándose en SMA, slope y RSI."""
+    """Detección precisa de tendencia con EMA, pendiente local y RSI."""
+
     if df is None or df.empty or "close" not in df.columns or len(df) < 60:
         log.warning(f"⚠️ Datos insuficientes para detectar tendencia en {symbol}")
         return "lateral", {}
 
     df = df.copy()
-    df["sma_fast"] = df["close"].rolling(window=10).mean()
-    df["sma_slow"] = df["close"].rolling(window=30).mean()
 
-    sma_fast = df["sma_fast"].iloc[-1]
-    sma_slow = df["sma_slow"].iloc[-1]
-    close_std = df["close"].std()
+    # Cálculo de EMAs
+    df["ema_fast"] = df["close"].ewm(span=10, adjust=False).mean()
+    df["ema_slow"] = df["close"].ewm(span=30, adjust=False).mean()
 
-    umbral = max(close_std * 0.02, 0.1)
-    delta = sma_fast - sma_slow
-    slope = calcular_slope(df)
+    # Diferencia entre EMAs (delta)
+    delta = df["ema_fast"].iloc[-1] - df["ema_slow"].iloc[-1]
+
+    # Pendiente local de la EMA lenta (últimos 5 puntos)
+    slope = (df["ema_slow"].iloc[-1] - df["ema_slow"].iloc[-5]) / 5
+
+    # RSI como indicador adicional
     rsi = calcular_rsi(df)
 
-    # Clasificación de tendencia
-    if abs(delta) < umbral and abs(slope) < 0.015:
-        tendencia = "lateral"
-    elif delta > umbral and slope > 0.01:
+    # Umbral dinámico adaptado a la volatilidad
+    close_std = df["close"].std()
+    umbral = max(close_std * 0.02, 0.1)
+
+    # Clasificación de tendencia con sistema de puntos
+    puntos = 0
+    if delta > umbral * 0.8:
+        puntos += 1
+    if slope > 0.008:
+        puntos += 1
+    if rsi is not None and rsi > 58:
+        puntos += 1
+
+    # Puedes descomentar esto si decides usar ADX
+    adx = calcular_adx(df)
+    if adx > 20:
+        puntos += 1
+
+    # Decisión final basada en puntos
+    if puntos >= 2:
         tendencia = "alcista"
-    elif delta < -umbral and slope < 0.01:
+    elif puntos == 1:
         tendencia = "bajista"
     else:
-        # RSI como criterio de desempate
-        if rsi is not None:
-            if rsi > 58:
-                tendencia = "alcista"
-            elif rsi < 42:
-                tendencia = "bajista"
-            else:
-                tendencia = "lateral"
-        else:
-            tendencia = "lateral"
+        tendencia = "lateral"
 
     estrategias = obtener_estrategias_por_tendencia(tendencia)
-
-    estrategias_activas = {
-        nombre: True for nombre in estrategias
-    } if isinstance(estrategias, list) else (
-        estrategias if isinstance(estrategias, dict) else {}
+    estrategias_activas = (
+        {nombre: True for nombre in estrategias}
+        if isinstance(estrategias, list)
+        else (estrategias if isinstance(estrategias, dict) else {})
     )
 
     log.info({
         "evento": "deteccion_tendencia",
         "symbol": symbol,
         "tendencia": tendencia,
-        "delta_sma": round(delta, 6),
-        "slope": round(slope, 6),
+        "delta_ema": round(delta, 6),
+        "slope_local": round(slope, 6),
         "rsi": round(rsi, 2) if rsi else None,
+        "adx": round(adx, 2) if adx else None  # si activas ADX
     })
 
     return tendencia, estrategias_activas
