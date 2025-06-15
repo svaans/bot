@@ -3,12 +3,10 @@ import platform
 import signal
 import traceback
 from pathlib import Path
-from core.hot_reload import start_hot_reload, stop_hot_reload
-from aprendizaje.reset_configuracion import (
-    resetear_configuracion_diaria_si_corresponde,
-)
-from core.config_manager import ConfigManager
 
+from core.hot_reload import start_hot_reload, stop_hot_reload
+from aprendizaje.reset_configuracion import resetear_configuracion_diaria_si_corresponde
+from core.config_manager import ConfigManager
 
 def mostrar_banner():
     print("\n===============================")
@@ -17,17 +15,17 @@ def mostrar_banner():
 
 async def main():
     config = ConfigManager.load_from_env()
+
+    # ✅ Observador sin usar hilos externos
     observer = start_hot_reload(path=Path.cwd(), modules=None)
 
     try:
         from aprendizaje.reset_pesos import resetear_pesos_diarios_si_corresponde
-
         from core.trader_modular import Trader
     except ValueError as e:
         print(f"❌ {e}")
         return
 
-    # El nuevo Trader modular soporta ambos modos
     if config.modo_real:
         print("🟢 Modo REAL activado")
     else:
@@ -36,7 +34,7 @@ async def main():
     try:
         resetear_configuracion_diaria_si_corresponde()
         resetear_pesos_diarios_si_corresponde()
-    except Exception as e:
+    except Exception:
         print("❌ Error al cargar los pesos desde backtest:")
         traceback.print_exc()
 
@@ -48,6 +46,7 @@ async def main():
     except ValueError as e:
         print(f"❌ {e}")
         return
+
     tarea_bot = asyncio.create_task(bot.ejecutar())
     stop_event = asyncio.Event()
     tarea_stop = asyncio.create_task(stop_event.wait())
@@ -83,14 +82,8 @@ if __name__ == "__main__":
         asyncio.run(main())
     except KeyboardInterrupt:
         print("\n🛑 Bot detenido manualmente.")
-    except Exception as e:
+    except Exception:
         print("\n❌ Error inesperado:")
         traceback.print_exc()
-        # 📁 Guardar errores también en log.txt si lo deseas:
-        # with open("logs/error.log", "a") as f:
-        #     f.write(traceback.format_exc() + "\n")
-
-
-
 
 

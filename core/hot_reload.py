@@ -132,5 +132,8 @@ def start_hot_reload(
 
 
 def stop_hot_reload(observer: Observer) -> None:
-    observer.stop()
-    observer.join()
+    if observer and observer.is_alive():
+        observer.stop()
+        observer.join()
+    else:
+        log.warning("⚠️ El observador no está activo o ya fue detenido.")
