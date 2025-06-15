@@ -687,7 +687,7 @@ class Trader:
         motivo: str,
         puntaje: float | None = None,
         peso_total: float | None = None,
-        estrategias: list[str] | None = None,
+        estrategias: list[str] | dict | None = None,
     ) -> None:
         """Centraliza los mensajes de descartes de entrada."""
         mensaje = f"🔴 RECHAZO: {symbol} | Causa: {motivo}"
@@ -696,7 +696,10 @@ class Trader:
         if peso_total is not None:
             mensaje += f" | Peso: {peso_total:.2f}"
         if estrategias:
-            mensaje += f" | Estrategias: {estrategias}"
+            estr = estrategias
+            if isinstance(estr, dict):
+                estr = list(estr.keys())
+            mensaje += f" | Estrategias: {estr}"
         log.info(mensaje)
 
         registro = {
@@ -704,7 +707,7 @@ class Trader:
             "motivo": motivo,
             "puntaje": puntaje,
             "peso_total": peso_total,
-            "estrategias": ",".join(estrategias) if estrategias else "",
+            "estrategias": ",".join(estrategias.keys() if isinstance(estrategias, dict) else estrategias) if estrategias else "",
         }
         fecha = datetime.utcnow().strftime("%Y%m%d")
         archivo = os.path.join(
@@ -730,7 +733,7 @@ class Trader:
         symbol: str,
         peso_total: float,
         peso_min_total: float,
-        estrategias_activas: list[str],
+        estrategias_activas: Dict[str, float],
         diversidad_min: int,
         estrategias_disponibles: dict,
         df: pd.DataFrame,
@@ -1027,12 +1030,17 @@ class Trader:
             return
         fracciones = self.piramide_fracciones
         cantidad = cantidad_total / fracciones
+        if isinstance(estrategias, dict):
+            estrategias_dict = estrategias
+        else:
+            pesos_symbol = self.pesos_por_simbolo.get(symbol, {})
+            estrategias_dict = {e: pesos_symbol.get(e, 0.0) for e in estrategias}
         await self.orders.abrir_async(
             symbol,
             precio,
             sl,
             tp,
-            estrategias,
+            estrategias_dict,
             tendencia,
             direccion,
             cantidad,
@@ -1041,9 +1049,7 @@ class Trader:
             objetivo=cantidad_total,
             fracciones=fracciones,
         )
-        estrategias_list = (
-            list(estrategias.keys()) if isinstance(estrategias, dict) else list(estrategias)
-        )
+        estrategias_list = list(estrategias_dict.keys())
         log.info(
             f"🟢 ENTRADA: {symbol} | Puntaje: {puntaje:.2f} / Umbral: {umbral:.2f} | Estrategias: {estrategias_list}"
         )
@@ -1310,8 +1316,10 @@ class Trader:
                 else:
                     self.historial_cierres.pop(symbol, None)
 
-        estrategias_activas = list(estrategias_persistentes.keys())
-        peso_total = sum(pesos_symbol.get(k, 0) for k in estrategias_activas)
+        estrategias_activas = {
+            e: pesos_symbol.get(e, 0.0) for e in estrategias_persistentes
+        }
+        peso_total = sum(estrategias_activas.values())
         peso_min_total = config_actual.get("peso_minimo_total", 0.5)
         diversidad_min = config_actual.get("diversidad_minima", 2)
         persistencia = coincidencia_parcial(estado.buffer, pesos_symbol, ventanas=5)
