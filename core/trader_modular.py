@@ -4,7 +4,7 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass
 from typing import Dict, List
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date
 import json
 import os
 import numpy as np
@@ -439,6 +439,7 @@ class Trader:
         limite: float = 0.3,
         penalizacion_corr: float = 0.2,
         umbral_corr: float = 0.8,
+        fecha: datetime.date | None = None,
     ) -> None:
         """Redistribuye el capital según múltiples métricas adaptativas."""
         total = sum(self.capital_por_simbolo.values())
@@ -522,7 +523,7 @@ class Trader:
             self.reservas_piramide[symbol] = round(reserva, 2)
 
         self.capital_inicial_diario = self.capital_por_simbolo.copy()
-        self.fecha_actual = datetime.utcnow().date()
+        self.fecha_actual = fecha or datetime.utcnow().date()
         log.info(f"💰 Capital redistribuido: {self.capital_por_simbolo}")
 
     async def _obtener_minimo_binance(self, symbol: str) -> float | None:
