@@ -24,6 +24,8 @@ def obtener_orden_abierta():
     if os.path.exists(ORDENES_DB_PATH):
         try:
             ordenes = ordenes_reales.cargar_ordenes()
+            if not ordenes:
+                ordenes = ordenes_reales.sincronizar_ordenes_binance()
             return ordenes if ordenes else None
         except (OSError, sqlite3.Error) as e:
             log.warning(f"⚠️ Error al leer órdenes desde la base de datos: {e}")
@@ -46,12 +48,20 @@ def estimar_estado_emocional(ultima_orden):
             return ESTADOS_EMOCION[clave]
     return ESTADOS_EMOCION["activo"]
 
-def monitorear_estado_bot():
+def monitorear_estado_bot(ordenes_memoria: dict | None = None):
+    """Muestra el estado del bot y las órdenes activas.
+
+    Si no se encuentran órdenes en la base de datos y ``ordenes_memoria`` está
+    provisto, se utilizarán esos datos en su lugar. Esto permite monitorizar las
+    operaciones también en modo simulado.
+    """
     try:
         cliente = crear_cliente()
         balance = cliente.fetch_balance()
         euros = balance["total"].get("EUR", 0)
         orden_abierta = obtener_orden_abierta()
+        if not orden_abierta and ordenes_memoria:
+            orden_abierta = ordenes_memoria
 
         log.info("======= 🤖 ESTADO ACTUAL DEL BOT =======")
         log.info(
@@ -102,7 +112,7 @@ async def monitorear_estado_periodicamente(self, intervalo=300):
     loop = asyncio.get_running_loop()
     while True:
         try:
-            await loop.run_in_executor(None, monitorear_estado_bot)
+            await loop.run_in_executor(None, monitorear_estado_bot, dict(self.ordenes_abiertas))
             log.info("🧭 Monitoreo de estado completado.")
             log.debug(f"📌 Órdenes abiertas: {list(self.ordenes_abiertas.keys())}")
             await asyncio.sleep(intervalo)

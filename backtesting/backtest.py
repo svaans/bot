@@ -133,13 +133,17 @@ async def backtest_modular(
 
                 fecha = pd.to_datetime(vela["timestamp"]).date()
                 if fecha != bot.fecha_actual:
-                    print(f"📅 Cambio de día detectado: {bot.fecha_actual} → {fecha}")  # <-- NUEVO
-                    bot.ajustar_capital_diario()
+                    print(f"📅 Cambio de día detectado: {bot.fecha_actual} → {fecha}")
+                    bot.ajustar_capital_diario(fecha=fecha)
 
                 tareas.append(bot._procesar_vela(vela))
 
             if tareas:
-                await asyncio.gather(*tareas)
+                try:
+                    await asyncio.wait_for(asyncio.gather(*tareas), timeout=5.0)
+                except asyncio.TimeoutError:
+                    print("⏱️ Tarea bloqueada por más de 5 segundos. Posible cuelgue detectado.")
+                    continue
                 print(f"✅ Iteración {i} completada con {len(tareas)} velas")  # <-- NUEVO
                 bar.update(len(tareas))
 

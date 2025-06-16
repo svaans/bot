@@ -4,7 +4,7 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass
 from typing import Dict, List
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date
 import json
 import os
 import numpy as np
@@ -76,8 +76,11 @@ class Trader:
         self.engine = StrategyEngine()
         self.risk = RiskManager(config.umbral_riesgo_diario)
         self.notificador = Notificador(config.telegram_token, config.telegram_chat_id)
-        self.orders = OrderManager(config.modo_real, self.risk, self.notificador)
-        self.cliente = crear_cliente(config)
+        self.modo_real = getattr(config, "modo_real", False)
+        self.orders = OrderManager(self.modo_real, self.risk, self.notificador)
+        self.cliente = crear_cliente(config) if self.modo_real else None
+        if not self.modo_real:
+            log.info("🧪 Modo simulado activado. No se inicializará cliente Binance")
         self._markets = None
         self.modo_capital_bajo = config.modo_capital_bajo
         self.persistencia = PersistenciaTecnica(
@@ -124,15 +127,18 @@ class Trader:
         self.reserva_piramide = max(0.0, min(1.0, config.reserva_piramide))
         self.umbral_piramide = max(0.0, config.umbral_piramide)
         euros = 0
-        if config.api_key and config.api_secret:
-            try:
-                balance = self.cliente.fetch_balance()
-                euros = balance["total"].get("EUR", 0)
-            except BaseError as e:
-                log.error(f"❌ Error al obtener balance: {e}")
-                raise
+        if self.modo_real:
+            if config.api_key and config.api_secret:
+                try:
+                    balance = self.cliente.fetch_balance()
+                    euros = balance["total"].get("EUR", 0)
+                except BaseError as e:
+                    log.error(f"❌ Error al obtener balance: {e}")
+                    raise
+            else:
+                log.info("⚠️ Claves API no proporcionadas, se inicia con balance 0")
         else:
-            log.info("⚠️ Claves API no proporcionadas, se inicia con balance 0")
+            log.info("💡 Ejecutando en modo simulado. No se consultará balance")
         inicial = euros / max(len(config.symbols), 1)
         inicial = max(inicial, 20.0)
         self.capital_por_simbolo: Dict[str, float] = {
@@ -160,7 +166,7 @@ class Trader:
 
         try:
             self.orders.ordenes = ordenes_reales.obtener_todas_las_ordenes()
-            if not self.orders.ordenes:
+            if self.modo_real and not self.orders.ordenes:
                 self.orders.ordenes = ordenes_reales.sincronizar_ordenes_binance(
                     config.symbols
                 )
@@ -433,6 +439,7 @@ class Trader:
         limite: float = 0.3,
         penalizacion_corr: float = 0.2,
         umbral_corr: float = 0.8,
+        fecha: datetime.date | None = None,
     ) -> None:
         """Redistribuye el capital según múltiples métricas adaptativas."""
         total = sum(self.capital_por_simbolo.values())
@@ -516,11 +523,13 @@ class Trader:
             self.reservas_piramide[symbol] = round(reserva, 2)
 
         self.capital_inicial_diario = self.capital_por_simbolo.copy()
-        self.fecha_actual = datetime.utcnow().date()
+        self.fecha_actual = fecha or datetime.utcnow().date()
         log.info(f"💰 Capital redistribuido: {self.capital_por_simbolo}")
 
     async def _obtener_minimo_binance(self, symbol: str) -> float | None:
         """Devuelve el valor mínimo de compra permitido por Binance."""
+        if not self.modo_real or not self.cliente:
+            return None
         try:
             if self._markets is None:
                 self._markets = await load_markets_async(self.cliente)
@@ -533,6 +542,9 @@ class Trader:
 
     async def _precargar_historico(self, velas: int = 12) -> None:
         """Carga datos recientes para todos los símbolos antes de iniciar."""
+        if not self.modo_real or not self.cliente:
+            log.info("📈 Modo simulado: se omite precarga de histórico desde Binance")
+            return
         for symbol in self.estado.keys():
             try:
                 datos = await fetch_ohlcv_async(
@@ -567,8 +579,11 @@ class Trader:
     
     async def _calcular_cantidad_async(self, symbol: str, precio: float) -> float:
         """Determina la cantidad de cripto a comprar con capital asignado."""
-        balance = await fetch_balance_async(self.cliente)
-        euros = balance["total"].get("EUR", 0)
+        if self.modo_real and self.cliente:
+            balance = await fetch_balance_async(self.cliente)
+            euros = balance["total"].get("EUR", 0)
+        else:
+            euros = self.capital_por_simbolo.get(symbol, 0)
         if euros <= 0:
             log.debug("Saldo en EUR insuficiente")
             return 0.0
@@ -742,11 +757,13 @@ class Trader:
         diversidad = len(estrategias_activas)
         
         if self.modo_capital_bajo:
-            try:
-                balance = await fetch_balance_async(self.cliente)
-                euros = balance["total"].get("EUR", 0)
-            except BaseError:
-                euros = 0
+            euros = 0
+            if self.modo_real and self.cliente:
+                try:
+                    balance = await fetch_balance_async(self.cliente)
+                    euros = balance["total"].get("EUR", 0)
+                except BaseError:
+                    euros = 0
             if euros < 500:
                 diversidad_min = min(diversidad_min, 2)
                 peso_min_total *= 0.7
