@@ -57,6 +57,7 @@ from indicadores.rsi import calcular_rsi
 from indicadores.momentum import calcular_momentum
 from indicadores.slope import calcular_slope
 from core.analisis_previo import validar_condiciones_tecnicas_extra
+from estrategias_salida.analisis_previo_salida import permitir_cierre_tecnico
    
 
 log = configurar_logger("trader")
@@ -141,6 +142,7 @@ class Trader:
                 log.info("⚠️ Claves API no proporcionadas, se inicia con balance 0")
         else:
             log.info("💡 Ejecutando en modo simulado. No se consultará balance")
+            euros = 1000
         inicial = euros / max(len(config.symbols), 1)
         inicial = max(inicial, 20.0)
         self.capital_por_simbolo: Dict[str, float] = {
@@ -1118,9 +1120,12 @@ class Trader:
                 orden.to_dict(), df, config=config_actual
             )
             if resultado.get("cerrar", False):
-                await self._cerrar_y_reportar(
-                    orden, orden.stop_loss, "Stop Loss", df=df
-                )
+                if not permitir_cierre_tecnico(symbol, df, precio_cierre, orden.to_dict()):
+                    log.info(f"🛡️ Cierre evitado por análisis técnico: {symbol}")
+                else:
+                    await self._cerrar_y_reportar(
+                        orden, orden.stop_loss, "Stop Loss", df=df
+                    )
             else:
                 if resultado.get("evitado", False):
                     log.debug("SL evitado correctamente, no se notificará por Telegram")
@@ -1187,7 +1192,9 @@ class Trader:
             log.warning(f"⚠️ Error en trailing stop para {symbol}: {e}")
             cerrar, motivo = False, ""
         if cerrar:
-            if await self._cerrar_y_reportar(orden, precio_cierre, motivo, df=df):
+            if not permitir_cierre_tecnico(symbol, df, precio_cierre, orden.to_dict()):
+                log.info(f"🛡️ Cierre evitado por análisis técnico: {symbol}")
+            elif await self._cerrar_y_reportar(orden, precio_cierre, motivo, df=df):
                 log.info(
                     f"🔄 Trailing Stop activado para {symbol} a {precio_cierre:.2f}€"
                 )
@@ -1200,7 +1207,9 @@ class Trader:
                 symbol, df, orden.estrategias_activas, pesos_symbol
             ):
                 nueva_tendencia, _ = detectar_tendencia(symbol, df)
-                if await self._cerrar_y_reportar(
+                if not permitir_cierre_tecnico(symbol, df, precio_cierre, orden.to_dict()):
+                    log.info(f"🛡️ Cierre evitado por análisis técnico: {symbol}")
+                elif await self._cerrar_y_reportar(
                     orden,
                     precio_cierre,
                     "Cambio de tendencia",
@@ -1242,6 +1251,9 @@ class Trader:
                 log.info(
                     f"❌ Cierre por '{razon}' evitado: condiciones técnicas aún válidas."
                 )
+                return
+            if not permitir_cierre_tecnico(symbol, df, precio_cierre, orden.to_dict()):
+                log.info(f"🛡️ Cierre evitado por análisis técnico: {symbol}")
                 return
             await self._cerrar_y_reportar(
                 orden, precio_cierre, f"Estrategia: {razon}", df=df
