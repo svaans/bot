@@ -4,6 +4,10 @@ from __future__ import annotations
 
 from typing import Dict
 
+from core.pesos import gestor_pesos
+from core.utils import validar_dataframe
+from core.adaptador_umbral import calcular_umbral_adaptativo
+
 import pandas as pd
 
 from estrategias_entrada.gestor_entradas import evaluar_estrategias
@@ -21,6 +25,9 @@ class StrategyEngine:
     def evaluar_entrada(
         symbol: str,
         df: pd.DataFrame,
+        tendencia: str | None = None,
+        config: dict | None = None,
+        pesos_symbol: dict | None = None,
     ) -> Dict:
         """
         Evalúa si se cumplen condiciones para abrir una posición.
@@ -36,8 +43,8 @@ class StrategyEngine:
                 - probabilidad
                 - tendencia
         """
-        if not symbol or df is None or df.empty:
-            log.warning("⚠️ Entrada inválida: símbolo o DataFrame vacío.")
+        if not symbol or not validar_dataframe(df, ["close", "high", "low", "volume"]):
+            log.warning("⚠️ Entrada inválida: símbolo o DataFrame inválido.")
             return {
                 "estrategias_activas": {},
                 "puntaje_total": 0.0,
@@ -46,9 +53,15 @@ class StrategyEngine:
             }
 
         try:
-            # Detectar tendencia
-            tendencia, _ = detectar_tendencia(symbol, df)
-            log.info(f"📊 [{symbol}] Tendencia detectada: {tendencia}")
+            if pesos_symbol is None:
+                pesos_symbol = gestor_pesos.obtener_pesos_symbol(symbol)
+
+            # Detectar tendencia si no viene dada
+            if tendencia is None:
+                tendencia, _ = detectar_tendencia(symbol, df)
+                log.info(f"📊 [{symbol}] Tendencia detectada: {tendencia}")
+            else:
+                log.debug(f"[{symbol}] Tendencia previa usada: {tendencia}")
 
             # Evaluar estrategias
             resultado = evaluar_estrategias(symbol, df, tendencia)
@@ -56,13 +69,27 @@ class StrategyEngine:
 
             log.info(f"🔍 [{symbol}] Estrategias activas antes del filtro: {list(estrategias_activas.keys())}")
 
-            # Asignar metadatos
-            resultado["tendencia"] = tendencia
-            resultado["probabilidad"] = 1.0  # Fijo por ahora
-
-            resultado["puntaje_total"] = round(
-                resultado.get("puntaje_total", 0.0) * resultado["probabilidad"], 2
+            dispersion = resultado.get("diversidad", 0) / max(len(estrategias_activas) or 1, 1)
+            puntaje_total = resultado.get("puntaje_total", 0.0)
+            umbral = calcular_umbral_adaptativo(
+                symbol,
+                df,
+                estrategias_activas,
+                pesos_symbol,
+                persistencia=0.0,
+                config=config,
             )
+            max_peso = sum(pesos_symbol.values()) or 1.0
+            puntaje_rel = puntaje_total / max_peso
+            score_tecnico = puntaje_total / umbral if umbral else 0.0
+            prob = (dispersion + puntaje_rel + score_tecnico) / 3
+            if config and config.get("modo_agresivo"):
+                prob *= 1.1
+            prob = round(min(1.0, max(0.0, prob)), 2)
+
+            resultado["tendencia"] = tendencia
+            resultado["probabilidad"] = prob
+            resultado["puntaje_total"] = round(puntaje_total, 2)
 
             log.info(f"📈 [{symbol}] Puntaje total calculado: {resultado['puntaje_total']}")
             log.info(f"✅ [{symbol}] Estrategias finales: {list(estrategias_activas.keys())}")
