@@ -39,7 +39,7 @@ from core.monitor_estado_bot import monitorear_estado_periodicamente
 from core.contexto_externo import StreamContexto
 from core import ordenes_reales
 from core.adaptador_configuracion import configurar_parametros_dinamicos
-from adaptador_configuracion_dinamica import adaptar_configuracion
+from core.adaptador_configuracion_dinamica import adaptar_configuracion
 from ccxt.base.errors import BaseError
 from core.reporting import reporter_diario
 from core.registro_metrico import registro_metrico
