@@ -75,17 +75,18 @@ class OrderManager:
                 except Exception:
                     cantidad = 0.0
 
-            await asyncio.to_thread(
-                ordenes_reales.registrar_orden,
-                symbol,
-                precio,
-                cantidad,
-                sl,
-                tp,
-                estrategias,
-                tendencia,
-                direccion,
-            )
+            if cantidad > 0:
+                await asyncio.to_thread(
+                    ordenes_reales.registrar_orden,
+                    symbol,
+                    precio,
+                    cantidad,
+                    sl,
+                    tp,
+                    estrategias,
+                    tendencia,
+                    direccion,
+                )
 
             if self.modo_real:
                 orden.cantidad_abierta = cantidad

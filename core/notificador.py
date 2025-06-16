@@ -7,11 +7,11 @@ from dotenv import load_dotenv
 log = configurar_logger("notificador")
 
 class Notificador:
-    def __init__(self, token: str = "", chat_id: str = "", modo_test: bool = False, parse_mode: str = "Markdown"):
+    def __init__(self, token: str = "", chat_id: str = "", modo_test: bool = False, parse_mode: str | None = "Markdown"):
         self.token = token
         self.chat_id = chat_id
         self.modo_test = modo_test
-        self.parse_mode = parse_mode
+        self.parse_mode = parse_mode if parse_mode else None
 
         if not self.token or not self.chat_id:
             log.warning("❌ Token o Chat ID no configurados. Notificaciones deshabilitadas.")
@@ -30,13 +30,25 @@ class Notificador:
         payload = {
             "chat_id": self.chat_id,
             "text": mensaje,
-            "parse_mode": self.parse_mode
+            
         }
+        if self.parse_mode:
+            payload["parse_mode"] = self.parse_mode
 
         try:
             response = requests.post(url, json=payload, timeout=10)
             if response.status_code != 200:
                 log.warning(f"⚠️ Error enviando notificación: {response.text}")
+                if (
+                    self.parse_mode
+                    and "can't parse entities" in response.text.lower()
+                ):
+                    payload.pop("parse_mode", None)
+                    retry = requests.post(url, json=payload, timeout=10)
+                    if retry.status_code != 200:
+                        log.warning(
+                            f"⚠️ Reintento sin parse_mode: {retry.text}"
+                        )
         except Exception as e:
             log.error(f"❌ Excepción al enviar notificación: {e}")
 
@@ -50,5 +62,6 @@ def crear_notificador_desde_env() -> Notificador:
     token = os.getenv("TELEGRAM_TOKEN", "")
     chat_id = os.getenv("TELEGRAM_CHAT_ID", "")
     modo_test = os.getenv("MODO_TEST_NOTIFICADOR", "false").lower() == "true"
-    parse_mode = os.getenv("TELEGRAM_PARSE_MODE", "Markdown")
+    parse_mode_env = os.getenv("TELEGRAM_PARSE_MODE", "Markdown").strip()
+    parse_mode = parse_mode_env if parse_mode_env else None
     return Notificador(token=token, chat_id=chat_id, modo_test=modo_test, parse_mode=parse_mode)

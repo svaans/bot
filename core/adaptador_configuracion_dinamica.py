@@ -8,6 +8,8 @@ from indicadores.atr import calcular_atr
 from indicadores.rsi import calcular_rsi
 from indicadores.slope import calcular_slope
 
+from core.adaptador_configuracion_dinamica import *
+
 log = configurar_logger("adaptador_dinamico")
 
 

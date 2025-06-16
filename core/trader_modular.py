@@ -39,6 +39,7 @@ from core.monitor_estado_bot import monitorear_estado_periodicamente
 from core.contexto_externo import StreamContexto
 from core import ordenes_reales
 from core.adaptador_configuracion import configurar_parametros_dinamicos
+from adaptador_configuracion_dinamica import adaptar_configuracion
 from ccxt.base.errors import BaseError
 from core.reporting import reporter_diario
 from core.registro_metrico import registro_metrico
@@ -55,6 +56,8 @@ from core.estrategias import filtrar_por_direccion
 from indicadores.rsi import calcular_rsi
 from indicadores.momentum import calcular_momentum
 from indicadores.slope import calcular_slope
+from core.analisis_previo import validar_condiciones_tecnicas_extra
+from estrategias_salida.analisis_previo_salida import permitir_cierre_tecnico
    
 
 log = configurar_logger("trader")
@@ -139,6 +142,7 @@ class Trader:
                 log.info("⚠️ Claves API no proporcionadas, se inicia con balance 0")
         else:
             log.info("💡 Ejecutando en modo simulado. No se consultará balance")
+            euros = 1000
         inicial = euros / max(len(config.symbols), 1)
         inicial = max(inicial, 20.0)
         self.capital_por_simbolo: Dict[str, float] = {
@@ -1116,9 +1120,12 @@ class Trader:
                 orden.to_dict(), df, config=config_actual
             )
             if resultado.get("cerrar", False):
-                await self._cerrar_y_reportar(
-                    orden, orden.stop_loss, "Stop Loss", df=df
-                )
+                if not permitir_cierre_tecnico(symbol, df, precio_cierre, orden.to_dict()):
+                    log.info(f"🛡️ Cierre evitado por análisis técnico: {symbol}")
+                else:
+                    await self._cerrar_y_reportar(
+                        orden, orden.stop_loss, "Stop Loss", df=df
+                    )
             else:
                 if resultado.get("evitado", False):
                     log.debug("SL evitado correctamente, no se notificará por Telegram")
@@ -1171,6 +1178,9 @@ class Trader:
         if precio_cierre > orden.max_price:
             orden.max_price = precio_cierre
 
+        dinamica = adaptar_configuracion(symbol, df)
+        if dinamica:
+            config_actual.update(dinamica)
         config_actual = configurar_parametros_dinamicos(symbol, df, config_actual)
         self.config_por_simbolo[symbol] = config_actual
 
@@ -1182,7 +1192,9 @@ class Trader:
             log.warning(f"⚠️ Error en trailing stop para {symbol}: {e}")
             cerrar, motivo = False, ""
         if cerrar:
-            if await self._cerrar_y_reportar(orden, precio_cierre, motivo, df=df):
+            if not permitir_cierre_tecnico(symbol, df, precio_cierre, orden.to_dict()):
+                log.info(f"🛡️ Cierre evitado por análisis técnico: {symbol}")
+            elif await self._cerrar_y_reportar(orden, precio_cierre, motivo, df=df):
                 log.info(
                     f"🔄 Trailing Stop activado para {symbol} a {precio_cierre:.2f}€"
                 )
@@ -1195,7 +1207,9 @@ class Trader:
                 symbol, df, orden.estrategias_activas, pesos_symbol
             ):
                 nueva_tendencia, _ = detectar_tendencia(symbol, df)
-                if await self._cerrar_y_reportar(
+                if not permitir_cierre_tecnico(symbol, df, precio_cierre, orden.to_dict()):
+                    log.info(f"🛡️ Cierre evitado por análisis técnico: {symbol}")
+                elif await self._cerrar_y_reportar(
                     orden,
                     precio_cierre,
                     "Cambio de tendencia",
@@ -1238,6 +1252,9 @@ class Trader:
                     f"❌ Cierre por '{razon}' evitado: condiciones técnicas aún válidas."
                 )
                 return
+            if not permitir_cierre_tecnico(symbol, df, precio_cierre, orden.to_dict()):
+                log.info(f"🛡️ Cierre evitado por análisis técnico: {symbol}")
+                return
             await self._cerrar_y_reportar(
                 orden, precio_cierre, f"Estrategia: {razon}", df=df
             )
@@ -1247,9 +1264,11 @@ class Trader:
     ) -> dict | None:
         """Evalúa todas las condiciones de entrada y devuelve info de la operación."""
 
-        config_actual = configurar_parametros_dinamicos(
-            symbol, df, self.config_por_simbolo.get(symbol, {})
-        )
+        config_actual = self.config_por_simbolo.get(symbol, {})
+        dinamica = adaptar_configuracion(symbol, df)
+        if dinamica:
+            config_actual.update(dinamica)
+        config_actual = configurar_parametros_dinamicos(symbol, df, config_actual)
         self.config_por_simbolo[symbol] = config_actual
 
         # Detectar tendencia
@@ -1411,6 +1430,11 @@ class Trader:
                 f"📏 [{symbol}] Distancia SL/TP insuficiente. SL: {sl:.2f} TP: {tp:.2f}"
             )
             return None
+        
+        if not validar_condiciones_tecnicas_extra(symbol, df, precio, sl, tp):
+            log.info(f"[{symbol}] Entrada rechazada por análisis técnico adicional")
+            return None
+        
         return {
             "symbol": symbol,
             "precio": precio,
@@ -1531,12 +1555,24 @@ class Trader:
         try:
             if os.path.exists("estado/historial_cierres.json"):
                 with open("estado/historial_cierres.json") as f:
-                    data = json.load(f)
+                    contenido = f.read()
+                if contenido.strip():
+                    try:
+                        data = json.loads(contenido)
+                    except json.JSONDecodeError as e:
+                        log.warning(f"⚠️ Error leyendo historial_cierres.json: {e}")
+                        data = {}
                     if isinstance(data, dict):
                         self.historial_cierres.update(data)
             if os.path.exists("estado/capital.json"):
                 with open("estado/capital.json") as f:
-                    data = json.load(f)
+                    contenido = f.read()
+                if contenido.strip():
+                    try:
+                        data = json.loads(contenido)
+                    except json.JSONDecodeError as e:
+                        log.warning(f"⚠️ Error leyendo capital.json: {e}")
+                        data = {}
                     if isinstance(data, dict):
                         self.capital_por_simbolo.update({k: float(v) for k, v in data.items()})
         except Exception as e:  # noqa: BLE001
