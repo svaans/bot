@@ -39,10 +39,7 @@ class Notificador:
             response = requests.post(url, json=payload, timeout=10)
             if response.status_code != 200:
                 log.warning(f"⚠️ Error enviando notificación: {response.text}")
-                if (
-                    self.parse_mode
-                    and "can't parse entities" in response.text.lower()
-                ):
+                if self.parse_mode:
                     payload.pop("parse_mode", None)
                     retry = requests.post(url, json=payload, timeout=10)
                     if retry.status_code != 200:
@@ -51,7 +48,16 @@ class Notificador:
                         )
         except Exception as e:
             log.error(f"❌ Excepción al enviar notificación: {e}")
-
+            if self.parse_mode:
+                payload.pop("parse_mode", None)
+                try:
+                    retry = requests.post(url, json=payload, timeout=10)
+                    if retry.status_code != 200:
+                        log.warning(
+                            f"⚠️ Reintento tras excepción: {retry.text}"
+                        )
+                except Exception as e2:
+                    log.error(f"❌ Error en reintento de notificación: {e2}")
     async def enviar_async(self, mensaje: str, tipo: str = "INFO") -> None:
         """Envía la notificación sin bloquear el loop principal."""
         loop = asyncio.get_running_loop()
