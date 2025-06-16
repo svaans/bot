@@ -65,32 +65,34 @@ class OrderManager:
             umbral_entrada=umbral,
         )
 
-        if self.modo_real:
-            try:
-                if is_valid_number(cantidad) and cantidad > 0:
-                    cantidad = await asyncio.to_thread(
-                        ordenes_reales.ejecutar_orden_market, symbol, cantidad
-                    )
-                    try:
-                        cantidad = float(cantidad)
-                    except Exception:
-                        cantidad = 0.0
-                await asyncio.to_thread(
-                    ordenes_reales.registrar_orden,
-                    symbol,
-                    precio,
-                    cantidad,
-                    sl,
-                    tp,
-                    estrategias,
-                    tendencia,
-                    direccion,
+        try:
+            if self.modo_real and is_valid_number(cantidad) and cantidad > 0:
+                cantidad = await asyncio.to_thread(
+                    ordenes_reales.ejecutar_orden_market, symbol, cantidad
                 )
+                try:
+                    cantidad = float(cantidad)
+                except Exception:
+                    cantidad = 0.0
+
+            await asyncio.to_thread(
+                ordenes_reales.registrar_orden,
+                symbol,
+                precio,
+                cantidad,
+                sl,
+                tp,
+                estrategias,
+                tendencia,
+                direccion,
+            )
+
+            if self.modo_real:
                 orden.cantidad_abierta = cantidad
                 orden.entradas[0]["cantidad"] = cantidad
-            except Exception as e:
-                log.error(f"❌ No se pudo abrir la orden real para {symbol}: {e}")
-                return
+        except Exception as e:
+            log.error(f"❌ No se pudo abrir la orden para {symbol}: {e}")
+            return
 
         self.ordenes[symbol] = orden
         log.info(f"🟢 Orden abierta para {symbol} @ {precio:.2f}")
@@ -103,7 +105,7 @@ class OrderManager:
                 f"Estrategias: {estrategias_txt}"
             )
             try:
-                self.notificador.enviar(mensaje)
+                await self.notificador.enviar_async(mensaje)
             except Exception as e:
                 log.error(f"❌ Error enviando notificación: {e}")
 
@@ -155,8 +157,8 @@ class OrderManager:
             log.warning(f"⚠️ Se intentó verificar TP/SL sin orden activa en {symbol}")
             return False
 
-        if self.modo_real:
-            try:
+        try:
+            if self.modo_real:
                 cantidad = orden.cantidad if is_valid_number(orden.cantidad) else 0.0
                 if cantidad > 1e-8:
                     await asyncio.to_thread(
@@ -164,18 +166,18 @@ class OrderManager:
                         symbol,
                         cantidad,
                     )
-            except Exception as e:
-                log.error(f"❌ No se pudo cerrar la orden real para {symbol}: {e}")
-                if self.notificador:
-                    try:
-                        self.notificador.enviar(f"❌ Venta fallida en {symbol}: {e}")
-                    except Exception as err:
-                        log.error(f"❌ Error enviando notificación: {err}")
-            finally:
+        except Exception as e:
+            log.error(f"❌ No se pudo cerrar la orden real para {symbol}: {e}")
+            if self.notificador:
                 try:
-                    await asyncio.to_thread(ordenes_reales.eliminar_orden, symbol)
-                except Exception as e:
-                    log.error(f"❌ Error consultando o eliminando orden abierta: {e}")
+                    await self.notificador.enviar_async(f"❌ Venta fallida en {symbol}: {e}")
+                except Exception as err:
+                    log.error(f"❌ Error enviando notificación: {err}")
+        finally:
+            try:
+                await asyncio.to_thread(ordenes_reales.eliminar_orden, symbol)
+            except Exception as e:
+                log.error(f"❌ Error consultando o eliminando orden abierta: {e}")
 
         self.ordenes.pop(symbol, None)
         orden.precio_cierre = precio
@@ -205,7 +207,7 @@ class OrderManager:
                 f"Motivo: {motivo}"
             )
             try:
-                self.notificador.enviar(mensaje)
+                await self.notificador.enviar_async(mensaje)
             except Exception as e:
                 log.error(f"❌ Error enviando notificación: {e}")
         return True
@@ -242,7 +244,7 @@ class OrderManager:
                 log.error(f"❌ Error en venta parcial de {symbol}: {e}")
                 if self.notificador:
                     try:
-                        self.notificador.enviar(f"❌ Venta parcial fallida en {symbol}: {e}")
+                        await self.notificador.enviar_async(f"❌ Venta parcial fallida en {symbol}: {e}")
                     except Exception as err:
                         log.error(f"❌ Error enviando notificación: {err}")
                 return False
@@ -269,7 +271,7 @@ class OrderManager:
                 f"Motivo: {motivo}"
             )
             try:
-                self.notificador.enviar(mensaje)
+                await self.notificador.enviar_async(mensaje)
             except Exception as e:
                 log.error(f"❌ Error enviando notificación: {e}")
 

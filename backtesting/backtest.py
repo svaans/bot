@@ -139,7 +139,11 @@ async def backtest_modular(
                 tareas.append(bot._procesar_vela(vela))
 
             if tareas:
-                await asyncio.gather(*tareas)
+                try:
+                    await asyncio.wait_for(asyncio.gather(*tareas), timeout=5.0)
+                except asyncio.TimeoutError:
+                    print("⏱️ Tarea bloqueada por más de 5 segundos. Posible cuelgue detectado.")
+                    continue
                 print(f"✅ Iteración {i} completada con {len(tareas)} velas")  # <-- NUEVO
                 bar.update(len(tareas))
 

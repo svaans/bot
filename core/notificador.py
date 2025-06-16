@@ -1,5 +1,6 @@
 import os
 import requests
+import asyncio
 from core.logger import configurar_logger
 from dotenv import load_dotenv
 
@@ -38,6 +39,11 @@ class Notificador:
                 log.warning(f"⚠️ Error enviando notificación: {response.text}")
         except Exception as e:
             log.error(f"❌ Excepción al enviar notificación: {e}")
+
+    async def enviar_async(self, mensaje: str, tipo: str = "INFO") -> None:
+        """Envía la notificación sin bloquear el loop principal."""
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(None, self.enviar, mensaje, tipo)
 
 def crear_notificador_desde_env() -> Notificador:
     load_dotenv("config/claves.env")
