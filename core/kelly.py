@@ -33,7 +33,10 @@ def calcular_fraccion_kelly(dias_historia: int = 30, fallback: float = 0.20) -> 
         if fecha < fecha_limite:
             continue
         try:
-            df = pd.read_csv(os.path.join(carpeta, archivo))
+            df = pd.read_csv(
+                os.path.join(carpeta, archivo),
+                on_bad_lines="skip",
+            )
         except (
             pd.errors.EmptyDataError,
             pd.errors.ParserError,

@@ -13,7 +13,8 @@ def crear_cliente(config: Config | None = None):
         'enableRateLimit': True,
         'options': {
             'defaultType': 'spot',
-            'adjustForTimeDifference': True 
+            'adjustForTimeDifference': True,
+            'warnOnFetchOpenOrdersWithoutSymbol': False,
         }
     })
     exchange.set_sandbox_mode(not config.modo_real)
