@@ -1,7 +1,9 @@
 import pandas as pd
 from indicadores.rsi import calcular_rsi
 from indicadores.slope import calcular_slope
+from indicadores.momentum import calcular_momentum
 from indicadores.divergencia_rsi import detectar_divergencia_alcista
+from core.tendencia import detectar_tendencia
 from core.logger import configurar_logger
 
 log = configurar_logger("analisis_salidas")
@@ -34,7 +36,36 @@ def es_vela_envolvente_alcista(df: pd.DataFrame) -> bool:
     )
 
 
+def _score_tecnico_basico(df: pd.DataFrame, direccion: str) -> float:
+    """Calcula un score técnico sencillo (0-4)."""
+    rsi = calcular_rsi(df)
+    momentum = calcular_momentum(df)
+    slope = calcular_slope(df)
+    tendencia, _ = detectar_tendencia("", df)
+
+    puntos = 0
+    if rsi is not None:
+        puntos += 1 if (rsi > 50 if direccion == "long" else rsi < 50) else 0
+    if momentum is not None and abs(momentum) > 0.001:
+        puntos += 1
+    if slope > 0.01:
+        puntos += 1
+    if direccion == "long":
+        puntos += 1 if tendencia in {"alcista", "lateral"} else 0
+    else:
+        puntos += 1 if tendencia in {"bajista", "lateral"} else 0
+    return float(puntos)
+
+
 def permitir_cierre_tecnico(symbol: str, df: pd.DataFrame, sl: float, precio: float) -> bool:
+    """Decide si se permite cerrar la operación ignorando posibles rebotes."""
+
+    orden = None
+    if isinstance(precio, dict):
+        # Compatibilidad con llamadas antiguas
+        orden = precio
+        precio = sl
+        sl = orden.get("stop_loss", precio)
     if df is None or len(df) < 40:
         log.warning(f"[{symbol}] Datos insuficientes para análisis técnico de salida.")
         return True  # Mejor prevenir si no hay datos suficientes
@@ -49,8 +80,25 @@ def permitir_cierre_tecnico(symbol: str, df: pd.DataFrame, sl: float, precio: fl
     cuerpo = abs(cierre - apertura)
 
     rsi = calcular_rsi(df)
-    pendiente_rsi = calcular_slope(pd.DataFrame({"rsi": df["close"].rolling(14).apply(calcular_rsi)})) if len(df) >= 30 else None
+    pendiente_rsi = calcular_slope(
+        pd.DataFrame({"rsi": df["close"].rolling(14).apply(calcular_rsi)})
+    ) if len(df) >= 30 else None
 
+    direccion = orden.get("direccion", "long") if orden else "long"
+    score = _score_tecnico_basico(df, direccion)
+    envolvente = es_vela_envolvente_alcista(df)
+    soporte_cerca = precio_cerca_de_soporte(df, precio)
+    divergencia = detectar_divergencia_alcista(df)
+
+    if score < 2:
+        log.info(f"❌ {symbol} Score técnico {score:.2f} < 2. Cierre obligatorio.")
+        return True
+
+    if orden:
+        pesos = [v for v in orden.get("estrategias_activas", {}).values() if isinstance(v, (int, float))]
+        if pesos and max(pesos) < 0.3:
+            log.info(f"❌ {symbol} Estrategias de bajo peso. Cierre recomendado.")
+            return True
     # 1️⃣ RSI muy bajo pero subiendo (posible rebote)
     if rsi is not None and rsi < 35 and pendiente_rsi is not None and pendiente_rsi > 0:
         log.info(f"⚠️ {symbol} RSI bajo pero subiendo ({rsi:.2f}) → posible rebote. Evitar cierre.")
