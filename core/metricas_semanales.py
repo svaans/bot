@@ -2,6 +2,7 @@ import os
 import json
 from datetime import datetime, timedelta
 import pandas as pd
+from core.utils import leer_csv_seguro
 
 
 class MetricasTracker:
@@ -83,9 +84,8 @@ def metricas_semanales(carpeta: str = "reportes_diarios") -> pd.DataFrame:
             continue
         if not (inicio <= fecha < fin):
             continue
-        try:
-            df = pd.read_csv(os.path.join(carpeta, archivo))
-        except Exception:
+        df = leer_csv_seguro(os.path.join(carpeta, archivo))
+        if df.empty:
             continue
         if "symbol" not in df.columns and "simbolo" in df.columns:
             df["symbol"] = df["simbolo"]

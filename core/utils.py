@@ -130,6 +130,45 @@ def segundos_transcurridos(timestamp_iso):
         return 0
     
 
+def leer_csv_seguro(ruta: str, log_lineas=None) -> pd.DataFrame:
+    """Carga ``ruta`` ignorando líneas corruptas y evitando interrupciones."""
+    logger = configurar_logger("csv_reader", modo_silencioso=True)
+    line_logger = None
+    if log_lineas:
+        line_logger = (
+            log_lineas
+            if hasattr(log_lineas, "warning")
+            else configurar_logger("csv_corrupto", modo_silencioso=True)
+        )
+    try:
+        return pd.read_csv(ruta)
+    except pd.errors.ParserError as e:
+        logger.warning(
+            f"⚠️ Error leyendo archivo {ruta}: {e}. Reintentando con líneas omitidas"
+        )
+        if line_logger:
+            def _bad_line(line: list[str]) -> None:
+                line_logger.warning(f"{ruta} => {line}")
+                return None
+
+            try:
+                return pd.read_csv(ruta, on_bad_lines=_bad_line, engine="python")
+            except Exception as err:
+                logger.error(f"❌ No se pudo recuperar {ruta}: {err}")
+                return pd.DataFrame()
+        try:
+            return pd.read_csv(ruta, on_bad_lines="skip")
+        except Exception as err:
+            logger.error(f"❌ No se pudo recuperar {ruta}: {err}")
+            return pd.DataFrame()
+    except (pd.errors.EmptyDataError, OSError) as e:
+        logger.warning(f"⚠️ Archivo vacío o no accesible {ruta}: {e}")
+        return pd.DataFrame()
+    except Exception as e:
+        logger.error(f"❌ Error inesperado leyendo {ruta}: {e}")
+        return pd.DataFrame()
+    
+
 
     
 def dividir_dataframe_en_bloques(df, n_bloques=10):

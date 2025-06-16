@@ -1290,8 +1290,23 @@ class Trader:
         except Exception as e:
             log.warning(f"⚠️ Error evaluando salidas para {symbol}: {e}")
             resultado = {}
+
+        if resultado.get("break_even"):
+            nuevo_sl = resultado.get("nuevo_sl")
+            if nuevo_sl is not None:
+                if orden.direccion in ("long", "compra"):
+                    if nuevo_sl > orden.stop_loss:
+                        orden.stop_loss = nuevo_sl
+                else:
+                    if nuevo_sl < orden.stop_loss:
+                        orden.stop_loss = nuevo_sl
+                log.info(
+                    f"🟡 Break-Even activado para {symbol} → SL movido a entrada: {nuevo_sl}"
+                )
+
         if resultado.get("cerrar", False):
             razon = resultado.get("razon", "Estrategia desconocida")
+            tendencia_actual, _ = detectar_tendencia(symbol, df)
             evaluacion = self.engine.evaluar_entrada(
                 symbol,
                 df,
