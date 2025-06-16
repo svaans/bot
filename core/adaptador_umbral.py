@@ -4,6 +4,7 @@ import os
 import pandas as pd
 from core.logger import configurar_logger
 from core.contexto_externo import obtener_puntaje_contexto
+from core.market_regime import detectar_regimen
 from scipy.stats import linregress
 from ta.momentum import RSIIndicator
 
@@ -111,11 +112,22 @@ def calcular_umbral_adaptativo(
         penalizacion = 1 - (1 - abs(rsi - 50) / 10) * 0.25
         contexto_score *= penalizacion
 
-    contexto_score += obtener_puntaje_contexto(symbol)
+    contexto_extra = obtener_puntaje_contexto(symbol)
+    try:
+        contexto_score += float(contexto_extra)
+    except (TypeError, ValueError):
+        log.warning(f"[{symbol}] Puntaje de contexto inválido: {contexto_extra}")
 
     # === Potencia técnica ===
-    total_puntaje = sum(pesos_symbol.get(k, 0) for k in estrategias_activadas)
-    potencia_tecnica = min(total_puntaje / max(len(estrategias_activadas), 1), 20)
+    pesos_validos = [pesos_symbol.get(k, 0) for k in estrategias_activadas if pesos_symbol.get(k, 0) > 0]
+    if pesos_validos:
+        total_puntaje = sum(pesos_validos)
+        if max(pesos_validos) >= 8:
+            potencia_tecnica = min(sum(np.exp(p / 10) for p in pesos_validos), 30)
+        else:
+            potencia_tecnica = min(total_puntaje, 30)
+    else:
+        potencia_tecnica = 0.0
 
     # === Ajustes de riesgo ===
     ajuste_riesgo = min(ajuste_riesgo, 1.3)
@@ -127,7 +139,8 @@ def calcular_umbral_adaptativo(
         ajuste_riesgo += 0.2
 
     # === Persistencia ===
-    factor_persistencia = 1 - min(persistencia * 0.05, 0.2)
+    dinamica_persistencia = 0.05 + min(abs(slope) * 0.1, 0.15) + min(momentum_std * 2, 0.1)
+    factor_persistencia = 1 - min(persistencia * dinamica_persistencia, 0.3)
 
     # === Umbral final ===
     max_dinamico, min_dinamico = _limites_adaptativos(contexto_score)
@@ -165,13 +178,23 @@ def calcular_tp_sl_adaptativos(df, precio_actual, config=None, capital_actual=No
     df["hc"] = abs(df["high"] - df["close"].shift(1))
     df["lc"] = abs(df["low"] - df["close"].shift(1))
     df["tr"] = df[["hl", "hc", "lc"]].max(axis=1)
-    atr = df["tr"].rolling(window=14).mean().iloc[-1]
+    
+    regimen = detectar_regimen(df)
+    ventana_atr = 7 if regimen == "lateral" else 14
+    atr = df["tr"].rolling(window=ventana_atr).mean().iloc[-1]
 
     if pd.isna(atr):
         atr = precio_actual * 0.01  # fallback
 
     multiplicador_sl = config.get("sl_ratio", 1.5)
     multiplicador_tp = config.get("tp_ratio", 2.5)
+
+    if regimen == "lateral":
+        multiplicador_sl *= 0.8
+        multiplicador_tp *= 0.8
+    else:
+        multiplicador_sl *= 1.2
+        multiplicador_tp *= 1.2
 
     if config.get("modo_capital_bajo") and capital_actual is not None and capital_actual < 500:
         factor = 1 + (1 - capital_actual / 500) * 0.2
@@ -182,7 +205,7 @@ def calcular_tp_sl_adaptativos(df, precio_actual, config=None, capital_actual=No
     tp = round(precio_actual + atr * multiplicador_tp, 6)
 
     log.debug(
-        f"[{symbol}] TP/SL adaptativos | Precio: {precio_actual:.2f} | ATR: {atr:.5f} | "
+        f"[{symbol}] TP/SL adaptativos | Regimen: {regimen} | Precio: {precio_actual:.2f} | ATR: {atr:.5f} | "
         f"SL: {sl:.2f} | TP: {tp:.2f} | Ratios: SL x{multiplicador_sl}, TP x{multiplicador_tp} | "
         f"Capital: {capital_actual}"
     )

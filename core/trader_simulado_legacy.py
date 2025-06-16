@@ -422,7 +422,14 @@ class TraderSimulado:
 
         # 📉 Reversión de tendencia
         if verificar_reversion_tendencia(symbol, df, self.ultima_tendencia.get(symbol)):
-            if not verificar_filtro_tecnico(self, symbol):
+            pesos_symbol = self.pesos_por_simbolo.get(symbol, {})
+            if not verificar_filtro_tecnico(
+                symbol,
+                df,
+                orden.estrategias_activas,
+                pesos_symbol,
+                config=config_actual,
+            ):
                 log.warning(f"📉 [{symbol}] Cambio de tendencia detectado — Cierre forzado")
                 await self.cerrar_orden_simulada(symbol, precio_cierre, exito=False, motivo="Cambio de tendencia")
                 return

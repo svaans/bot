@@ -31,7 +31,7 @@ from core.utils import distancia_minima_valida
 from core.pesos import cargar_pesos_estrategias
 from core.kelly import calcular_fraccion_kelly
 from core.persistencia_tecnica import PersistenciaTecnica, coincidencia_parcial
-from core.metricas_semanales import metricas_tracker
+from core.metricas_semanales import metricas_tracker, metricas_semanales
 from core.adaptador_persistencia import calcular_persistencia_minima
 from aprendizaje.entrenador_estrategias import actualizar_pesos_estrategias_symbol
 from core.logger import configurar_logger
@@ -233,6 +233,26 @@ class Trader:
         capital_final = capital_inicial + ganancia
         self.capital_por_simbolo[orden.symbol] = capital_final
         info["capital_final"] = capital_final
+        if getattr(orden, "sl_evitar_info", None):
+            os.makedirs("logs", exist_ok=True)
+            for ev in orden.sl_evitar_info:
+                sl_val = ev.get("sl", 0.0)
+                peor = (
+                    precio < sl_val
+                    if orden.direccion in ("long", "compra")
+                    else precio > sl_val
+                )
+                mensaje = (
+                    f"❗ Evitar SL en {orden.symbol} resultó en pérdida mayor"
+                    f" ({precio:.2f} vs {sl_val:.2f})"
+                    if peor
+                    else f"👍 Evitar SL en {orden.symbol} fue beneficioso"
+                    f" ({precio:.2f} vs {sl_val:.2f})"
+                )
+                with open("logs/impacto_sl.log", "a") as f:
+                    f.write(mensaje + "\n")
+                log.info(mensaje)
+            orden.sl_evitar_info = []
         reporter_diario.registrar_operacion(info)
         registrar_resultado_trade(orden.symbol, info, retorno_total)
         actualizar_pesos_estrategias_symbol(orden.symbol)
@@ -248,6 +268,7 @@ class Trader:
             duracion = (datetime.utcnow() - apertura).total_seconds() / 60
         except Exception:
             pass
+        prev = self.historial_cierres.get(orden.symbol, {})
         self.historial_cierres[orden.symbol] = {
             "timestamp": datetime.utcnow().isoformat(),
             "motivo": motivo.lower().strip(),
@@ -257,6 +278,17 @@ class Trader:
             "duracion": duracion,
             "retorno_total": retorno_total,
         }
+        if retorno_total < 0:
+            fecha_hoy = datetime.utcnow().date().isoformat()
+            if prev.get("fecha_perdidas") != fecha_hoy:
+                perdidas = 0
+            else:
+                perdidas = prev.get("perdidas_consecutivas", 0)
+            perdidas += 1
+            self.historial_cierres[orden.symbol]["perdidas_consecutivas"] = perdidas
+            self.historial_cierres[orden.symbol]["fecha_perdidas"] = fecha_hoy
+        else:
+            self.historial_cierres[orden.symbol]["perdidas_consecutivas"] = 0
         log.info(
             f"✅ CIERRE {motivo.upper()}: {orden.symbol} | Beneficio: {ganancia:.2f} €"
         )
@@ -413,7 +445,7 @@ class Trader:
 
         pesos_symbol = self.pesos_por_simbolo.get(orden.symbol, {})
         if not verificar_filtro_tecnico(
-            orden.symbol, df, orden.estrategias_activas, pesos_symbol
+            orden.symbol, df, orden.estrategias_activas, pesos_symbol, config=config
         ):
             return False
 
@@ -449,6 +481,7 @@ class Trader:
         total = sum(self.capital_por_simbolo.values())
         # Métricas generales de rendimiento (ganancia y drawdown recientes)
         metricas_globales = self._metricas_recientes()
+        semanales = metricas_semanales()
 
         pesos: dict[str, float] = {}
 
@@ -491,6 +524,12 @@ class Trader:
                 wins = float(fila["wins"].iloc[0])
                 ganancia = float(fila["retorno_acumulado"].iloc[0])
                 winrate = wins / operaciones if operaciones else 0.0
+            if not semanales.empty:
+                sem = semanales[semanales["symbol"] == symbol]
+                if not sem.empty:
+                    weekly = float(sem["ganancia_promedio"].iloc[0]) * float(sem["operaciones"].iloc[0])
+                    if weekly < -0.05:
+                        peso *= 0.5
 
             # 4️⃣ Penalización por drawdown acumulado negativo
             if drawdown < 0:
@@ -1115,6 +1154,14 @@ class Trader:
                 log.info(
                     f"🛡️ SL evitado por validación técnica — Score: {score:.1f}/5, RSI fuerte, Momentum alcista"
                 )
+                orden.sl_evitar_info = orden.sl_evitar_info or []
+                orden.sl_evitar_info.append(
+                    {
+                        "timestamp": datetime.utcnow().isoformat(),
+                        "sl": orden.stop_loss,
+                        "precio": precio_cierre,
+                    }
+                )
                 return
             resultado = verificar_salida_stoploss(
                 orden.to_dict(), df, config=config_actual
@@ -1122,6 +1169,14 @@ class Trader:
             if resultado.get("cerrar", False):
                 if not permitir_cierre_tecnico(symbol, df, precio_cierre, orden.to_dict()):
                     log.info(f"🛡️ Cierre evitado por análisis técnico: {symbol}")
+                    orden.sl_evitar_info = orden.sl_evitar_info or []
+                    orden.sl_evitar_info.append(
+                        {
+                            "timestamp": datetime.utcnow().isoformat(),
+                            "sl": orden.stop_loss,
+                            "precio": precio_cierre,
+                        }
+                    )
                 else:
                     await self._cerrar_y_reportar(
                         orden, orden.stop_loss, "Stop Loss", df=df
@@ -1130,6 +1185,14 @@ class Trader:
                 if resultado.get("evitado", False):
                     log.debug("SL evitado correctamente, no se notificará por Telegram")
                     metricas_tracker.registrar_sl_evitado()
+                    orden.sl_evitar_info = orden.sl_evitar_info or []
+                    orden.sl_evitar_info.append(
+                        {
+                            "timestamp": datetime.utcnow().isoformat(),
+                            "sl": orden.stop_loss,
+                            "precio": precio_cierre,
+                        }
+                    )
                     log.info(
                         f"🛡️ SL evitado para {symbol} → {resultado.get('motivo', '')}"
                     )
@@ -1204,7 +1267,7 @@ class Trader:
         if verificar_reversion_tendencia(symbol, df, orden.tendencia):
             pesos_symbol = self.pesos_por_simbolo.get(symbol, {})
             if not verificar_filtro_tecnico(
-                symbol, df, orden.estrategias_activas, pesos_symbol
+                symbol, df, orden.estrategias_activas, pesos_symbol, config=config_actual
             ):
                 nueva_tendencia, _ = detectar_tendencia(symbol, df)
                 if not permitir_cierre_tecnico(symbol, df, precio_cierre, orden.to_dict()):
@@ -1229,7 +1292,13 @@ class Trader:
             resultado = {}
         if resultado.get("cerrar", False):
             razon = resultado.get("razon", "Estrategia desconocida")
-            evaluacion = self.engine.evaluar_entrada(symbol, df)
+            evaluacion = self.engine.evaluar_entrada(
+                symbol,
+                df,
+                tendencia=tendencia_actual,
+                config=config_actual,
+                pesos_symbol=self.pesos_por_simbolo.get(symbol, {}),
+            )
             estrategias = evaluacion.get("estrategias_activas", {})
             puntaje = evaluacion.get("puntaje_total", 0)
             pesos_symbol = self.pesos_por_simbolo.get(symbol, {})
@@ -1276,10 +1345,15 @@ class Trader:
         log.debug(f"[{symbol}] Tendencia detectada: {tendencia_actual}")
 
         # Evaluar entrada solo con tendencia
-        evaluacion = self.engine.evaluar_entrada(symbol, df)
+        evaluacion = self.engine.evaluar_entrada(
+            symbol,
+            df,
+            tendencia=tendencia_actual,
+            config=config_actual,
+            pesos_symbol=self.pesos_por_simbolo.get(symbol, {}),
+        )
         estrategias = evaluacion.get("estrategias_activas", {})
         log.debug(f"[{symbol}] Estrategias iniciales desde engine: {estrategias}")
-
         if not estrategias:
             log.warning(f"⚠️ [{symbol}] Sin estrategias activas tras evaluación. Tendencia detectada previamente.")
         else:
@@ -1351,7 +1425,11 @@ class Trader:
                     return None
                 else:
                     self.historial_cierres.pop(symbol, None)
-
+        registro = cierre or {}
+        fecha_hoy = datetime.utcnow().date().isoformat()
+        if registro.get("fecha_perdidas") == fecha_hoy and registro.get("perdidas_consecutivas", 0) >= 6:
+            log.info(f"🚫 [{symbol}] Bloqueo por pérdidas consecutivas en el día.")
+            return None
         estrategias_activas = {
             e: pesos_symbol.get(e, 0.0) for e in estrategias_persistentes
         }
