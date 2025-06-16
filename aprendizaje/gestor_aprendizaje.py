@@ -47,13 +47,22 @@ def registrar_resultado_trade(orden: dict):
     # Aprendizaje rápido (solo si hay al menos 20 operaciones para evitar sobreajuste)
     if len(df_ordenes) >= 20:
         df_metricas = analizar_estrategias_en_ordenes(ruta_archivo)
-        pesos_actuales = gestor_pesos.obtener_pesos_symbol(symbol)
-        if pesos_actuales:
-            nuevos_pesos = ajustar_pesos_por_desempeno(df_metricas, pesos_actuales)
-            datos = gestor_pesos.pesos
-            datos[symbol] = nuevos_pesos
-            gestor_pesos.guardar(datos)
-            print("✅ Pesos actualizados tras operación.")
+        if not df_metricas.empty:
+            valores = dict(zip(df_metricas["estrategia"], df_metricas["retorno_total"]))
+            temp_path = RUTA_PESOS + ".tmp"
+            calculados = ajustar_pesos_por_desempeno({symbol: valores}, temp_path)
+            nuevos_pesos = calculados.get(symbol, {})
+
+            if os.path.exists(temp_path):
+                os.remove(temp_path)
+
+            if nuevos_pesos:
+                datos = gestor_pesos.pesos
+                pesos_previos = datos.get(symbol, {})
+                pesos_previos.update(nuevos_pesos)
+                datos[symbol] = pesos_previos
+                gestor_pesos.guardar(datos)
+                print("✅ Pesos actualizados tras operación.")
 
 
 
