@@ -26,6 +26,7 @@ class Orden:
     retorno_total: Optional[float] = None
     puntaje_entrada: float = 0.0
     umbral_entrada: float = 0.0
+    sl_evitar_info: list | None = None
 
     @staticmethod
     def from_dict(data: Dict[str, Any]) -> "Orden":
@@ -51,6 +52,7 @@ class Orden:
         data.setdefault("precio_ultima_piramide", data.get("precio_entrada", 0.0))
         data.setdefault("puntaje_entrada", 0.0)
         data.setdefault("umbral_entrada", 0.0)
+        data.setdefault("sl_evitar_info", [])
 
         return Orden(**data)
 
