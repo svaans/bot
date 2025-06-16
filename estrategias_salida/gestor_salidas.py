@@ -59,7 +59,7 @@ def evaluar_salidas(orden: dict, df, config=None):
                 resultado = f(df)
         except Exception as e:
                         log.warning(f"❌ Error ejecutando estrategia de salida: {f} → {e}")
-            continue
+                        continue
 
         if resultado.get("cerrar", False):
             razon = resultado.get("razon", "Sin motivo")
