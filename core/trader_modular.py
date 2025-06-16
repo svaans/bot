@@ -445,7 +445,7 @@ class Trader:
 
         pesos_symbol = self.pesos_por_simbolo.get(orden.symbol, {})
         if not verificar_filtro_tecnico(
-            orden.symbol, df, orden.estrategias_activas, pesos_symbol
+            orden.symbol, df, orden.estrategias_activas, pesos_symbol, config=config
         ):
             return False
 
@@ -1267,7 +1267,7 @@ class Trader:
         if verificar_reversion_tendencia(symbol, df, orden.tendencia):
             pesos_symbol = self.pesos_por_simbolo.get(symbol, {})
             if not verificar_filtro_tecnico(
-                symbol, df, orden.estrategias_activas, pesos_symbol
+                symbol, df, orden.estrategias_activas, pesos_symbol, config=config_actual
             ):
                 nueva_tendencia, _ = detectar_tendencia(symbol, df)
                 if not permitir_cierre_tecnico(symbol, df, precio_cierre, orden.to_dict()):
@@ -1292,7 +1292,13 @@ class Trader:
             resultado = {}
         if resultado.get("cerrar", False):
             razon = resultado.get("razon", "Estrategia desconocida")
-            evaluacion = self.engine.evaluar_entrada(symbol, df)
+            evaluacion = self.engine.evaluar_entrada(
+                symbol,
+                df,
+                tendencia=tendencia_actual,
+                config=config_actual,
+                pesos_symbol=self.pesos_por_simbolo.get(symbol, {}),
+            )
             estrategias = evaluacion.get("estrategias_activas", {})
             puntaje = evaluacion.get("puntaje_total", 0)
             pesos_symbol = self.pesos_por_simbolo.get(symbol, {})
@@ -1339,7 +1345,13 @@ class Trader:
         log.debug(f"[{symbol}] Tendencia detectada: {tendencia_actual}")
 
         # Evaluar entrada solo con tendencia
-        evaluacion = self.engine.evaluar_entrada(symbol, df)
+        evaluacion = self.engine.evaluar_entrada(
+            symbol,
+            df,
+            tendencia=tendencia_actual,
+            config=config_actual,
+            pesos_symbol=self.pesos_por_simbolo.get(symbol, {}),
+        )
         estrategias = evaluacion.get("estrategias_activas", {})
         log.debug(f"[{symbol}] Estrategias iniciales desde engine: {estrategias}")
         if not estrategias:
