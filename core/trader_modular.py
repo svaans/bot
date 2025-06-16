@@ -39,6 +39,7 @@ from core.monitor_estado_bot import monitorear_estado_periodicamente
 from core.contexto_externo import StreamContexto
 from core import ordenes_reales
 from core.adaptador_configuracion import configurar_parametros_dinamicos
+from adaptador_configuracion_dinamica import adaptar_configuracion
 from ccxt.base.errors import BaseError
 from core.reporting import reporter_diario
 from core.registro_metrico import registro_metrico
@@ -55,6 +56,7 @@ from core.estrategias import filtrar_por_direccion
 from indicadores.rsi import calcular_rsi
 from indicadores.momentum import calcular_momentum
 from indicadores.slope import calcular_slope
+from core.analisis_previo import validar_condiciones_tecnicas_extra
    
 
 log = configurar_logger("trader")
@@ -1171,6 +1173,9 @@ class Trader:
         if precio_cierre > orden.max_price:
             orden.max_price = precio_cierre
 
+        dinamica = adaptar_configuracion(symbol, df)
+        if dinamica:
+            config_actual.update(dinamica)
         config_actual = configurar_parametros_dinamicos(symbol, df, config_actual)
         self.config_por_simbolo[symbol] = config_actual
 
@@ -1247,9 +1252,11 @@ class Trader:
     ) -> dict | None:
         """Evalúa todas las condiciones de entrada y devuelve info de la operación."""
 
-        config_actual = configurar_parametros_dinamicos(
-            symbol, df, self.config_por_simbolo.get(symbol, {})
-        )
+        config_actual = self.config_por_simbolo.get(symbol, {})
+        dinamica = adaptar_configuracion(symbol, df)
+        if dinamica:
+            config_actual.update(dinamica)
+        config_actual = configurar_parametros_dinamicos(symbol, df, config_actual)
         self.config_por_simbolo[symbol] = config_actual
 
         # Detectar tendencia
@@ -1411,6 +1418,11 @@ class Trader:
                 f"📏 [{symbol}] Distancia SL/TP insuficiente. SL: {sl:.2f} TP: {tp:.2f}"
             )
             return None
+        
+        if not validar_condiciones_tecnicas_extra(symbol, df, precio, sl, tp):
+            log.info(f"[{symbol}] Entrada rechazada por análisis técnico adicional")
+            return None
+        
         return {
             "symbol": symbol,
             "precio": precio,
@@ -1531,12 +1543,24 @@ class Trader:
         try:
             if os.path.exists("estado/historial_cierres.json"):
                 with open("estado/historial_cierres.json") as f:
-                    data = json.load(f)
+                    contenido = f.read()
+                if contenido.strip():
+                    try:
+                        data = json.loads(contenido)
+                    except json.JSONDecodeError as e:
+                        log.warning(f"⚠️ Error leyendo historial_cierres.json: {e}")
+                        data = {}
                     if isinstance(data, dict):
                         self.historial_cierres.update(data)
             if os.path.exists("estado/capital.json"):
                 with open("estado/capital.json") as f:
-                    data = json.load(f)
+                    contenido = f.read()
+                if contenido.strip():
+                    try:
+                        data = json.loads(contenido)
+                    except json.JSONDecodeError as e:
+                        log.warning(f"⚠️ Error leyendo capital.json: {e}")
+                        data = {}
                     if isinstance(data, dict):
                         self.capital_por_simbolo.update({k: float(v) for k, v in data.items()})
         except Exception as e:  # noqa: BLE001
