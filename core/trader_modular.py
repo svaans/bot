@@ -1580,9 +1580,18 @@ class Trader:
 
         if self.orders.obtener(symbol):
             try:
-                await asyncio.wait_for(self._verificar_salidas(symbol, df), timeout=5)
+                await asyncio.wait_for(
+                    self._verificar_salidas(symbol, df), timeout=20
+                )
             except asyncio.TimeoutError:
                 log.error(f"Timeout verificando salidas de {symbol}")
+                if self.notificador:
+                    try:
+                        await self.notificador.enviar_async(
+                            f"⚠️ Timeout verificando salidas de {symbol}"
+                        )
+                    except Exception as e:
+                        log.error(f"❌ Error enviando notificación: {e}")
             return
 
         info = await self.evaluar_condiciones_de_entrada(symbol, df, estado)
