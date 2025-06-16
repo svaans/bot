@@ -1,5 +1,6 @@
 # estrategias_salida/gestor_salidas.py
 import pandas as pd
+import inspect
 from core.utils import validar_dataframe
 from core.tendencia import detectar_tendencia
 from estrategias_entrada.gestor_entradas import evaluar_estrategias
@@ -39,8 +40,7 @@ def evaluar_salidas(orden: dict, df, config=None):
             continue  # Evita errores por strings u objetos incorrectos
 
         try:
-           
-            params = f.__code__.co_varnames
+            params = list(inspect.signature(f).parameters.keys())
             if "symbol" in params and "orden" in params and "config" in params:
                 resultado = f(symbol, orden, df, config=config)
             elif "symbol" in params and "orden" in params:
@@ -58,8 +58,8 @@ def evaluar_salidas(orden: dict, df, config=None):
             else:
                 resultado = f(df)
         except Exception as e:
-                        log.warning(f"❌ Error ejecutando estrategia de salida: {f} → {e}")
-                        continue
+            log.warning(f"❌ Error ejecutando estrategia de salida: {f} → {e}")
+            continue
 
         if resultado.get("cerrar", False):
             razon = resultado.get("razon", "Sin motivo")
