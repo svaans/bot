@@ -105,7 +105,7 @@ def actualizar_pesos_estrategias_symbol(symbol: str):
     pesos_actuales = pesos_totales.get(symbol, {})
 
     # Aplicar suavizado
-    pesos_suavizados = {}
+    pesos_suavizados = pesos_actuales.copy()
     for estrategia, score in nuevos_scores_normalizados.items():
         peso_actual = pesos_actuales.get(estrategia, 0.5)
         peso_nuevo = peso_actual * (1 - FACTOR_SUAVIZADO) + score * FACTOR_SUAVIZADO
