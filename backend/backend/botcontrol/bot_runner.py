@@ -1,6 +1,3 @@
-"""Módulo de utilidades para gestionar la ejecución del bot."""
-
-from __future__ import annotations
 
 from typing import Dict
 

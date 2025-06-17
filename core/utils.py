@@ -130,7 +130,7 @@ def segundos_transcurridos(timestamp_iso):
         return 0
     
 
-def leer_csv_seguro(ruta: str, log_lineas=None) -> pd.DataFrame:
+def leer_csv_seguro(ruta: str, log_lineas=None, expected_cols: int | None = None) -> pd.DataFrame:
     """Carga ``ruta`` ignorando líneas corruptas y evitando interrupciones."""
     logger = configurar_logger("csv_reader", modo_silencioso=True)
     line_logger = None
@@ -141,7 +141,13 @@ def leer_csv_seguro(ruta: str, log_lineas=None) -> pd.DataFrame:
             else configurar_logger("csv_corrupto", modo_silencioso=True)
         )
     try:
-        return pd.read_csv(ruta)
+        df = pd.read_csv(ruta)
+        if expected_cols and df.shape[1] < expected_cols:
+            logger.warning(
+                f"⚠️ {ruta} tiene {df.shape[1]} columnas (<{expected_cols}). Reintentando con líneas omitidas"
+            )
+            df = pd.read_csv(ruta, on_bad_lines="skip")
+        return df
     except pd.errors.ParserError as e:
         logger.warning(
             f"⚠️ Error leyendo archivo {ruta}: {e}. Reintentando con líneas omitidas"

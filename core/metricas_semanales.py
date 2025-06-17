@@ -84,7 +84,7 @@ def metricas_semanales(carpeta: str = "reportes_diarios") -> pd.DataFrame:
             continue
         if not (inicio <= fecha < fin):
             continue
-        df = leer_csv_seguro(os.path.join(carpeta, archivo))
+        df = leer_csv_seguro(os.path.join(carpeta, archivo), expected_cols=20)
         if df.empty:
             continue
         if "symbol" not in df.columns and "simbolo" in df.columns:
