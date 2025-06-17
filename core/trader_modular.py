@@ -23,7 +23,7 @@ from binance_api.cliente import (
     load_markets_async,
     fetch_ohlcv_async,
 )
-from core.adaptador_umbral import (
+from core.adaptador_dinamico import (
     calcular_umbral_adaptativo,
     calcular_tp_sl_adaptativos
 )
@@ -38,7 +38,7 @@ from core.logger import configurar_logger
 from core.monitor_estado_bot import monitorear_estado_periodicamente
 from core.contexto_externo import StreamContexto
 from core import ordenes_reales
-from core.adaptador_configuracion import configurar_parametros_dinamicos
+from core.adaptador_dinamico import adaptar_configuracion as adaptar_configuracion_base
 from core.adaptador_configuracion_dinamica import adaptar_configuracion
 from ccxt.base.errors import BaseError
 from core.reporting import reporter_diario
@@ -98,6 +98,7 @@ class Trader:
         self.usar_score_tecnico = getattr(config, "usar_score_tecnico", True)
         self.contradicciones_bloquean_entrada = config.contradicciones_bloquean_entrada
         self.registro_tecnico_csv = config.registro_tecnico_csv
+        self.historicos: Dict[str, pd.DataFrame] = {}
         self.fraccion_kelly = calcular_fraccion_kelly()
         factor_kelly = self.risk.multiplicador_kelly()
         self.fraccion_kelly *= factor_kelly
@@ -105,8 +106,9 @@ class Trader:
         try:
             factores = []
             for sym in config.symbols:
-                archivo = f"datos/{sym.replace('/', '_').lower()}_1m.parquet"
-                df = pd.read_parquet(archivo, columns=["close"])
+                df = self._obtener_historico(sym)
+                if df is None or "close" not in df:
+                    continue
                 cambios = df["close"].pct_change().dropna()
                 if cambios.empty:
                     continue
@@ -723,19 +725,29 @@ class Trader:
             and v.get("estrategias_activas")
         )
 
-    
+    def _obtener_historico(self, symbol: str) -> pd.DataFrame | None:
+        """Devuelve el DataFrame de histórico para ``symbol`` usando caché."""
+        df = self.historicos.get(symbol)
+        if df is None:
+            archivo = f"datos/{symbol.replace('/', '_').lower()}_1m.parquet"
+            try:
+                df = pd.read_parquet(archivo)
+                self.historicos[symbol] = df
+            except Exception as e:
+                log.debug(f"No se pudo cargar histórico para {symbol}: {e}")
+                self.historicos[symbol] = None
+                return None
+        return df
+        
     def _calcular_correlaciones(self, periodos: int = 1440) -> pd.DataFrame:
         """Calcula correlación histórica de cierres entre símbolos."""
         precios = {}
         for symbol in self.capital_por_simbolo:
-            archivo = f"datos/{symbol.replace('/', '_').lower()}_1m.parquet"
-            try:
-                df = pd.read_parquet(archivo, columns=["close"])
+            df = self._obtener_historico(symbol)
+            if df is not None and "close" in df:
                 precios[symbol] = (
                     df["close"].astype(float).tail(periodos).reset_index(drop=True)
                 )
-            except Exception as e:
-                log.debug(f"No se pudo cargar historial para {symbol}: {e}")
         if len(precios) < 2:
             return pd.DataFrame()
         df_precios = pd.DataFrame(precios)
@@ -1254,7 +1266,7 @@ class Trader:
         dinamica = adaptar_configuracion(symbol, df)
         if dinamica:
             config_actual.update(dinamica)
-        config_actual = configurar_parametros_dinamicos(symbol, df, config_actual)
+        config_actual = adaptar_configuracion_base(symbol, df, config_actual)
         self.config_por_simbolo[symbol] = config_actual
 
         try:
@@ -1369,7 +1381,7 @@ class Trader:
         dinamica = adaptar_configuracion(symbol, df)
         if dinamica:
             config_actual.update(dinamica)
-        config_actual = configurar_parametros_dinamicos(symbol, df, config_actual)
+        config_actual = adaptar_configuracion_base(symbol, df, config_actual)
         self.config_por_simbolo[symbol] = config_actual
 
         # Detectar tendencia
@@ -1588,13 +1600,15 @@ class Trader:
 
         self._task_contexto = asyncio.create_task(self.context_stream.escuchar(symbols, handle_context))
         self._task_contexto.add_done_callback(_log_fallo_task)
+        self._task_flush = asyncio.create_task(ordenes_reales.flush_periodico())
+        self._task_flush.add_done_callback(_log_fallo_task)
 
         try:
-            await asyncio.gather(self._task, self._task_estado, self._task_contexto)
+            await asyncio.gather(self._task, self._task_estado, self._task_contexto, self._task_flush)
         except Exception as e:
             log.error(f"❌ Error inesperado en ejecución de tareas: {e}")
             
-        await asyncio.gather(self._task, self._task_estado, self._task_contexto)
+        await asyncio.gather(self._task, self._task_estado, self._task_contexto, self._task_flush)
 
     async def _procesar_vela(self, vela: dict) -> None:
         symbol = vela["symbol"]
