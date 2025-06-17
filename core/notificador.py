@@ -4,6 +4,17 @@ import asyncio
 from core.logger import configurar_logger
 from dotenv import load_dotenv
 
+ESCAPE_CHARS = [
+    "_", "*", "[", "]", "(", ")", "~", "`", ">", "#", "+", "-",
+    "=", "|", "{", "}", ".", "!",
+]
+
+def escape_markdown(text: str) -> str:
+    """Escapa caracteres problemáticos para Markdown/MarkdownV2 de Telegram."""
+    for char in ESCAPE_CHARS:
+        text = text.replace(char, f"\\{char}")
+    return text
+
 log = configurar_logger("notificador")
 
 class Notificador:
@@ -21,6 +32,8 @@ class Notificador:
             return
 
         mensaje = f"[{tipo.upper()}] {mensaje}"
+        if self.parse_mode and self.parse_mode.startswith("Markdown"):
+            mensaje = escape_markdown(mensaje)
 
         if self.modo_test:
             print(f"🧪 [TEST] {mensaje}")
@@ -70,4 +83,9 @@ def crear_notificador_desde_env() -> Notificador:
     modo_test = os.getenv("MODO_TEST_NOTIFICADOR", "false").lower() == "true"
     parse_mode_env = os.getenv("TELEGRAM_PARSE_MODE", "Markdown").strip()
     parse_mode = parse_mode_env if parse_mode_env else None
-    return Notificador(token=token, chat_id=chat_id, modo_test=modo_test, parse_mode=parse_mode)
+    return Notificador(
+        token=token,
+        chat_id=chat_id,
+        modo_test=modo_test,
+        parse_mode=parse_mode,
+    )
