@@ -8,7 +8,7 @@ from core.estrategias import (
     ESTRATEGIAS_POR_TENDENCIA,
 )
 from core.utils import validar_dataframe
-from core.adaptador_umbral import calcular_umbral_adaptativo
+from core.adaptador_dinamico import calcular_umbral_adaptativo
 from estrategias_entrada.gestor_entradas import evaluar_estrategias
 from core.pesos import gestor_pesos
 from core.logger import configurar_logger
