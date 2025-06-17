@@ -6,7 +6,7 @@ from typing import Dict
 
 from core.pesos import gestor_pesos
 from core.utils import validar_dataframe
-from core.adaptador_umbral import calcular_umbral_adaptativo
+from core.adaptador_dinamico import calcular_umbral_adaptativo
 
 import pandas as pd
 

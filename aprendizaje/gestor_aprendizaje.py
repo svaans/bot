@@ -5,7 +5,7 @@ from datetime import datetime
 from .analisis_resultados import analizar_estrategias_en_ordenes
 from core.ajustador_pesos import ajustar_pesos_por_desempeno
 from core.pesos import gestor_pesos
-from core.adaptador_umbral import calcular_umbral_adaptativo
+from core.adaptador_dinamico import calcular_umbral_adaptativo
 from dotenv import dotenv_values
 
 # Configuración global

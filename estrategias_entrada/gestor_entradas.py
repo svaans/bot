@@ -11,6 +11,17 @@ log = configurar_logger("entradas")
 # Cache de funciones cargadas
 ESTRATEGIAS_DISPONIBLES = cargar_estrategias()
 
+
+def validar_volumen(df, direccion: str) -> bool:
+    """Valida el volumen antes de permitir una entrada."""
+    if df is None:
+        return True
+    if not verificar_volumen_suficiente(df):
+        return False
+    if direccion == "short" and detectar_divergencia_alcista(df):
+        return False
+    return True
+    
 def evaluar_estrategias(symbol, df, tendencia):
     """
     Evalúa todas las estrategias activas según la tendencia y calcula:
@@ -92,13 +103,9 @@ def entrada_permitida(
     """
     estrategias_activas_count = sum(1 for v in estrategias_activas.values() if v)
 
-    if direccion == "short" and df is not None:
-        if not verificar_volumen_suficiente(df):
-            log.info(f"📉 Entrada evitada por volumen insuficiente en {symbol}")
-            return False
-        if detectar_divergencia_alcista(df):
-            log.warning(f"⚠️ Entrada short bloqueada por divergencia alcista en {symbol}")
-            return False
+    if df is not None and not validar_volumen(df, direccion):
+        log.info(f"📉 Entrada evitada por volumen insuficiente o divergencia en {symbol}")
+        return False
 
     if potencia >= umbral:
         log.info(f"🟢 [{symbol}] Entrada directa permitida: {potencia:.2f} >= {umbral:.2f}")

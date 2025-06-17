@@ -3,7 +3,7 @@ import json
 import pandas as pd
 from collections import defaultdict
 from core.pesos import gestor_pesos
-from core.adaptador_umbral import (
+from core.adaptador_dinamico import (
     calcular_umbral_adaptativo,
     calcular_tp_sl_adaptativos,
 )

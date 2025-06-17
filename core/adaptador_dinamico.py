@@ -1,23 +1,26 @@
-import numpy as np
-import json
+from __future__ import annotations
+
 import os
+import json
+import numpy as np
 import pandas as pd
+from scipy.stats import linregress
+from ta.momentum import RSIIndicator
 from core.logger import configurar_logger
 from core.contexto_externo import obtener_puntaje_contexto
 from core.market_regime import detectar_regimen
-from scipy.stats import linregress
-from ta.momentum import RSIIndicator
 
-log = configurar_logger("umbral")
 
-# === CONFIGURACIÓN GLOBAL ===
+log = configurar_logger("adaptador_dinamico")
+
+# --- Configuración global para umbrales -------------------------------------
 RUTA_CONFIGS_OPTIMAS = "config/configuraciones_optimas.json"
 if os.path.exists(RUTA_CONFIGS_OPTIMAS):
     with open(RUTA_CONFIGS_OPTIMAS, "r") as f:
         CONFIGS_OPTIMAS = json.load(f)
 else:
     log.warning("❌ Archivo de configuración no encontrado. Se usará configuración por defecto.")
-    CONFIGS_OPTIMAS = {}
+    CONFIGS_OPTIMAS: dict = {}
 
 UMBRAL_POR_DEFECTO = 10
 MIN_LONGITUD_DATA = 30
@@ -25,9 +28,72 @@ PESO_VOLATILIDAD = 0.4
 PESO_RANGO = 0.4
 PESO_VOLUMEN = 0.2
 
-# === FUNCIONES AUXILIARES ===
+# --- Adaptación de configuración -------------------------------------------
+def adaptar_configuracion(symbol: str, df: pd.DataFrame, base_config: dict) -> dict:
+    """Ajusta ``base_config`` dinámicamente en función del mercado."""
+    if df is None or len(df) < 10 or "close" not in df.columns:
+        log.warning(f"[{symbol}] ❌ Datos insuficientes para adaptar configuración.")
+        return base_config
+
+    config = base_config.copy()
+    cambios = df["close"].pct_change().dropna().tail(10)
+    volatilidad = cambios.std() if not cambios.empty else 0
+
+    cierre_reciente = df["close"].tail(10)
+    try:
+        slope = linregress(range(len(cierre_reciente)), cierre_reciente).slope
+    except ValueError:
+        slope = 0
+
+    config["ajuste_volatilidad"] = round(min(5.0, 1 + volatilidad * 10), 2)
+    factor_dinamico = base_config.get("factor_umbral", 1.0) * (1 + volatilidad)
+    config["factor_umbral"] = round(min(3.0, max(0.3, factor_dinamico)), 2)
+
+    sl_ratio = base_config.get("sl_ratio", 2.0)
+    tp_ratio = base_config.get("tp_ratio", 4.0)
+    if slope < -0.001:
+        sl_ratio *= 1.1
+        tp_ratio *= 0.9
+    elif slope > 0.001:
+        sl_ratio *= 0.9
+        tp_ratio *= 1.1
+    config["sl_ratio"] = round(min(5.0, max(sl_ratio, 0.5)), 2)
+    config["tp_ratio"] = round(min(8.0, max(tp_ratio, 1.0)), 2)
+
+    base_peso = base_config.get("peso_minimo_total", 2.0)
+    config["peso_minimo_total"] = round(min(5.0, base_peso * (1 + volatilidad * 1.5)), 2)
+
+    if slope < -0.002:
+        config["diversidad_minima"] = 2
+    elif slope > 0.002:
+        config["diversidad_minima"] = 1
+    else:
+        config["diversidad_minima"] = 2
+
+    cooldown = min(24, max(0, int(volatilidad * 100)))
+    config["cooldown_tras_perdida"] = cooldown
+    config["modo_agresivo"] = volatilidad > 0.01 or slope > 0.003
+    config["ponderar_por_diversidad"] = config["diversidad_minima"] <= 2
+
+    base_mult = base_config.get("multiplicador_estrategias_recurrentes", 1.5)
+    config["multiplicador_estrategias_recurrentes"] = round(min(3.0, base_mult * (1 + volatilidad)), 2)
+
+    base_riesgo = base_config.get("riesgo_maximo_diario", 2.0)
+    config["riesgo_maximo_diario"] = round(min(10.0, base_riesgo + volatilidad * 5), 2)
+
+    log.info(
+        f"[{symbol}] Config adaptada | Volatilidad={volatilidad:.4f} | Slope={slope:.4f} | "
+        f"Factor Umbral={config['factor_umbral']} | SL={config['sl_ratio']} | TP={config['tp_ratio']} | "
+        f"PesoMin={config['peso_minimo_total']} | Diversidad={config['diversidad_minima']} | "
+        f"Cooldown={config['cooldown_tras_perdida']} | Riesgo Diario={config['riesgo_maximo_diario']} | "
+        f"Aggresivo={config['modo_agresivo']}"
+    )
+    return config
+
+
+# --- Umbral adaptativo ------------------------------------------------------
+
 def _limites_adaptativos(contexto_score: float) -> tuple[float, float]:
-    """Devuelve el máximo y mínimo del umbral de forma dinámica."""
     base_max = 10.0
     base_min = 1.0
     umbral_max = max(5.0, min(30.0, base_max + contexto_score))
@@ -36,17 +102,20 @@ def _limites_adaptativos(contexto_score: float) -> tuple[float, float]:
         umbral_max = umbral_min + 1.0
     return umbral_max, umbral_min
 
-# === FUNCIÓN PRINCIPAL ===
+
+
 def calcular_umbral_adaptativo(
     symbol,
     df,
+    symbol: str,
+    df: pd.DataFrame,
     estrategias_activadas,
     pesos_symbol,
     persistencia: float = 0.0,
-    config=None,
-):
-    """Calcula un umbral técnico adaptativo basado en contexto, configuración y persistencia."""
-    if df is None or len(df) < 30 or not estrategias_activadas:
+    config: dict | None = None,
+) -> float:
+    """Calcula un umbral técnico adaptativo."""
+    if df is None or len(df) < MIN_LONGITUD_DATA or not estrategias_activadas:
         log.warning(f"⚠️ [{symbol}] Datos insuficientes o sin estrategias activas. Umbral: {UMBRAL_POR_DEFECTO}")
         return UMBRAL_POR_DEFECTO
 
@@ -55,16 +124,15 @@ def calcular_umbral_adaptativo(
         log.warning(f"❌ [{symbol}] Faltan columnas clave en el DataFrame: {columnas_necesarias}")
         return UMBRAL_POR_DEFECTO
 
-    # === Ventanas ===
+    
     ventana_close = df["close"].tail(10)
     ventana_high = df["high"].tail(10)
     ventana_low = df["low"].tail(10)
     ventana_vol = df["volume"].tail(30)
 
-    # === Métricas de mercado ===
+    
     media_close = np.mean(ventana_close)
     if media_close == 0 or np.isnan(media_close):
-        log.info(f"⚠️ [{symbol}] Media de cierre inválida. Contexto neutral.")
         volatilidad = 0
         rango_medio = 0
     else:
@@ -89,23 +157,20 @@ def calcular_umbral_adaptativo(
         log.warning(f"⚠️ Error calculando RSI para {symbol}: {e}")
         rsi = 50
 
-    # === Carga de configuración ===
+    
     if config:
         ajuste_volatilidad = config.get("ajuste_volatilidad", 1.0)
         factor_umbral = config.get("factor_umbral", 1.0)
         ajuste_riesgo = config.get("riesgo_maximo_diario", 1.0)
     else:
-        config_symbol = CONFIGS_OPTIMAS.get(symbol, {})
-        ajuste_volatilidad = config_symbol.get("ajuste_volatilidad", 1.0)
-        factor_umbral = config_symbol.get("factor_umbral", 1.0)
-        ajuste_riesgo = config_symbol.get("riesgo_maximo_diario", 1.0)
+        cfg_sym = CONFIGS_OPTIMAS.get(symbol, {})
+        ajuste_volatilidad = cfg_sym.get("ajuste_volatilidad", 1.0)
+        factor_umbral = cfg_sym.get("factor_umbral", 1.0)
+        ajuste_riesgo = cfg_sym.get("riesgo_maximo_diario", 1.0)
 
-    # === Cálculo de contexto ===
+    
     contexto_score = (
-        (volatilidad * 0.3 +
-         rango_medio * 0.3 +
-         volumen_relativo * 0.2 +
-         momentum_std * 0.2) * 10
+        (volatilidad * 0.3 + rango_medio * 0.3 + volumen_relativo * 0.2 + momentum_std * 0.2) * 10
     ) * ajuste_volatilidad
 
     if 40 < rsi < 60:
@@ -118,7 +183,7 @@ def calcular_umbral_adaptativo(
     except (TypeError, ValueError):
         log.warning(f"[{symbol}] Puntaje de contexto inválido: {contexto_extra}")
 
-    # === Potencia técnica ===
+    
     pesos_validos = [pesos_symbol.get(k, 0) for k in estrategias_activadas if pesos_symbol.get(k, 0) > 0]
     if pesos_validos:
         total_puntaje = sum(pesos_validos)
@@ -129,7 +194,7 @@ def calcular_umbral_adaptativo(
     else:
         potencia_tecnica = 0.0
 
-    # === Ajustes de riesgo ===
+    
     ajuste_riesgo = min(ajuste_riesgo, 1.3)
     if contexto_score < 4:
         ajuste_riesgo += 0.5
@@ -138,11 +203,11 @@ def calcular_umbral_adaptativo(
     if slope < 0:
         ajuste_riesgo += 0.2
 
-    # === Persistencia ===
+    
     dinamica_persistencia = 0.05 + min(abs(slope) * 0.1, 0.15) + min(momentum_std * 2, 0.1)
     factor_persistencia = 1 - min(persistencia * dinamica_persistencia, 0.3)
 
-    # === Umbral final ===
+    
     max_dinamico, min_dinamico = _limites_adaptativos(contexto_score)
     umbral_base = min(potencia_tecnica * ajuste_riesgo, max_dinamico)
     umbral = max(
@@ -150,7 +215,7 @@ def calcular_umbral_adaptativo(
         min_dinamico,
     )
 
-    # === Logging completo ===
+    
     log.debug(
         f"📊 [{symbol}] Umbral: {umbral:.2f} | Base: {umbral_base:.2f} | "
         f"Limites({min_dinamico:.2f}-{max_dinamico:.2f}) | Contexto: {contexto_score:.2f} | "
@@ -159,13 +224,21 @@ def calcular_umbral_adaptativo(
         f"FactorUmbral: {factor_umbral:.2f} | Riesgo: {ajuste_riesgo:.2f} | "
         f"Persistencia: {persistencia:.2f} | FactorPersistencia: {factor_persistencia:.2f}"
     )
-
     return umbral
 
-# === FUNCIÓN DE TP/SL ADAPTATIVO ===
-def calcular_tp_sl_adaptativos(df, precio_actual, config=None, capital_actual=None, symbol: str = "SYM"):
+# --- TP/SL adaptativos ------------------------------------------------------
+
+def calcular_tp_sl_adaptativos(
+    symbol: str,
+    df: pd.DataFrame,
+    config: dict | None = None,
+    capital_actual: float | None = None,
+    precio_actual: float | None = None,
+) -> tuple[float, float]:
     if config is None:
         config = {}
+    if precio_actual is None:
+        precio_actual = float(df["close"].iloc[-1])
 
     columnas_requeridas = {"high", "low", "close"}
     if not columnas_requeridas.issubset(df.columns):
@@ -177,18 +250,15 @@ def calcular_tp_sl_adaptativos(df, precio_actual, config=None, capital_actual=No
     df["hl"] = df["high"] - df["low"]
     df["hc"] = abs(df["high"] - df["close"].shift(1))
     df["lc"] = abs(df["low"] - df["close"].shift(1))
-    df["tr"] = df[["hl", "hc", "lc"]].max(axis=1)
-    
+    df["tr"] = df[["hl", "hc", "lc"]].max(axis=1)º
     regimen = detectar_regimen(df)
     ventana_atr = 7 if regimen == "lateral" else 14
     atr = df["tr"].rolling(window=ventana_atr).mean().iloc[-1]
-
     if pd.isna(atr):
-        atr = precio_actual * 0.01  # fallback
+        atr = precio_actual * 0.01
 
     multiplicador_sl = config.get("sl_ratio", 1.5)
     multiplicador_tp = config.get("tp_ratio", 2.5)
-
     if regimen == "lateral":
         multiplicador_sl *= 0.8
         multiplicador_tp *= 0.8
@@ -209,11 +279,7 @@ def calcular_tp_sl_adaptativos(df, precio_actual, config=None, capital_actual=No
         f"SL: {sl:.2f} | TP: {tp:.2f} | Ratios: SL x{multiplicador_sl}, TP x{multiplicador_tp} | "
         f"Capital: {capital_actual}"
     )
-
     return sl, tp
-
-
-
 
 
 

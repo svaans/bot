@@ -13,6 +13,7 @@ import time
 import atexit
 import signal
 import threading
+import asyncio
 from datetime import datetime
 from binance_api.cliente import obtener_cliente
 from core.logger import configurar_logger
@@ -547,7 +548,15 @@ def flush_operaciones() -> None:
         log.warning(f"⚠️ Guardadas {len(operaciones)} operaciones con errores — SQLite: {errores_sqlite}, Parquet: {errores_parquet}")
 
 
-
+async def flush_periodico(interval: int = _FLUSH_INTERVAL) -> None:
+    """Ejecuta :func:`flush_operaciones` cada ``interval`` segundos."""
+    while True:
+        await asyncio.sleep(interval)
+        try:
+            flush_operaciones()
+        except Exception as e:  # noqa: BLE001
+            log.error(f"❌ Error en flush periódico: {e}")
+            
 def _handle_exit(signum, frame) -> None:
     log.info(f"📴 Señal de salida recibida ({signal.Signals(signum).name}). Guardando operaciones...")
     try:
