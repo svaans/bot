@@ -62,6 +62,7 @@ from estrategias_salida.analisis_previo_salida import (
     permitir_cierre_tecnico,
     evaluar_condiciones_de_cierre_anticipado,
 )
+from core.auditoria import registrar_auditoria
    
 
 log = configurar_logger("trader")
@@ -333,6 +334,32 @@ class Trader:
         )
         metricas = self._metricas_recientes()
         self.risk.ajustar_umbral(metricas)
+        try:
+            rsi_val = calcular_rsi(df) if df is not None else None
+            score, _ = (
+                self._calcular_score_tecnico(
+                    df,
+                    rsi_val,
+                    calcular_momentum(df),
+                    tendencia or "",
+                    orden.direccion,
+                )
+                if df is not None
+                else (None, None)
+            )
+            registrar_auditoria(
+                symbol=orden.symbol,
+                evento=motivo,
+                resultado="ganancia" if retorno_total > 0 else "pérdida",
+                estrategias_activas=orden.estrategias_activas,
+                score=score,
+                rsi=rsi_val,
+                tendencia=tendencia,
+                capital_actual=capital_final,
+                config_usada=self.config_por_simbolo.get(orden.symbol, {}),
+            )
+        except Exception as e:  # noqa: BLE001
+            log.debug(f"No se pudo registrar auditoría de cierre: {e}")
         return True
     
     def _registrar_salida_profesional(self, symbol: str, info: dict) -> None:
@@ -425,6 +452,32 @@ class Trader:
                 "beneficio_relativo": retorno_total,
             },
         )
+        try:
+            rsi_val = calcular_rsi(df) if df is not None else None
+            score, _ = (
+                self._calcular_score_tecnico(
+                    df,
+                    rsi_val,
+                    calcular_momentum(df),
+                    orden.tendencia,
+                    orden.direccion,
+                )
+                if df is not None
+                else (None, None)
+            )
+            registrar_auditoria(
+                symbol=orden.symbol,
+                evento=motivo,
+                resultado="ganancia" if retorno_total > 0 else "pérdida",
+                estrategias_activas=orden.estrategias_activas,
+                score=score,
+                rsi=rsi_val,
+                tendencia=orden.tendencia,
+                capital_actual=capital_final,
+                config_usada=self.config_por_simbolo.get(orden.symbol, {}),
+            )
+        except Exception as e:  # noqa: BLE001
+            log.debug(f"No se pudo registrar auditoría de cierre parcial: {e}")
         return True
     
     def es_salida_parcial_valida(
@@ -795,6 +848,20 @@ class Trader:
         df.to_csv(archivo, mode=modo, header=not os.path.exists(archivo), index=False)
         registro_metrico.registrar("rechazo", registro)
 
+        try:
+            registrar_auditoria(
+                symbol=symbol,
+                evento="Entrada rechazada",
+                resultado="rechazo",
+                estrategias_activas=estrategias,
+                score=puntaje,
+                razon=motivo,
+                capital_actual=self.capital_por_simbolo.get(symbol, 0.0),
+                config_usada=self.config_por_simbolo.get(symbol, {}),
+            )
+        except Exception as e:  # noqa: BLE001
+            log.debug(f"No se pudo registrar auditoría de rechazo: {e}")
+
     def _validar_puntaje(self, symbol: str, puntaje: float, umbral: float) -> bool:
         """Comprueba si ``puntaje`` supera ``umbral``."""
         diferencia = umbral - puntaje
@@ -1142,6 +1209,19 @@ class Trader:
                 "precio": precio,
             },
         )
+        try:
+            registrar_auditoria(
+                symbol=symbol,
+                evento="Entrada",
+                resultado="ejecutada",
+                estrategias_activas=estrategias_dict,
+                score=puntaje,
+                tendencia=tendencia,
+                capital_actual=self.capital_por_simbolo.get(symbol, 0.0),
+                config_usada=self.config_por_simbolo.get(symbol, {}),
+            )
+        except Exception as e:  # noqa: BLE001
+            log.debug(f"No se pudo registrar auditoría de entrada: {e}")
 
     async def _verificar_salidas(self, symbol: str, df: pd.DataFrame) -> None:
         """Evalúa si la orden abierta en ``symbol`` debe cerrarse."""
