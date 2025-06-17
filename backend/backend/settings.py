@@ -30,6 +30,7 @@ INSTALLED_APPS = [
     # Tu app
     'users',
     'tareas',
+    'botcontrol',
 ]
 
 # MIDDLEWARE

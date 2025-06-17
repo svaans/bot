@@ -63,6 +63,8 @@ class OrderManager:
             precio_ultima_piramide=precio,
             puntaje_entrada=puntaje,
             umbral_entrada=umbral,
+            break_even_activado=False,
+            duracion_en_velas=0,
         )
 
         try:
@@ -73,7 +75,7 @@ class OrderManager:
                 try:
                     cantidad = float(cantidad)
                 except Exception:
-                    cantidad = 0.0
+                    cantidad = float(orden.cantidad_abierta) if is_valid_number(orden.cantidad_abierta) else 0.0
 
             if cantidad > 0:
                 await asyncio.to_thread(

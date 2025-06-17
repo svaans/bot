@@ -3,6 +3,7 @@
 from django.contrib import admin
 from django.urls import path, include
 from tareas.views import OrdenesAPIView
+
 from rest_framework_simplejwt.views import (
     TokenObtainPairView,
     TokenRefreshView,
@@ -17,6 +18,8 @@ urlpatterns = [
     # ✅ Endpoint para refrescar el token JWT
     path('api/token/refresh/', TokenRefreshView.as_view(), name='token_refresh'),
 
-    # Tu vista protegida
+    # Endpoints principales
     path('api/ordenes/', OrdenesAPIView.as_view(), name='ordenes'),
+    path('api/users/', include('users.urls')),
+    path('api/bot/', include('botcontrol.urls')),
 ]
