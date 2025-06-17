@@ -250,7 +250,7 @@ def calcular_tp_sl_adaptativos(
     df["hl"] = df["high"] - df["low"]
     df["hc"] = abs(df["high"] - df["close"].shift(1))
     df["lc"] = abs(df["low"] - df["close"].shift(1))
-    df["tr"] = df[["hl", "hc", "lc"]].max(axis=1)º
+    df["tr"] = df[["hl", "hc", "lc"]].max(axis=1)
     regimen = detectar_regimen(df)
     ventana_atr = 7 if regimen == "lateral" else 14
     atr = df["tr"].rolling(window=ventana_atr).mean().iloc[-1]
