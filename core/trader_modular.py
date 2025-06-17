@@ -156,6 +156,7 @@ class Trader:
         self.estado: Dict[str, EstadoSimbolo] = {
             s: EstadoSimbolo([]) for s in config.symbols
         }
+        self.estado_tendencia: Dict[str, str] = {}
         self.config_por_simbolo: Dict[str, dict] = {s: {} for s in config.symbols}
         try:
             self.pesos_por_simbolo: Dict[str, Dict[str, float]] = (
@@ -1148,7 +1149,10 @@ class Trader:
         if precio_min <= orden.stop_loss:
             rsi = calcular_rsi(df)
             momentum = calcular_momentum(df)
-            tendencia_actual = self.estado[symbol].tendencia_detectada or detectar_tendencia(symbol, df)[0]
+            tendencia_actual = self.estado_tendencia.get(symbol)
+            if not tendencia_actual:
+                tendencia_actual, _ = detectar_tendencia(symbol, df)
+                self.estado_tendencia[symbol] = tendencia_actual
             score, _ = self._calcular_score_tecnico(
                 df,
                 rsi,
@@ -1275,7 +1279,10 @@ class Trader:
             if not verificar_filtro_tecnico(
                 symbol, df, orden.estrategias_activas, pesos_symbol, config=config_actual
             ):
-                nueva_tendencia = self.estado[symbol].tendencia_detectada or detectar_tendencia(symbol, df)[0]
+                nueva_tendencia = self.estado_tendencia.get(symbol)
+                if not nueva_tendencia:
+                    nueva_tendencia, _ = detectar_tendencia(symbol, df)
+                    self.estado_tendencia[symbol] = nueva_tendencia
                 if not permitir_cierre_tecnico(symbol, df, precio_cierre, orden.to_dict()):
                     log.info(f"🛡️ Cierre evitado por análisis técnico: {symbol}")
                 elif await self._cerrar_y_reportar(
@@ -1313,7 +1320,10 @@ class Trader:
 
         if resultado.get("cerrar", False):
             razon = resultado.get("razon", "Estrategia desconocida")
-            tendencia_actual = self.estado[symbol].tendencia_detectada or detectar_tendencia(symbol, df)[0]
+            tendencia_actual = self.estado_tendencia.get(symbol)
+            if not tendencia_actual:
+                tendencia_actual, _ = detectar_tendencia(symbol, df)
+                self.estado_tendencia[symbol] = tendencia_actual
             evaluacion = self.engine.evaluar_entrada(
                 symbol,
                 df,
@@ -1363,7 +1373,10 @@ class Trader:
         self.config_por_simbolo[symbol] = config_actual
 
         # Detectar tendencia
-        tendencia_actual = estado.tendencia_detectada or detectar_tendencia(symbol, df)[0]
+        tendencia_actual = self.estado_tendencia.get(symbol)
+        if not tendencia_actual:
+            tendencia_actual, _ = detectar_tendencia(symbol, df)
+            self.estado_tendencia[symbol] = tendencia_actual
         log.debug(f"[{symbol}] Tendencia detectada: {tendencia_actual}")
 
         # Evaluar entrada solo con tendencia
@@ -1598,6 +1611,7 @@ class Trader:
         estado.ultimo_timestamp = vela.get("timestamp")
         df = pd.DataFrame(estado.buffer)
         estado.tendencia_detectada, _ = detectar_tendencia(symbol, df)
+        self.estado_tendencia[symbol] = estado.tendencia_detectada
         log.info(f"Procesando vela {symbol} | Precio: {vela.get('close')}")
 
         if self.orders.obtener(symbol):

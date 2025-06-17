@@ -12,13 +12,7 @@ from core.riesgo import cargar_estado_riesgo
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 ORDENES_DB_PATH = os.path.join(BASE_DIR, "ordenes_reales", "ordenes.db")
 
-ESTADOS_EMOCION = {
-    "ganancia": "😄 Eufórico",
-    "perdida": "😢 Frustrado",
-    "expirada": "😐 Impaciente",
-    "esperando": "🧘 En calma",
-    "activo": "😎 Determinado",
-}
+
 
 log = configurar_logger("estado_bot")
 
@@ -34,21 +28,34 @@ def obtener_orden_abierta():
             return None
     return None
 
-def estimar_estado_emocional(ultima_orden):
-    if not ultima_orden:
-        return ESTADOS_EMOCION["esperando"]
-    if isinstance(ultima_orden, dict):
-        motivo = ultima_orden.get("motivo_cierre")
-    else:
-        motivo = getattr(ultima_orden, "motivo_cierre", None)
+def estimar_estado_emocional(_ultima_orden=None):
+    """Determina el estado emocional actual del bot basado en el desempeño."""
 
-    # ``motivo`` puede ser ``None`` si no se especificó un motivo de cierre.
-    # Convertimos a cadena vacía para evitar ``AttributeError`` al llamar ``lower``.
-    motivo_normalizado = (motivo or "").lower()
-    for clave in ESTADOS_EMOCION:
-        if clave in motivo_normalizado:
-            return ESTADOS_EMOCION[clave]
-    return ESTADOS_EMOCION["activo"]
+    operaciones: list[dict] = []
+    for ops in reporter_diario.ultimas_operaciones.values():
+        operaciones.extend(ops)
+    operaciones.sort(key=lambda o: o.get("fecha_cierre", ""))
+
+    ganancias = 0
+    perdidas = 0
+    for op in reversed(operaciones):
+        retorno = op.get("retorno_total", 0)
+        if retorno > 0 and perdidas == 0:
+            ganancias += 1
+        elif retorno < 0 and ganancias == 0:
+            perdidas += 1
+        else:
+            break
+
+    riesgo = cargar_estado_riesgo().get("perdida_acumulada", 0.0)
+
+    if ganancias >= 3:
+        return "😎 Determinado"
+    if perdidas >= 2 or riesgo > 1.5:
+        return "😰 Cauteloso"
+    if ganancias == 0 and riesgo < 0.5:
+        return "😐 Observador"
+    return "🤔 Neutro"
 
 def resumen_emocional() -> str:
     """Genera una breve justificación del estado emocional."""
@@ -56,14 +63,21 @@ def resumen_emocional() -> str:
     for ops in reporter_diario.ultimas_operaciones.values():
         operaciones.extend(ops)
     operaciones.sort(key=lambda o: o.get("fecha_cierre", ""))
-    consecutivas = 0
+    ganancias = 0
+    perdidas = 0
     for op in reversed(operaciones):
-        if op.get("retorno_total", 0) > 0:
-            consecutivas += 1
+        retorno = op.get("retorno_total", 0)
+        if retorno > 0 and perdidas == 0:
+            ganancias += 1
+        elif retorno < 0 and ganancias == 0:
+            perdidas += 1
         else:
             break
     riesgo = cargar_estado_riesgo().get("perdida_acumulada", 0.0)
-    return f"{consecutivas} ganancias consecutivas, riesgo acumulado {riesgo:.2f}%"
+    return (
+        f"{ganancias} ganancias consecutivas, {perdidas} pérdidas consecutivas, "
+        f"riesgo acumulado {riesgo:.2f}%"
+    )
 
 def monitorear_estado_bot(ordenes_memoria: dict | None = None):
     """Muestra el estado del bot y las órdenes activas.
