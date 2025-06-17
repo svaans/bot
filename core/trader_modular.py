@@ -1192,7 +1192,30 @@ class Trader:
                 orden.to_dict(), df, config=config_actual
             )
             if resultado.get("cerrar", False):
-                if not permitir_cierre_tecnico(symbol, df, precio_cierre, orden.to_dict()):
+                if score <= 1 and not evaluar_condiciones_de_cierre_anticipado(
+                    symbol,
+                    df,
+                    orden.to_dict(),
+                    score,
+                    orden.estrategias_activas,
+                ):
+                    log.info(
+                        f"🛡️ Cierre por SL evitado tras reevaluación técnica: {symbol}"
+                    )
+                    orden.sl_evitar_info = orden.sl_evitar_info or []
+                    orden.sl_evitar_info.append(
+                        {
+                            "timestamp": datetime.utcnow().isoformat(),
+                            "sl": orden.stop_loss,
+                            "precio": precio_cierre,
+                        }
+                    )
+                elif not permitir_cierre_tecnico(
+                    symbol,
+                    df,
+                    precio_cierre,
+                    orden.to_dict(),
+                ):
                     log.info(f"🛡️ Cierre evitado por análisis técnico: {symbol}")
                     orden.sl_evitar_info = orden.sl_evitar_info or []
                     orden.sl_evitar_info.append(
