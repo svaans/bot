@@ -1131,6 +1131,8 @@ class Trader:
             log.warning(f"⚠️ Se intentó verificar TP/SL sin orden activa en {symbol}")
             return
         
+        orden.duracion_en_velas = getattr(orden, "duracion_en_velas", 0) + 1
+        
         await self._piramidar(symbol, orden, df)
 
         precio_min = float(df["low"].iloc[-1])
@@ -1300,9 +1302,10 @@ class Trader:
                 else:
                     if nuevo_sl < orden.stop_loss:
                         orden.stop_loss = nuevo_sl
-                log.info(
-                    f"🟡 Break-Even activado para {symbol} → SL movido a entrada: {nuevo_sl}"
-                )
+            orden.break_even_activado = True
+            log.info(
+                f"🟡 Break-Even activado para {symbol} → SL movido a entrada: {nuevo_sl}"
+            )
 
         if resultado.get("cerrar", False):
             razon = resultado.get("razon", "Estrategia desconocida")

@@ -27,6 +27,8 @@ class Orden:
     puntaje_entrada: float = 0.0
     umbral_entrada: float = 0.0
     sl_evitar_info: list | None = None
+    break_even_activado: bool = False
+    duracion_en_velas: int = 0
 
     @staticmethod
     def from_dict(data: Dict[str, Any]) -> "Orden":
@@ -53,6 +55,8 @@ class Orden:
         data.setdefault("puntaje_entrada", 0.0)
         data.setdefault("umbral_entrada", 0.0)
         data.setdefault("sl_evitar_info", [])
+        data.setdefault("break_even_activado", False)
+        data.setdefault("duracion_en_velas", 0)
 
         return Orden(**data)
 

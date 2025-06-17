@@ -122,28 +122,44 @@ def salida_stoploss(orden: dict, df: pd.DataFrame, config: dict = None) -> dict:
 def verificar_salida_stoploss(
     orden: dict, df: pd.DataFrame, config: dict | None = None
 ) -> dict:
-    """Determina si el SL debe ejecutarse tras validar condiciones técnicas.
+    """Determina si debe ejecutarse el Stop Loss o mantenerse la operación."""
 
-    El nivel de SL se adapta dinámicamente según la volatilidad reciente.
-    """
 
-    if not validar_sl_tecnico(df, orden.get("direccion", "long")):
-        return {
-            "cerrar": False,
-            "motivo": "SL tocado pero indicadores válidos para mantener",
-            "evitado": True,
-        }
-     # --- Cálculo dinámico del SL ---
-    precio_entrada = orden.get("precio_entrada", df["close"].iloc[-1])
+    symbol = orden.get("symbol", "SYM")
+    if df is None or not {"close", "high", "low"}.issubset(df.columns):
+        return {"cerrar": False, "motivo": "Datos insuficientes", "evitado": False}
+
+    precio_actual = float(df["close"].iloc[-1])
+    precio_entrada = orden.get("precio_entrada", precio_actual)
     direccion = orden.get("direccion", "long")
+    precio_actual = float(df["close"].iloc[-1])
+    precio_entrada = orden.get("precio_entrada", precio_actual)
     sl_config = orden.get("stop_loss")
+
+    # --- Cierre inmediato por Break Even ---
+    if orden.get("break_even_activado"):
+        if (
+            direccion in ("long", "compra") and precio_actual <= precio_entrada
+        ) or (
+            direccion in ("short", "venta") and precio_actual >= precio_entrada
+        ):
+            log.info(
+                f"🟢 Cierre por Break Even en {symbol} | Precio actual: {precio_actual:.2f} <= Entrada: {precio_entrada:.2f}"
+            )
+            return {"cerrar": True, "motivo": "Break Even", "evitado": False}
+
+    # --- Cálculo dinámico del SL ---
     atr = None
     if len(df) >= 20:
         atr = (df["high"].tail(20) - df["low"].tail(20)).mean()
 
     ratio = config.get("sl_ratio", 1.5) if config else 1.5
     if atr is not None:
-        sl_dinamico = precio_entrada - atr * ratio if direccion in ("long", "compra") else precio_entrada + atr * ratio
+        sl_dinamico = (
+            precio_entrada - atr * ratio
+            if direccion in ("long", "compra")
+            else precio_entrada + atr * ratio
+        )
         if direccion in ("long", "compra"):
             sl_config = max(sl_config, sl_dinamico)
         else:
@@ -151,11 +167,65 @@ def verificar_salida_stoploss(
 
     orden["stop_loss"] = sl_config
 
-    resultado = salida_stoploss(orden, df, config=config)
-    cerrar = resultado.get("cerrar", False)
-    motivo = resultado.get("razon", "")
-    evitado = not cerrar and "evitado" in motivo.lower()
-    return {"cerrar": cerrar, "motivo": motivo, "evitado": evitado}
+    if (direccion in ("long", "compra") and precio_actual > sl_config) or (
+        direccion in ("short", "venta") and precio_actual < sl_config
+    ):
+        return {
+            "cerrar": False,
+            "motivo": f"SL no alcanzado aún (precio: {precio_actual:.2f} vs SL: {sl_config:.2f})",
+            "evitado": False,
+        }
+
+    tendencia, _ = detectar_tendencia(symbol, df)
+    evaluacion = evaluar_estrategias(symbol, df, tendencia)
+    estrategias_activas = evaluacion.get("estrategias_activas", {}) if evaluacion else {}
+    puntaje = evaluacion.get("puntaje_total", 0) if evaluacion else 0
+    activas = [k for k, v in estrategias_activas.items() if v]
+
+    pesos_symbol = pesos.get(symbol, {})
+    umbral = calcular_umbral_adaptativo(
+        symbol,
+        df,
+        estrategias_activas,
+        pesos_symbol,
+        persistencia=0.0,
+        config=config,
+    )
+
+    factor_umbral = config.get("factor_umbral_sl", 0.7) if config else 0.7
+    min_estrategias_relevantes = config.get("min_estrategias_relevantes_sl", 3) if config else 3
+    esperadas = ESTRATEGIAS_POR_TENDENCIA.get(tendencia, [])
+    activas_relevantes = [e for e in activas if e in esperadas]
+    condiciones_validas = (
+        len(activas_relevantes) >= min_estrategias_relevantes
+        and puntaje >= factor_umbral * umbral
+    )
+
+    duracion = orden.get("duracion_en_velas", 0)
+    max_velas = config.get("max_velas_sin_tp", 10) if config else 10
+    intentos = len(orden.get("sl_evitar_info", []))
+    max_evitar = config.get("max_evitar_sl", 2) if config else 2
+
+    cerrar_forzado = validar_sl_tecnico(df, direccion) or puntaje < 0.75 * umbral or duracion >= max_velas or intentos >= max_evitar
+
+    if condiciones_validas and not cerrar_forzado:
+        log.info(
+            f"🛡️ SL evitado en {symbol} | Puntaje: {puntaje:.2f}/{umbral:.2f} | Velas abiertas: {duracion}"
+        )
+        return {
+            "cerrar": False,
+            "motivo": "SL tocado pero indicadores válidos para mantener",
+            "evitado": True,
+        }
+
+    log.info(
+        f"🔴 SL forzado en {symbol} | Score técnico: {puntaje:.2f}/{umbral:.2f} | Velas abiertas: {duracion}"
+    )
+    return {
+        "cerrar": True,
+        "motivo": f"SL forzado | Score: {puntaje:.2f}/{umbral:.2f} | Velas: {duracion}",
+        "evitado": False,
+    }
     
 
     
