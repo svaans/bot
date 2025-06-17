@@ -13,7 +13,7 @@ from core.pesos import gestor_pesos
 from core.tendencia import detectar_tendencia, señales_repetidas
 from core.modo import MODO_REAL
 from core.config_manager import Config
-from core.adaptador_umbral import calcular_umbral_adaptativo, calcular_tp_sl_adaptativos
+from core.adaptador_dinamico import calcular_umbral_adaptativo, calcular_tp_sl_adaptativos
 from estrategias_entrada.gestor_entradas import evaluar_estrategias, entrada_permitida
 from estrategias_salida.reajuste_tp_sl import calcular_promedios_sl_tp
 from estrategias_salida.salida_trailing_stop import verificar_trailing_stop
