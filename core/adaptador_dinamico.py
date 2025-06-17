@@ -235,6 +235,8 @@ def calcular_tp_sl_adaptativos(
 ) -> tuple[float, float]:
     if config is None:
         config = {}
+    if not isinstance(df, pd.DataFrame):
+        raise TypeError("df debe ser un DataFrame de pandas")
     if precio_actual is None:
         precio_actual = float(df["close"].iloc[-1])
 

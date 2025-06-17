@@ -1543,11 +1543,11 @@ class Trader:
         log.info(f"✅ [{symbol}] Señal de entrada generada con {len(estrategias_activas)} estrategias.")
         precio = float(df["close"].iloc[-1])
         sl, tp = calcular_tp_sl_adaptativos(
+            symbol,
             df,
-            precio,
             config_actual,
             self.capital_por_simbolo.get(symbol, 0),
-            symbol,
+            precio,
         )
 
         if not distancia_minima_valida(precio, sl, tp):

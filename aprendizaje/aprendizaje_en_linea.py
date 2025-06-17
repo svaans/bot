@@ -138,10 +138,11 @@ def actualizar_pesos_dinamicos(symbol: str, historial: list, factor_ajuste=0.05)
 
             if precio_actual is not None and all(c in df_fake.columns for c in ["high", "low", "close"]):
                 sl, tp = calcular_tp_sl_adaptativos(
+                    symbol,
                     df_fake,
-                    precio_actual,
                     config_actual,
                     None,
+                    precio_actual,
                 )
                 df_tmp = df_fake.copy()
                 df_tmp["hl"] = df_tmp["high"] - df_tmp["low"]

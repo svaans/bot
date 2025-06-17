@@ -321,10 +321,11 @@ class TraderSimulado:
 
             precio = float(vela["close"])
             sl, tp = calcular_tp_sl_adaptativos(
+                symbol,
                 df,
-                precio,
                 config,
                 self.capital_simulado.get(symbol, 0),
+                precio,
             )
             
             if not distancia_minima_valida(precio, sl, tp):
