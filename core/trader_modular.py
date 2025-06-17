@@ -58,7 +58,10 @@ from indicadores.rsi import calcular_rsi
 from indicadores.momentum import calcular_momentum
 from indicadores.slope import calcular_slope
 from core.analisis_previo import validar_condiciones_tecnicas_extra
-from estrategias_salida.analisis_previo_salida import permitir_cierre_tecnico
+from estrategias_salida.analisis_previo_salida import (
+    permitir_cierre_tecnico,
+    evaluar_condiciones_de_cierre_anticipado,
+)
    
 
 log = configurar_logger("trader")

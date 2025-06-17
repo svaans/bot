@@ -1,4 +1,5 @@
 import pandas as pd
+from typing import Dict, Any
 from indicadores.rsi import calcular_rsi
 from indicadores.slope import calcular_slope
 from indicadores.momentum import calcular_momentum
@@ -72,6 +73,69 @@ def _score_tecnico_basico(df: pd.DataFrame, direccion: str) -> float:
     return float(puntos)
 
 
+def evaluar_condiciones_de_cierre_anticipado(
+    symbol: str,
+    df: pd.DataFrame,
+    orden: Dict[str, Any],
+    score: float,
+    estrategias_activas: Dict[str, Any] | None = None,
+) -> bool:
+    """Reevalúa el contexto técnico antes de confirmar un cierre por SL.
+
+    Retorna ``True`` si se debe permitir el cierre, ``False`` si las
+    condiciones aún respaldan mantener la operación abierta.
+    """
+
+    estrategias_activas = estrategias_activas or {}
+
+    direccion = orden.get("direccion", "long")
+
+    rsi = calcular_rsi(df)
+    volumen_actual = df["volume"].iloc[-1] if "volume" in df else 0.0
+    volumen_promedio = (
+        df["volume"].iloc[-20:-1].mean() if "volume" in df and len(df) > 20 else 0.0
+    )
+    volumen_rel = volumen_actual / volumen_promedio if volumen_promedio else 0.0
+
+    slope = calcular_slope(df)
+    tendencia_actual, _ = detectar_tendencia(symbol, df)
+
+    cond_rsi = rsi is not None and (
+        rsi > 55 if direccion == "long" else rsi < 45
+    )
+    cond_vol = volumen_rel >= 1.5
+    cond_slope = slope > 0 if direccion == "long" else slope < 0
+    cond_tendencia = tendencia_actual == orden.get("tendencia", tendencia_actual)
+
+    condiciones = [cond_rsi, cond_vol, cond_slope, cond_tendencia]
+    favorables = sum(1 for c in condiciones if c)
+
+    log.info(
+        f"🔍 Evaluación de cierre anticipado: condiciones favorables = {favorables}/4"
+    )
+
+    if favorables >= 2:
+        detalles: list[str] = []
+        if cond_rsi:
+            detalles.append(f"RSI alto: {rsi:.0f}") if direccion == "long" else detalles.append(
+                f"RSI bajo: {rsi:.0f}"
+            )
+        if cond_vol:
+            detalles.append(f"volumen fuerte: {volumen_rel:.1f}x")
+        if cond_slope:
+            detalles.append("pendiente a favor")
+        if cond_tendencia:
+            detalles.append("tendencia intacta")
+
+        log.info(
+            "🛡️ Cierre por SL evitado | %s",
+            ", ".join(detalles),
+        )
+        return False
+
+    return True
+
+
 def permitir_cierre_tecnico(symbol: str, df: pd.DataFrame, sl: float, precio: float) -> bool:
     """Decide si se permite cerrar la operación ignorando posibles rebotes."""
 
@@ -107,6 +171,17 @@ def permitir_cierre_tecnico(symbol: str, df: pd.DataFrame, sl: float, precio: fl
     envolvente = es_vela_envolvente_alcista(df)
     soporte_cerca = precio_cerca_de_soporte(df, precio)
     divergencia = detectar_divergencia_alcista(df)
+
+    if score <= 1:
+        if not evaluar_condiciones_de_cierre_anticipado(
+            symbol,
+            df,
+            orden or {},
+            score,
+            (orden.get("estrategias_activas") if orden else {}),
+        ):
+            return False
+
 
     if score < 2:
         log.info(f"❌ {symbol} Score técnico {score:.2f} < 2. Cierre obligatorio.")
