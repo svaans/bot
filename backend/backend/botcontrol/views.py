@@ -25,10 +25,10 @@ class BotStartView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
     def post(self, request):
-        state, _ = BotState.objects.get_or_create(usuario=request.user)
-        if state.activo:
+        started = bot_runner.start(request.user.id)
+        if not started:
             return Response({"detail": "Bot ya está en ejecución."}, status=400)
-
+        state, _ = BotState.objects.get_or_create(usuario=request.user)
         state.activo = True
         state.save()
         return Response({"detail": "Bot iniciado."})
@@ -41,6 +41,30 @@ class BotStopView(APIView):
         bot_runner.stop(request.user.id)
         BotState.objects.update_or_create(usuario=request.user, defaults={"activo": False})
         return Response({"detail": "Bot detenido."})
+    
+class BotModeView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request):
+        modo_real = request.data.get("modo_real")
+        if modo_real is None:
+            return Response({"detail": "modo_real requerido"}, status=400)
+        state, _ = BotState.objects.get_or_create(usuario=request.user)
+        state.modo_real = bool(modo_real)
+        state.save()
+        return Response({"detail": "Modo actualizado."})
+
+
+class BotRestartView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request):
+        bot_runner.stop(request.user.id)
+        bot_runner.start(request.user.id)
+        state, _ = BotState.objects.get_or_create(usuario=request.user)
+        state.activo = True
+        state.save()
+        return Response({"detail": "Bot reiniciado."})
 
 
 class ConfigListCreateView(generics.ListCreateAPIView):

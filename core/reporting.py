@@ -5,6 +5,7 @@ import pandas as pd
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_pdf import PdfPages
 from core.logger import configurar_logger
+from core.utils import leer_csv_seguro
 
 
 class ReporterDiario:
@@ -30,7 +31,9 @@ class ReporterDiario:
         ]
         if os.path.exists(self.estadisticas_archivo):
             try:
-                self.estadisticas = pd.read_csv(self.estadisticas_archivo)
+                self.estadisticas = leer_csv_seguro(
+                    self.estadisticas_archivo, expected_cols=len(columnas)
+                )
             except Exception:
                 self.estadisticas = pd.DataFrame(columns=columnas)
         else:
@@ -108,7 +111,7 @@ class ReporterDiario:
         archivo = os.path.join(self.carpeta, f"{fecha}.csv")
         if not os.path.exists(archivo):
             return
-        df = pd.read_csv(archivo)
+        df = leer_csv_seguro(archivo, expected_cols=20)
         if df.empty:
             return
         ganancia_total = df["retorno_total"].sum()

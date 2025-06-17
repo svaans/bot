@@ -3,6 +3,7 @@ import re
 from datetime import datetime, timedelta
 import pandas as pd
 from core.logger import configurar_logger
+from core.utils import leer_csv_seguro
 
 log = configurar_logger("kelly")
 
@@ -33,9 +34,8 @@ def calcular_fraccion_kelly(dias_historia: int = 30, fallback: float = 0.20) -> 
         if fecha < fecha_limite:
             continue
         try:
-            df = pd.read_csv(
-                os.path.join(carpeta, archivo),
-                on_bad_lines="skip",
+            df = leer_csv_seguro(
+                os.path.join(carpeta, archivo), expected_cols=20
             )
         except (
             pd.errors.EmptyDataError,

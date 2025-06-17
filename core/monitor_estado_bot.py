@@ -6,6 +6,8 @@ from binance_api.cliente import crear_cliente
 from ccxt.base.errors import AuthenticationError, NetworkError
 from core.logger import configurar_logger
 from core import ordenes_reales
+from core.reporting import reporter_diario
+from core.riesgo import cargar_estado_riesgo
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 ORDENES_DB_PATH = os.path.join(BASE_DIR, "ordenes_reales", "ordenes.db")
@@ -47,6 +49,21 @@ def estimar_estado_emocional(ultima_orden):
         if clave in motivo_normalizado:
             return ESTADOS_EMOCION[clave]
     return ESTADOS_EMOCION["activo"]
+
+def resumen_emocional() -> str:
+    """Genera una breve justificación del estado emocional."""
+    operaciones = []
+    for ops in reporter_diario.ultimas_operaciones.values():
+        operaciones.extend(ops)
+    operaciones.sort(key=lambda o: o.get("fecha_cierre", ""))
+    consecutivas = 0
+    for op in reversed(operaciones):
+        if op.get("retorno_total", 0) > 0:
+            consecutivas += 1
+        else:
+            break
+    riesgo = cargar_estado_riesgo().get("perdida_acumulada", 0.0)
+    return f"{consecutivas} ganancias consecutivas, riesgo acumulado {riesgo:.2f}%"
 
 def monitorear_estado_bot(ordenes_memoria: dict | None = None):
     """Muestra el estado del bot y las órdenes activas.
@@ -95,7 +112,9 @@ def monitorear_estado_bot(ordenes_memoria: dict | None = None):
         estado_emocional = estimar_estado_emocional(
             list(orden_abierta.values())[-1] if orden_abierta else None
         )
-        log.info(f"🧠 Estado emocional del bot: {estado_emocional}")
+        log.info(
+            f"🧠 Estado emocional del bot: {estado_emocional} — {resumen_emocional()}"
+        )
         log.info("========================================")
 
     except AuthenticationError:

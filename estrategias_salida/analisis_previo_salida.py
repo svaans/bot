@@ -10,14 +10,29 @@ log = configurar_logger("analisis_salidas")
 
 
 def precio_cerca_de_soporte(df: pd.DataFrame, precio: float, ventana: int = 30, margen: float = 0.003) -> bool:
-    """Comprueba si ``precio`` está cerca de un soporte reciente."""
-    if "low" not in df or len(df) < 2:
+    """Comprueba si ``precio`` está cerca de un soporte reciente y validado."""
+    if "low" not in df or len(df) < ventana:
         return False
-    recientes = df["low"].tail(ventana)
-    soporte = recientes.min()
-    if soporte <= 0:
+    recientes = df.tail(ventana)
+    soporte = recientes["low"].min()
+    if soporte <= 0 or precio > soporte * (1 + margen):
         return False
-    return precio <= soporte * (1 + margen)
+    
+    rebotes_validos = (recientes["low"] <= soporte * (1 + margen)).sum()
+    if rebotes_validos < 3:
+        return False
+
+    mecha_inf = min(recientes.iloc[-1]["open"], recientes.iloc[-1]["close"]) - recientes.iloc[-1]["low"]
+    cuerpo = abs(recientes.iloc[-1]["close"] - recientes.iloc[-1]["open"])
+    hammer = cuerpo > 0 and mecha_inf > cuerpo * 2
+    envolvente = es_vela_envolvente_alcista(recientes)
+
+    volumen_creciente = False
+    if "volume" in recientes.columns:
+        vol = recientes["volume"].tail(3)
+        volumen_creciente = vol.iloc[-1] > vol.mean()
+
+    return (hammer or envolvente) and volumen_creciente
 
 
 def es_vela_envolvente_alcista(df: pd.DataFrame) -> bool:
@@ -109,8 +124,8 @@ def permitir_cierre_tecnico(symbol: str, df: pd.DataFrame, sl: float, precio: fl
 
     # 2️⃣ Proximidad a soporte reciente (rebote potencial)
     soporte_reciente = df["low"].rolling(20).min().iloc[-1]
-    if precio - soporte_reciente < 0.005 * precio:
-        log.info(f"⚠️ {symbol} muy cerca del soporte ({soporte_reciente:.2f}) → posible rebote.")
+    if soporte_cerca:
+        log.info(f"⚠️ {symbol} Soporte técnico validado cercano → posible rebote.")
         return False
 
     # 3️⃣ Vela envolvente alcista (posible reversión)
