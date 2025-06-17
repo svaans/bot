@@ -33,13 +33,13 @@ PRIORIDAD = {
 
 def verificar_take_profit(orden: Dict, df: pd.DataFrame, config: Dict | None = None) -> Dict:
     """Comprueba si se alcanzó el TP adaptado dinámicamente."""
-    if "close" not in df.columns:
+    if df is None or "close" not in df.columns:
         return {"cerrar": False, "razon": "Datos insuficientes"}
 
     precio_actual = df["close"].iloc[-1]
     direccion = orden.get("direccion", "long")
     atr = None
-    if len(df) >= 20:
+    if df is not None and len(df) >= 20:
         rango = df["high"].tail(20) - df["low"].tail(20)
         atr = rango.mean()
 

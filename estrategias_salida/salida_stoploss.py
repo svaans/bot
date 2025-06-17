@@ -126,7 +126,7 @@ def verificar_salida_stoploss(
 
 
     symbol = orden.get("symbol", "SYM")
-    if df is None or not {"close", "high", "low"}.issubset(df.columns):
+    if not validar_dataframe(df, ["close", "high", "low"]):
         return {"cerrar": False, "motivo": "Datos insuficientes", "evitado": False}
 
     precio_actual = float(df["close"].iloc[-1])
@@ -150,7 +150,7 @@ def verificar_salida_stoploss(
 
     # --- Cálculo dinámico del SL ---
     atr = None
-    if len(df) >= 20:
+    if df is not None and len(df) >= 20:
         atr = (df["high"].tail(20) - df["low"].tail(20)).mean()
 
     ratio = config.get("sl_ratio", 1.5) if config else 1.5
@@ -217,6 +217,12 @@ def verificar_salida_stoploss(
             "motivo": "SL tocado pero indicadores válidos para mantener",
             "evitado": True,
         }
+    
+    if puntaje >= 2.5 * umbral:
+        log.info(
+            f"🛡️ SL evitado por score excepcional en {symbol} → {puntaje:.2f}/{umbral:.2f}"
+        )
+        return {"cerrar": False, "motivo": "Score técnico muy alto", "evitado": True}
 
     log.info(
         f"🔴 SL forzado en {symbol} | Score técnico: {puntaje:.2f}/{umbral:.2f} | Velas abiertas: {duracion}"
