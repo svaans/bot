@@ -4,7 +4,7 @@ import inspect
 from core.utils import validar_dataframe
 from core.tendencia import detectar_tendencia
 from estrategias_entrada.gestor_entradas import evaluar_estrategias
-from core.adaptador_umbral import calcular_umbral_adaptativo
+from core.adaptador_dinamico import calcular_umbral_adaptativo
 from core.logger import configurar_logger
 
 log = configurar_logger("gestor_salidas")
