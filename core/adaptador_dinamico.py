@@ -105,8 +105,6 @@ def _limites_adaptativos(contexto_score: float) -> tuple[float, float]:
 
 
 def calcular_umbral_adaptativo(
-    symbol,
-    df,
     symbol: str,
     df: pd.DataFrame,
     estrategias_activadas,
