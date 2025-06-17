@@ -637,7 +637,8 @@ class Trader:
         if self.modo_capital_bajo and euros < 500:
             deficit = (500 - euros) / 500
             fraccion = max(fraccion, 0.02 + deficit * 0.1)
-        riesgo = max(capital_symbol * fraccion, self.config.min_order_eur)
+        riesgo = capital_symbol * fraccion * self.config.umbral_riesgo_diario
+        riesgo = max(riesgo, self.config.min_order_eur)
         riesgo = min(riesgo, euros)
         minimo_binance = await self._obtener_minimo_binance(symbol)
         cantidad = riesgo / precio

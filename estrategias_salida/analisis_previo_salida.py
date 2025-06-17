@@ -80,9 +80,12 @@ def permitir_cierre_tecnico(symbol: str, df: pd.DataFrame, sl: float, precio: fl
     cuerpo = abs(cierre - apertura)
 
     rsi = calcular_rsi(df)
-    pendiente_rsi = calcular_slope(
-        pd.DataFrame({"rsi": df["close"].rolling(14).apply(calcular_rsi)})
-    ) if len(df) >= 30 else None
+    rsi_series = calcular_rsi(df, serie_completa=True)
+    pendiente_rsi = (
+        calcular_slope(pd.DataFrame({"close": rsi_series.dropna()}))
+        if isinstance(rsi_series, pd.Series) and len(df) >= 30
+        else None
+    )
 
     direccion = orden.get("direccion", "long") if orden else "long"
     score = _score_tecnico_basico(df, direccion)
