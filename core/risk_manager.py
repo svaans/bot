@@ -26,16 +26,22 @@ class RiskManager:
             actualizar_perdida(symbol, perdida)
 
     def ajustar_umbral(self, segun_metricas: dict) -> None:
-        """
-        Modifica ``self.umbral`` de acuerdo al desempeño reciente.
+        """Ajusta ``self.umbral`` usando métricas recientes.
 
-        Espera un diccionario con las claves:
-        - ganancia_semana (float): ganancia semanal acumulada
-        - drawdown (float): pérdida máxima registrada en la semana
+        ``segun_metricas`` puede incluir las siguientes claves:
 
-        Lógica:
-        - Si ganancia semanal > 5%, aumenta el umbral hasta un máximo del 0.5
-        - Si drawdown < -5%, reduce el umbral hasta un mínimo del 0.01
+        - ``ganancia_semana`` (float): ganancia semanal acumulada.
+        - ``drawdown`` (float): pérdida máxima registrada en la semana.
+        - ``winrate`` (float): winrate de las últimas operaciones (0-1).
+        - ``capital_actual`` (float): capital disponible en la cuenta.
+        - ``capital_inicial`` (float): capital al inicio del periodo.
+
+        Reglas de ajuste:
+        - Si ``ganancia_semana`` > 5% → aumenta el umbral hasta un máximo de
+          ``0.5``.
+        - Si ``drawdown`` < -5% → reduce el umbral hasta un mínimo de ``0.01``.
+        - Si ``winrate`` > 0.6 **y** ``capital_actual`` > ``capital_inicial`` →
+          incrementa un 20 % el umbral sin superar ``0.06``.
         """
         if not isinstance(segun_metricas, dict):
             log.warning("⚠️ Métricas de riesgo no proporcionadas como diccionario")
@@ -43,6 +49,9 @@ class RiskManager:
 
         ganancia = segun_metricas.get("ganancia_semana", 0.0)
         drawdown = segun_metricas.get("drawdown", 0.0)
+        winrate = segun_metricas.get("winrate")
+        capital_actual = segun_metricas.get("capital_actual")
+        capital_inicial = segun_metricas.get("capital_inicial")
 
         if not isinstance(ganancia, (int, float)) or not isinstance(drawdown, (int, float)):
             log.warning("⚠️ Métricas inválidas para ajuste de riesgo")
@@ -57,6 +66,13 @@ class RiskManager:
             self.umbral = round(min(0.5, self.umbral * 1.05), 4)
         elif drawdown < -0.05:
             self.umbral = round(max(0.01, self.umbral * 0.9), 4)
+        if (
+            isinstance(winrate, (int, float))
+            and isinstance(capital_actual, (int, float))
+            and isinstance(capital_inicial, (int, float))
+        ):
+            if winrate > 0.6 and capital_actual > capital_inicial:
+                self.umbral = round(min(0.06, self.umbral * 1.2), 4)
 
         if self.umbral != umbral_anterior:
             log.info(f"🔧 Umbral ajustado de {umbral_anterior:.4f} → {self.umbral:.4f}")
