@@ -78,7 +78,7 @@ def adaptar_configuracion(symbol: str, df: pd.DataFrame, base_config: dict) -> d
     base_mult = base_config.get("multiplicador_estrategias_recurrentes", 1.5)
     config["multiplicador_estrategias_recurrentes"] = round(min(3.0, base_mult * (1 + volatilidad)), 2)
 
-    base_riesgo = base_config.get("riesgo_maximo_diario", 2.0)
+    base_riesgo = base_config.get("riesgo_maximo_diario", 5.0)
     config["riesgo_maximo_diario"] = round(min(10.0, base_riesgo + volatilidad * 5), 2)
 
     log.info(

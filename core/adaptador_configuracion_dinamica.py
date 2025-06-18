@@ -75,10 +75,11 @@ def adaptar_configuracion(symbol: str, df: pd.DataFrame) -> dict:
     modo_agresivo = abs(rsi - 50) > 20 or abs(slope_pct) > 0.002
 
     factor_umbral = 1.0
-    if atr_pct > 0.015:
-        factor_umbral += 0.2
+    if atr_pct > 0.02:
+        factor_umbral += 0.1
     if abs(slope_pct) < 0.0005:
-        factor_umbral += 0.2
+        factor_umbral += 0.1
+    factor_umbral = min(factor_umbral, 1.3)
 
     sl_ratio = 1.5
     tp_ratio = 3.0
@@ -95,17 +96,17 @@ def adaptar_configuracion(symbol: str, df: pd.DataFrame) -> dict:
     elif atr_pct > 0.02:
         riesgo_maximo_diario *= 0.8
 
-    cooldown_tras_perdida = 3
+    cooldown_tras_perdida = 2
     if atr_pct > 0.02 or abs(slope_pct) < 0.0005:
-        cooldown_tras_perdida = 6
+        cooldown_tras_perdida = 4
     elif atr_pct < 0.01 and abs(slope_pct) > 0.001:
-        cooldown_tras_perdida = 2
+        cooldown_tras_perdida = 1
 
     diversidad_minima = 2
     if modo_agresivo and atr_pct < 0.015:
         diversidad_minima = 1
     elif not modo_agresivo and atr_pct > 0.02:
-        diversidad_minima = 3
+        diversidad_minima = 2
 
     config = {
         "modo_agresivo": modo_agresivo,

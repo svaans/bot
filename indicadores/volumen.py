@@ -11,7 +11,7 @@ def calcular_volumen_alto(df: pd.DataFrame, factor: float = 1.5, ventana: int = 
 
 
 def verificar_volumen_suficiente(
-    df: pd.DataFrame, factor: float = 0.7, ventana: int = 20
+    df: pd.DataFrame, factor: float = 0.6, ventana: int = 20
 ) -> bool:
     """Comprueba si el volumen actual es suficiente en relación al promedio.
 

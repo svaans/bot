@@ -84,7 +84,7 @@ def validar_tecnica_entrada(
     volumen_actual = float(df["volume"].iloc[-1])
     volumen_prom_30 = float(df["volume"].rolling(30).mean().iloc[-1])
 
-    if volumen_prom_30 > 0 and (volumen_actual / volumen_prom_30) < 1.1:
+    if volumen_prom_30 > 0 and (volumen_actual / volumen_prom_30) < 1.05:
         log.info(f"🚫 {symbol} volumen relativo bajo")
         return False
 
@@ -96,7 +96,7 @@ def validar_tecnica_entrada(
     if tendencia == "alcista" and slope < 0:
         log.info(f"🚫 {symbol} slope incompatible con tendencia alcista {slope:.4f}")
         return False
-    if abs(slope) < 0.05:
+    if abs(slope) < 0.03:
         log.info(f"🚫 {symbol} slope débil {slope:.4f}")
         return False
     if momentum is not None:
@@ -117,7 +117,7 @@ def validar_tecnica_entrada(
             return False
 
     _, banda_sup, _ = calcular_bollinger(df)
-    if banda_sup is not None and abs(banda_sup - close_actual) / close_actual < 0.01:
+    if banda_sup is not None and abs(banda_sup - close_actual) / close_actual < 0.015:
         log.info(f"🚫 {symbol} muy cerca de resistencia")
         return False
 
@@ -152,7 +152,7 @@ def validar_volumen(df, direccion: str, cantidad: float = 0.0) -> bool:
         return True
     if not verificar_volumen_suficiente(df):
         return False
-    if cantidad > 0 and not verificar_liquidez_orden(df, cantidad):
+    if cantidad > 0 and not verificar_liquidez_orden(df, cantidad, factor=0.3):
         return False
     if direccion == "short" and detectar_divergencia_alcista(df):
         return False
@@ -267,8 +267,8 @@ def entrada_permitida(
         return True
 
     if (
-        potencia >= umbral * 0.95
-        and estrategias_activas_count >= 5
+        potencia >= umbral * 0.9
+        and estrategias_activas_count >= 4
         and rsi > 55
         and (
             (tendencia == "bajista" and slope < 0)
