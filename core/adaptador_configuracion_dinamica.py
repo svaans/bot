@@ -112,7 +112,7 @@ def adaptar_configuracion(symbol: str, df: pd.DataFrame) -> dict:
         "factor_umbral": round(factor_umbral, 2),
         "tp_ratio": round(tp_ratio, 2),
         "sl_ratio": round(sl_ratio, 2),
-        "riesgo_maximo_diario": round(riesgo_maximo_diario, 2),
+        "riesgo_maximo_diario": round(riesgo_maximo_diario, 4),
         "cooldown_tras_perdida": int(cooldown_tras_perdida),
         "diversidad_minima": int(diversidad_minima),
         "min_slope": min_slope,
