@@ -309,6 +309,10 @@ class TraderSimulado:
                 momentum,
                 df,
                 direccion,
+                tendencia=tendencia,
+                score=puntaje,
+                persistencia=repetidas,
+                persistencia_minima=2.0,
             ):
                 log.debug(f"🚫 [{symbol}] Rechazada por entrada_permitida()")
                 return

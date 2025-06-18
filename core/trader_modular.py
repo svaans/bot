@@ -948,7 +948,7 @@ class Trader:
         puntaje: float,
         umbral: float,
         estrategias: Dict[str, bool],
-    ) -> bool:
+    ) -> tuple[bool, float, float]:
         """Evalúa si las señales persistentes son suficientes para entrar."""
         ventana_close = df["close"].tail(10)
         media_close = np.mean(ventana_close)
@@ -977,7 +977,7 @@ class Trader:
                 estrategias=list(estrategias.keys()),
             )
             metricas_tracker.registrar_filtro("persistencia")
-            return False
+            return False, repetidas, minimo
 
         if repetidas < 1 and puntaje < 1.2 * umbral:
             self._rechazo(
@@ -986,13 +986,13 @@ class Trader:
                 puntaje=puntaje,
                 estrategias=list(estrategias.keys()),
             )
-            return False
+            return False, repetidas, minimo
         elif repetidas < 1:
             log.info(
                 f"⚠️ Entrada débil en {symbol}: Coincidencia {repetidas:.2f} insuficiente pero puntaje alto ({puntaje}) > Umbral {umbral} — Permitida."
             )
             metricas_tracker.registrar_filtro("persistencia")
-        return True
+        return True, repetidas, minimo
     
     def _tendencia_persistente(
         self, symbol: str, df: pd.DataFrame, tendencia: str, velas: int = 3
@@ -1638,9 +1638,10 @@ class Trader:
             log.info(f"❌ [{symbol}] Validación de estrategia final fallida.")
             return None
 
-        if not self._evaluar_persistencia(
+        ok_pers, valor_pers, minimo_pers = self._evaluar_persistencia(
             symbol, estado, df, pesos_symbol, tendencia_actual, puntaje, umbral, estrategias
-        ):
+        )
+        if not ok_pers:
             log.info(f"❌ [{symbol}] Evaluación de persistencia fallida.")
             return None
 
@@ -1667,6 +1668,10 @@ class Trader:
             df,
             direccion,
             cantidad=cantidad_simulada,
+            tendencia=tendencia_actual,
+            score=score_tecnico if self.usar_score_tecnico else None,
+            persistencia=valor_pers,
+            persistencia_minima=minimo_pers,
         ):
             log.info(f"❌ [{symbol}] Filtro técnico final bloqueó la entrada.")
             return None

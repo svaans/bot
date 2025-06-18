@@ -74,6 +74,7 @@ def validar_tecnica_entrada(
     estrategias_activas: dict,
     symbol: str,
     direccion: str = "long",
+    tendencia: str | None = None,
 ) -> bool:
     """Valida múltiples criterios técnicos antes de ejecutar la entrada."""
     if df is None or len(df) < 30:
@@ -89,9 +90,22 @@ def validar_tecnica_entrada(
 
     slope = calcular_slope(df, 10)
     momentum = calcular_momentum(df, 10)
-    if slope < 0.05 or (momentum is not None and momentum < 0):
-        log.info(f"🚫 {symbol} slope/momentum débil")
+    if tendencia == "bajista" and slope > 0:
+        log.info(f"🚫 {symbol} slope incompatible con tendencia bajista {slope:.4f}")
         return False
+    if tendencia == "alcista" and slope < 0:
+        log.info(f"🚫 {symbol} slope incompatible con tendencia alcista {slope:.4f}")
+        return False
+    if abs(slope) < 0.05:
+        log.info(f"🚫 {symbol} slope débil {slope:.4f}")
+        return False
+    if momentum is not None:
+        if tendencia == "bajista" and momentum > 0:
+            log.info(f"🚫 {symbol} momentum alcista en tendencia bajista {momentum:.4f}")
+            return False
+        if tendencia == "alcista" and momentum < 0:
+            log.info(f"🚫 {symbol} momentum bajista en tendencia alcista {momentum:.4f}")
+            return False
 
     rsi = calcular_rsi(df, 14)
     if rsi is not None:
@@ -219,6 +233,10 @@ def entrada_permitida(
     cantidad=0.0,
     df_referencia=None,
     umbral_correlacion: float = 0.9,
+    tendencia: str | None = None,
+    score: float | None = None,
+    persistencia: float = 0.0,
+    persistencia_minima: float = 0.0,
 ):
     """
     Evalúa si se permite una entrada con base en:
@@ -238,7 +256,9 @@ def entrada_permitida(
             log.info(f"🚫 {symbol} correlación alta {corr:.2f}")
             return False
     
-    if df is not None and not validar_tecnica_entrada(df, estrategias_activas, symbol, direccion):
+    if df is not None and not validar_tecnica_entrada(
+        df, estrategias_activas, symbol, direccion, tendencia
+    ):
         log.info(f"🔴 [{symbol}] Entrada rechazada por validación técnica previa")
         return False
 
@@ -247,13 +267,25 @@ def entrada_permitida(
         return True
 
     if (
-        potencia >= umbral * 0.95 and
-        estrategias_activas_count >= 5 and
-        rsi > 55 and
-        slope > 0 and
-        momentum > 0.0004
+        potencia >= umbral * 0.95
+        and estrategias_activas_count >= 5
+        and rsi > 55
+        and (
+            (tendencia == "bajista" and slope < 0)
+            or (tendencia == "alcista" and slope > 0)
+            or tendencia is None
+        )
+        and momentum > 0.0004
     ):
-        log.info(f"🟡 [{symbol}] Entrada validada por criterios técnicos. Potencia: {potencia:.2f} < Umbral: {umbral:.2f}")
+        log.info(
+            f"🟡 [{symbol}] Entrada validada por criterios técnicos. Potencia: {potencia:.2f} < Umbral: {umbral:.2f}"
+        )
+        return True
+
+    if score is not None and score >= 3.5 and persistencia >= persistencia_minima:
+        log.info(
+            f"🟢 [{symbol}] Entrada permitida por score {score:.2f} y persistencia {persistencia:.2f}"
+        )
         return True
 
     log.info(f"🔴 [{symbol}] Entrada descartada. Potencia: {potencia:.2f} < Umbral: {umbral:.2f}")
