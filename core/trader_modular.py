@@ -137,6 +137,7 @@ class Trader:
         self.piramide_fracciones = max(1, config.fracciones_piramide)
         self.reserva_piramide = max(0.0, min(1.0, config.reserva_piramide))
         self.umbral_piramide = max(0.0, config.umbral_piramide)
+        self.riesgo_maximo_diario = 1.0
         euros = 0
         if self.modo_real:
             if config.api_key and config.api_secret:
@@ -701,26 +702,32 @@ class Trader:
         if self.modo_capital_bajo and euros < 500:
             deficit = (500 - euros) / 500
             fraccion = max(fraccion, 0.02 + deficit * 0.1)
-        riesgo = capital_symbol * fraccion * self.config.umbral_riesgo_diario
-        riesgo = max(riesgo, self.config.min_order_eur)
+        riesgo_teorico = capital_symbol * fraccion * self.risk.umbral
+        minimo_dinamico = max(10.0, euros * 0.02)
+        riesgo = max(riesgo_teorico, minimo_dinamico)
+        riesgo = min(riesgo, euros * self.riesgo_maximo_diario)
         riesgo = min(riesgo, euros)
         minimo_binance = await self._obtener_minimo_binance(symbol)
         cantidad = riesgo / precio
-        if cantidad * precio < self.config.min_order_eur:
+        if cantidad * precio < minimo_dinamico:
             log.debug(
-                f"Orden mínima {self.config.min_order_eur}€, intento {cantidad * precio:.2f}€"
+                f"Orden mínima {minimo_dinamico:.2f}€, intento {cantidad * precio:.2f}€"
             )
             return 0.0
         orden_eur = cantidad * precio
         log.info(
-            "📊 Capital disponible: %.2f€ | Kelly: %.4f | Orden: %.2f€ | Mínimo Binance: %s | %s"
-            % (
-                euros,
-                fraccion,
-                orden_eur,
-                f"{minimo_binance:.2f}€" if minimo_binance else "desconocido",
-                symbol,
-            )
+            "⚖️ Kelly ajustada: %.4f | Riesgo teórico: %.2f€ | Mínimo dinámico: %.2f€ | Riesgo final: %.2f€",
+            fraccion,
+            riesgo_teorico,
+            minimo_dinamico,
+            riesgo,
+        )
+        log.info(
+            "📊 Capital disponible: %.2f€ | Orden: %.2f€ | Mínimo Binance: %s | %s",
+            euros,
+            orden_eur,
+            f"{minimo_binance:.2f}€" if minimo_binance else "desconocido",
+            symbol,
         )
         return round(cantidad, 6)
     
@@ -732,7 +739,13 @@ class Trader:
         """Calcula ganancia acumulada y drawdown de los últimos ``dias``."""
         carpeta = reporter_diario.carpeta
         if not os.path.isdir(carpeta):
-            return {"ganancia_semana": 0.0, "drawdown": 0.0}
+            return {
+                "ganancia_semana": 0.0,
+                "drawdown": 0.0,
+                "winrate": 0.0,
+                "capital_actual": sum(self.capital_por_simbolo.values()),
+                "capital_inicial": sum(self.capital_inicial_diario.values()),
+            }
 
         fecha_limite = datetime.utcnow().date() - timedelta(days=dias)
         retornos: list[float] = []
@@ -764,7 +777,13 @@ class Trader:
                 retornos.extend(df["retorno_total"].dropna().tolist())
 
         if not retornos:
-            return {"ganancia_semana": 0.0, "drawdown": 0.0}
+            return {
+                "ganancia_semana": 0.0,
+                "drawdown": 0.0,
+                "winrate": 0.0,
+                "capital_actual": sum(self.capital_por_simbolo.values()),
+                "capital_inicial": sum(self.capital_inicial_diario.values()),
+            }
 
         serie = pd.Series(retornos).cumsum()
         drawdown = float((serie - serie.cummax()).min())
