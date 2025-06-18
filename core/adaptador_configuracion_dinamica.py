@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pandas as pd
+import numpy as np
 from core.logger import configurar_logger
 from indicadores.atr import calcular_atr
 from indicadores.rsi import calcular_rsi
@@ -37,6 +38,39 @@ def adaptar_configuracion(symbol: str, df: pd.DataFrame) -> dict:
 
     atr_pct = atr / close_actual if close_actual else 0.0
     slope_pct = slope / close_actual if close_actual else 0.0
+
+    volumen_actual = float(df["volume"].iloc[-1])
+    volumen_prom_30 = float(df["volume"].rolling(30).mean().iloc[-1])
+    volumen_relativo = (
+        volumen_actual / volumen_prom_30 if volumen_prom_30 else 1.0
+    )
+
+    # --- Adaptación de parámetros técnicos previos -----------------------------
+    if atr_pct <= 0.008:
+        min_slope = 0.01
+    elif atr_pct >= 0.015:
+        min_slope = 0.03
+    else:
+        t = np.clip((atr_pct - 0.008) / (0.015 - 0.008), 0.0, 1.0)
+        min_slope = 0.01 + t * (0.03 - 0.01)
+    min_slope = round(float(min_slope), 3)
+
+    if rsi < 50:
+        max_rsi = 70.0
+    elif rsi > 60:
+        max_rsi = 65.0
+    else:
+        max_rsi = 68.0
+    max_rsi = round(float(max_rsi), 3)
+
+    if volumen_relativo <= 1.2:
+        min_volumen_relativo = 1.1
+    elif volumen_relativo >= 1.5:
+        min_volumen_relativo = 1.3
+    else:
+        t = np.clip((volumen_relativo - 1.2) / (1.5 - 1.2), 0.0, 1.0)
+        min_volumen_relativo = 1.1 + t * (1.3 - 1.1)
+    min_volumen_relativo = round(float(min_volumen_relativo), 3)
 
     modo_agresivo = abs(rsi - 50) > 20 or abs(slope_pct) > 0.002
 
@@ -81,11 +115,15 @@ def adaptar_configuracion(symbol: str, df: pd.DataFrame) -> dict:
         "riesgo_maximo_diario": round(riesgo_maximo_diario, 2),
         "cooldown_tras_perdida": int(cooldown_tras_perdida),
         "diversidad_minima": int(diversidad_minima),
+        "min_slope": min_slope,
+        "max_rsi": max_rsi,
+        "min_volumen_relativo": min_volumen_relativo,
     }
 
     log.info(
         f"[{symbol}] Config adaptada | ATR%={atr_pct:.4f} | RSI={rsi:.2f} | "
-        f"Slope%={slope_pct:.4f} | Aggresivo={modo_agresivo}"
+        f"Slope%={slope_pct:.4f} | Aggresivo={modo_agresivo} | "
+        f"minSlope={min_slope} | maxRSI={max_rsi} | minVolRel={min_volumen_relativo}"
     )
 
     return config

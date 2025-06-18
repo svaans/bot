@@ -8,7 +8,9 @@ import threading
 from core.logger import configurar_logger
 
 from watchdog.observers import Observer
+from watchdog.observers.polling import PollingObserver
 from watchdog.events import PatternMatchingEventHandler
+import errno
 
 log = configurar_logger("hot_reload")
 
@@ -124,10 +126,20 @@ def start_hot_reload(
     texto_mods = ", ".join(mods) if mods else "todos"
     log.info(f"👀 Observando carpeta {base} con módulos: {texto_mods}")
     handler = _ReloadHandler(base, mods, exclude)
-    observer = Observer()
+    observer: Observer = Observer()
     observer.schedule(handler, str(base), recursive=True)
-    thread = threading.Thread(target=observer.start, daemon=True)
-    thread.start()
+    try:
+        observer.start()
+    except OSError as exc:
+        if exc.errno == errno.ENOSPC:
+            log.warning(
+                "⚠️ Límite de inotify alcanzado. Usando PollingObserver."
+            )
+            observer = PollingObserver()
+            observer.schedule(handler, str(base), recursive=True)
+            observer.start()
+        else:
+            raise
     return observer
 
 

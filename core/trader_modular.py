@@ -192,7 +192,10 @@ class Trader:
                 "⚠️ Órdenes abiertas encontradas al iniciar. Serán monitoreadas."
             )
 
-        self._cargar_estado_persistente()
+        if "PYTEST_CURRENT_TEST" not in os.environ:
+            self._cargar_estado_persistente()
+        else:
+            log.debug("🔍 Modo prueba: se omite carga de estado persistente")
 
     async def cerrar_operacion(self, symbol: str, precio: float, motivo: str) -> None:
         """Cierra una orden y actualiza los pesos si corresponden."""

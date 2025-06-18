@@ -3,13 +3,131 @@ from estrategias_entrada.loader import cargar_estrategias
 from core.estrategias import obtener_estrategias_por_tendencia
 from indicadores.volumen import verificar_volumen_suficiente
 from indicadores.divergencia_rsi import detectar_divergencia_alcista
+from indicadores.bollinger import calcular_bollinger
+from indicadores.slope import calcular_slope
+from indicadores.momentum import calcular_momentum
+from indicadores.rsi import calcular_rsi
 from core.logger import configurar_logger
+from collections import Counter
+from pathlib import Path
+import pandas as pd
 import traceback
+import json
 
 log = configurar_logger("entradas")
 
 # Cache de funciones cargadas
 ESTRATEGIAS_DISPONIBLES = cargar_estrategias()
+
+# Cache de rendimientos históricos por símbolo y estrategia
+_RENDIMIENTOS_CACHE: dict | None = None
+
+
+def _cargar_rendimientos() -> dict:
+    """Carga el archivo de rendimiento histórico de estrategias."""
+    global _RENDIMIENTOS_CACHE
+    if _RENDIMIENTOS_CACHE is not None:
+        return _RENDIMIENTOS_CACHE
+
+    ruta = Path("datos/estrategias_por_rendimiento.json")
+    if ruta.exists():
+        with open(ruta, "r", encoding="utf-8") as fh:
+            _RENDIMIENTOS_CACHE = json.load(fh)
+    else:
+        _RENDIMIENTOS_CACHE = {}
+    return _RENDIMIENTOS_CACHE
+
+
+def _categoria(nombre: str) -> str:
+    n = nombre.lower()
+    if "volumen" in n:
+        return "volumen"
+    if any(k in n for k in ["rsi", "macd", "momentum", "adx", "stoch", "ichimoku", "atr"]):
+        return "momentum"
+    if any(k in n for k in ["ema", "sma", "vwap", "media"]):
+        return "medias"
+    if any(k in n for k in [
+        "triangle",
+        "wedge",
+        "flag",
+        "rectangle",
+        "scallop",
+        "cup",
+        "bottom",
+        "top",
+        "pennant",
+        "diamond",
+    ]):
+        return "chartismo"
+    return "otro"
+
+
+def _tiene_reversion(nombre: str) -> bool:
+    n = nombre.lower()
+    return any(k in n for k in ["bottom", "top", "inverted", "scallop", "head_and_shoulders"])
+
+
+def validar_tecnica_entrada(
+    df: pd.DataFrame,
+    estrategias_activas: dict,
+    symbol: str,
+    direccion: str = "long",
+) -> bool:
+    """Valida múltiples criterios técnicos antes de ejecutar la entrada."""
+    if df is None or len(df) < 30:
+        return True
+
+    close_actual = float(df["close"].iloc[-1])
+    volumen_actual = float(df["volume"].iloc[-1])
+    volumen_prom_30 = float(df["volume"].rolling(30).mean().iloc[-1])
+
+    if volumen_prom_30 > 0 and (volumen_actual / volumen_prom_30) < 1.1:
+        log.info(f"🚫 {symbol} volumen relativo bajo")
+        return False
+
+    slope = calcular_slope(df, 10)
+    momentum = calcular_momentum(df, 10)
+    if slope < 0.05 or (momentum is not None and momentum < 0):
+        log.info(f"🚫 {symbol} slope/momentum débil")
+        return False
+
+    rsi = calcular_rsi(df, 14)
+    if rsi is not None:
+        if rsi > 70:
+            log.info(f"🚫 {symbol} RSI alto {rsi:.2f}")
+            return False
+        if direccion == "short" and rsi < 30:
+            log.info(f"🚫 {symbol} RSI bajo {rsi:.2f} para short")
+            return False
+
+    _, banda_sup, _ = calcular_bollinger(df)
+    if banda_sup is not None and abs(banda_sup - close_actual) / close_actual < 0.01:
+        log.info(f"🚫 {symbol} muy cerca de resistencia")
+        return False
+
+    categorias = [_categoria(n) for n, a in estrategias_activas.items() if a]
+    if categorias:
+        conteo = Counter(categorias)
+        if max(conteo.values()) / len(categorias) > 0.6:
+            log.info(f"🚫 {symbol} poca diversidad real de estrategias")
+            return False
+
+    if any(_tiene_reversion(n) for n, a in estrategias_activas.items() if a):
+        if len(df) >= 5:
+            close_5 = float(df["close"].iloc[-5])
+            if close_5 != 0 and (close_5 - close_actual) / close_5 < 0.015:
+                log.info(f"🚫 {symbol} sin caída previa suficiente para reversión")
+                return False
+
+    rendimientos = _cargar_rendimientos().get(symbol, {})
+    activas = [n for n, a in estrategias_activas.items() if a]
+    if activas and rendimientos:
+        total = sum(rendimientos.get(n, 1.0) for n in activas)
+        if total / len(activas) < 0.8:
+            log.info(f"🚫 {symbol} rendimiento histórico bajo")
+            return False
+
+    return True
 
 
 def validar_volumen(df, direccion: str) -> bool:
@@ -105,6 +223,10 @@ def entrada_permitida(
 
     if df is not None and not validar_volumen(df, direccion):
         log.info(f"📉 Entrada evitada por volumen insuficiente o divergencia en {symbol}")
+        return False
+    
+    if df is not None and not validar_tecnica_entrada(df, estrategias_activas, symbol, direccion):
+        log.info(f"🔴 [{symbol}] Entrada rechazada por validación técnica previa")
         return False
 
     if potencia >= umbral:
