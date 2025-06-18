@@ -1628,6 +1628,8 @@ class Trader:
         rsi = calcular_rsi(df)
         momentum = calcular_momentum(df)
         slope = calcular_slope(df)
+        precio_actual = float(df["close"].iloc[-1])
+        cantidad_simulada = await self._calcular_cantidad_async(symbol, precio_actual)
 
         if self.usar_score_tecnico:
             score_tecnico, puntos = self._calcular_score_tecnico(
@@ -1645,12 +1647,13 @@ class Trader:
             momentum,
             df,
             direccion,
+            cantidad=cantidad_simulada,
         ):
             log.info(f"❌ [{symbol}] Filtro técnico final bloqueó la entrada.")
             return None
 
         log.info(f"✅ [{symbol}] Señal de entrada generada con {len(estrategias_activas)} estrategias.")
-        precio = float(df["close"].iloc[-1])
+        precio = precio_actual
         sl, tp = calcular_tp_sl_adaptativos(
             symbol,
             df,

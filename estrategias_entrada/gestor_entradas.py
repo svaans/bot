@@ -2,6 +2,8 @@ from core.pesos import gestor_pesos
 from estrategias_entrada.loader import cargar_estrategias
 from core.estrategias import obtener_estrategias_por_tendencia
 from indicadores.volumen import verificar_volumen_suficiente
+from filtros.validador_entradas import verificar_liquidez_orden
+from indicadores.correlacion import calcular_correlacion
 from indicadores.divergencia_rsi import detectar_divergencia_alcista
 from indicadores.bollinger import calcular_bollinger
 from indicadores.slope import calcular_slope
@@ -130,11 +132,13 @@ def validar_tecnica_entrada(
     return True
 
 
-def validar_volumen(df, direccion: str) -> bool:
-    """Valida el volumen antes de permitir una entrada."""
+def validar_volumen(df, direccion: str, cantidad: float = 0.0) -> bool:
+    """Valida el volumen y la liquidez antes de permitir una entrada."""
     if df is None:
         return True
     if not verificar_volumen_suficiente(df):
+        return False
+    if cantidad > 0 and not verificar_liquidez_orden(df, cantidad):
         return False
     if direccion == "short" and detectar_divergencia_alcista(df):
         return False
@@ -212,6 +216,9 @@ def entrada_permitida(
     momentum,
     df=None,
     direccion="long",
+    cantidad=0.0,
+    df_referencia=None,
+    umbral_correlacion: float = 0.9,
 ):
     """
     Evalúa si se permite una entrada con base en:
@@ -221,9 +228,15 @@ def entrada_permitida(
     """
     estrategias_activas_count = sum(1 for v in estrategias_activas.values() if v)
 
-    if df is not None and not validar_volumen(df, direccion):
+    if df is not None and not validar_volumen(df, direccion, cantidad):
         log.info(f"📉 Entrada evitada por volumen insuficiente o divergencia en {symbol}")
         return False
+    
+    if df is not None and df_referencia is not None:
+        corr = calcular_correlacion(df, df_referencia)
+        if corr is not None and abs(corr) >= umbral_correlacion:
+            log.info(f"🚫 {symbol} correlación alta {corr:.2f}")
+            return False
     
     if df is not None and not validar_tecnica_entrada(df, estrategias_activas, symbol, direccion):
         log.info(f"🔴 [{symbol}] Entrada rechazada por validación técnica previa")

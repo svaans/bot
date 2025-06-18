@@ -26,4 +26,26 @@ def evaluar_validez_estrategica(
     return True
 
 
+def verificar_liquidez_orden(
+    df,
+    cantidad_orden: float,
+    ventana: int = 20,
+    factor: float = 0.2,
+) -> bool:
+    """Valida la proporción entre ``cantidad_orden`` y el volumen promedio.
+
+    Retorna ``True`` cuando la orden no supera ``factor`` veces el volumen medio
+    de las ``ventana`` últimas velas. Si no hay suficientes datos de volumen,
+    la función asume que la orden es válida.
+    """
+
+    if "volume" not in df or len(df) < ventana or cantidad_orden <= 0:
+        return True
+
+    volumen_promedio = df["volume"].iloc[-ventana:].mean()
+    if volumen_promedio <= 0:
+        return True
+
+    return cantidad_orden <= volumen_promedio * factor
+
 
