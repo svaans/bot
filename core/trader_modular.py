@@ -1201,6 +1201,7 @@ class Trader:
         direccion: str,
         puntaje: float = 0.0,
         umbral: float = 0.0,
+        detalles_tecnicos: dict | None = None,
         **kwargs,  # <- acepta parámetros adicionales sin fallar
     ) -> None:
         cantidad_total = await self._calcular_cantidad_async(symbol, precio)
@@ -1226,7 +1227,7 @@ class Trader:
             umbral,
             objetivo=cantidad_total,
             fracciones=fracciones,
-            detalles_tecnicos=evaluacion.get("detalles", {}),
+            detalles_tecnicos=detalles_tecnicos or {}
         )
         estrategias_list = list(estrategias_dict.keys())
         log.info(
