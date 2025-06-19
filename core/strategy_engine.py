@@ -2,11 +2,19 @@
 
 from __future__ import annotations
 
-from typing import Dict
-
 from core.pesos import gestor_pesos
+from typing import Dict
+from core.adaptador_umbral import calcular_umbral_adaptativo, calcular_score_tecnico
 from core.utils import validar_dataframe
-from core.adaptador_dinamico import calcular_umbral_adaptativo
+from estrategias_entrada.validadores import (
+    validar_volumen,
+    validar_rsi,
+    validar_slope,
+    validar_bollinger,
+)
+from indicadores.slope import calcular_slope
+from indicadores.momentum import calcular_momentum
+from indicadores.rsi import calcular_rsi
 
 import pandas as pd
 
@@ -46,63 +54,95 @@ class StrategyEngine:
         if not symbol or not validar_dataframe(df, ["close", "high", "low", "volume"]):
             log.warning("⚠️ Entrada inválida: símbolo o DataFrame inválido.")
             return {
+                "permitido": False,
+                "motivo_rechazo": "datos_invalidos",
                 "estrategias_activas": {},
-                "puntaje_total": 0.0,
-                "probabilidad": 0.0,
-                "tendencia": "desconocida",
+                "score_total": 0.0,
+                "umbral": 0.0,
+                "diversidad": 0,
             }
 
         try:
             if pesos_symbol is None:
                 pesos_symbol = gestor_pesos.obtener_pesos_symbol(symbol)
 
-            # Detectar tendencia si no viene dada
+            
             if tendencia is None:
                 tendencia, _ = detectar_tendencia(symbol, df)
-                log.info(f"📊 [{symbol}] Tendencia detectada: {tendencia}")
-            else:
-                log.debug(f"[{symbol}] Tendencia previa usada: {tendencia}")
+            log.debug(f"[{symbol}] Tendencia usada: {tendencia}")
 
-            # Evaluar estrategias
+            
             resultado = evaluar_estrategias(symbol, df, tendencia)
             estrategias_activas = resultado.get("estrategias_activas", {})
+            score_total = resultado.get("puntaje_total", 0.0)
+            diversidad = resultado.get("diversidad", 0)
 
-            log.info(f"🔍 [{symbol}] Estrategias activas antes del filtro: {list(estrategias_activas.keys())}")
+            rsi_val = calcular_rsi(df)
+            slope_val = calcular_slope(df)
+            mom_val = calcular_momentum(df)
 
-            dispersion = resultado.get("diversidad", 0) / max(len(estrategias_activas) or 1, 1)
-            puntaje_total = resultado.get("puntaje_total", 0.0)
-            umbral = calcular_umbral_adaptativo(
-                symbol,
-                df,
-                estrategias_activas,
-                pesos_symbol,
-                persistencia=0.0,
-                config=config,
+            contexto = {"rsi": rsi_val, "slope": slope_val}
+            umbral = calcular_umbral_adaptativo(symbol, df, contexto)
+
+            validaciones = {
+                "volumen": validar_volumen(df),
+                "rsi": validar_rsi(df),
+                "slope": validar_slope(df, tendencia),
+                "bollinger": validar_bollinger(df),
+            }
+            validaciones_fallidas = [k for k, v in validaciones.items() if not v]
+
+            contradiccion = any(
+                "alcista" in n for n, a in estrategias_activas.items() if a
+            ) and any(
+                "bajista" in n for n, a in estrategias_activas.items() if a
             )
-            max_peso = sum(pesos_symbol.values()) or 1.0
-            puntaje_rel = puntaje_total / max_peso
-            score_tecnico = puntaje_total / umbral if umbral else 0.0
-            prob = (dispersion + puntaje_rel + score_tecnico) / 3
-            if config and config.get("modo_agresivo"):
-                prob *= 1.1
-            prob = round(min(1.0, max(0.0, prob)), 2)
+            score_tec = calcular_score_tecnico(df, rsi_val, mom_val, slope_val, tendencia)
 
-            resultado["tendencia"] = tendencia
-            resultado["probabilidad"] = prob
-            resultado["puntaje_total"] = round(puntaje_total, 2)
+            cumple_div = diversidad >= (config or {}).get("diversidad_minima", 1)
+            permitido = (
+                score_total >= umbral
+                and cumple_div
+                and not contradiccion
+                and not validaciones_fallidas
+            )
+            motivo = None
+            if not permitido:
+                if contradiccion:
+                    motivo = "contradiccion"
+                elif validaciones_fallidas:
+                    motivo = "validaciones_fallidas"
+                elif score_total < umbral:
+                    motivo = "score_bajo"
+                elif not cumple_div:
+                    motivo = "diversidad_baja"
+                else:
+                    motivo = "desconocido"
 
-            log.info(f"📈 [{symbol}] Puntaje total calculado: {resultado['puntaje_total']}")
-            log.info(f"✅ [{symbol}] Estrategias finales: {list(estrategias_activas.keys())}")
+            return {
+                "permitido": permitido,
+                "motivo_rechazo": motivo,
+                "estrategias_activas": estrategias_activas,
+                "score_total": round(score_total, 2),
+                "umbral": umbral,
+                "diversidad": diversidad,
+                "tendencia": tendencia,
+                "rsi": rsi_val,
+                "slope": slope_val,
+                "momentum": mom_val,
+                "validaciones_fallidas": validaciones_fallidas,
+                "score_tecnico": score_tec,
+            }
 
-            return resultado
-
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             log.error(f"❌ Error evaluando entrada para {symbol}: {e}")
             return {
+                "permitido": False,
+                "motivo_rechazo": "error",
                 "estrategias_activas": {},
-                "puntaje_total": 0.0,
-                "probabilidad": 0.0,
-                "tendencia": "desconocida",
+                "score_total": 0.0,
+                "umbral": 0.0,
+                "diversidad": 0,
             }
 
 
