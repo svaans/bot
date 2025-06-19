@@ -1,0 +1,62 @@
+{
+  "BTC/EUR": {
+    "rsi": 1.0,
+    "volumen": 1.0,
+    "tp_sl": 0.7,
+    "no_doji": 0.5,
+    "no_sobrecompra": 1.0,
+    "cuerpo_sano": 1.0,
+    "rsi_creciente": 0.6,
+    "volumen_creciente": 0.5,
+    "sin_mecha_sup_larga": 0.4,
+    "distancia_extremos": 0.6
+  },
+  "ETH/EUR": {
+    "rsi": 1.0,
+    "volumen": 1.0,
+    "tp_sl": 0.7,
+    "no_doji": 0.5,
+    "no_sobrecompra": 1.0,
+    "cuerpo_sano": 1.0,
+    "rsi_creciente": 0.6,
+    "volumen_creciente": 0.5,
+    "sin_mecha_sup_larga": 0.4,
+    "distancia_extremos": 0.6
+  },
+  "ADA/EUR": {
+    "rsi": 1.0,
+    "volumen": 1.0,
+    "tp_sl": 0.7,
+    "no_doji": 0.5,
+    "no_sobrecompra": 1.0,
+    "cuerpo_sano": 1.0,
+    "rsi_creciente": 0.6,
+    "volumen_creciente": 0.5,
+    "sin_mecha_sup_larga": 0.4,
+    "distancia_extremos": 0.6
+  },
+  "SOL/EUR": {
+    "rsi": 1.0,
+    "volumen": 1.0,
+    "tp_sl": 0.7,
+    "no_doji": 0.5,
+    "no_sobrecompra": 1.0,
+    "cuerpo_sano": 1.0,
+    "rsi_creciente": 0.6,
+    "volumen_creciente": 0.5,
+    "sin_mecha_sup_larga": 0.4,
+    "distancia_extremos": 0.6
+  },
+  "BNB/EUR": {
+    "rsi": 1.0,
+    "volumen": 1.0,
+    "tp_sl": 0.7,
+    "no_doji": 0.5,
+    "no_sobrecompra": 1.0,
+    "cuerpo_sano": 1.0,
+    "rsi_creciente": 0.6,
+    "volumen_creciente": 0.5,
+    "sin_mecha_sup_larga": 0.4,
+    "distancia_extremos": 0.6
+  }
+}

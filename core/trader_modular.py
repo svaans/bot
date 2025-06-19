@@ -57,7 +57,11 @@ from core.estrategias import filtrar_por_direccion
 from indicadores.rsi import calcular_rsi
 from indicadores.momentum import calcular_momentum
 from indicadores.slope import calcular_slope
-from core.analisis_previo import validar_condiciones_tecnicas_extra
+from core.evaluador_tecnico import (
+    evaluar_puntaje_tecnico,
+    calcular_umbral_adaptativo as calc_umbral_tecnico,
+    cargar_pesos_tecnicos,
+)
 from estrategias_salida.analisis_previo_salida import (
     permitir_cierre_tecnico,
     evaluar_condiciones_de_cierre_anticipado,
@@ -1692,8 +1696,26 @@ class Trader:
             )
             return None
         
-        if not validar_condiciones_tecnicas_extra(symbol, df, precio, sl, tp):
-            log.info(f"[{symbol}] Entrada rechazada por análisis técnico adicional")
+        evaluacion = evaluar_puntaje_tecnico(symbol, df, precio, sl, tp)
+        score_total = evaluacion["score_total"]
+        vol = 0.0
+        if "volume" in df.columns and len(df) > 20:
+            vol = df["volume"].iloc[-1] / (df["volume"].rolling(20).mean().iloc[-1] or 1)
+        volatilidad = df["close"].pct_change().tail(20).std()
+        pesos_simbolo = cargar_pesos_tecnicos(symbol)
+        score_max = sum(pesos_simbolo.values())
+        umbral_tecnico = calc_umbral_tecnico(
+            score_max,
+            tendencia_actual,
+            volatilidad,
+            vol,
+            estrategias_persistentes,
+        )
+        log.info(
+            f"- Umbral adaptativo: {umbral_tecnico:.2f} → {'✅' if score_total >= umbral_tecnico else '❌'} Entrada permitida"
+        )
+        if score_total < umbral_tecnico:
+            log.info(f"[{symbol}] Entrada rechazada por score técnico {score_total:.2f} < {umbral_tecnico:.2f}")
             return None
         
         return {
