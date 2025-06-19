@@ -1273,6 +1273,18 @@ class Trader:
         config_actual = self.config_por_simbolo.get(symbol, {})
         log.debug(f"Verificando salidas para {symbol} con orden: {orden.to_dict()}")
 
+        atr = calcular_atr(df)
+        volatilidad_rel = atr / precio_cierre if atr and precio_cierre else 1.0
+        tendencia_detectada = self.estado_tendencia.get(symbol)
+        if not tendencia_detectada:
+            tendencia_detectada, _ = detectar_tendencia(symbol, df)
+            self.estado_tendencia[symbol] = tendencia_detectada
+        contexto = {
+            "volatilidad": volatilidad_rel,
+            "tendencia": tendencia_detectada,
+        }
+
+
         # --- Stop Loss con validación ---
         if precio_min <= orden.stop_loss:
             rsi = calcular_rsi(df)
@@ -1450,7 +1462,12 @@ class Trader:
 
         # --- Estrategias de salida personalizadas ---
         try:
-            resultado = evaluar_salidas(orden.to_dict(), df, config=config_actual)
+            resultado = evaluar_salidas(
+                orden.to_dict(),
+                df,
+                config=config_actual,
+                contexto=contexto,
+            )
         except Exception as e:
             log.warning(f"⚠️ Error evaluando salidas para {symbol}: {e}")
             resultado = {}

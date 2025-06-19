@@ -149,12 +149,42 @@ class GestorPesos:
 
         self.guardar(pesos_por_symbol)
 
+# -----------------------------------------------------------
+# Gestión de pesos de salida
+# -----------------------------------------------------------
+@dataclass
+class GestorPesosSalidas:
+    """Maneja la carga de pesos para estrategias de salida."""
+    ruta: str = "config/pesos_salidas.json"
+    pesos: Dict[str, Dict[str, float]] = field(init=False, default_factory=dict)
+
+    def __post_init__(self) -> None:
+        self.pesos = self._cargar_pesos()
+
+    def _cargar_pesos(self) -> Dict[str, Dict[str, float]]:
+        if not os.path.exists(self.ruta):
+            log.error(f"❌ No se encontró archivo de pesos: {self.ruta}")
+            raise ValueError("Archivo de pesos inexistente")
+        try:
+            with open(self.ruta, "r") as fh:
+                datos = json.load(fh)
+        except json.JSONDecodeError as e:
+            log.error(f"❌ Error cargando pesos de salida: {e}")
+            datos = {}
+        if not isinstance(datos, dict):
+            raise ValueError("❌ Archivo de pesos de salida inválido")
+        return datos
+
+    def obtener(self, razon: str, symbol: str) -> float:
+        return self.pesos.get(symbol, {}).get(razon, 0.0)
+
 
 # -----------------------------------------------------------
 # Inicialización automática
 # -----------------------------------------------------------
 try:
     gestor_pesos = GestorPesos()
+    gestor_pesos_salidas = GestorPesosSalidas()
 except ValueError as e:
     log.error(e)
     raise
@@ -163,3 +193,10 @@ except ValueError as e:
 # Función pública para acceder desde otros módulos
 def cargar_pesos_estrategias() -> Dict[str, Dict[str, float]]:
     return GestorPesos().pesos
+
+def obtener_peso_salida(razon: str, symbol: str) -> float:
+    """Devuelve el peso de una estrategia de salida para el símbolo dado."""
+    try:
+        return gestor_pesos_salidas.obtener(razon, symbol)
+    except Exception:
+        return 0.0

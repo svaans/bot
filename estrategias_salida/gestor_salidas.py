@@ -5,27 +5,15 @@ from core.utils import validar_dataframe
 from core.tendencia import detectar_tendencia
 from estrategias_entrada.gestor_entradas import evaluar_estrategias
 from core.adaptador_dinamico import calcular_umbral_adaptativo
+from core.adaptador_umbral import calcular_umbral_salida_adaptativo
+from core.pesos import obtener_peso_salida
 from core.logger import configurar_logger
 
 log = configurar_logger("gestor_salidas")
 
 from estrategias_salida.loader_salidas import cargar_estrategias_salida
 
-# Ponderación de riesgo por estrategia de salida
-PESOS_SALIDAS = {
-    "Stop Loss": 10,
-    "Trailing Stop": 8,
-    "Estrategia: Cambio de tendencia": 6,
-    "Estrategia: Cruce bajista de MACD": 5,
-    "Estrategia: RSI en sobrecompra o sobreventa": 4,
-    "Estrategia: Tiempo máximo alcanzado": 3,
-    "Estrategia: Take Profit por ATR": 2,
-    "Estrategia: Stop Loss por ATR": 6,
-}
-
-UMBRAL_CIERRE = 8  # Puntos acumulados para cerrar
-
-def evaluar_salidas(orden: dict, df, config=None):
+def evaluar_salidas(orden: dict, df, config=None, contexto=None):
     symbol = orden.get("symbol", "SYM")
     if not validar_dataframe(df, ["close", "high", "low", "volume"]):
         log.warning(f"[{symbol}] DataFrame inválido para gestor de salidas")
@@ -68,24 +56,21 @@ def evaluar_salidas(orden: dict, df, config=None):
                 return {"cerrar": True, "razon": razon}
             resultados.append(razon)
 
-    tendencia, _ = detectar_tendencia(symbol, df)
-    volatilidad = df["close"].pct_change().tail(10).std() if "close" in df else 0.0
-    factor_vol = 1 + min(volatilidad * 50, 0.5)
-    factor_tend = 1.2 if tendencia in {"alcista", "bajista"} else 1.0
-    factor_sig = 1 + len(resultados) / 10
-    pesos_dinamicos = {k: v * factor_vol * factor_tend * factor_sig for k, v in PESOS_SALIDAS.items()}
-
-    riesgo_total = sum(pesos_dinamicos.get(r, 1) for r in resultados)
-    if riesgo_total >= UMBRAL_CIERRE:
+    peso_total = sum(obtener_peso_salida(razon, symbol) for razon in resultados)
+    umbral = calcular_umbral_salida_adaptativo(symbol, config or {}, contexto)
+    log.info(
+        f"[SALIDA] {symbol} | Score: {peso_total:.2f} | Umbral: {umbral:.2f} | Señales: {resultados}"
+    )
+    if peso_total >= umbral:
         return {
             "cerrar": True,
-            "razon": f"{', '.join(resultados)} (Riesgo total: {riesgo_total:.2f})"
+            "razon": f"Score {peso_total:.2f} ≥ {umbral:.2f}. Señales: {', '.join(resultados)}"
         }
-
-    return {
-        "cerrar": False,
-        "razon": f"Riesgo insuficiente ({riesgo_total:.2f})"
-    }
+    else:
+        return {
+            "cerrar": False,
+            "razon": f"Score insuficiente {peso_total:.2f} < {umbral:.2f}"
+        }
 
 def verificar_filtro_tecnico(symbol, df, estrategias_activas, pesos_symbol, config=None):
     if not validar_dataframe(df, ["high", "low", "close"]):
