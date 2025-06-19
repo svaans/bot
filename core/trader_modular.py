@@ -52,7 +52,6 @@ from filtros.filtro_salidas import validar_necesidad_de_salida
 from core.tendencia import detectar_tendencia
 from estrategias_salida.analisis_salidas import patron_tecnico_fuerte
 from filtros.validador_entradas import evaluar_validez_estrategica
-from estrategias_entrada.gestor_entradas import entrada_permitida
 from core.estrategias import filtrar_por_direccion
 from indicadores.rsi import calcular_rsi
 from indicadores.momentum import calcular_momentum
@@ -72,6 +71,13 @@ from indicadores.atr import calcular_atr
    
 
 log = configurar_logger("trader")
+
+PESOS_SCORE_TECNICO = {
+    "RSI": 1.0,
+    "Momentum": 0.5,
+    "Slope": 1.0,
+    "Tendencia": 1.0,
+}
 
 
 @dataclass
@@ -1090,10 +1096,12 @@ class Trader:
         else:
             resultados["Tendencia"] = tendencia in {"bajista", "lateral"}
 
-        score_total = sum(1 for v in resultados.values() if v)
+        score_total = sum(
+            PESOS_SCORE_TECNICO.get(k, 1.0) for k, v in resultados.items() if v
+        )
 
         log.info(
-            "📊 Score técnico: %s/4 | RSI: %s (%.2f), Momentum: %s (%.4f), Slope: %s (%.4f), Tendencia: %s",
+            "📊 Score técnico: %.2f | RSI: %s (%.2f), Momentum: %s (%.4f), Slope: %s (%.4f), Tendencia: %s",
             score_total,
             "✅" if resultados["RSI"] else "❌",
             rsi if rsi is not None else 0.0,
@@ -1168,6 +1176,7 @@ class Trader:
         tendencia: str,
         precio: float,
         motivo: str,
+        estrategias: dict | None = None,
     ) -> None:
         """Guarda detalles de rechazos técnicos en un CSV."""
 
@@ -1181,6 +1190,7 @@ class Trader:
             "estado_mercado": tendencia,
             "precio": precio,
             "motivo": motivo,
+            "estrategias": ",".join(estrategias.keys()) if estrategias else "",
         }
         df = pd.DataFrame([fila])
         modo = "a" if os.path.exists(self.registro_tecnico_csv) else "w"
@@ -1190,6 +1200,74 @@ class Trader:
             header=not os.path.exists(self.registro_tecnico_csv),
             index=False,
         )
+
+    async def evaluar_condiciones_entrada(
+        self, symbol: str, df: pd.DataFrame
+    ) -> None:
+        """Evalúa y ejecuta una entrada si todas las condiciones se cumplen."""
+
+        estado = self.estado[symbol]
+        config_actual = self.config_por_simbolo.get(symbol, {})
+        dinamica = adaptar_configuracion(symbol, df)
+        if dinamica:
+            config_actual.update(dinamica)
+        config_actual = adaptar_configuracion_base(symbol, df, config_actual)
+        self.config_por_simbolo[symbol] = config_actual
+
+        tendencia_actual = self.estado_tendencia.get(symbol)
+        if not tendencia_actual:
+            tendencia_actual, _ = detectar_tendencia(symbol, df)
+            self.estado_tendencia[symbol] = tendencia_actual
+
+        resultado = self.engine.evaluar_entrada(
+            symbol,
+            df,
+            tendencia=tendencia_actual,
+            config=config_actual,
+            pesos_symbol=self.pesos_por_simbolo.get(symbol, {}),
+        )
+        estrategias = resultado.get("estrategias_activas", {})
+        estado.buffer[-1]["estrategias_activas"] = estrategias
+        self.persistencia.actualizar(symbol, estrategias)
+
+        precio_actual = float(df["close"].iloc[-1])
+
+        if not resultado.get("permitido"):
+            if self.usar_score_tecnico:
+                rsi = resultado.get("rsi")
+                mom = resultado.get("momentum")
+                score, puntos = self._calcular_score_tecnico(
+                    df, rsi, mom, tendencia_actual,
+                    "short" if tendencia_actual == "bajista" else "long",
+                )
+                self._registrar_rechazo_tecnico(
+                    symbol,
+                    score,
+                    puntos,
+                    tendencia_actual,
+                    precio_actual,
+                    resultado.get("motivo_rechazo", "desconocido"),
+                    estrategias,
+                )
+            self._rechazo(
+                symbol,
+                resultado.get("motivo_rechazo", "desconocido"),
+                puntaje=resultado.get("score_total"),
+                estrategias=list(estrategias.keys()),
+            )
+            return
+
+        info = await self.evaluar_condiciones_de_entrada(symbol, df, estado)
+        if not info:
+            self._rechazo(
+                symbol,
+                "filtros_post_engine",
+                puntaje=resultado.get("score_total"),
+                estrategias=list(estrategias.keys()),
+            )
+            return
+
+        await self._abrir_operacion_real(**info)
 
     async def _abrir_operacion_real(
         self,
@@ -1687,22 +1765,7 @@ class Trader:
             )
             log.debug(f"[{symbol}] Score técnico: {score_tecnico:.2f}, Componentes: {puntos}")
 
-        if not entrada_permitida(
-            symbol,
-            puntaje,
-            umbral,
-            estrategias_persistentes,
-            rsi,
-            slope,
-            momentum,
-            df,
-            direccion,
-            cantidad=cantidad_simulada,
-            tendencia=tendencia_actual,
-            score=score_tecnico if self.usar_score_tecnico else None,
-            persistencia=valor_pers,
-            persistencia_minima=minimo_pers,
-        ):
+        if puntaje < umbral or not estrategias_persistentes:
             log.info(f"❌ [{symbol}] Filtro técnico final bloqueó la entrada.")
             return None
 
@@ -1829,9 +1892,7 @@ class Trader:
                         log.error(f"❌ Error enviando notificación: {e}")
             return
 
-        info = await self.evaluar_condiciones_de_entrada(symbol, df, estado)
-        if info:
-            await self._abrir_operacion_real(**info)
+        await self.evaluar_condiciones_entrada(symbol, df)
         return
 
     async def cerrar(self) -> None:

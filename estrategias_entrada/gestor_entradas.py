@@ -8,14 +8,6 @@ import pandas as pd
 from core.pesos import gestor_pesos
 from estrategias_entrada.loader import cargar_estrategias
 from core.estrategias import obtener_estrategias_por_tendencia
-from indicadores.volumen import verificar_volumen_suficiente
-from filtros.validador_entradas import verificar_liquidez_orden
-from indicadores.correlacion import calcular_correlacion
-from indicadores.divergencia_rsi import detectar_divergencia_alcista
-from indicadores.bollinger import calcular_bollinger
-from indicadores.slope import calcular_slope
-from indicadores.momentum import calcular_momentum
-from indicadores.rsi import calcular_rsi
 from core.logger import configurar_logger
 
 log = configurar_logger("entradas")
@@ -61,27 +53,6 @@ def evaluar_estrategias(symbol: str, df: pd.DataFrame, tendencia: str) -> dict:
     }
 
 
-def entrada_permitida(
-    symbol: str,
-    potencia: float,
-    umbral: float,
-    estrategias_activas: dict,
-    rsi: float,
-    slope: float,
-    momentum: float,
-    df=None,
-    direccion: str = "long",
-    cantidad: float = 0.0,
-    df_referencia=None,
-    umbral_correlacion: float = 0.9,
-    tendencia: str | None = None,
-    score: float | None = None,
-    persistencia: float = 0.0,
-    persistencia_minima: float = 0.0,
-) -> bool:
-    """Versión simplificada para compatibilidad con pruebas existentes."""
-    activas = sum(1 for v in estrategias_activas.values() if v)
-    return potencia >= umbral and activas > 0
 
 
 

@@ -14,7 +14,7 @@ from core.tendencia import detectar_tendencia, señales_repetidas
 from core.modo import MODO_REAL
 from core.config_manager import Config
 from core.adaptador_dinamico import calcular_umbral_adaptativo, calcular_tp_sl_adaptativos
-from estrategias_entrada.gestor_entradas import evaluar_estrategias, entrada_permitida
+from estrategias_entrada.gestor_entradas import evaluar_estrategias
 from estrategias_salida.reajuste_tp_sl import calcular_promedios_sl_tp
 from estrategias_salida.salida_trailing_stop import verificar_trailing_stop
 from estrategias_salida.salida_por_tendencia import verificar_reversion_tendencia
@@ -299,22 +299,8 @@ class TraderSimulado:
             momentum = await asyncio.to_thread(calcular_momentum, df)
             slope = await asyncio.to_thread(calcular_slope, df)
 
-            if not entrada_permitida(
-                symbol,
-                puntaje,
-                umbral,
-                estrategias_detectadas,
-                rsi,
-                slope,
-                momentum,
-                df,
-                direccion,
-                tendencia=tendencia,
-                score=puntaje,
-                persistencia=repetidas,
-                persistencia_minima=2.0,
-            ):
-                log.debug(f"🚫 [{symbol}] Rechazada por entrada_permitida()")
+            if puntaje < umbral or not any(estrategias_detectadas.values()):
+                log.debug(f"🚫 [{symbol}] Rechazada por filtros básicos")
                 return
 
             if self.riesgo_superado_simulado(symbol, config):

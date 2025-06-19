@@ -11,7 +11,7 @@ def cargar_estrategias():
     ruta_base = os.path.dirname(__file__)
 
     for archivo in os.listdir(ruta_base):
-        if archivo.endswith(".py") and not archivo.startswith(("__", "gestor", "loader", "analisis")):
+        if archivo.endswith(".py") and not archivo.startswith(("__", "gestor", "loader", "analisis", "validadores")):
             nombre_modulo = archivo[:-3]  # quitar ".py"
             ruta_completa = os.path.join(ruta_base, archivo)
 
