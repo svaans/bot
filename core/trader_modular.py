@@ -68,6 +68,7 @@ from estrategias_salida.analisis_previo_salida import (
     evaluar_condiciones_de_cierre_anticipado,
 )
 from core.auditoria import registrar_auditoria
+from indicadores.atr import calcular_atr
    
 
 log = configurar_logger("trader")
