@@ -175,6 +175,20 @@ def leer_csv_seguro(ruta: str, log_lineas=None, expected_cols: int | None = None
         return pd.DataFrame()
     
 
+def leer_reporte_seguro(path: str, columnas_esperadas: int = 24) -> pd.DataFrame:
+    """Lee un reporte diario garantizando la estructura correcta."""
+    try:
+        df = pd.read_csv(path)
+        if df.shape[1] != columnas_esperadas:
+            raise ValueError(
+                f"📛 Columnas esperadas: {columnas_esperadas}, encontradas: {df.shape[1]}"
+            )
+        return df
+    except Exception as e:
+        log.warning(f"⚠️ Error leyendo archivo {path}: {e}")
+        return pd.DataFrame()
+    
+
 
     
 def dividir_dataframe_en_bloques(df, n_bloques=10):

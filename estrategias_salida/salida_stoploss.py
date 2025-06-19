@@ -124,11 +124,33 @@ def verificar_salida_stoploss(
 ) -> dict:
     """Determina si debe ejecutarse el Stop Loss o mantenerse la operación."""
 
-
-    symbol = orden.get("symbol", "SYM")
+    if df is None or not isinstance(df, pd.DataFrame):
+        return {
+            "cerrar": False,
+            "motivo": "❌ DataFrame no válido (None o tipo incorrecto)",
+            "evitado": False,
+        }
+    if df.empty or len(df) < 15:
+        return {
+            "cerrar": False,
+            "motivo": "❌ DataFrame insuficiente para evaluar SL",
+            "evitado": False,
+        }
     if not validar_dataframe(df, ["close", "high", "low"]):
-        return {"cerrar": False, "motivo": "Datos insuficientes", "evitado": False}
-
+        return {
+            "cerrar": False,
+            "motivo": "Datos insuficientes",
+            "evitado": False,
+        }
+    if not all(k in orden for k in ["precio_entrada", "stop_loss", "direccion"]):
+        return {
+            "cerrar": False,
+            "motivo": "❌ Orden incompleta",
+            "evitado": False,
+        }
+    
+    symbol = orden.get("symbol", "SYM")
+    
     precio_actual = float(df["close"].iloc[-1])
     precio_entrada = orden.get("precio_entrada", precio_actual)
     direccion = orden.get("direccion", "long")

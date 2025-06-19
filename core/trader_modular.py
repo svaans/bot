@@ -27,7 +27,7 @@ from core.adaptador_dinamico import (
     calcular_umbral_adaptativo,
     calcular_tp_sl_adaptativos
 )
-from core.utils import distancia_minima_valida
+from core.utils import distancia_minima_valida, leer_reporte_seguro
 from core.pesos import cargar_pesos_estrategias
 from core.kelly import calcular_fraccion_kelly
 from core.persistencia_tecnica import PersistenciaTecnica, coincidencia_parcial
@@ -781,14 +781,8 @@ class Trader:
             if fecha < fecha_limite:
                 continue
             ruta_archivo = os.path.join(carpeta, archivo)
-            try:
-                df = pd.read_csv(ruta_archivo)
-            except (
-                pd.errors.EmptyDataError,
-                pd.errors.ParserError,
-                OSError,
-            ) as e:
-                log.warning(f"⚠️ Error leyendo archivo {ruta_archivo}: {e}")
+            df = leer_reporte_seguro(ruta_archivo, columnas_esperadas=20)
+            if df.empty:
                 continue
             if "retorno_total" in df.columns:
                 retornos.extend(df["retorno_total"].dropna().tolist())
