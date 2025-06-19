@@ -26,6 +26,7 @@ class Orden:
     retorno_total: Optional[float] = None
     puntaje_entrada: float = 0.0
     umbral_entrada: float = 0.0
+    detalles_tecnicos: dict | None = None
     sl_evitar_info: list | None = None
     break_even_activado: bool = False
     duracion_en_velas: int = 0
@@ -54,6 +55,7 @@ class Orden:
         data.setdefault("precio_ultima_piramide", data.get("precio_entrada", 0.0))
         data.setdefault("puntaje_entrada", 0.0)
         data.setdefault("umbral_entrada", 0.0)
+        data.setdefault("detalles_tecnicos", None)
         data.setdefault("sl_evitar_info", [])
         data.setdefault("break_even_activado", False)
         data.setdefault("duracion_en_velas", 0)

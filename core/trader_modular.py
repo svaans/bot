@@ -61,6 +61,7 @@ from core.evaluador_tecnico import (
     evaluar_puntaje_tecnico,
     calcular_umbral_adaptativo as calc_umbral_tecnico,
     cargar_pesos_tecnicos,
+    actualizar_pesos_tecnicos,
 )
 from estrategias_salida.analisis_previo_salida import (
     permitir_cierre_tecnico,
@@ -272,6 +273,11 @@ class Trader:
             orden.sl_evitar_info = []
         reporter_diario.registrar_operacion(info)
         registrar_resultado_trade(orden.symbol, info, retorno_total)
+        try:
+            if orden.detalles_tecnicos:
+                actualizar_pesos_tecnicos(orden.symbol, orden.detalles_tecnicos, retorno_total)
+        except Exception as e:  # noqa: BLE001
+            log.debug(f"No se pudo actualizar pesos tecnicos: {e}")
         actualizar_pesos_estrategias_symbol(orden.symbol)
         try:
             self.pesos_por_simbolo = cargar_pesos_estrategias()
@@ -1220,6 +1226,7 @@ class Trader:
             umbral,
             objetivo=cantidad_total,
             fracciones=fracciones,
+            detalles_tecnicos=evaluacion.get("detalles", {}),
         )
         estrategias_list = list(estrategias_dict.keys())
         log.info(
@@ -1729,6 +1736,7 @@ class Trader:
             "tendencia": tendencia_actual,
             "direccion": direccion,
             "score_tecnico": score_tecnico if self.usar_score_tecnico else None,
+            "detalles_tecnicos": evaluacion.get("detalles", {}),
         }
 
 

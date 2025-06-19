@@ -83,16 +83,25 @@ def evaluar_puntaje_tecnico(symbol: str, df: pd.DataFrame, precio: float, sl: fl
     detalles: dict[str, float] = {}
     total = 0.0
 
-    def _add(clave: str, condicion: bool):
+    def _add(clave: str, condicion: bool | None) -> None:
+        """Suma o resta puntaje según ``condicion`` y registra detalles."""
         nonlocal total
-        puntos = pesos.get(clave, 0.0) if condicion else 0.0
+        peso = pesos.get(clave, 0.0)
+        if condicion is None:
+            puntos = 0.0
+        elif condicion:
+            puntos = peso
+        else:
+            puntos = -peso * 0.5
         detalles[clave] = float(puntos)
         total += puntos
+        if puntos < 0:
+            log.debug(f"[{symbol}] {clave} penaliza {puntos:.2f}")
 
     _add("rsi", rsi is not None and 40 <= rsi <= 70)
     _add("volumen", media_vol > 0 and volumen_actual > media_vol)
-    ratio = (tp - precio) / (precio - sl) if precio != sl else 0
-    _add("tp_sl", ratio >= 1.2)
+    ratio = (tp - precio) / (precio - sl) if precio != sl else None
+    _add("tp_sl", ratio is not None and ratio >= 1.2)
     _add("no_doji", rango_total > 0 and cuerpo / rango_total >= 0.3)
     _add("no_sobrecompra", rsi is None or rsi < 75)
     _add("cuerpo_sano", cierre > apertura and cuerpo >= 0.6 * rango_total)
@@ -102,13 +111,19 @@ def evaluar_puntaje_tecnico(symbol: str, df: pd.DataFrame, precio: float, sl: fl
     _add("sin_mecha_sup_larga", mecha_sup <= 2 * cuerpo)
     max_dia = df["high"].max()
     min_dia = df["low"].min()
-    distancia_max = (max_dia - precio) / max_dia if max_dia else 1
-    distancia_min = (precio - min_dia) / min_dia if min_dia else 1
-    _add("distancia_extremos", distancia_max > 0.002 and distancia_min > 0.002)
+    distancia_max = (max_dia - precio) / max_dia if max_dia else None
+    distancia_min = (precio - min_dia) / min_dia if min_dia else None
+    _add(
+        "distancia_extremos",
+        None not in (distancia_max, distancia_min)
+        and distancia_max > 0.002
+        and distancia_min > 0.002,
+    )
 
     log.info(f"[ENTRY ANALYSIS] {symbol}")
     for k, v in detalles.items():
-        log.info(f"- {k}: {'✅' if v else '❌'} (+{v})")
+        signo = "+" if v >= 0 else ""
+        log.info(f"- {k}: {'✅' if v > 0 else '❌'} ({signo}{v})")
     log.info(f"- Total score: {total:.2f} / {sum(pesos.values()):.2f}")
 
     return {"score_total": round(total, 2), "detalles": detalles}
@@ -117,10 +132,40 @@ def evaluar_puntaje_tecnico(symbol: str, df: pd.DataFrame, precio: float, sl: fl
 def calcular_umbral_adaptativo(score_maximo_esperado: float, tendencia: str, volatilidad: float, volumen: float, estrategias_activas: dict) -> float:
     """Calcula un umbral técnico dinámico simple."""
     base = score_maximo_esperado * 0.5
-    if tendencia in {"alcista", "bajista"} and volumen > 1:
+    if volumen > 1:
+        base *= 0.95
+    if tendencia in {"alcista", "bajista"}:
         base *= 0.9
-    if volatilidad > 0.02:
-        base *= 1.2
-    if estrategias_activas and len([v for v in estrategias_activas.values() if v]) < 3:
+    base *= 1 + min(max(volatilidad * 5, 0.0), 0.3)
+    activos = [v for v in estrategias_activas.values() if v]
+    if activos and len(activos) < 3:
         base *= 1.1
     return round(base, 2)
+
+
+def actualizar_pesos_tecnicos(symbol: str, detalles: dict, retorno: float, factor: float = 0.05) -> None:
+    """Ajusta pesos del JSON según rendimiento de la operación."""
+    if not detalles:
+        return
+    pesos = _cargar_pesos(symbol)
+    modificados = False
+    for clave, puntaje in detalles.items():
+        peso_actual = pesos.get(clave, PESOS_DEFECTO.get(clave, 0.0))
+        if peso_actual <= 0:
+            continue
+        if retorno > 0 and puntaje > 0:
+            nuevo = peso_actual * (1 + factor)
+        elif retorno < 0 and puntaje > 0:
+            nuevo = peso_actual * (1 - factor)
+        else:
+            continue
+        pesos[clave] = max(0.1, round(nuevo, 3))
+        modificados = True
+    if modificados:
+        _pesos_cache[symbol] = pesos
+        try:
+            with open(RUTA_PESOS, "w", encoding="utf-8") as fh:
+                json.dump(_pesos_cache, fh, indent=2)
+            log.info(f"[{symbol}] Pesos tecnicos actualizados")
+        except Exception as e:  # noqa: BLE001
+            log.warning(f"[{symbol}] Error guardando pesos: {e}")

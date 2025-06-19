@@ -42,6 +42,7 @@ class OrderManager:
         umbral: float = 0.0,
         objetivo: float | None = None,
         fracciones: int = 1,
+        detalles_tecnicos: dict | None = None,
     ) -> None:
         """Registra una nueva orden en memoria y/o en Binance."""
         objetivo = objetivo if objetivo is not None else cantidad
@@ -63,6 +64,7 @@ class OrderManager:
             precio_ultima_piramide=precio,
             puntaje_entrada=puntaje,
             umbral_entrada=umbral,
+            detalles_tecnicos=detalles_tecnicos,
             break_even_activado=False,
             duracion_en_velas=0,
         )

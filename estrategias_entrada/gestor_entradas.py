@@ -84,7 +84,7 @@ def validar_tecnica_entrada(
     volumen_actual = float(df["volume"].iloc[-1])
     volumen_prom_30 = float(df["volume"].rolling(30).mean().iloc[-1])
 
-    if volumen_prom_30 > 0 and (volumen_actual / volumen_prom_30) < 1.05:
+    if volumen_prom_30 > 0 and (volumen_actual / volumen_prom_30) < 0.9:
         log.info(f"🚫 {symbol} volumen relativo bajo")
         return False
 
@@ -96,7 +96,7 @@ def validar_tecnica_entrada(
     if tendencia == "alcista" and slope < 0:
         log.info(f"🚫 {symbol} slope incompatible con tendencia alcista {slope:.4f}")
         return False
-    if abs(slope) < 0.03:
+    if abs(slope) < 0.01:
         log.info(f"🚫 {symbol} slope débil {slope:.4f}")
         return False
     if momentum is not None:
@@ -109,7 +109,7 @@ def validar_tecnica_entrada(
 
     rsi = calcular_rsi(df, 14)
     if rsi is not None:
-        if rsi > 70:
+        if rsi > 75:
             log.info(f"🚫 {symbol} RSI alto {rsi:.2f}")
             return False
         if direccion == "short" and rsi < 30:
@@ -117,7 +117,7 @@ def validar_tecnica_entrada(
             return False
 
     _, banda_sup, _ = calcular_bollinger(df)
-    if banda_sup is not None and abs(banda_sup - close_actual) / close_actual < 0.015:
+    if banda_sup is not None and abs(banda_sup - close_actual) / close_actual < 0.01:
         log.info(f"🚫 {symbol} muy cerca de resistencia")
         return False
 
@@ -139,7 +139,7 @@ def validar_tecnica_entrada(
     activas = [n for n, a in estrategias_activas.items() if a]
     if activas and rendimientos:
         total = sum(rendimientos.get(n, 1.0) for n in activas)
-        if total / len(activas) < 0.8:
+        if total / len(activas) < 0.7:
             log.info(f"🚫 {symbol} rendimiento histórico bajo")
             return False
 
