@@ -58,19 +58,27 @@ def evaluar_salidas(orden: dict, df, config=None, contexto=None):
 
     peso_total = sum(obtener_peso_salida(razon, symbol) for razon in resultados)
     umbral = calcular_umbral_salida_adaptativo(symbol, config or {}, contexto)
+    min_conf = (config or {}).get("min_confirmaciones_salida", 1)
     log.info(
         f"[SALIDA] {symbol} | Score: {peso_total:.2f} | Umbral: {umbral:.2f} | Señales: {resultados}"
     )
-    if peso_total >= umbral:
-        return {
-            "cerrar": True,
-            "razon": f"Score {peso_total:.2f} ≥ {umbral:.2f}. Señales: {', '.join(resultados)}"
-        }
+    cerrar = peso_total >= umbral and len(resultados) >= min_conf
+    if cerrar:
+        razon = f"Score {peso_total:.2f} ≥ {umbral:.2f} con {len(resultados)} señales"
     else:
-        return {
-            "cerrar": False,
-            "razon": f"Score insuficiente {peso_total:.2f} < {umbral:.2f}"
-        }
+        razon = (
+            f"Score insuficiente {peso_total:.2f} < {umbral:.2f}"
+            if len(resultados) >= min_conf
+            else f"Señales insuficientes: {len(resultados)}/{min_conf}"
+        )
+
+    return {
+        "cerrar": cerrar,
+        "razon": razon,
+        "detalles": resultados,
+        "score": peso_total,
+        "umbral": umbral,
+    }
 
 def verificar_filtro_tecnico(symbol, df, estrategias_activas, pesos_symbol, config=None):
     if not validar_dataframe(df, ["high", "low", "close"]):

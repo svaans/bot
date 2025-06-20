@@ -3,16 +3,22 @@ import pandas as pd
 from collections import defaultdict
 
 
-def analizar_estrategias_en_ordenes(path_ordenes):
-    """
-    Analiza el rendimiento de cada estrategia basada en órdenes cerradas (ganancia/pérdida).
-    Devuelve un DataFrame con métricas por estrategia.
+def analizar_estrategias_en_ordenes(path_ordenes: str, dias: int | None = None) -> pd.DataFrame:
+    """Devuelve métricas por estrategia a partir de ``path_ordenes``.
+
+    Si ``dias`` se especifica se filtra el ``DataFrame`` a ese rango temporal
+    utilizando la columna ``timestamp`` si está disponible.
     """
     try:
         df = pd.read_parquet(path_ordenes)
     except Exception as e:
         print(f"❌ Error al leer el archivo de órdenes: {e}")
         return pd.DataFrame()
+    
+    if dias is not None and "timestamp" in df.columns:
+        limite = pd.Timestamp.utcnow().tz_localize(None) - pd.Timedelta(days=dias)
+        ts = pd.to_datetime(df["timestamp"], unit="s", errors="coerce").dt.tz_localize(None)
+        df = df[ts >= limite]
 
     conteo = defaultdict(lambda: {"ganadas": 0, "perdidas": 0, "total": 0, "retorno": 0.0})
 

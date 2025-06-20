@@ -44,6 +44,7 @@ from ccxt.base.errors import BaseError
 from core.reporting import reporter_diario
 from core.registro_metrico import registro_metrico
 from aprendizaje.aprendizaje_en_linea import registrar_resultado_trade
+from aprendizaje.aprendizaje_continuo import ejecutar_ciclo as ciclo_aprendizaje
 from estrategias_salida.salida_trailing_stop import verificar_trailing_stop
 from estrategias_salida.salida_por_tendencia import verificar_reversion_tendencia
 from estrategias_salida.gestor_salidas import evaluar_salidas, verificar_filtro_tecnico
@@ -188,6 +189,7 @@ class Trader:
         self._task: asyncio.Task | None = None
         self._task_estado: asyncio.Task | None = None
         self._task_contexto: asyncio.Task | None = None
+        self._task_aprendizaje: asyncio.Task | None = None
         self.context_stream = StreamContexto()
 
         try:
@@ -701,6 +703,18 @@ class Trader:
             if datos:
                 self.estado[symbol].ultimo_timestamp = datos[-1][0]
         log.info("📈 Histórico inicial cargado")
+
+    async def _ciclo_aprendizaje(self, intervalo: int = 86400) -> None:
+        """Ejecuta el proceso de aprendizaje continuo periódicamente."""
+        await asyncio.sleep(1)
+        while True:
+            try:
+                loop = asyncio.get_running_loop()
+                await loop.run_in_executor(None, ciclo_aprendizaje)
+                log.info("🧠 Ciclo de aprendizaje completado")
+            except Exception as e:  # noqa: BLE001
+                log.warning(f"⚠️ Error en ciclo de aprendizaje: {e}")
+            await asyncio.sleep(intervalo)
     
     async def _calcular_cantidad_async(self, symbol: str, precio: float) -> float:
         """Determina la cantidad de cripto a comprar con capital asignado."""
@@ -1844,13 +1858,22 @@ class Trader:
         self._task_contexto.add_done_callback(_log_fallo_task)
         self._task_flush = asyncio.create_task(ordenes_reales.flush_periodico())
         self._task_flush.add_done_callback(_log_fallo_task)
+        if "PYTEST_CURRENT_TEST" not in os.environ:
+            self._task_aprendizaje = asyncio.create_task(self._ciclo_aprendizaje())
+            self._task_aprendizaje.add_done_callback(_log_fallo_task)
 
         try:
-            await asyncio.gather(self._task, self._task_estado, self._task_contexto, self._task_flush)
+            tareas = [self._task, self._task_estado, self._task_contexto, self._task_flush]
+            if self._task_aprendizaje:
+                tareas.append(self._task_aprendizaje)
+            await asyncio.gather(*tareas)
         except Exception as e:
             log.error(f"❌ Error inesperado en ejecución de tareas: {e}")
             
-        await asyncio.gather(self._task, self._task_estado, self._task_contexto, self._task_flush)
+        tareas = [self._task, self._task_estado, self._task_contexto, self._task_flush]
+        if self._task_aprendizaje:
+            tareas.append(self._task_aprendizaje)
+        await asyncio.gather(*tareas)
 
     async def _procesar_vela(self, vela: dict) -> None:
         symbol = vela["symbol"]
@@ -1909,6 +1932,13 @@ class Trader:
             self._task_contexto.cancel()
             try:
                 await self._task_contexto
+            except asyncio.CancelledError:
+                pass
+            
+        if self._task_aprendizaje:
+            self._task_aprendizaje.cancel()
+            try:
+                await self._task_aprendizaje
             except asyncio.CancelledError:
                 pass
 
