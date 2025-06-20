@@ -11,6 +11,9 @@ from estrategias_entrada.validadores import (
     validar_rsi,
     validar_slope,
     validar_bollinger,
+    validar_max_min,
+    validar_volumen_real,
+    validar_spread,
 )
 from indicadores.slope import calcular_slope
 from indicadores.momentum import calcular_momentum
@@ -60,6 +63,9 @@ class StrategyEngine:
                 "score_total": 0.0,
                 "umbral": 0.0,
                 "diversidad": 0,
+                "max_min": validar_max_min(df),
+                "volumen_real": validar_volumen_real(df),
+                "spread": validar_spread(df),
             }
 
         try:
@@ -100,8 +106,10 @@ class StrategyEngine:
             score_tec = calcular_score_tecnico(df, rsi_val, mom_val, slope_val, tendencia)
 
             cumple_div = diversidad >= (config or {}).get("diversidad_minima", 1)
+            umbral_score = (config or {}).get("umbral_score_tecnico", 1.0)
             permitido = (
                 score_total >= umbral
+                and score_tec >= umbral_score
                 and cumple_div
                 and not contradiccion
                 and not validaciones_fallidas
@@ -112,6 +120,8 @@ class StrategyEngine:
                     motivo = "contradiccion"
                 elif validaciones_fallidas:
                     motivo = "validaciones_fallidas"
+                elif score_tec < umbral_score:
+                    motivo = "score_tecnico_bajo"
                 elif score_total < umbral:
                     motivo = "score_bajo"
                 elif not cumple_div:
@@ -125,6 +135,7 @@ class StrategyEngine:
                 "estrategias_activas": estrategias_activas,
                 "score_total": round(score_total, 2),
                 "umbral": umbral,
+                "umbral_score_tecnico": umbral_score,
                 "diversidad": diversidad,
                 "tendencia": tendencia,
                 "rsi": rsi_val,
