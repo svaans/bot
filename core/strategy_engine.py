@@ -80,14 +80,22 @@ class StrategyEngine:
             
             resultado = evaluar_estrategias(symbol, df, tendencia)
             estrategias_activas = resultado.get("estrategias_activas", {})
-            score_total = resultado.get("puntaje_total", 0.0)
+            score_base = resultado.get("puntaje_total", 0.0)
             diversidad = resultado.get("diversidad", 0)
+            sinergia = resultado.get("sinergia", 0.0)
+            score_total = score_base * (1 + sinergia)
 
             rsi_val = calcular_rsi(df)
             slope_val = calcular_slope(df)
             mom_val = calcular_momentum(df)
 
-            contexto = {"rsi": rsi_val, "slope": slope_val}
+            vol_media = df["volume"].rolling(20).mean().iloc[-1]
+            contexto = {
+                "rsi": rsi_val,
+                "slope": slope_val,
+                "volumen": float(vol_media) if not pd.isna(vol_media) else 0.0,
+                "tendencia": tendencia,
+            }
             umbral = calcular_umbral_adaptativo(symbol, df, contexto)
 
             validaciones = {
@@ -134,6 +142,8 @@ class StrategyEngine:
                 "motivo_rechazo": motivo,
                 "estrategias_activas": estrategias_activas,
                 "score_total": round(score_total, 2),
+                "score_base": round(score_base, 2),
+                "sinergia": round(sinergia, 2),
                 "umbral": umbral,
                 "umbral_score_tecnico": umbral_score,
                 "diversidad": diversidad,

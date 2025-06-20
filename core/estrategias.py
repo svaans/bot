@@ -86,3 +86,15 @@ def filtrar_por_direccion(estrategias: dict, direccion: str) -> tuple[dict, list
 
     return coherentes, incoherentes
 
+def calcular_sinergia(estrategias: dict[str, bool], tendencia: str) -> float:
+    """Calcula la fracción de estrategias activas alineadas con la tendencia."""
+    activos = [e for e, a in estrategias.items() if a]
+    if not activos:
+        return 0.0
+    alineados = [
+        e
+        for e in activos
+        if TENDENCIA_IDEAL.get(e, "lateral") in {tendencia.lower(), "lateral"}
+    ]
+    return round(len(alineados) / len(activos), 2)
+
