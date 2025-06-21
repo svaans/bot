@@ -9,13 +9,16 @@ from typing import Dict, Optional
 import pandas as pd
 
 from indicadores import rsi as indicador_rsi, slope as indicador_slope
-
+from core.score_tecnico import calcular_score_tecnico
 from core.logger import configurar_logger
 
 log = configurar_logger("adaptador_umbral")
 
 RUTA_CONFIG = Path("config/configuraciones_optimas.json")
 _CONFIG_CACHE: Dict[str, dict] | None = None
+
+_UMBRAL_SUAVIZADO: Dict[str, float] = {}
+ALPHA = 0.3
 
 
 def _cargar_config() -> Dict[str, dict]:
@@ -29,30 +32,7 @@ def _cargar_config() -> Dict[str, dict]:
     return _CONFIG_CACHE
 
 
-def calcular_score_tecnico(
-    df: pd.DataFrame,
-    rsi: float | None,
-    momentum: float | None,
-    slope: float | None,
-    tendencia: str,
-) -> float:
-    """Calcula un puntaje técnico simple basado en indicadores."""
-    score = 0.0
-    if rsi is not None:
-        if tendencia == "alcista" and rsi > 50:
-            score += 1
-        elif tendencia == "bajista" and rsi < 50:
-            score += 1
-        elif 45 <= rsi <= 55:
-            score += 0.5
-    if momentum is not None and momentum > 0:
-        score += 1
-    if slope is not None:
-        if tendencia == "alcista" and slope > 0:
-            score += 1
-        elif tendencia == "bajista" and slope < 0:
-            score += 1
-    return score
+
 
 
 def calcular_umbral_adaptativo(
@@ -79,7 +59,14 @@ def calcular_umbral_adaptativo(
     if rsi_val is not None:
         umbral *= 1 + abs(rsi_val - 50) / 100
 
-    return round(max(1.0, umbral), 2)
+    umbral = max(1.0, umbral)
+    previo = _UMBRAL_SUAVIZADO.get(symbol)
+    if previo is None:
+        suavizado = umbral
+    else:
+        suavizado = previo + ALPHA * (umbral - previo)
+    _UMBRAL_SUAVIZADO[symbol] = suavizado
+    return round(suavizado, 2)
 
 
 def calcular_umbral_salida_adaptativo(symbol: str, config: Dict | None = None, contexto: Optional[Dict] = None) -> float:

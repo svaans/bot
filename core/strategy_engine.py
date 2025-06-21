@@ -4,7 +4,8 @@ from __future__ import annotations
 
 from core.pesos import gestor_pesos
 from typing import Dict
-from core.adaptador_umbral import calcular_umbral_adaptativo, calcular_score_tecnico
+from core.adaptador_umbral import calcular_umbral_adaptativo
+from core.score_tecnico import calcular_score_tecnico
 from core.utils import validar_dataframe
 from estrategias_entrada.validadores import (
     validar_volumen,
@@ -21,7 +22,8 @@ from indicadores.rsi import calcular_rsi
 
 import pandas as pd
 
-from estrategias_entrada.gestor_entradas import evaluar_estrategias
+from core.evaluacion_tecnica import evaluar_estrategias
+from core.validaciones_tecnicas import hay_contradicciones
 from estrategias_salida.gestor_salidas import evaluar_salidas
 from core.tendencia import detectar_tendencia
 from core.logger import configurar_logger
@@ -106,11 +108,7 @@ class StrategyEngine:
             }
             validaciones_fallidas = [k for k, v in validaciones.items() if not v]
 
-            contradiccion = any(
-                "alcista" in n for n, a in estrategias_activas.items() if a
-            ) and any(
-                "bajista" in n for n, a in estrategias_activas.items() if a
-            )
+            contradiccion = hay_contradicciones(estrategias_activas)
             score_tec = calcular_score_tecnico(df, rsi_val, mom_val, slope_val, tendencia)
 
             cumple_div = diversidad >= (config or {}).get("diversidad_minima", 1)
