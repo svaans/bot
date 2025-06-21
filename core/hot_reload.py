@@ -14,6 +14,20 @@ import errno
 
 log = configurar_logger("hot_reload")
 
+def _patch_watchdog_for_py313() -> None:
+    """Ajusta Watchdog para Python 3.13."""
+    if sys.version_info >= (3, 13):
+        try:
+            from watchdog.utils import BaseThread
+
+            def _start(self) -> None:
+                self.on_thread_start()
+                threading.Thread.start(self, handle=None)
+
+            BaseThread.start = _start  # type: ignore[assignment]
+        except Exception as exc:  # pragma: no cover - best effort
+            log.debug(f"No se pudo parchear watchdog: {exc}")
+
 DEFAULT_MODULES: list[str] = [
     "bot",
     
@@ -121,6 +135,7 @@ def start_hot_reload(
     se vigilarán todos los paquetes dentro de ``path`` salvo los indicados en
     ``exclude``.
     """
+    _patch_watchdog_for_py313()
     base = Path(path or Path.cwd())
     mods = list(modules) if modules is not None else []
     texto_mods = ", ".join(mods) if mods else "todos"
