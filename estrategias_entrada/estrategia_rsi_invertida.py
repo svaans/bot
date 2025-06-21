@@ -1,16 +1,16 @@
 import pandas as pd
-from indicadores.rsi import calcular_rsi
+from .validaciones_comunes import rsi_cruce_descendente
 
 def estrategia_rsi_invertida(df: pd.DataFrame) -> dict:
     if len(df) < 15:
         return {"activo": False, "mensaje": "Insuficientes datos"}
 
-    rsi_serie = calcular_rsi(df, serie_completa=True)
+    valido, rsi = rsi_cruce_descendente(df, umbral=70)
 
-    if rsi_serie is None or len(rsi_serie.dropna()) < 2:
+    if rsi is None:
         return {"activo": False, "mensaje": "RSI no disponible"}
 
-    if rsi_serie.iloc[-2] > 70 and rsi_serie.iloc[-1] < 70:
+    if valido:
         return {"activo": True, "mensaje": "RSI cruzando hacia abajo desde sobrecompra"}
 
     return {"activo": False, "mensaje": "Sin cruce descendente de RSI"}

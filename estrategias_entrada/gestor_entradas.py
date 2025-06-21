@@ -8,10 +8,12 @@ import pandas as pd
 from core.pesos import gestor_pesos
 from estrategias_entrada.loader import cargar_estrategias
 from indicadores.correlacion import calcular_correlacion
+from filtros.validador_entradas import verificar_liquidez_orden
 from core.estrategias import (
     obtener_estrategias_por_tendencia,
     calcular_sinergia,
 )
+from core.score_tecnico import calcular_score_tecnico
 from core.logger import configurar_logger
 
 log = configurar_logger("entradas")
@@ -59,6 +61,44 @@ def evaluar_estrategias(symbol: str, df: pd.DataFrame, tendencia: str) -> dict:
     }
 
 
+def _validar_correlacion(symbol: str, df: pd.DataFrame, df_ref: pd.DataFrame, umbral: float) -> bool:
+    if df is not None and df_ref is not None and umbral < 1.0:
+        correlacion = calcular_correlacion(df, df_ref)
+        if correlacion is not None and correlacion >= umbral:
+            log.info(
+                f"🚫 [{symbol}] Rechazo por correlación {correlacion:.2f} >= {umbral}"
+            )
+            return False
+    return True
+
+
+def _validar_diversidad(symbol: str, estrategias: dict) -> bool:
+    activas = sum(1 for v in estrategias.values() if v)
+    if activas <= 0:
+        log.info(f"🚫 [{symbol}] Rechazo por falta de estrategias activas")
+        return False
+    return True
+
+
+def _validar_score(symbol: str, potencia: float, umbral: float) -> bool:
+    if potencia < umbral:
+        log.info(
+            f"🚫 [{symbol}] Rechazo por score {potencia:.2f} < {umbral:.2f}"
+        )
+        return False
+    return True
+
+
+def _validar_volumen(symbol: str, df: pd.DataFrame, cantidad: float) -> bool:
+    if df is not None and cantidad > 0:
+        if not verificar_liquidez_orden(df, cantidad):
+            log.info(
+                f"🚫 [{symbol}] Rechazo por volumen insuficiente para {cantidad}"
+            )
+            return False
+    return True
+
+
 def entrada_permitida(
     symbol: str,
     potencia: float,
@@ -78,12 +118,24 @@ def entrada_permitida(
     persistencia_minima: float = 0.0,
 ) -> bool:
     """Versión simplificada usada en las pruebas unitarias."""
-    activas = sum(1 for v in estrategias_activas.values() if v)
-    if df is not None and df_referencia is not None and umbral_correlacion < 1.0:
-        correlacion = calcular_correlacion(df, df_referencia)
-        if correlacion is not None and correlacion >= umbral_correlacion:
-            return False
-    return potencia >= umbral and activas > 0
+    score_tecnico = score if score is not None else calcular_score_tecnico(
+        df if df is not None else pd.DataFrame(),
+        rsi,
+        momentum,
+        slope,
+        tendencia or "lateral",
+    )
+    potencia_ajustada = potencia * (1 + score_tecnico / 3)
+
+    if not _validar_correlacion(symbol, df, df_referencia, umbral_correlacion):
+        return False
+    if not _validar_diversidad(symbol, estrategias_activas):
+        return False
+    if not _validar_score(symbol, potencia_ajustada, umbral):
+        return False
+    if not _validar_volumen(symbol, df, cantidad):
+        return False
+    return True
 
 
 
