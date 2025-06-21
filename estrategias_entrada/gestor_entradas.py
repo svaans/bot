@@ -7,6 +7,7 @@ from __future__ import annotations
 import pandas as pd
 from core.pesos import gestor_pesos
 from estrategias_entrada.loader import cargar_estrategias
+from indicadores.correlacion import calcular_correlacion
 from core.estrategias import (
     obtener_estrategias_por_tendencia,
     calcular_sinergia,
@@ -78,6 +79,10 @@ def entrada_permitida(
 ) -> bool:
     """Versión simplificada usada en las pruebas unitarias."""
     activas = sum(1 for v in estrategias_activas.values() if v)
+    if df is not None and df_referencia is not None and umbral_correlacion < 1.0:
+        correlacion = calcular_correlacion(df, df_referencia)
+        if correlacion is not None and correlacion >= umbral_correlacion:
+            return False
     return potencia >= umbral and activas > 0
 
 

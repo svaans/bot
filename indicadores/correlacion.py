@@ -7,11 +7,7 @@ def calcular_correlacion(
     columna: str = "close",
     ventana: int = 30,
 ) -> float | None:
-    """Calcula la correlación de Pearson entre dos series de precios.
-
-    Si alguna serie carece de ``columna`` o no hay datos suficientes,
-    devuelve ``None``.
-    """
+    """Calcula la correlación de Pearson entre dos series de precios."""
 
     if columna not in df1 or columna not in df2:
         return None

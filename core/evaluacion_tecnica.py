@@ -4,10 +4,9 @@ from __future__ import annotations
 from typing import Dict
 
 import pandas as pd
-
-from estrategias_entrada.gestor_entradas import evaluar_estrategias as _eval
+from estrategias_entrada import gestor_entradas
 
 
 def evaluar_estrategias(symbol: str, df: pd.DataFrame, tendencia: str) -> Dict:
     """Evalúa las estrategias activas para ``symbol`` y ``tendencia``."""
-    return _eval(symbol, df, tendencia)
+    return gestor_entradas.evaluar_estrategias(symbol, df, tendencia)

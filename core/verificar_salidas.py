@@ -21,7 +21,7 @@ from filtros.filtro_salidas import validar_necesidad_de_salida
 from core.adaptador_dinamico import adaptar_configuracion as adaptar_configuracion_base
 from core.adaptador_configuracion_dinamica import adaptar_configuracion
 from core.adaptador_umbral import calcular_umbral_adaptativo
-from metricas_semanales import metricas_tracker
+from core.metricas_semanales import metricas_tracker
 
 log = configurar_logger("verificar_salidas")
 
