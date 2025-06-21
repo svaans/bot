@@ -1,5 +1,9 @@
 import pandas as pd
 from indicadores.atr import calcular_atr
+from core.logger import configurar_logger
+from core.salida_utils import resultado_salida
+
+log = configurar_logger("salida_trailing_stop")
 
 def salida_trailing_stop(orden: dict, df: pd.DataFrame, config: dict = None) -> dict:
     """
@@ -19,7 +23,11 @@ def salida_trailing_stop(orden: dict, df: pd.DataFrame, config: dict = None) -> 
     """
     try:
         if df is None or len(df) < 3 or not {"close"}.issubset(df.columns):
-            return {"cerrar": False, "razon": "Datos insuficientes o mal formateados"}
+            return resultado_salida(
+                "Trailing Stop",
+                False,
+                "Datos insuficientes o mal formateados",
+            )
 
         precio_actual = df["close"].iloc[-1]
         direccion = orden.get("direccion", "long")
@@ -28,7 +36,11 @@ def salida_trailing_stop(orden: dict, df: pd.DataFrame, config: dict = None) -> 
         atr_mult = config.get("atr_multiplicador", 1.0) if config else 1.0
         atr = calcular_atr(df)
         if atr is None:
-            return {"cerrar": False, "razon": "ATR no disponible"}
+            return resultado_salida(
+                "Trailing Stop",
+                False,
+                "ATR no disponible",
+            )
         trailing_dist = atr * atr_mult
 
         # --- Inicializa max_precio si no existe ---
@@ -40,24 +52,32 @@ def salida_trailing_stop(orden: dict, df: pd.DataFrame, config: dict = None) -> 
             if precio_actual > orden["max_precio"]:
                 orden["max_precio"] = precio_actual
             elif precio_actual < orden["max_precio"] - trailing_dist:
-                return {
-                    "cerrar": True,
-                    "razon": f"Trailing Stop activado (long) → Max: {orden['max_precio']:.2f}, Precio actual: {precio_actual:.2f}"
-                }
+                return resultado_salida(
+                    "Trailing Stop",
+                    True,
+                    f"Trailing Stop activado (long) → Max: {orden['max_precio']:.2f}, Precio actual: {precio_actual:.2f}",
+                    logger=log,
+                )
 
         elif direccion in ["venta", "short"]:
             if precio_actual < orden["max_precio"]:
                 orden["max_precio"] = precio_actual
             elif precio_actual > orden["max_precio"] + trailing_dist:
-                return {
-                    "cerrar": True,
-                    "razon": f"Trailing Stop activado (short) → Min: {orden['max_precio']:.2f}, Precio actual: {precio_actual:.2f}"
-                }
+                return resultado_salida(
+                    "Trailing Stop",
+                    True,
+                    f"Trailing Stop activado (short) → Min: {orden['max_precio']:.2f}, Precio actual: {precio_actual:.2f}",
+                    logger=log,
+                )
 
-        return {"cerrar": False, "razon": "Trailing no activado"}
+        return resultado_salida("Trailing Stop", False, "Trailing no activado")
 
     except Exception as e:
-        return {"cerrar": False, "razon": f"Error en trailing stop: {e}"}
+        return resultado_salida(
+            "Trailing Stop",
+            False,
+            f"Error en trailing stop: {e}",
+        )
 
 
 

@@ -1,6 +1,10 @@
 import pandas as pd
 from core.utils import validar_dataframe
 from core.tendencia import detectar_tendencia
+from core.logger import configurar_logger
+from core.salida_utils import resultado_salida
+
+log = configurar_logger("salida_por_tendencia")
 
 def salida_por_tendencia(orden, df):
     """
@@ -8,19 +12,25 @@ def salida_por_tendencia(orden, df):
     """
     tendencia_entrada = orden.get("tendencia")
     if not tendencia_entrada:
-        return {"cerrar": False, "razon": "Sin tendencia previa registrada"}
+        return resultado_salida(
+            "Tecnico",
+            False,
+            "Sin tendencia previa registrada",
+        )
 
     try:
         tendencia_actual, _ = detectar_tendencia(orden["symbol"], df)
         if tendencia_actual != tendencia_entrada:
-            return {
-                "cerrar": True,
-                "razon": f"Cambio de tendencia: {tendencia_entrada} → {tendencia_actual}"
-            }
+            return resultado_salida(
+                "Tecnico",
+                True,
+                f"Cambio de tendencia: {tendencia_entrada} → {tendencia_actual}",
+                logger=log,
+            )
         else:
-            return {"cerrar": False, "razon": "Tendencia estable"}
+            return resultado_salida("Tecnico", False, "Tendencia estable")
     except Exception as e:
-        return {"cerrar": False, "razon": f"Error evaluando tendencia: {e}"}
+        return resultado_salida("Tecnico", False, f"Error evaluando tendencia: {e}")
     
 
 def verificar_reversion_tendencia(symbol, df, tendencia_anterior):

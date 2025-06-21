@@ -50,11 +50,12 @@ def evaluar_salidas(orden: dict, df, config=None, contexto=None):
             continue
 
         if resultado.get("cerrar", False):
+            evento = resultado.get("evento", resultado.get("razon", "Sin motivo"))
             razon = resultado.get("razon", "Sin motivo")
-            if razon in PRIORIDAD_ABSOLUTA:
-                log.info(f"[{symbol}] Cierre prioritario por {razon}")
-                return {"cerrar": True, "razon": razon}
-            resultados.append(razon)
+            if evento in PRIORIDAD_ABSOLUTA:
+                log.info(f"[{symbol}] Cierre prioritario por {evento}")
+                return {"cerrar": True, "razon": evento}
+            resultados.append(evento)
 
     peso_total = sum(obtener_peso_salida(razon, symbol) for razon in resultados)
     umbral = calcular_umbral_salida_adaptativo(symbol, config or {}, contexto)

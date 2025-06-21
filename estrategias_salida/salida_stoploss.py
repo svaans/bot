@@ -12,6 +12,7 @@ from core.adaptador_dinamico import calcular_umbral_adaptativo
 from estrategias_entrada.gestor_entradas import evaluar_estrategias
 from core.pesos import gestor_pesos
 from core.logger import configurar_logger
+from core.salida_utils import resultado_salida
 from indicadores.rsi import calcular_rsi
 from indicadores.slope import calcular_slope
 from indicadores.vwap import calcular_vwap
@@ -59,23 +60,42 @@ def salida_stoploss(orden: dict, df: pd.DataFrame, config: dict = None) -> dict:
     try:
         symbol = orden.get("symbol")
         if not symbol or not validar_dataframe(df, ["high", "low", "close"]):
-            return {"cerrar": True, "razon": "Datos inválidos o símbolo no definido"}
+            return resultado_salida(
+                "Stop Loss",
+                True,
+                "Datos inválidos o símbolo no definido",
+                logger=log,
+            )
 
         sl = orden.get("stop_loss")
         precio_actual = df["close"].iloc[-1]
 
         # 🛑 Si el precio no ha tocado el SL, no se evalúa nada
         if precio_actual > sl:
-            return {"cerrar": False, "razon": f"SL no alcanzado aún (precio: {precio_actual:.2f} > SL: {sl:.2f})"}
+            return resultado_salida(
+                "Stop Loss",
+                False,
+                f"SL no alcanzado aún (precio: {precio_actual:.2f} > SL: {sl:.2f})",
+            )
 
         # ⚙️ Evaluación técnica solo si se ha tocado el SL
         tendencia, _ = detectar_tendencia(symbol, df)
         if not tendencia:
-            return {"cerrar": True, "razon": "Tendencia no identificada"}
+            return resultado_salida(
+                "Stop Loss",
+                True,
+                "Tendencia no identificada",
+                logger=log,
+            )
 
         evaluacion = evaluar_estrategias(symbol, df, tendencia)
         if not evaluacion:
-            return {"cerrar": True, "razon": "Evaluación de estrategias fallida"}
+            return resultado_salida(
+                "Stop Loss",
+                True,
+                "Evaluación de estrategias fallida",
+                logger=log,
+            )
 
         estrategias_activas = evaluacion.get("estrategias_activas", {})
         puntaje = evaluacion.get("puntaje_total", 0)
@@ -111,13 +131,26 @@ def salida_stoploss(orden: dict, df: pd.DataFrame, config: dict = None) -> dict:
                 f"Estrategias activas: {activas}, Puntaje: {puntaje:.2f}/{umbral:.2f}"
             )
             log.info(mensaje)
-            return {"cerrar": False, "razon": "SL evitado por validación técnica y concordancia con tendencia"}
+            return resultado_salida(
+                "Stop Loss",
+                False,
+                "SL evitado por validación técnica y concordancia con tendencia",
+            )
 
-        return {"cerrar": True, "razon": "Condiciones técnicas débiles para mantener"}
+        return resultado_salida(
+            "Stop Loss",
+            True,
+            "Condiciones técnicas débiles para mantener",
+            logger=log,
+        )
 
     except Exception as e:
-        return {"cerrar": True, "razon": f"Error interno en SL: {e}"}
-    
+        return resultado_salida(
+            "Stop Loss",
+            True,
+            f"Error interno en SL: {e}",
+            logger=log,
+        )
     
 def verificar_salida_stoploss(
     orden: dict, df: pd.DataFrame, config: dict | None = None
@@ -125,29 +158,37 @@ def verificar_salida_stoploss(
     """Determina si debe ejecutarse el Stop Loss o mantenerse la operación."""
 
     if df is None or not isinstance(df, pd.DataFrame):
-        return {
-            "cerrar": False,
-            "motivo": "❌ DataFrame no válido (None o tipo incorrecto)",
-            "evitado": False,
-        }
+        return resultado_salida(
+            "Stop Loss",
+            False,
+            "❌ DataFrame no válido (None o tipo incorrecto)",
+            motivo="❌ DataFrame no válido (None o tipo incorrecto)",
+            evitado=False,
+        )
     if df.empty or len(df) < 15:
-        return {
-            "cerrar": False,
-            "motivo": "❌ DataFrame insuficiente para evaluar SL",
-            "evitado": False,
-        }
+        return resultado_salida(
+            "Stop Loss",
+            False,
+            "❌ DataFrame insuficiente para evaluar SL",
+            motivo="❌ DataFrame insuficiente para evaluar SL",
+            evitado=False,
+        )
     if not validar_dataframe(df, ["close", "high", "low"]):
-        return {
-            "cerrar": False,
-            "motivo": "Datos insuficientes",
-            "evitado": False,
-        }
+         return resultado_salida(
+            "Stop Loss",
+            False,
+            "Datos insuficientes",
+            motivo="Datos insuficientes",
+            evitado=False,
+        )
     if not all(k in orden for k in ["precio_entrada", "stop_loss", "direccion"]):
-        return {
-            "cerrar": False,
-            "motivo": "❌ Orden incompleta",
-            "evitado": False,
-        }
+        return resultado_salida(
+            "Stop Loss",
+            False,
+            "❌ Orden incompleta",
+            motivo="❌ Orden incompleta",
+            evitado=False,
+        )
     
     symbol = orden.get("symbol", "SYM")
     
@@ -192,11 +233,13 @@ def verificar_salida_stoploss(
     if (direccion in ("long", "compra") and precio_actual > sl_config) or (
         direccion in ("short", "venta") and precio_actual < sl_config
     ):
-        return {
-            "cerrar": False,
-            "motivo": f"SL no alcanzado aún (precio: {precio_actual:.2f} vs SL: {sl_config:.2f})",
-            "evitado": False,
-        }
+        return resultado_salida(
+            "Stop Loss",
+            False,
+            f"SL no alcanzado aún (precio: {precio_actual:.2f} vs SL: {sl_config:.2f})",
+            motivo=f"SL no alcanzado aún (precio: {precio_actual:.2f} vs SL: {sl_config:.2f})",
+            evitado=False,
+        )
 
     tendencia, _ = detectar_tendencia(symbol, df)
     evaluacion = evaluar_estrategias(symbol, df, tendencia)
@@ -234,26 +277,37 @@ def verificar_salida_stoploss(
         log.info(
             f"🛡️ SL evitado en {symbol} | Puntaje: {puntaje:.2f}/{umbral:.2f} | Velas abiertas: {duracion}"
         )
-        return {
-            "cerrar": False,
-            "motivo": "SL tocado pero indicadores válidos para mantener",
-            "evitado": True,
-        }
+        return resultado_salida(
+            "Stop Loss",
+            False,
+            "SL tocado pero indicadores válidos para mantener",
+            motivo="SL tocado pero indicadores válidos para mantener",
+            evitado=True,
+        )
     
     if puntaje >= 2.5 * umbral:
         log.info(
             f"🛡️ SL evitado por score excepcional en {symbol} → {puntaje:.2f}/{umbral:.2f}"
         )
-        return {"cerrar": False, "motivo": "Score técnico muy alto", "evitado": True}
+        return resultado_salida(
+            "Stop Loss",
+            False,
+            "Score técnico muy alto",
+            motivo="Score técnico muy alto",
+            evitado=True,
+        )
 
     log.info(
         f"🔴 SL forzado en {symbol} | Score técnico: {puntaje:.2f}/{umbral:.2f} | Velas abiertas: {duracion}"
     )
-    return {
-        "cerrar": True,
-        "motivo": f"SL forzado | Score: {puntaje:.2f}/{umbral:.2f} | Velas: {duracion}",
-        "evitado": False,
-    }
+    return resultado_salida(
+        "Stop Loss",
+        True,
+        f"SL forzado | Score: {puntaje:.2f}/{umbral:.2f} | Velas: {duracion}",
+        motivo=f"SL forzado | Score: {puntaje:.2f}/{umbral:.2f} | Velas: {duracion}",
+        evitado=False,
+        logger=log,
+    )
     
 
     
