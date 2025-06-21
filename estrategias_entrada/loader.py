@@ -16,7 +16,8 @@ def cargar_estrategias():
             ruta_completa = os.path.join(ruta_base, archivo)
 
             try:
-                spec = importlib.util.spec_from_file_location(nombre_modulo, ruta_completa)
+                full_name = f"estrategias_entrada.{nombre_modulo}"
+                spec = importlib.util.spec_from_file_location(full_name, ruta_completa)
                 modulo = importlib.util.module_from_spec(spec)
                 spec.loader.exec_module(modulo)
 
