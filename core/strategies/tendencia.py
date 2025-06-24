@@ -4,7 +4,7 @@ import pandas as pd
 
 from indicators.rsi import calcular_rsi
 from indicators.adx import calcular_adx
-from strategies.entry.gestor_entradas import evaluar_estrategias
+from core.strategies.entry.gestor_entradas import evaluar_estrategias
 from core.estrategias import obtener_estrategias_por_tendencia
 from core.utils.utils import configurar_logger
 
@@ -68,22 +68,26 @@ def detectar_tendencia(symbol: str, df: pd.DataFrame) -> tuple[str, dict[str, bo
         else (estrategias if isinstance(estrategias, dict) else {})
     )
 
-    log.info({
-        "evento": "deteccion_tendencia",
-        "symbol": symbol,
-        "tendencia": tendencia,
-        "delta_ema": round(delta, 6),
-        "slope_local": round(slope, 6),
-        "rsi": round(rsi, 2) if rsi else None,
-        "adx": round(adx, 2) if adx else None  # si activas ADX
-    })
+    log.info(
+        {
+            "evento": "deteccion_tendencia",
+            "symbol": symbol,
+            "tendencia": tendencia,
+            "delta_ema": round(delta, 6),
+            "slope_local": round(slope, 6),
+            "rsi": round(rsi, 2) if rsi else None,
+            "adx": round(adx, 2) if adx else None,  # si activas ADX
+        }
+    )
 
     return tendencia, estrategias_activas
 
 
 # -------------------- AJUSTE DE PERSISTENCIA --------------------
 
-def obtener_parametros_persistencia(tendencia: str, volatilidad: float) -> tuple[float, int]:
+def obtener_parametros_persistencia(
+    tendencia: str, volatilidad: float
+) -> tuple[float, int]:
     """Define los requisitos de persistencia según la tendencia y la volatilidad."""
     if tendencia == "lateral":
         return 0.6, 3
@@ -110,14 +114,16 @@ def señales_repetidas(
     if len(buffer) < ventanas + 30:
         return 0
 
-    peso_minimo, min_estrategias = obtener_parametros_persistencia(tendencia_actual, volatilidad_actual)
-    df = pd.DataFrame(buffer[-(ventanas + 30):])
+    peso_minimo, min_estrategias = obtener_parametros_persistencia(
+        tendencia_actual, volatilidad_actual
+    )
+    df = pd.DataFrame(buffer[-(ventanas + 30) :])
     peso_max = sum(estrategias_func.values()) or 1.0
     contador = 0
 
     for i in range(-ventanas, 0):
         try:
-            ventana = df.iloc[i - 30:i]
+            ventana = df.iloc[i - 30 : i]
             if ventana.empty or len(ventana) < 10:
                 continue
 
@@ -129,7 +135,8 @@ def señales_repetidas(
 
             estrategias_activas = evaluacion.get("estrategias_activas", {})
             estrategias_validas = [
-                nombre for nombre, activa in estrategias_activas.items()
+                nombre
+                for nombre, activa in estrategias_activas.items()
                 if activa and estrategias_func.get(nombre, 0) >= peso_minimo * peso_max
             ]
 

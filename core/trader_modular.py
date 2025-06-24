@@ -25,12 +25,16 @@ from binance_api.cliente import (
 )
 from core.adaptador_dinamico import (
     calcular_umbral_adaptativo,
-    calcular_tp_sl_adaptativos
+    calcular_tp_sl_adaptativos,
 )
 from core.utils.utils import distancia_minima_valida, leer_reporte_seguro
 from core.strategies import cargar_pesos_estrategias
 from core.risk import calcular_fraccion_kelly
-from core.data import PersistenciaTecnica, coincidencia_parcial, calcular_persistencia_minima
+from core.data import (
+    PersistenciaTecnica,
+    coincidencia_parcial,
+    calcular_persistencia_minima,
+)
 from core.metricas_semanales import metricas_tracker, metricas_semanales
 from learning.entrenador_estrategias import actualizar_pesos_estrategias_symbol
 from core.utils.utils import configurar_logger
@@ -44,13 +48,16 @@ from core.reporting import reporter_diario
 from core.registro_metrico import registro_metrico
 from learning.aprendizaje_en_linea import registrar_resultado_trade
 from learning.aprendizaje_continuo import ejecutar_ciclo as ciclo_aprendizaje
-from strategies.exit.salida_trailing_stop import verificar_trailing_stop
-from strategies.exit.salida_por_tendencia import verificar_reversion_tendencia
-from strategies.exit.gestor_salidas import evaluar_salidas, verificar_filtro_tecnico
-from strategies.exit.salida_stoploss import verificar_salida_stoploss
+from core.strategies.exit.salida_trailing_stop import verificar_trailing_stop
+from core.strategies.exit.salida_por_tendencia import verificar_reversion_tendencia
+from core.strategies.exit.gestor_salidas import (
+    evaluar_salidas,
+    verificar_filtro_tecnico,
+)
+from core.strategies.exit.salida_stoploss import verificar_salida_stoploss
 from core.strategies.exit.filtro_salidas import validar_necesidad_de_salida
 from core.strategies.tendencia import detectar_tendencia
-from strategies.exit.analisis_salidas import patron_tecnico_fuerte
+from core.strategies.exit.analisis_salidas import patron_tecnico_fuerte
 from core.strategies.entry.validador_entradas import evaluar_validez_estrategica
 from core.estrategias import filtrar_por_direccion
 from indicators.rsi import calcular_rsi
@@ -62,7 +69,7 @@ from core.strategies.evaluador_tecnico import (
     cargar_pesos_tecnicos,
     actualizar_pesos_tecnicos,
 )
-from strategies.exit.analisis_previo_salida import (
+from core.strategies.exit.analisis_previo_salida import (
     permitir_cierre_tecnico,
     evaluar_condiciones_de_cierre_anticipado,
 )
@@ -99,7 +106,9 @@ class Trader:
         self.data_feed = DataFeed(config.intervalo_velas)
         self.engine = StrategyEngine()
         self.risk = RiskManager(config.umbral_riesgo_diario)
-        self.notificador = NotificationManager(config.telegram_token, config.telegram_chat_id)
+        self.notificador = NotificationManager(
+            config.telegram_token, config.telegram_chat_id
+        )
         self.modo_real = getattr(config, "modo_real", False)
         self.orders = PositionManager(self.modo_real, self.risk, self.notificador)
         self.cliente = crear_cliente(config) if self.modo_real else None
@@ -274,7 +283,9 @@ class Trader:
         registrar_resultado_trade(orden.symbol, info, retorno_total)
         try:
             if orden.detalles_tecnicos:
-                actualizar_pesos_tecnicos(orden.symbol, orden.detalles_tecnicos, retorno_total)
+                actualizar_pesos_tecnicos(
+                    orden.symbol, orden.detalles_tecnicos, retorno_total
+                )
         except Exception as e:  # noqa: BLE001
             log.debug(f"No se pudo actualizar pesos tecnicos: {e}")
         actualizar_pesos_estrategias_symbol(orden.symbol)
@@ -578,10 +589,12 @@ class Trader:
             # Penaliza símbolos altamente correlacionados
             corr_media = None
             if not correlaciones.empty and symbol in correlaciones.columns:
-                corr_series = correlaciones[symbol].drop(labels=[symbol], errors="ignore").abs()
+                corr_series = (
+                    correlaciones[symbol].drop(labels=[symbol], errors="ignore").abs()
+                )
                 corr_media = corr_series.mean()
             if corr_media >= umbral_corr:
-                    peso *= 1 - penalizacion_corr * corr_media
+                peso *= 1 - penalizacion_corr * corr_media
 
             # Extrae métricas previas del reporte para el símbolo actual
             fila = (
@@ -601,7 +614,9 @@ class Trader:
             if not semanales.empty:
                 sem = semanales[semanales["symbol"] == symbol]
                 if not sem.empty:
-                    weekly = float(sem["ganancia_promedio"].iloc[0]) * float(sem["operaciones"].iloc[0])
+                    weekly = float(sem["ganancia_promedio"].iloc[0]) * float(
+                        sem["operaciones"].iloc[0]
+                    )
                     if weekly < -0.05:
                         peso *= 0.5
 
@@ -819,7 +834,13 @@ class Trader:
             "motivo": motivo,
             "puntaje": puntaje,
             "peso_total": peso_total,
-            "estrategias": ",".join(estrategias.keys() if isinstance(estrategias, dict) else estrategias) if estrategias else "",
+            "estrategias": (
+                ",".join(
+                    estrategias.keys() if isinstance(estrategias, dict) else estrategias
+                )
+                if estrategias
+                else ""
+            ),
         }
         fecha = datetime.utcnow().strftime("%Y%m%d")
         archivo = os.path.join(
@@ -1144,9 +1165,7 @@ class Trader:
             index=False,
         )
 
-    async def evaluar_condiciones_entrada(
-        self, symbol: str, df: pd.DataFrame
-    ) -> None:
+    async def evaluar_condiciones_entrada(self, symbol: str, df: pd.DataFrame) -> None:
         """Evalúa y ejecuta una entrada si todas las condiciones se cumplen."""
 
         estado = self.estado[symbol]
@@ -1180,7 +1199,10 @@ class Trader:
                 rsi = resultado.get("rsi")
                 mom = resultado.get("momentum")
                 score, puntos = self._calcular_score_tecnico(
-                    df, rsi, mom, tendencia_actual,
+                    df,
+                    rsi,
+                    mom,
+                    tendencia_actual,
                     "short" if tendencia_actual == "bajista" else "long",
                 )
                 self._registrar_rechazo_tecnico(
@@ -1226,7 +1248,9 @@ class Trader:
         detalles_tecnicos: dict | None = None,
         **kwargs,  # <- acepta parámetros adicionales sin fallar
     ) -> None:
-        cantidad_total = await self.capital_manager.calcular_cantidad_async(symbol, precio)
+        cantidad_total = await self.capital_manager.calcular_cantidad_async(
+            symbol, precio
+        )
         if cantidad_total <= 0:
             return
         fracciones = self.piramide_fracciones
@@ -1249,7 +1273,7 @@ class Trader:
             umbral,
             objetivo=cantidad_total,
             fracciones=fracciones,
-            detalles_tecnicos=detalles_tecnicos or {}
+            detalles_tecnicos=detalles_tecnicos or {},
         )
         estrategias_list = list(estrategias_dict.keys())
         log.info(
@@ -1285,9 +1309,9 @@ class Trader:
     async def evaluar_condiciones_de_entrada(
         self, symbol: str, df: pd.DataFrame, estado: EstadoSimbolo
         ) -> dict | None:
-            if not self._validar_config(symbol):
-                return None
-            return await verificar_entrada(self, symbol, df, estado)
+        if not self._validar_config(symbol):
+            return None
+        return await verificar_entrada(self, symbol, df, estado)
 
 
 
@@ -1314,7 +1338,9 @@ class Trader:
         self._task_estado = asyncio.create_task(monitorear_estado_periodicamente(self))
         self._task_estado.add_done_callback(_log_fallo_task)
 
-        self._task_contexto = asyncio.create_task(self.context_stream.escuchar(symbols, handle_context))
+        self._task_contexto = asyncio.create_task(
+            self.context_stream.escuchar(symbols, handle_context)
+        )
         self._task_contexto.add_done_callback(_log_fallo_task)
         self._task_flush = asyncio.create_task(real_orders.flush_periodico())
         self._task_flush.add_done_callback(_log_fallo_task)
@@ -1323,7 +1349,12 @@ class Trader:
             self._task_aprendizaje.add_done_callback(_log_fallo_task)
 
         try:
-            tareas = [self._task, self._task_estado, self._task_contexto, self._task_flush]
+            tareas = [
+                self._task,
+                self._task_estado,
+                self._task_contexto,
+                self._task_flush,
+            ]
             if self._task_aprendizaje:
                 tareas.append(self._task_aprendizaje)
             await asyncio.gather(*tareas)
@@ -1412,7 +1443,9 @@ class Trader:
                         log.warning(f"⚠️ Error leyendo capital.json: {e}")
                         data = {}
                     if isinstance(data, dict):
-                        self.capital_por_simbolo.update({k: float(v) for k, v in data.items()})
+                        self.capital_por_simbolo.update(
+                            {k: float(v) for k, v in data.items()}
+                        )
         except Exception as e:  # noqa: BLE001
             log.warning(f"⚠️ Error cargando estado persistente: {e}")
 

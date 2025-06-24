@@ -8,14 +8,14 @@ from typing import Dict, List
 
 import pandas as pd
 
-from strategies.exit.salida_stoploss import verificar_salida_stoploss
-from strategies.exit.salida_trailing_stop import verificar_trailing_stop
-from strategies.exit.salida_por_macd import salida_por_macd
-from strategies.exit.salida_por_rsi import salida_por_rsi
-from strategies.exit.salida_por_tendencia import salida_por_tendencia
-from strategies.exit.salida_stoploss_atr import salida_stoploss_atr
-from strategies.exit.salida_takeprofit_atr import salida_takeprofit_atr
-from strategies.exit.salida_tiempo_maximo import salida_tiempo_maximo
+from .salida_stoploss import verificar_salida_stoploss
+from .salida_trailing_stop import verificar_trailing_stop
+from .salida_por_macd import salida_por_macd
+from .salida_por_rsi import salida_por_rsi
+from .salida_por_tendencia import salida_por_tendencia
+from .salida_stoploss_atr import salida_stoploss_atr
+from .salida_takeprofit_atr import salida_takeprofit_atr
+from .salida_tiempo_maximo import salida_tiempo_maximo
 
 
 PRIORIDAD = {
@@ -31,7 +31,9 @@ PRIORIDAD = {
 }
 
 
-def verificar_take_profit(orden: Dict, df: pd.DataFrame, config: Dict | None = None) -> Dict:
+def verificar_take_profit(
+    orden: Dict, df: pd.DataFrame, config: Dict | None = None
+) -> Dict:
     """Comprueba si se alcanzó el TP adaptado dinámicamente."""
     if df is None or "close" not in df.columns:
         return {"cerrar": False, "razon": "Datos insuficientes"}
@@ -45,7 +47,11 @@ def verificar_take_profit(orden: Dict, df: pd.DataFrame, config: Dict | None = N
 
     ratio = config.get("tp_ratio", 2.5) if config else 2.5
     if atr is not None:
-        tp_dinamico = orden.get("precio_entrada", precio_actual) + atr * ratio if direccion in ("long", "compra") else orden.get("precio_entrada", precio_actual) - atr * ratio
+        tp_dinamico = (
+            orden.get("precio_entrada", precio_actual) + atr * ratio
+            if direccion in ("long", "compra")
+            else orden.get("precio_entrada", precio_actual) - atr * ratio
+        )
     else:
         tp_dinamico = orden.get("take_profit", precio_actual)
 
@@ -79,11 +85,15 @@ def evaluar_salida_inteligente(
 
     res_trend = salida_por_tendencia(orden, df)
     if res_trend.get("cerrar"):
-        resultados.append({"razon": "Cambio de tendencia", "detalle": res_trend["razon"]})
+        resultados.append(
+            {"razon": "Cambio de tendencia", "detalle": res_trend["razon"]}
+        )
 
     res_macd = salida_por_macd(orden, df)
     if res_macd.get("cerrar"):
-        resultados.append({"razon": "Cruce bajista de MACD", "detalle": res_macd["razon"]})
+        resultados.append(
+            {"razon": "Cruce bajista de MACD", "detalle": res_macd["razon"]}
+        )
 
     res_rsi = salida_por_rsi(df)
     if res_rsi.get("cerrar"):

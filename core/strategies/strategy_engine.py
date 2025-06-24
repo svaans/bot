@@ -8,7 +8,7 @@ from core.adaptador_umbral import calcular_umbral_adaptativo
 from core.score_tecnico import calcular_score_tecnico
 
 from core.utils.utils import validar_dataframe
-from strategies.entry.validadores import (
+from core.strategies.entry.validadores import (
     validar_volumen,
     validar_rsi,
     validar_slope,
@@ -25,7 +25,7 @@ import pandas as pd
 
 from core.evaluacion_tecnica import evaluar_estrategias
 from core.strategies.entry.validaciones_tecnicas import hay_contradicciones
-from strategies.exit.gestor_salidas import evaluar_salidas
+from core.strategies.exit.gestor_salidas import evaluar_salidas
 from core.strategies.tendencia import detectar_tendencia
 from core.utils.utils import configurar_logger
 
@@ -110,7 +110,9 @@ class StrategyEngine:
             validaciones_fallidas = [k for k, v in validaciones.items() if not v]
 
             contradiccion = hay_contradicciones(estrategias_activas)
-            score_tec = calcular_score_tecnico(df, rsi_val, mom_val, slope_val, tendencia)
+            score_tec = calcular_score_tecnico(
+                df, rsi_val, mom_val, slope_val, tendencia
+            )
 
             cumple_div = diversidad >= (config or {}).get("diversidad_minima", 1)
             umbral_score = (config or {}).get("umbral_score_tecnico", 1.0)

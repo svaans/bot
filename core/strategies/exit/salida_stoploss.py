@@ -9,7 +9,7 @@ from core.estrategias import (
 )
 from core.utils.utils import validar_dataframe
 from core.adaptador_dinamico import calcular_umbral_adaptativo
-from strategies.entry.gestor_entradas import evaluar_estrategias
+from core.strategies.entry.gestor_entradas import evaluar_estrategias
 from core.strategies.pesos import gestor_pesos
 from core.utils import configurar_logger
 from core.strategies.exit.salida_utils import resultado_salida
@@ -103,7 +103,9 @@ def salida_stoploss(orden: dict, df: pd.DataFrame, config: dict = None) -> dict:
 
         # Configuración personalizada
         factor_umbral = config.get("factor_umbral_sl", 0.7) if config else 0.7
-        min_estrategias_relevantes = config.get("min_estrategias_relevantes_sl", 3) if config else 3
+        min_estrategias_relevantes = (
+            config.get("min_estrategias_relevantes_sl", 3) if config else 3
+        )
 
         # Carga de pesos para umbral
         pesos_symbol = pesos.get(symbol, {})
@@ -121,8 +123,8 @@ def salida_stoploss(orden: dict, df: pd.DataFrame, config: dict = None) -> dict:
         activas_relevantes = [e for e in activas if e in esperadas]
 
         condiciones_validas = (
-            len(activas_relevantes) >= min_estrategias_relevantes and
-            puntaje >= factor_umbral * umbral
+            len(activas_relevantes) >= min_estrategias_relevantes
+            and puntaje >= factor_umbral * umbral
         )
 
         if condiciones_validas:
@@ -174,7 +176,7 @@ def verificar_salida_stoploss(
             evitado=False,
         )
     if not validar_dataframe(df, ["close", "high", "low"]):
-         return resultado_salida(
+        return resultado_salida(
             "Stop Loss",
             False,
             "Datos insuficientes",
@@ -201,9 +203,7 @@ def verificar_salida_stoploss(
 
     # --- Cierre inmediato por Break Even ---
     if orden.get("break_even_activado"):
-        if (
-            direccion in ("long", "compra") and precio_actual <= precio_entrada
-        ) or (
+        if (direccion in ("long", "compra") and precio_actual <= precio_entrada) or (
             direccion in ("short", "venta") and precio_actual >= precio_entrada
         ):
             log.info(
@@ -243,7 +243,9 @@ def verificar_salida_stoploss(
 
     tendencia, _ = detectar_tendencia(symbol, df)
     evaluacion = evaluar_estrategias(symbol, df, tendencia)
-    estrategias_activas = evaluacion.get("estrategias_activas", {}) if evaluacion else {}
+    estrategias_activas = (
+        evaluacion.get("estrategias_activas", {}) if evaluacion else {}
+    )
     puntaje = evaluacion.get("puntaje_total", 0) if evaluacion else 0
     activas = [k for k, v in estrategias_activas.items() if v]
 
@@ -258,7 +260,9 @@ def verificar_salida_stoploss(
     )
 
     factor_umbral = config.get("factor_umbral_sl", 0.7) if config else 0.7
-    min_estrategias_relevantes = config.get("min_estrategias_relevantes_sl", 3) if config else 3
+    min_estrategias_relevantes = (
+        config.get("min_estrategias_relevantes_sl", 3) if config else 3
+    )
     esperadas = ESTRATEGIAS_POR_TENDENCIA.get(tendencia, [])
     activas_relevantes = [e for e in activas if e in esperadas]
     condiciones_validas = (
@@ -271,7 +275,12 @@ def verificar_salida_stoploss(
     intentos = len(orden.get("sl_evitar_info", []))
     max_evitar = config.get("max_evitar_sl", 2) if config else 2
 
-    cerrar_forzado = validar_sl_tecnico(df, direccion) or puntaje < 0.75 * umbral or duracion >= max_velas or intentos >= max_evitar
+    cerrar_forzado = (
+        validar_sl_tecnico(df, direccion)
+        or puntaje < 0.75 * umbral
+        or duracion >= max_velas
+        or intentos >= max_evitar
+    )
 
     if condiciones_validas and not cerrar_forzado:
         log.info(

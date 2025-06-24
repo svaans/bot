@@ -1,10 +1,11 @@
 """Funciones de evaluación técnica utilizadas por el engine."""
+
 from __future__ import annotations
 
 from typing import Dict
 
 import pandas as pd
-from strategies.entry import gestor_entradas
+from core.strategies.entry import gestor_entradas
 
 
 def evaluar_estrategias(symbol: str, df: pd.DataFrame, tendencia: str) -> Dict:

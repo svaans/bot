@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import pandas as pd
 from core.strategies.pesos import gestor_pesos
-from strategies.entry.loader import cargar_estrategias
+from .loader import cargar_estrategias
 from indicators.correlacion import calcular_correlacion
 from core.strategies.entry.validador_entradas import verificar_liquidez_orden
 from core.estrategias import (
@@ -41,7 +41,9 @@ def evaluar_estrategias(symbol: str, df: pd.DataFrame, tendencia: str) -> dict:
 
         try:
             resultado = func(df)
-            activo = bool(resultado.get("activo")) if isinstance(resultado, dict) else False
+            activo = (
+                bool(resultado.get("activo")) if isinstance(resultado, dict) else False
+            )
         except Exception as exc:  # noqa: BLE001
             log.warning(f"Error ejecutando {nombre}: {exc}")
             activo = False
@@ -61,7 +63,9 @@ def evaluar_estrategias(symbol: str, df: pd.DataFrame, tendencia: str) -> dict:
     }
 
 
-def _validar_correlacion(symbol: str, df: pd.DataFrame, df_ref: pd.DataFrame, umbral: float) -> bool:
+def _validar_correlacion(
+    symbol: str, df: pd.DataFrame, df_ref: pd.DataFrame, umbral: float
+) -> bool:
     if df is not None and df_ref is not None and umbral < 1.0:
         correlacion = calcular_correlacion(df, df_ref)
         if correlacion is not None and correlacion >= umbral:
@@ -82,9 +86,7 @@ def _validar_diversidad(symbol: str, estrategias: dict) -> bool:
 
 def _validar_score(symbol: str, potencia: float, umbral: float) -> bool:
     if potencia < umbral:
-        log.info(
-            f"🚫 [{symbol}] Rechazo por score {potencia:.2f} < {umbral:.2f}"
-        )
+        log.info(f"🚫 [{symbol}] Rechazo por score {potencia:.2f} < {umbral:.2f}")
         return False
     return True
 
@@ -92,9 +94,7 @@ def _validar_score(symbol: str, potencia: float, umbral: float) -> bool:
 def _validar_volumen(symbol: str, df: pd.DataFrame, cantidad: float) -> bool:
     if df is not None and cantidad > 0:
         if not verificar_liquidez_orden(df, cantidad):
-            log.info(
-                f"🚫 [{symbol}] Rechazo por volumen insuficiente para {cantidad}"
-            )
+            log.info(f"🚫 [{symbol}] Rechazo por volumen insuficiente para {cantidad}")
             return False
     return True
 
@@ -118,12 +118,16 @@ def entrada_permitida(
     persistencia_minima: float = 0.0,
 ) -> bool:
     """Versión simplificada usada en las pruebas unitarias."""
-    score_tecnico = score if score is not None else calcular_score_tecnico(
-        df if df is not None else pd.DataFrame(),
-        rsi,
-        momentum,
-        slope,
-        tendencia or "lateral",
+    score_tecnico = (
+        score
+        if score is not None
+        else calcular_score_tecnico(
+            df if df is not None else pd.DataFrame(),
+            rsi,
+            momentum,
+            slope,
+            tendencia or "lateral",
+        )
     )
     potencia_ajustada = potencia * (1 + score_tecnico / 3)
 
@@ -136,8 +140,3 @@ def entrada_permitida(
     if not _validar_volumen(symbol, df, cantidad):
         return False
     return True
-
-
-
-
-

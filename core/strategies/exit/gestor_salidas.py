@@ -3,7 +3,7 @@ import pandas as pd
 import inspect
 from core.utils.utils import validar_dataframe
 from core.strategies.tendencia import detectar_tendencia
-from strategies.entry.gestor_entradas import evaluar_estrategias
+from core.strategies.entry.gestor_entradas import evaluar_estrategias
 from core.adaptador_dinamico import calcular_umbral_adaptativo
 from core.adaptador_umbral import calcular_umbral_salida_adaptativo
 from core.strategies.pesos import obtener_peso_salida
@@ -11,7 +11,7 @@ from core.utils import configurar_logger
 
 log = configurar_logger("gestor_salidas")
 
-from strategies.exit.loader_salidas import cargar_estrategias_salida
+from .loader_salidas import cargar_estrategias_salida
 
 def evaluar_salidas(orden: dict, df, config=None, contexto=None):
     symbol = orden.get("symbol", "SYM")
@@ -81,7 +81,9 @@ def evaluar_salidas(orden: dict, df, config=None, contexto=None):
         "umbral": umbral,
     }
 
-def verificar_filtro_tecnico(symbol, df, estrategias_activas, pesos_symbol, config=None):
+def verificar_filtro_tecnico(
+    symbol, df, estrategias_activas, pesos_symbol, config=None
+):
     if not validar_dataframe(df, ["high", "low", "close"]):
         return False
 

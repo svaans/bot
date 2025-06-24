@@ -8,15 +8,15 @@ from indicators.rsi import calcular_rsi
 from indicators.momentum import calcular_momentum
 from indicators.atr import calcular_atr
 from core.strategies.tendencia import detectar_tendencia
-from strategies.exit.salida_stoploss import verificar_salida_stoploss
-from strategies.exit.salida_trailing_stop import verificar_trailing_stop
-from strategies.exit.salida_por_tendencia import verificar_reversion_tendencia
-from strategies.exit.gestor_salidas import evaluar_salidas, verificar_filtro_tecnico
-from strategies.exit.analisis_previo_salida import (
+from .salida_stoploss import verificar_salida_stoploss
+from .salida_trailing_stop import verificar_trailing_stop
+from .salida_por_tendencia import verificar_reversion_tendencia
+from .gestor_salidas import evaluar_salidas, verificar_filtro_tecnico
+from .analisis_previo_salida import (
     permitir_cierre_tecnico,
     evaluar_condiciones_de_cierre_anticipado,
 )
-from strategies.exit.analisis_salidas import patron_tecnico_fuerte
+from .analisis_salidas import patron_tecnico_fuerte
 from core.strategies.exit.filtro_salidas import validar_necesidad_de_salida
 from core.adaptador_dinamico import adaptar_configuracion as adaptar_configuracion_base
 from core.adaptador_configuracion_dinamica import adaptar_configuracion
@@ -69,9 +69,7 @@ async def verificar_salidas(trader, symbol: str, df: pd.DataFrame) -> None:
             orden.direccion,
         )
         if score >= 2 or patron_tecnico_fuerte(df):
-            log.info(
-                f"🛡️ SL evitado por validación técnica — Score: {score:.1f}/4"
-            )
+            log.info(f"🛡️ SL evitado por validación técnica — Score: {score:.1f}/4")
             orden.sl_evitar_info = orden.sl_evitar_info or []
             orden.sl_evitar_info.append(
                 {
@@ -81,9 +79,7 @@ async def verificar_salidas(trader, symbol: str, df: pd.DataFrame) -> None:
                 }
             )
             return
-        resultado = verificar_salida_stoploss(
-            orden.to_dict(), df, config=config_actual
-        )
+        resultado = verificar_salida_stoploss(orden.to_dict(), df, config=config_actual)
         if resultado.get("cerrar", False):
             if score <= 1 and not evaluar_condiciones_de_cierre_anticipado(
                 symbol,
@@ -92,9 +88,7 @@ async def verificar_salidas(trader, symbol: str, df: pd.DataFrame) -> None:
                 score,
                 orden.estrategias_activas,
             ):
-                log.info(
-                    f"🛡️ Cierre por SL evitado tras reevaluación técnica: {symbol}"
-                )
+                log.info(f"🛡️ Cierre por SL evitado tras reevaluación técnica: {symbol}")
                 orden.sl_evitar_info = orden.sl_evitar_info or []
                 orden.sl_evitar_info.append(
                     {
@@ -134,19 +128,14 @@ async def verificar_salidas(trader, symbol: str, df: pd.DataFrame) -> None:
                         "precio": precio_cierre,
                     }
                 )
-                log.info(
-                    f"🛡️ SL evitado para {symbol} → {resultado.get('motivo', '')}"
-                )
+                log.info(f"🛡️ SL evitado para {symbol} → {resultado.get('motivo', '')}")
             else:
                 log.info(f"ℹ️ {symbol} → {resultado.get('motivo', '')}")
         return
 
     # --- Take Profit ---
     if precio_max >= orden.take_profit:
-        if (
-            not getattr(orden, "parcial_cerrado", False)
-            and orden.cantidad_abierta > 0
-        ):
+        if not getattr(orden, "parcial_cerrado", False) and orden.cantidad_abierta > 0:
             if trader.es_salida_parcial_valida(
                 orden,
                 orden.take_profit,
@@ -198,9 +187,7 @@ async def verificar_salidas(trader, symbol: str, df: pd.DataFrame) -> None:
         if not permitir_cierre_tecnico(symbol, df, precio_cierre, orden.to_dict()):
             log.info(f"🛡️ Cierre evitado por análisis técnico: {symbol}")
         elif await trader._cerrar_y_reportar(orden, precio_cierre, motivo, df=df):
-            log.info(
-                f"🔄 Trailing Stop activado para {symbol} a {precio_cierre:.2f}€"
-            )
+            log.info(f"🔄 Trailing Stop activado para {symbol} a {precio_cierre:.2f}€")
         return
 
     # --- Cambio de tendencia ---
