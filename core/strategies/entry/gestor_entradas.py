@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import pandas as pd
 from core.strategies.pesos import gestor_pesos
+from core.decision_engine import sumar_pesos, superar_umbral
 from .loader import cargar_estrategias
 from core.validaciones_comunes import (
     validar_correlacion,
@@ -34,7 +35,6 @@ def evaluar_estrategias(symbol: str, df: pd.DataFrame, tendencia: str) -> dict:
 
     nombres = obtener_estrategias_por_tendencia(tendencia)
     activas: dict[str, bool] = {}
-    puntaje_total = 0.0
 
     for nombre in nombres:
         func = _FUNCIONES.get(nombre)
@@ -51,9 +51,8 @@ def evaluar_estrategias(symbol: str, df: pd.DataFrame, tendencia: str) -> dict:
             log.warning(f"Error ejecutando {nombre}: {exc}")
             activo = False
         activas[nombre] = activo
-        if activo:
-            puntaje_total += gestor_pesos.obtener_peso(nombre, symbol)
-
+    
+    puntaje_total = sumar_pesos(activas, symbol)
     diversidad = sum(1 for a in activas.values() if a)
     sinergia = calcular_sinergia(activas, tendencia)
     
@@ -67,7 +66,7 @@ def evaluar_estrategias(symbol: str, df: pd.DataFrame, tendencia: str) -> dict:
 
 
 def _validar_score(symbol: str, potencia: float, umbral: float) -> bool:
-    if potencia < umbral:
+    if not superar_umbral(potencia, umbral):
         log.info(f"🚫 [{symbol}] Rechazo por score {potencia:.2f} < {umbral:.2f}")
         return False
     return True

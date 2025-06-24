@@ -5,8 +5,7 @@ from core.utils.utils import validar_dataframe
 from core.strategies.tendencia import detectar_tendencia
 from core.strategies.entry.gestor_entradas import evaluar_estrategias
 from core.adaptador_dinamico import calcular_umbral_adaptativo
-from core.adaptador_umbral import calcular_umbral_salida_adaptativo
-from core.strategies.pesos import obtener_peso_salida
+from core.decision_engine import decidir_salida
 from core.utils import configurar_logger
 
 log = configurar_logger("gestor_salidas")
@@ -57,18 +56,17 @@ def evaluar_salidas(orden: dict, df, config=None, contexto=None):
                 return {"cerrar": True, "razon": evento}
             resultados.append(evento)
 
-    peso_total = sum(obtener_peso_salida(razon, symbol) for razon in resultados)
-    umbral = calcular_umbral_salida_adaptativo(symbol, df, config or {}, contexto)
+    decision = decidir_salida(symbol, df, resultados, config or {}, contexto)
     min_conf = (config or {}).get("min_confirmaciones_salida", 1)
+    cerrar = decision["cerrar"] and len(resultados) >= min_conf
     log.info(
-        f"[SALIDA] {symbol} | Score: {peso_total:.2f} | Umbral: {umbral:.2f} | Señales: {resultados}"
+        f"[SALIDA] {symbol} | Score: {decision['score']:.2f} | Umbral: {decision['umbral']:.2f} | Señales: {resultados}"
     )
-    cerrar = peso_total >= umbral and len(resultados) >= min_conf
     if cerrar:
-        razon = f"Score {peso_total:.2f} ≥ {umbral:.2f} con {len(resultados)} señales"
+        razon = f"Score {decision['score']:.2f} ≥ {decision['umbral']:.2f} con {len(resultados)} señales"
     else:
         razon = (
-            f"Score insuficiente {peso_total:.2f} < {umbral:.2f}"
+            f"Score insuficiente {decision['score']:.2f} < {decision['umbral']:.2f}"
             if len(resultados) >= min_conf
             else f"Señales insuficientes: {len(resultados)}/{min_conf}"
         )
@@ -77,8 +75,8 @@ def evaluar_salidas(orden: dict, df, config=None, contexto=None):
         "cerrar": cerrar,
         "razon": razon,
         "detalles": resultados,
-        "score": peso_total,
-        "umbral": umbral,
+        "score": decision["score"],
+        "umbral": decision["umbral"],
     }
 
 def verificar_filtro_tecnico(
