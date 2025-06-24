@@ -12,6 +12,10 @@ class PositionManager:
     @property
     def ordenes(self):
         return self._manager.ordenes
+    
+    @ordenes.setter
+    def ordenes(self, value):
+        self._manager.ordenes = value
 
     def obtener(self, symbol):
         return self._manager.obtener(symbol)
