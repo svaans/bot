@@ -1,0 +1,71 @@
+# ───────── CORE DE DATOS Y ANÁLISIS ─────────
+matplotlib>=3.5.0             # Gráficos y visualizaciones
+numpy==2.2.5                  # Cálculos numéricos y arrays
+pandas==2.2.3                 # Manipulación de datos tabulares
+python-dateutil==2.9.0.post0  # Manejo avanzado de fechas
+scipy>=1.9.0                  # Funciones matemáticas avanzadas
+tqdm==4.67.1 
+pyspark
+pyarrow                 # Barras de progreso
+
+# ───────── TRADING Y MERCADOS ─────────
+ccxt==4.4.80                  # Conexión con exchanges (Binance, etc.)
+python-binance==1.0.28        # API específica de Binance
+pycryptodome==3.22.0          # Criptografía para claves API
+ta==0.11.0                    # Indicadores técnicos (RSI, MACD, etc.)
+
+# ───────── OPTIMIZACIÓN Y APRENDIZAJE ─────────
+optuna==4.3.0                 # Optimización de hiperparámetros
+
+# ───────── FECHAS, ZONAS HORARIAS Y PARSE ─────────
+dateparser==1.2.1             # Interpretación de fechas en texto
+pytz==2025.2                  # Soporte de zonas horarias
+tzdata==2025.2                # Base de datos de zonas horarias
+tzlocal==5.3.1                # ZH local detectada automáticamente
+
+# ───────── CONEXIÓN Y RED ─────────
+aiohttp==3.10.11              # Cliente HTTP asíncrono
+aiodns==3.4.0                 # Resolución DNS asíncrona
+websockets==15.0.1            # Cliente WebSocket
+yarl==1.20.0                  # URLs inmutables
+frozenlist==1.6.0             # Listas inmutables (requerido por aiohttp)
+multidict==6.4.3              # Diccionarios multivalor (requerido por yarl)
+pycares==4.8.0                # Wrapper de c-ares para DNS
+asyncio==3.4.3                # Librería async (en versiones antiguas de Python)
+
+# ───────── CONFIGURACIÓN Y UTILIDADES ─────────
+python-dotenv==1.1.0          # Carga de variables de entorno desde .env
+attrs==25.3.0                 # Validación estructural
+typing_extensions==4.13.2     # Compatibilidad de anotaciones de tipos
+packaging==25.0               # Parsing de versiones y metadatos
+regex==2024.11.6              # Expresiones regulares extendidas
+requests==2.32.3              # Cliente HTTP
+urllib3==2.4.0                # Conexión HTTP subyacente
+idna==3.10                    # Manejo de dominios internacionales
+certifi==2025.4.26            # Certificados SSL
+filelock==3.15.1              # Bloqueo de archivos entre procesos
+watchdog==3.0.0               # Observador de cambios en archivos
+
+# ───────── LOGGING Y FORMATO DE SALIDA ─────────
+colorama==0.4.6               # Colores en terminal (Windows compatible)
+colorlog==6.9.0               # Logging con colores
+
+# ───────── ORM Y GESTIÓN DE BASES DE DATOS ─────────
+SQLAlchemy==2.0.41            # ORM de Python para SQL
+alembic==1.15.2               # Migraciones de base de datos
+Mako==1.3.10                  # Plantillas utilizadas por Alembic
+MarkupSafe==3.0.2             # Seguridad en strings HTML
+greenlet==3.2.2               # Hilos ligeros usados por SQLAlchemy
+Django>=4.2                   # Framework web utilizado en el backend
+
+# ───────── CRIPTOGRAFÍA Y SEGURIDAD ─────────
+cryptography==44.0.3          # Seguridad, cifrado y certificados
+cffi==1.17.1                  # Interfaz con código C (usado por cryptography)
+pycparser==2.22               # Parser de C para CFFI
+pytest==8.2.2
+pytest-asyncio==0.23.6
+
+# ───────── COMPLEMENTOS Y DEPENDENCIAS ESPECIALES ─────────
+propcache==0.3.1              # Caché de propiedades
+dotenv==0.9.9                 # ⚠️ OBSOLETO, mantenido solo si requerido por alguna librería
+six==1.17.0                   # Compatibilidad entre Python 2 y 3

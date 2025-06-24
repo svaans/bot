@@ -1,0 +1,52 @@
+{
+  "BTC/EUR": {
+    "Stop Loss": 10,
+    "Trailing Stop": 8,
+    "Estrategia: Cambio de tendencia": 6,
+    "Estrategia: Cruce bajista de MACD": 5,
+    "Estrategia: RSI en sobrecompra o sobreventa": 4,
+    "Estrategia: Tiempo máximo alcanzado": 3,
+    "Estrategia: Take Profit por ATR": 2,
+    "Estrategia: Stop Loss por ATR": 6
+  },
+  "ETH/EUR": {
+    "Stop Loss": 10,
+    "Trailing Stop": 8,
+    "Estrategia: Cambio de tendencia": 6,
+    "Estrategia: Cruce bajista de MACD": 5,
+    "Estrategia: RSI en sobrecompra o sobreventa": 4,
+    "Estrategia: Tiempo máximo alcanzado": 3,
+    "Estrategia: Take Profit por ATR": 2,
+    "Estrategia: Stop Loss por ATR": 6
+  },
+  "ADA/EUR": {
+    "Stop Loss": 10,
+    "Trailing Stop": 8,
+    "Estrategia: Cambio de tendencia": 6,
+    "Estrategia: Cruce bajista de MACD": 5,
+    "Estrategia: RSI en sobrecompra o sobreventa": 4,
+    "Estrategia: Tiempo máximo alcanzado": 3,
+    "Estrategia: Take Profit por ATR": 2,
+    "Estrategia: Stop Loss por ATR": 6
+  },
+  "SOL/EUR": {
+    "Stop Loss": 10,
+    "Trailing Stop": 8,
+    "Estrategia: Cambio de tendencia": 6,
+    "Estrategia: Cruce bajista de MACD": 5,
+    "Estrategia: RSI en sobrecompra o sobreventa": 4,
+    "Estrategia: Tiempo máximo alcanzado": 3,
+    "Estrategia: Take Profit por ATR": 2,
+    "Estrategia: Stop Loss por ATR": 6
+  },
+  "BNB/EUR": {
+    "Stop Loss": 10,
+    "Trailing Stop": 8,
+    "Estrategia: Cambio de tendencia": 6,
+    "Estrategia: Cruce bajista de MACD": 5,
+    "Estrategia: RSI en sobrecompra o sobreventa": 4,
+    "Estrategia: Tiempo máximo alcanzado": 3,
+    "Estrategia: Take Profit por ATR": 2,
+    "Estrategia: Stop Loss por ATR": 6
+  }
+}

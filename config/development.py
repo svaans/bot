@@ -1,0 +1,29 @@
+from dataclasses import dataclass, field
+from typing import List
+
+@dataclass(frozen=True)
+class DevelopmentConfig:
+    """Valores por defecto para el entorno de desarrollo."""
+    modo_real: bool = False
+    intervalo_velas: str = "1m"
+    symbols: List[str] = field(default_factory=lambda: [
+        "BTC/EUR",
+        "ETH/EUR",
+        "ADA/EUR",
+        "SOL/EUR",
+        "BNB/EUR",
+    ])
+    umbral_riesgo_diario: float = 0.03
+    min_order_eur: float = 10.0
+    persistencia_minima: int = 2
+    peso_extra_persistencia: float = 0.5
+    modo_capital_bajo: bool = False
+    telegram_token: str | None = None
+    telegram_chat_id: str | None = None
+    umbral_score_tecnico: float = 3.0
+    usar_score_tecnico: bool = True
+    contradicciones_bloquean_entrada: bool = False
+    registro_tecnico_csv: str = "logs/rechazos_tecnico.csv"
+    fracciones_piramide: int = 1
+    reserva_piramide: float = 0.0
+    umbral_piramide: float = 0.006
