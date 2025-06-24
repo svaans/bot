@@ -16,6 +16,8 @@ from core.strategies.exit.salida_utils import resultado_salida
 from indicators.rsi import calcular_rsi
 from indicators.slope import calcular_slope
 from indicators.vwap import calcular_vwap
+from indicators.momentum import calcular_momentum
+from core.scoring import calcular_score_tecnico
 
 log = configurar_logger("salida_stoploss")
 
@@ -29,6 +31,7 @@ def validar_sl_tecnico(df: pd.DataFrame, direccion: str = "long") -> bool:
 
         rsi = calcular_rsi(df)
         slope = calcular_slope(df.tail(5))
+        momentum = calcular_momentum(df)
         precio = df["close"].iloc[-1]
         ma9 = df["close"].rolling(window=9).mean().iloc[-1]
         ma20 = df["close"].rolling(window=20).mean().iloc[-1]
@@ -39,13 +42,16 @@ def validar_sl_tecnico(df: pd.DataFrame, direccion: str = "long") -> bool:
         velas_rojas = (df["close"].diff().tail(5) < 0).sum()
         persistencia = velas_rojas >= 3
 
+        score = calcular_score_tecnico(
+            df,
+            rsi,
+            momentum,
+            slope,
+            "bajista" if direccion in ["long", "compra"] else "alcista",
+        )
+
         if direccion in ["long", "compra"]:
-            return (
-                (rsi is not None and rsi < 40)
-                and slope < 0
-                and (debajo_vwap or debajo_ma)
-                and persistencia
-            )
+            return score >= 2 and (debajo_vwap or debajo_ma) and persistencia
         return True
 
     except Exception as e:

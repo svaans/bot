@@ -78,6 +78,7 @@ from indicators.atr import calcular_atr
 from core.strategies.exit.verificar_salidas import verificar_salidas
 from core.strategies.entry.verificar_entradas import verificar_entrada
 from core.procesar_vela import procesar_vela
+from core.scoring import calcular_score_tecnico
    
 
 log = configurar_logger("trader")
@@ -1037,6 +1038,14 @@ class Trader:
 
         slope = calcular_slope(df)
 
+        score_indicadores = calcular_score_tecnico(
+            df,
+            rsi,
+            momentum,
+            slope,
+            tendencia,
+        )
+
         resultados = {
             "RSI": False,
             "Momentum": False,
@@ -1046,23 +1055,27 @@ class Trader:
 
         if rsi is not None:
             if direccion == "long":
-                resultados["RSI"] = rsi > 50
+                resultados["RSI"] = rsi > 50 or 45 <= rsi <= 55
             else:
-                resultados["RSI"] = rsi < 50
+                resultados["RSI"] = rsi < 50 or 45 <= rsi <= 55
 
         if momentum is not None:
-            resultados["Momentum"] = abs(momentum) > 0.001
+            resultados["Momentum"] = momentum > 0
 
-        resultados["Slope"] = slope > 0.01
+        if slope is not None:
+            if direccion == "long":
+                resultados["Slope"] = slope > 0
+            else:
+                resultados["Slope"] = slope < 0
 
         if direccion == "long":
             resultados["Tendencia"] = tendencia in {"alcista", "lateral"}
         else:
             resultados["Tendencia"] = tendencia in {"bajista", "lateral"}
 
-        score_total = sum(
-            PESOS_SCORE_TECNICO.get(k, 1.0) for k, v in resultados.items() if v
-        )
+        score_total = score_indicadores
+        if resultados["Tendencia"]:
+            score_total += PESOS_SCORE_TECNICO.get("Tendencia", 1.0)
 
         log.info(
             "📊 Score técnico: %.2f | RSI: %s (%.2f), Momentum: %s (%.4f), Slope: %s (%.4f), Tendencia: %s",
