@@ -58,7 +58,7 @@ def evaluar_salidas(orden: dict, df, config=None, contexto=None):
             resultados.append(evento)
 
     peso_total = sum(obtener_peso_salida(razon, symbol) for razon in resultados)
-    umbral = calcular_umbral_salida_adaptativo(symbol, config or {}, contexto)
+    umbral = calcular_umbral_salida_adaptativo(symbol, df, config or {}, contexto)
     min_conf = (config or {}).get("min_confirmaciones_salida", 1)
     log.info(
         f"[SALIDA] {symbol} | Score: {peso_total:.2f} | Umbral: {umbral:.2f} | Señales: {resultados}"
