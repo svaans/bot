@@ -7,8 +7,11 @@ from __future__ import annotations
 import pandas as pd
 from core.strategies.pesos import gestor_pesos
 from .loader import cargar_estrategias
-from indicators.correlacion import calcular_correlacion
-from core.strategies.entry.validador_entradas import verificar_liquidez_orden
+from core.validaciones_comunes import (
+    validar_correlacion,
+    validar_diversidad,
+    validar_volumen,
+)
 from core.estrategias import (
     obtener_estrategias_por_tendencia,
     calcular_sinergia,
@@ -63,39 +66,10 @@ def evaluar_estrategias(symbol: str, df: pd.DataFrame, tendencia: str) -> dict:
     }
 
 
-def _validar_correlacion(
-    symbol: str, df: pd.DataFrame, df_ref: pd.DataFrame, umbral: float
-) -> bool:
-    if df is not None and df_ref is not None and umbral < 1.0:
-        correlacion = calcular_correlacion(df, df_ref)
-        if correlacion is not None and correlacion >= umbral:
-            log.info(
-                f"🚫 [{symbol}] Rechazo por correlación {correlacion:.2f} >= {umbral}"
-            )
-            return False
-    return True
-
-
-def _validar_diversidad(symbol: str, estrategias: dict) -> bool:
-    activas = sum(1 for v in estrategias.values() if v)
-    if activas <= 0:
-        log.info(f"🚫 [{symbol}] Rechazo por falta de estrategias activas")
-        return False
-    return True
-
-
 def _validar_score(symbol: str, potencia: float, umbral: float) -> bool:
     if potencia < umbral:
         log.info(f"🚫 [{symbol}] Rechazo por score {potencia:.2f} < {umbral:.2f}")
         return False
-    return True
-
-
-def _validar_volumen(symbol: str, df: pd.DataFrame, cantidad: float) -> bool:
-    if df is not None and cantidad > 0:
-        if not verificar_liquidez_orden(df, cantidad):
-            log.info(f"🚫 [{symbol}] Rechazo por volumen insuficiente para {cantidad}")
-            return False
     return True
 
 
@@ -131,12 +105,12 @@ def entrada_permitida(
     )
     potencia_ajustada = potencia * (1 + score_tecnico / 3)
 
-    if not _validar_correlacion(symbol, df, df_referencia, umbral_correlacion):
+    if not validar_correlacion(symbol, df, df_referencia, umbral_correlacion):
         return False
-    if not _validar_diversidad(symbol, estrategias_activas):
+    if not validar_diversidad(symbol, estrategias_activas):
         return False
     if not _validar_score(symbol, potencia_ajustada, umbral):
         return False
-    if not _validar_volumen(symbol, df, cantidad):
+    if not validar_volumen(symbol, df, cantidad):
         return False
     return True

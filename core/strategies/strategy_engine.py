@@ -17,6 +17,7 @@ from core.strategies.entry.validadores import (
     validar_volumen_real,
     validar_spread,
 )
+from core.validaciones_comunes import validar_diversidad
 from indicators.slope import calcular_slope
 from indicators.momentum import calcular_momentum
 from indicators.rsi import calcular_rsi
@@ -114,7 +115,11 @@ class StrategyEngine:
                 df, rsi_val, mom_val, slope_val, tendencia
             )
 
-            cumple_div = diversidad >= (config or {}).get("diversidad_minima", 1)
+            cumple_div = validar_diversidad(
+                symbol,
+                estrategias_activas,
+                (config or {}).get("diversidad_minima", 1),
+            )
             umbral_score = (config or {}).get("umbral_score_tecnico", 1.0)
             permitido = (
                 score_total >= umbral
