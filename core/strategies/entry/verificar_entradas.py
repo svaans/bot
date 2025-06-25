@@ -140,7 +140,6 @@ async def verificar_entrada(trader, symbol: str, df: pd.DataFrame, estado) -> di
         symbol,
         puntaje,
         umbral,
-        config_actual.get("modo_agresivo", False),
     ):
         razones.append("puntaje")
 
@@ -152,7 +151,6 @@ async def verificar_entrada(trader, symbol: str, df: pd.DataFrame, estado) -> di
         diversidad_min,
         pesos_symbol,
         df,
-        config_actual.get("modo_agresivo", False),
     ):
         razones.append("diversidad")
 
