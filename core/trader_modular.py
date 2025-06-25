@@ -39,6 +39,7 @@ from core.metricas_semanales import metricas_tracker, metricas_semanales
 from learning.entrenador_estrategias import actualizar_pesos_estrategias_symbol
 from core.utils.utils import configurar_logger
 from core.monitor_estado_bot import monitorear_estado_periodicamente
+from core.watchdog import Watchdog
 from core.contexto_externo import StreamContexto
 from core.orders import real_orders
 from core.adaptador_dinamico import adaptar_configuracion as adaptar_configuracion_base
@@ -186,6 +187,9 @@ class Trader:
             log.error(f"❌ {e}")
             raise
         self.historial_cierres: Dict[str, dict] = {}
+        self.watchdog = Watchdog(timeout=60)
+        self._task_watchdog: asyncio.Task | None = None
+        self._task_heartbeat: asyncio.Task | None = None
         self._task: asyncio.Task | None = None
         self._task_estado: asyncio.Task | None = None
         self._task_contexto: asyncio.Task | None = None
@@ -773,6 +777,17 @@ class Trader:
         drawdown = float((serie - serie.cummax()).min())
         ganancia = float(serie.iloc[-1])
         return {"ganancia_semana": ganancia, "drawdown": drawdown}
+
+    async def _heartbeat(self, intervalo: int = 30) -> None:
+        """Emite logs periódicos para confirmar que el bot sigue activo."""
+        while True:
+            log.info("💓 Bot vivo - heartbeat")
+            self.watchdog.ping("heartbeat")
+            await asyncio.sleep(intervalo)
+
+    async def _run_watchdog(self) -> None:
+        """Lanza el monitor de tareas internas."""
+        await self.watchdog.monitor()
     
     def _contar_senales(self, symbol: str, minutos: int = 60) -> int:
         """Cuenta señales válidas recientes para ``symbol``."""
@@ -1336,14 +1351,19 @@ class Trader:
             log.debug(f"No se pudo registrar auditoría de entrada: {e}")
 
     async def _verificar_salidas(self, symbol: str, df: pd.DataFrame) -> None:
+        self.watchdog.ping("verificar_salidas")
         await verificar_salidas(self, symbol, df)
+        self.watchdog.ping("verificar_salidas")
 
     async def evaluar_condiciones_de_entrada(
         self, symbol: str, df: pd.DataFrame, estado: EstadoSimbolo
         ) -> dict | None:
         if not self._validar_config(symbol):
             return None
-        return await verificar_entrada(self, symbol, df, estado)
+        self.watchdog.ping("verificar_entrada")
+        resultado = await verificar_entrada(self, symbol, df, estado)
+        self.watchdog.ping("verificar_entrada")
+        return resultado
 
 
 
@@ -1376,6 +1396,10 @@ class Trader:
         self._task_contexto.add_done_callback(_log_fallo_task)
         self._task_flush = asyncio.create_task(real_orders.flush_periodico())
         self._task_flush.add_done_callback(_log_fallo_task)
+        self._task_heartbeat = asyncio.create_task(self._heartbeat())
+        self._task_heartbeat.add_done_callback(_log_fallo_task)
+        self._task_watchdog = asyncio.create_task(self._run_watchdog())
+        self._task_watchdog.add_done_callback(_log_fallo_task)
         if "PYTEST_CURRENT_TEST" not in os.environ:
             self._task_aprendizaje = asyncio.create_task(self._ciclo_aprendizaje())
             self._task_aprendizaje.add_done_callback(_log_fallo_task)
@@ -1386,6 +1410,8 @@ class Trader:
                 self._task_estado,
                 self._task_contexto,
                 self._task_flush,
+                self._task_heartbeat,
+                self._task_watchdog,
             ]
             if self._task_aprendizaje:
                 tareas.append(self._task_aprendizaje)
@@ -1393,7 +1419,14 @@ class Trader:
         except Exception as e:
             log.error(f"❌ Error inesperado en ejecución de tareas: {e}")
             
-        tareas = [self._task, self._task_estado, self._task_contexto, self._task_flush]
+        tareas = [
+            self._task,
+            self._task_estado,
+            self._task_contexto,
+            self._task_flush,
+            self._task_heartbeat,
+            self._task_watchdog,
+        ]
         if self._task_aprendizaje:
             tareas.append(self._task_aprendizaje)
         await asyncio.gather(*tareas)
@@ -1402,8 +1435,11 @@ class Trader:
         symbol = vela.get("symbol")
         if not self._validar_config(symbol):
             return
-        
+
+        self.watchdog.ping("procesar_vela")
         await procesar_vela(self, vela)
+        self.watchdog.ping("procesar_vela")
+        log.debug(f"✅ Procesamiento de vela completado {symbol}")
         return
 
     async def cerrar(self) -> None:
@@ -1428,6 +1464,14 @@ class Trader:
                 await self._task_contexto
             except asyncio.CancelledError:
                 pass
+
+        for extra_task in (self._task_heartbeat, self._task_watchdog):
+            if extra_task:
+                extra_task.cancel()
+                try:
+                    await extra_task
+                except asyncio.CancelledError:
+                    pass
             
         if self._task_aprendizaje:
             self._task_aprendizaje.cancel()
