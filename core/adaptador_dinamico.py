@@ -4,6 +4,7 @@ import os
 import json
 import numpy as np
 import pandas as pd
+from scipy.stats import linregress
 from core.utils.utils import configurar_logger
 from core.utils.umbral_helper import (
     calcular_umbral_avanzado,
