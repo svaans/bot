@@ -709,13 +709,21 @@ class Trader:
                 log.warning(f"⚠️ Error en ciclo de aprendizaje: {e}")
             await asyncio.sleep(intervalo)
     
-    async def _calcular_cantidad_async(self, symbol: str, precio: float) -> float:
+    async def _calcular_cantidad_async(
+        self, symbol: str, precio: float, factor_extra: float = 1.0
+    ) -> float:
         """Delegado a :class:`CapitalManager`."""
-        return await self.capital_manager.calcular_cantidad_async(symbol, precio)
+        return await self.capital_manager.calcular_cantidad_async(
+            symbol, precio, factor_extra=factor_extra
+        )
     
-    def _calcular_cantidad(self, symbol: str, precio: float) -> float:
+    def _calcular_cantidad(
+        self, symbol: str, precio: float, factor_extra: float = 1.0
+    ) -> float:
         """Versión síncrona de :meth:`_calcular_cantidad_async`."""
-        return self.capital_manager.calcular_cantidad(symbol, precio)
+        return self.capital_manager.calcular_cantidad(
+            symbol, precio, factor_extra=factor_extra
+        )
 
     def _metricas_recientes(self, dias: int = 7) -> dict:
         """Calcula ganancia acumulada y drawdown de los últimos ``dias``."""
@@ -1261,8 +1269,19 @@ class Trader:
         detalles_tecnicos: dict | None = None,
         **kwargs,  # <- acepta parámetros adicionales sin fallar
     ) -> None:
+        score_tecnico = kwargs.get("score_tecnico", 0.0)
+        volatilidad = kwargs.get("volatilidad")
+        factor_extra = 1.0
+        if score_tecnico > 6.0 and volatilidad is not None and volatilidad < 0.02:
+            factor_extra = 1.25
+        log.info(
+            "[KELLY] factor_extra %.2f (score %.2f, vol %.4f)",
+            factor_extra,
+            score_tecnico,
+            volatilidad if volatilidad is not None else float("nan"),
+        )
         cantidad_total = await self.capital_manager.calcular_cantidad_async(
-            symbol, precio
+            symbol, precio, factor_extra=factor_extra
         )
         if cantidad_total <= 0:
             return

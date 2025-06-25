@@ -63,7 +63,9 @@ class CapitalManager:
             log.debug(f"No se pudo obtener mínimo para {symbol}: {e}")
             return None
 
-    async def calcular_cantidad_async(self, symbol: str, precio: float) -> float:
+    async def calcular_cantidad_async(
+        self, symbol: str, precio: float, factor_extra: float = 1.0
+    ) -> float:
         if self.modo_real and self.cliente:
             balance = await fetch_balance_async(self.cliente)
             euros = balance["total"].get("EUR", 0)
@@ -75,12 +77,20 @@ class CapitalManager:
         capital_symbol = self.capital_por_simbolo.get(
             symbol, euros / max(len(self.capital_por_simbolo), 1)
         )
-        fraccion = self.fraccion_kelly
+        fraccion = self.fraccion_kelly * factor_extra
+        fraccion = min(1.0, max(0.0, fraccion))
         if self.modo_capital_bajo and euros < 500:
             deficit = (500 - euros) / 500
             fraccion = max(fraccion, 0.02 + deficit * 0.1)
         riesgo_teorico = capital_symbol * fraccion * self.risk.umbral
-        minimo_dinamico = max(10.0, euros * 0.02)
+        tam_sugerido = capital_symbol * self.fraccion_kelly
+        log.info(
+            "[KELLY] Tamaño sugerido %.2f€ | Capital símbolo %.2f€ | f %.4f",
+            tam_sugerido,
+            capital_symbol,
+            self.fraccion_kelly,
+        )
+        minimo_dinamico = max(20.0, euros * 0.02)
         riesgo = max(riesgo_teorico, minimo_dinamico)
         riesgo = min(riesgo, euros * self.riesgo_maximo_diario)
         riesgo = min(riesgo, euros)
@@ -107,8 +117,12 @@ class CapitalManager:
         )
         return round(cantidad, 6)
 
-    def calcular_cantidad(self, symbol: str, precio: float) -> float:
-        return asyncio.run(self.calcular_cantidad_async(symbol, precio))
+    def calcular_cantidad(
+        self, symbol: str, precio: float, factor_extra: float = 1.0
+    ) -> float:
+        return asyncio.run(
+            self.calcular_cantidad_async(symbol, precio, factor_extra=factor_extra)
+        )
 
     def actualizar_capital(self, symbol: str, retorno_total: float) -> float:
         capital_inicial = self.capital_por_simbolo.get(symbol, 0.0)

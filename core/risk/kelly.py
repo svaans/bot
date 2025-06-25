@@ -8,12 +8,17 @@ from core.utils.utils import leer_csv_seguro
 log = configurar_logger("kelly")
 
 
-def calcular_fraccion_kelly(dias_historia: int = 30, fallback: float = 0.20) -> float:
+def calcular_fraccion_kelly(
+    dias_historia: int = 30,
+    fallback: float = 0.20,
+    suavizado: float = 0.4,
+) -> float:
     """Calcula la fracción de capital a arriesgar usando el Criterio de Kelly.
 
     Se basa en los reportes diarios generados por ``ReporterDiario``. Si no
     existen suficientes registros, devuelve ``fallback``.
     """
+    
     carpeta = "reportes_diarios"
     if not os.path.isdir(carpeta):
         return fallback
@@ -62,7 +67,20 @@ def calcular_fraccion_kelly(dias_historia: int = 30, fallback: float = 0.20) -> 
         return fallback
 
     payoff = avg_profit / avg_loss
-    f = winrate - (1 - winrate) / payoff
-    if f <= 0:
+    p = winrate
+    q = 1 - p
+    b = payoff
+    f_kelly = (b * p - q) / b
+    if f_kelly <= 0:
+        log.info(
+            f"[KELLY] p={p:.2f}, q={q:.2f}, b={b:.2f}, Kelly f={f_kelly:.4f}"
+        )
         return fallback
-    return min(f, 0.60)  # Evitar apuestas excesivas
+    suavizado = min(0.5, max(0.25, float(suavizado)))
+    f = min(1.0, f_kelly) * suavizado
+    log.info(
+        f"[KELLY] p={p:.2f}, q={q:.2f}, b={b:.2f}, Kelly f={f_kelly:.4f}, "
+        f"suavizado={suavizado:.2f}, f_final={f:.4f}"
+    )
+
+    return f

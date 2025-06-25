@@ -235,4 +235,5 @@ async def verificar_entrada(trader, symbol: str, df: pd.DataFrame, estado) -> di
         "direccion": direccion,
         "score_tecnico": score_tecnico if trader.usar_score_tecnico else None,
         "detalles_tecnicos": evaluacion.get("detalles", {}),
+        "volatilidad": volatilidad,
     }
