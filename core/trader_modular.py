@@ -43,6 +43,7 @@ from core.monitor_estado_bot import monitorear_estado_periodicamente
 from core.watchdog import Watchdog
 from core.contexto_externo import StreamContexto
 from core.orders import real_orders
+from core.async_utils import TaskManager
 from core.adaptador_dinamico import adaptar_configuracion as adaptar_configuracion_base
 from core.adaptador_configuracion_dinamica import adaptar_configuracion
 from ccxt.base.errors import BaseError
@@ -185,12 +186,7 @@ class Trader:
             raise
         self.historial_cierres: Dict[str, dict] = {}
         self.watchdog = Watchdog(timeout=60)
-        self._task_watchdog: asyncio.Task | None = None
-        self._task_heartbeat: asyncio.Task | None = None
-        self._task: asyncio.Task | None = None
-        self._task_estado: asyncio.Task | None = None
-        self._task_contexto: asyncio.Task | None = None
-        self._task_aprendizaje: asyncio.Task | None = None
+        self.tasks = TaskManager()
         self.context_stream = StreamContexto()
 
         try:
@@ -1217,6 +1213,7 @@ class Trader:
     async def evaluar_condiciones_entrada(self, symbol: str, df: pd.DataFrame) -> None:
         """Evalúa y ejecuta una entrada si todas las condiciones se cumplen."""
 
+        self.watchdog.ping("verificar_entrada")
         estado = self.estado[symbol]
         config_actual = self.config_por_simbolo.get(symbol, {})
         dinamica = adaptar_configuracion(symbol, df)
@@ -1269,6 +1266,7 @@ class Trader:
                 puntaje=resultado.get("score_total"),
                 estrategias=list(estrategias.keys()),
             )
+            self.watchdog.ping("verificar_entrada")
             return
 
         info = await self.evaluar_condiciones_de_entrada(symbol, df, estado)
@@ -1279,9 +1277,11 @@ class Trader:
                 puntaje=resultado.get("score_total"),
                 estrategias=list(estrategias.keys()),
             )
+            self.watchdog.ping("verificar_entrada")
             return
 
         await self._abrir_operacion_real(**info)
+        self.watchdog.ping("verificar_entrada")
 
     async def _abrir_operacion_real(
         self,
@@ -1398,58 +1398,48 @@ class Trader:
         symbols = list(self.estado.keys())
         await self._precargar_historico(velas=60)
 
-        def _log_fallo_task(task: asyncio.Task):
+        def _log_fallo_task(task: asyncio.Task) -> None:
             if task.cancelled():
                 log.warning("⚠️ Una tarea fue cancelada.")
             elif task.exception():
                 log.error(f"❌ Error en tarea asincrónica: {task.exception()}")
 
-        self._task = asyncio.create_task(self.data_feed.escuchar(symbols, handle))
-        self._task.add_done_callback(_log_fallo_task)
+        task = asyncio.create_task(self.data_feed.escuchar(symbols, handle))
+        task.add_done_callback(_log_fallo_task)
+        self.tasks.add_task(task)
 
-        self._task_estado = asyncio.create_task(monitorear_estado_periodicamente(self))
-        self._task_estado.add_done_callback(_log_fallo_task)
+        task = asyncio.create_task(monitorear_estado_periodicamente(self))
+        task.add_done_callback(_log_fallo_task)
+        self.tasks.add_task(task)
 
-        self._task_contexto = asyncio.create_task(
+        task = asyncio.create_task(
             self.context_stream.escuchar(symbols, handle_context)
         )
-        self._task_contexto.add_done_callback(_log_fallo_task)
-        self._task_flush = asyncio.create_task(real_orders.flush_periodico())
-        self._task_flush.add_done_callback(_log_fallo_task)
-        self._task_heartbeat = asyncio.create_task(self._heartbeat())
-        self._task_heartbeat.add_done_callback(_log_fallo_task)
-        self._task_watchdog = asyncio.create_task(self._run_watchdog())
-        self._task_watchdog.add_done_callback(_log_fallo_task)
+        task.add_done_callback(_log_fallo_task)
+        self.tasks.add_task(task)
+
+        task = asyncio.create_task(real_orders.flush_periodico())
+        task.add_done_callback(_log_fallo_task)
+        self.tasks.add_task(task)
+
+        task = asyncio.create_task(self._heartbeat())
+        task.add_done_callback(_log_fallo_task)
+        self.tasks.add_task(task)
+
+        task = asyncio.create_task(self._run_watchdog())
+        task.add_done_callback(_log_fallo_task)
+        self.tasks.add_task(task)
         if "PYTEST_CURRENT_TEST" not in os.environ:
-            self._task_aprendizaje = asyncio.create_task(self._ciclo_aprendizaje())
-            self._task_aprendizaje.add_done_callback(_log_fallo_task)
+            task = asyncio.create_task(self._ciclo_aprendizaje())
+            task.add_done_callback(_log_fallo_task)
+            self.tasks.add_task(task)
 
         try:
-            tareas = [
-                self._task,
-                self._task_estado,
-                self._task_contexto,
-                self._task_flush,
-                self._task_heartbeat,
-                self._task_watchdog,
-            ]
-            if self._task_aprendizaje:
-                tareas.append(self._task_aprendizaje)
-            await asyncio.gather(*tareas)
+            await self.tasks.wait_all()
         except Exception as e:
             log.error(f"❌ Error inesperado en ejecución de tareas: {e}")
             
-        tareas = [
-            self._task,
-            self._task_estado,
-            self._task_contexto,
-            self._task_flush,
-            self._task_heartbeat,
-            self._task_watchdog,
-        ]
-        if self._task_aprendizaje:
-            tareas.append(self._task_aprendizaje)
-        await asyncio.gather(*tareas)
+        await self.tasks.wait_all()
 
     async def _procesar_vela(self, vela: dict) -> None:
         symbol = vela.get("symbol")
@@ -1463,42 +1453,9 @@ class Trader:
         return
 
     async def cerrar(self) -> None:
-        if self._task:
-            await self.data_feed.detener()
-            self._task.cancel()
-            try:
-                await self._task
-            except asyncio.CancelledError:
-                pass
-        if self._task_estado:
-            self._task_estado.cancel()
-            try:
-                await self._task_estado
-            except asyncio.CancelledError:
-                pass
-
-        if self._task_contexto:
-            await self.context_stream.detener()
-            self._task_contexto.cancel()
-            try:
-                await self._task_contexto
-            except asyncio.CancelledError:
-                pass
-
-        for extra_task in (self._task_heartbeat, self._task_watchdog):
-            if extra_task:
-                extra_task.cancel()
-                try:
-                    await extra_task
-                except asyncio.CancelledError:
-                    pass
-            
-        if self._task_aprendizaje:
-            self._task_aprendizaje.cancel()
-            try:
-                await self._task_aprendizaje
-            except asyncio.CancelledError:
-                pass
+        await self.data_feed.detener()
+        await self.context_stream.detener()
+        await self.tasks.cancel_all()
 
         guardar_estado(self.historial_cierres, self.capital_por_simbolo)
 

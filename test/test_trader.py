@@ -92,3 +92,58 @@ def test_trader_guarda_estado(monkeypatch):
 
     assert saved["hist"] is trader.historial_cierres
     assert saved["cap"] is trader.capital_por_simbolo
+
+
+def test_tareas_se_cancelan_al_cerrar(monkeypatch):
+    _patch_trader_deps(monkeypatch)
+
+    canceladas = set()
+
+    def dummy(name):
+        async def _d(*a, **k):
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                canceladas.add(name)
+                raise
+        return _d
+
+    monkeypatch.setattr("core.data_feed.DataFeed.escuchar", dummy("feed"))
+    monkeypatch.setattr(
+        "core.data_feed.DataFeed.detener", lambda self: asyncio.sleep(0)
+    )
+    monkeypatch.setattr(
+        "core.trader_modular.monitorear_estado_periodicamente", dummy("estado")
+    )
+    monkeypatch.setattr(
+        "core.contexto_externo.StreamContexto.escuchar", dummy("contexto")
+    )
+    monkeypatch.setattr(
+        "core.contexto_externo.StreamContexto.detener", lambda self: asyncio.sleep(0)
+    )
+    monkeypatch.setattr("core.orders.real_orders.flush_periodico", dummy("flush"))
+    monkeypatch.setattr("core.trader_modular.Trader._heartbeat", dummy("hb"))
+    monkeypatch.setattr("core.trader_modular.Trader._run_watchdog", dummy("wd"))
+
+    cfg = Config(
+        api_key="k",
+        api_secret="s",
+        modo_real=False,
+        intervalo_velas="1m",
+        symbols=["BTC/EUR"],
+        umbral_riesgo_diario=0.1,
+        min_order_eur=10,
+    )
+
+    trader = Trader(cfg)
+
+    async def run():
+        t = asyncio.create_task(trader.ejecutar())
+        await asyncio.sleep(0.1)
+        await trader.cerrar()
+        await asyncio.wait_for(t, timeout=1)
+
+    asyncio.run(run())
+
+    assert not trader.tasks._tasks
+    assert canceladas == {"feed", "estado", "contexto", "flush", "hb", "wd"}
