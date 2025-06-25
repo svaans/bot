@@ -82,6 +82,7 @@ from core.strategies.entry.verificar_entradas import verificar_entrada
 from core.procesar_vela import procesar_vela
 from core.scoring import calcular_score_tecnico
 from core.config.pesos import PESOS_SCORE_TECNICO
+from core.storage.persistencia import cargar_estado, guardar_estado
    
 
 log = configurar_logger("trader")
@@ -208,7 +209,9 @@ class Trader:
             )
 
         if "PYTEST_CURRENT_TEST" not in os.environ:
-            self._cargar_estado_persistente()
+            hist, capital = cargar_estado()
+            self.historial_cierres.update(hist)
+            self.capital_por_simbolo.update(capital)
         else:
             log.debug("🔍 Modo prueba: se omite carga de estado persistente")
 
@@ -1497,50 +1500,8 @@ class Trader:
             except asyncio.CancelledError:
                 pass
 
-        self._guardar_estado_persistente()
+        guardar_estado(self.historial_cierres, self.capital_por_simbolo)
 
-
-    def _guardar_estado_persistente(self) -> None:
-        """Guarda historial de cierres y capital en ``estado/``."""
-        try:
-            os.makedirs("estado", exist_ok=True)
-            with open("estado/historial_cierres.json", "w") as f:
-                json.dump(self.historial_cierres, f, indent=2)
-            with open("estado/capital.json", "w") as f:
-                json.dump(self.capital_por_simbolo, f, indent=2)
-        except Exception as e:  # noqa: BLE001
-            log.warning(f"⚠️ Error guardando estado persistente: {e}")
-
-
-    def _cargar_estado_persistente(self) -> None:
-        """Carga el estado previo de ``estado/`` si existe."""
-        try:
-            if os.path.exists("estado/historial_cierres.json"):
-                with open("estado/historial_cierres.json") as f:
-                    contenido = f.read()
-                if contenido.strip():
-                    try:
-                        data = json.loads(contenido)
-                    except json.JSONDecodeError as e:
-                        log.warning(f"⚠️ Error leyendo historial_cierres.json: {e}")
-                        data = {}
-                    if isinstance(data, dict):
-                        self.historial_cierres.update(data)
-            if os.path.exists("estado/capital.json"):
-                with open("estado/capital.json") as f:
-                    contenido = f.read()
-                if contenido.strip():
-                    try:
-                        data = json.loads(contenido)
-                    except json.JSONDecodeError as e:
-                        log.warning(f"⚠️ Error leyendo capital.json: {e}")
-                        data = {}
-                    if isinstance(data, dict):
-                        self.capital_por_simbolo.update(
-                            {k: float(v) for k, v in data.items()}
-                        )
-        except Exception as e:  # noqa: BLE001
-            log.warning(f"⚠️ Error cargando estado persistente: {e}")
 
     def _validar_config(self, symbol: str) -> bool:
         """Valida que exista configuración para ``symbol``."""
