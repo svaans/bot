@@ -90,3 +90,11 @@ BOT_ENV=production python main.py
 
 Los valores base de cada modo se definen en `config/development.py` y
 `config/production.py`.
+
+## Ajuste de pesos y umbrales
+
+La ponderación que recibe cada indicador técnico se encuentra en
+`core/config/pesos.py` bajo la constante `PESOS_SCORE_TECNICO`. Para modificar
+el umbral mínimo requerido por el score técnico usa la variable de entorno
+`UMBRAL_SCORE_TECNICO` o edita los valores por defecto en
+`config/development.py` o `config/production.py`.

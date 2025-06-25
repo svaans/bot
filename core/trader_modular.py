@@ -81,16 +81,10 @@ from core.strategies.exit.verificar_salidas import verificar_salidas
 from core.strategies.entry.verificar_entradas import verificar_entrada
 from core.procesar_vela import procesar_vela
 from core.scoring import calcular_score_tecnico
+from core.config.pesos import PESOS_SCORE_TECNICO
    
 
 log = configurar_logger("trader")
-
-PESOS_SCORE_TECNICO = {
-    "RSI": 1.0,
-    "Momentum": 0.5,
-    "Slope": 1.0,
-    "Tendencia": 1.0,
-}
 
 
 @dataclass
