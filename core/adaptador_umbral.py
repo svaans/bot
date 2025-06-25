@@ -1,12 +1,12 @@
 """Cálculo de umbral adaptativo para entradas."""
 from __future__ import annotations
 
-import json
-from pathlib import Path
 
 from typing import Dict, Optional
 
 import pandas as pd
+
+from core.config.gestor_config import cargar_config_optima
 
 from indicators import rsi as indicador_rsi, slope as indicador_slope
 from core.scoring import calcular_score_tecnico
@@ -15,25 +15,15 @@ from core.utils.umbral_helper import calcular_umbral_avanzado
 
 log = configurar_logger("adaptador_umbral")
 
-RUTA_CONFIG = Path("config/configuraciones_optimas.json")
-_CONFIG_CACHE: Dict[str, dict] | None = None
+
 
 _UMBRAL_SUAVIZADO: Dict[str, float] = {}
 ALPHA = 0.3
 
 
 def _cargar_config() -> Dict[str, dict]:
-    global _CONFIG_CACHE
-    if _CONFIG_CACHE is None:
-        if RUTA_CONFIG.exists():
-            with open(RUTA_CONFIG, "r", encoding="utf-8") as fh:
-                _CONFIG_CACHE = json.load(fh)
-        else:
-            _CONFIG_CACHE = {}
-    return _CONFIG_CACHE
-
-
-
+    """Proxy hacia :func:`cargar_config_optima`."""
+    return cargar_config_optima()
 
 
 def calcular_umbral_adaptativo(

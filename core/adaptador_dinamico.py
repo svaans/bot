@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 import json
 import numpy as np
 import pandas as pd
@@ -15,18 +14,12 @@ from core.utils.umbral_helper import (
     PESO_VOLUMEN,
 )
 from core.market_regime import detectar_regimen
+from core.config.gestor_config import cargar_config_optima
 
 
 log = configurar_logger("adaptador_dinamico")
 
 # --- Configuración global para umbrales -------------------------------------
-RUTA_CONFIGS_OPTIMAS = "config/configuraciones_optimas.json"
-if os.path.exists(RUTA_CONFIGS_OPTIMAS):
-    with open(RUTA_CONFIGS_OPTIMAS, "r") as f:
-        CONFIGS_OPTIMAS = json.load(f)
-else:
-    log.warning("❌ Archivo de configuración no encontrado. Se usará configuración por defecto.")
-    CONFIGS_OPTIMAS: dict = {}
 
 _cache: dict[str, float] = {}
 
@@ -128,7 +121,7 @@ def calcular_umbral_adaptativo(
         return UMBRAL_POR_DEFECTO
 
     
-    cfg_sym = CONFIGS_OPTIMAS.get(symbol, {}) if config is None else config
+    cfg_sym = cargar_config_optima().get(symbol, {}) if config is None else config
 
     umbral_raw = calcular_umbral_avanzado(
         symbol,
