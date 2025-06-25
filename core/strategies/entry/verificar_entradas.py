@@ -4,7 +4,10 @@ from datetime import datetime
 import pandas as pd
 
 from core.utils import configurar_logger
-from core.adaptador_dinamico import calcular_umbral_adaptativo, calcular_tp_sl_adaptativos
+from core.adaptador_dinamico import (
+    calcular_umbral_adaptativo,
+    calcular_tp_sl_adaptativos,
+)
 from core.adaptador_dinamico import adaptar_configuracion as adaptar_configuracion_base
 from core.adaptador_configuracion_dinamica import adaptar_configuracion
 from core.data import coincidencia_parcial
@@ -19,11 +22,18 @@ from indicators.rsi import calcular_rsi
 from indicators.momentum import calcular_momentum
 from indicators.slope import calcular_slope
 from core.utils.utils import distancia_minima_valida
+import asyncio
 
 log = configurar_logger("verificar_entrada")
 
-async def verificar_entrada(trader, symbol: str, df: pd.DataFrame, estado) -> dict | None:
+async def verificar_entrada(
+    trader, symbol: str, df: pd.DataFrame, estado
+) -> dict | None:
     """Evalúa las condiciones de entrada y devuelve info de la operación."""
+    log.debug(f"↪️ [{symbol}] Inicio verificar_entrada")
+    if df is None or df.empty:
+        log.warning(f"🚫 [{symbol}] DataFrame vacío. Se aborta la evaluación")
+        return None
     config_actual = trader.config_por_simbolo.get(symbol, {})
     dinamica = adaptar_configuracion(symbol, df)
     if dinamica:
@@ -72,7 +82,9 @@ async def verificar_entrada(trader, symbol: str, df: pd.DataFrame, estado) -> di
     )
 
     estrategias_persistentes = {
-        e: True for e, act in estrategias.items() if act and trader.persistencia.es_persistente(symbol, e)
+        e: True
+        for e, act in estrategias.items()
+        if act and trader.persistencia.es_persistente(symbol, e)
     }
     log.debug(f"[{symbol}] Estrategias persistentes: {estrategias_persistentes}")
 
@@ -81,8 +93,12 @@ async def verificar_entrada(trader, symbol: str, df: pd.DataFrame, estado) -> di
         return None
 
     direccion = "short" if tendencia_actual == "bajista" else "long"
-    estrategias_persistentes, incoherentes = filtrar_por_direccion(estrategias_persistentes, direccion)
-    log.debug(f"[{symbol}] Después del filtro por dirección ({direccion}): {estrategias_persistentes}")
+    estrategias_persistentes, incoherentes = filtrar_por_direccion(
+        estrategias_persistentes, direccion
+    )
+    log.debug(
+        f"[{symbol}] Después del filtro por dirección ({direccion}): {estrategias_persistentes}"
+    )
     log.debug(f"[{symbol}] Estrategias incoherentes: {incoherentes}")
 
     if not estrategias_persistentes:
@@ -94,6 +110,9 @@ async def verificar_entrada(trader, symbol: str, df: pd.DataFrame, estado) -> di
     puntaje += trader.persistencia.peso_extra * len(estrategias_persistentes)
     puntaje -= penalizacion
     estado.ultimo_umbral = umbral
+    log.debug(
+        f"[{symbol}] Puntaje preliminar {puntaje:.2f} (penalización {penalizacion:.2f})"
+    )
 
     cierre = trader.historial_cierres.get(symbol)
     if cierre:
@@ -118,7 +137,10 @@ async def verificar_entrada(trader, symbol: str, df: pd.DataFrame, estado) -> di
                 trader.historial_cierres.pop(symbol, None)
     registro = cierre or {}
     fecha_hoy = datetime.utcnow().date().isoformat()
-    if registro.get("fecha_perdidas") == fecha_hoy and registro.get("perdidas_consecutivas", 0) >= 6:
+    if (
+        registro.get("fecha_perdidas") == fecha_hoy
+        and registro.get("perdidas_consecutivas", 0) >= 6
+    ):
         log.info(f"🚫 [{symbol}] Bloqueo por pérdidas consecutivas en el día.")
         return None
 
@@ -143,14 +165,17 @@ async def verificar_entrada(trader, symbol: str, df: pd.DataFrame, estado) -> di
     ):
         razones.append("puntaje")
 
-    if not await trader._validar_diversidad(
-        symbol,
-        peso_total,
-        peso_min_total,
-        estrategias_activas,
-        diversidad_min,
-        pesos_symbol,
-        df,
+    if not await asyncio.wait_for(
+        trader._validar_diversidad(
+            symbol,
+            peso_total,
+            peso_min_total,
+            estrategias_activas,
+            diversidad_min,
+            pesos_symbol,
+            df,
+        ),
+        timeout=10,
     ):
         razones.append("diversidad")
 
@@ -173,7 +198,14 @@ async def verificar_entrada(trader, symbol: str, df: pd.DataFrame, estado) -> di
     momentum = calcular_momentum(df)
     slope = calcular_slope(df)
     precio_actual = float(df["close"].iloc[-1])
-    cantidad_simulada = await trader._calcular_cantidad_async(symbol, precio_actual)
+    try:
+        cantidad_simulada = await asyncio.wait_for(
+            trader._calcular_cantidad_async(symbol, precio_actual), timeout=10
+        )
+    except Exception as e:  # noqa: BLE001
+        log.exception(f"[{symbol}] Error calculando cantidad: {e}")
+        return None
+    log.debug(f"[{symbol}] Cantidad simulada calculada: {cantidad_simulada}")
 
     if trader.usar_score_tecnico:
         score_tecnico, puntos = trader._calcular_score_tecnico(
