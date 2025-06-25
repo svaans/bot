@@ -3,6 +3,7 @@ from typing import Dict, Any
 from indicators.rsi import calcular_rsi
 from indicators.slope import calcular_slope
 from indicators.momentum import calcular_momentum
+from core.scoring import calcular_score_tecnico
 from indicators.divergencia_rsi import detectar_divergencia_alcista
 from core.strategies.tendencia import detectar_tendencia
 from core.utils import configurar_logger
@@ -53,24 +54,22 @@ def es_vela_envolvente_alcista(df: pd.DataFrame) -> bool:
 
 
 def _score_tecnico_basico(df: pd.DataFrame, direccion: str) -> float:
-    """Calcula un score técnico sencillo (0-4)."""
+    """Calcula un score técnico utilizando ``calcular_score_tecnico``."""
     rsi = calcular_rsi(df)
     momentum = calcular_momentum(df)
     slope = calcular_slope(df)
     tendencia, _ = detectar_tendencia("", df)
 
-    puntos = 0
-    if rsi is not None:
-        puntos += 1 if (rsi > 50 if direccion == "long" else rsi < 50) else 0
-    if momentum is not None and abs(momentum) > 0.001:
-        puntos += 1
-    if slope > 0.01:
-        puntos += 1
-    if direccion == "long":
-        puntos += 1 if tendencia in {"alcista", "lateral"} else 0
-    else:
-        puntos += 1 if tendencia in {"bajista", "lateral"} else 0
-    return float(puntos)
+    tendencia_cierre = "bajista" if direccion == "long" else "alcista"
+    return float(
+        calcular_score_tecnico(
+            df,
+            rsi,
+            momentum,
+            slope,
+            tendencia_cierre if tendencia_cierre in {"alcista", "bajista"} else tendencia,
+        )
+    )
 
 
 def evaluar_condiciones_de_cierre_anticipado(

@@ -9,6 +9,7 @@ from core.estrategias import (
 )
 from core.utils.utils import validar_dataframe
 from core.adaptador_dinamico import calcular_umbral_adaptativo
+from core.adaptador_umbral import calcular_umbral_salida_adaptativo
 from core.strategies.entry.gestor_entradas import evaluar_estrategias
 from core.strategies.pesos import gestor_pesos
 from core.utils import configurar_logger
@@ -270,6 +271,27 @@ def verificar_salida_stoploss(
         config=config,
     )
 
+    rsi = calcular_rsi(df)
+    momentum = calcular_momentum(df)
+    slope = calcular_slope(df)
+    score_tecnico = calcular_score_tecnico(
+        df,
+        rsi,
+        momentum,
+        slope,
+        "bajista" if direccion in ["long", "compra"] else "alcista",
+    )
+
+    umbral_salida = calcular_umbral_salida_adaptativo(
+        symbol,
+        df,
+        config or {},
+        {
+            "estrategias_activas": estrategias_activas,
+            "pesos_symbol": pesos_symbol,
+        },
+    )
+
     factor_umbral = config.get("factor_umbral_sl", 0.7) if config else 0.7
     min_estrategias_relevantes = (
         config.get("min_estrategias_relevantes_sl", 3) if config else 3
@@ -279,6 +301,7 @@ def verificar_salida_stoploss(
     condiciones_validas = (
         len(activas_relevantes) >= min_estrategias_relevantes
         and puntaje >= factor_umbral * umbral
+        and score_tecnico >= umbral_salida
     )
 
     duracion = orden.get("duracion_en_velas", 0)
@@ -290,13 +313,14 @@ def verificar_salida_stoploss(
     cerrar_forzado = (
         sl_conf >= 0.5
         or puntaje < 0.75 * umbral
+        or score_tecnico < 0.5 * umbral_salida
         or duracion >= max_velas
         or intentos >= max_evitar
     )
 
     if condiciones_validas and not cerrar_forzado:
         log.info(
-            f"🛡️ SL evitado en {symbol} | Puntaje: {puntaje:.2f}/{umbral:.2f} | Velas abiertas: {duracion}"
+            f"🛡️ SL evitado en {symbol} | Score: {score_tecnico:.2f}/{umbral_salida:.2f} | Velas: {duracion}"
         )
         return resultado_salida(
             "Stop Loss",
@@ -304,11 +328,13 @@ def verificar_salida_stoploss(
             "SL tocado pero indicadores válidos para mantener",
             motivo="SL tocado pero indicadores válidos para mantener",
             evitado=True,
+            score=round(score_tecnico, 2),
+            umbral=round(umbral_salida, 2),
         )
     
-    if puntaje >= 2.5 * umbral:
+    if score_tecnico >= 2.5 * umbral_salida:
         log.info(
-            f"🛡️ SL evitado por score excepcional en {symbol} → {puntaje:.2f}/{umbral:.2f}"
+            f"🛡️ SL evitado por score excepcional en {symbol} → {score_tecnico:.2f}/{umbral_salida:.2f}"
         )
         return resultado_salida(
             "Stop Loss",
@@ -316,18 +342,22 @@ def verificar_salida_stoploss(
             "Score técnico muy alto",
             motivo="Score técnico muy alto",
             evitado=True,
+            score=round(score_tecnico, 2),
+            umbral=round(umbral_salida, 2),
         )
 
     log.info(
-        f"🔴 SL forzado en {symbol} | Score técnico: {puntaje:.2f}/{umbral:.2f} | Velas abiertas: {duracion}"
+        f"🔴 SL forzado en {symbol} | Score técnico: {score_tecnico:.2f}/{umbral_salida:.2f} | Velas: {duracion}"
     )
     return resultado_salida(
         "Stop Loss",
         True,
-        f"SL forzado | Score: {puntaje:.2f}/{umbral:.2f} | Velas: {duracion}",
-        motivo=f"SL forzado | Score: {puntaje:.2f}/{umbral:.2f} | Velas: {duracion}",
+        f"SL forzado | Score: {score_tecnico:.2f}/{umbral_salida:.2f} | Velas: {duracion}",
+        motivo=f"SL forzado | Score: {score_tecnico:.2f}/{umbral_salida:.2f} | Velas: {duracion}",
         evitado=False,
         logger=log,
+        score=round(score_tecnico, 2),
+        umbral=round(umbral_salida, 2),
     )
     
 

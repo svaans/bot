@@ -21,6 +21,7 @@ from core.strategies.exit.filtro_salidas import validar_necesidad_de_salida
 from core.adaptador_dinamico import adaptar_configuracion as adaptar_configuracion_base
 from core.adaptador_configuracion_dinamica import adaptar_configuracion
 from core.adaptador_dinamico import calcular_umbral_adaptativo
+from core.adaptador_umbral import calcular_umbral_salida_adaptativo
 from core.metricas_semanales import metricas_tracker
 
 log = configurar_logger("verificar_salidas")
@@ -68,7 +69,19 @@ async def verificar_salidas(trader, symbol: str, df: pd.DataFrame) -> None:
             tendencia_actual,
             orden.direccion,
         )
-        if score >= 2 or patron_tecnico_fuerte(df):
+        umbral_sal = calcular_umbral_salida_adaptativo(
+            symbol,
+            df,
+            config_actual,
+            {
+                "estrategias_activas": orden.estrategias_activas,
+                "pesos_symbol": trader.pesos_por_simbolo.get(symbol, {}),
+            },
+        )
+        log.debug(
+            f"[{symbol}] Score SL {score:.2f} vs Umbral {umbral_sal:.2f}"
+        )
+        if score >= umbral_sal or patron_tecnico_fuerte(df):
             log.info(f"🛡️ SL evitado por validación técnica — Score: {score:.1f}/4")
             orden.sl_evitar_info = orden.sl_evitar_info or []
             orden.sl_evitar_info.append(
