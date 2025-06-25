@@ -30,7 +30,19 @@ async def verificar_entrada(
     trader, symbol: str, df: pd.DataFrame, estado
 ) -> dict | None:
     """Evalúa las condiciones de entrada y devuelve info de la operación."""
-    log.debug(f"↪️ [{symbol}] Inicio verificar_entrada")
+    try:
+        return await asyncio.wait_for(
+            _verificar_entrada_impl(trader, symbol, df, estado), timeout=30
+        )
+    except asyncio.TimeoutError:
+        log.warning(f"⏱️ Timeout interno en verificación de entrada para {symbol}")
+        return None
+
+
+async def _verificar_entrada_impl(
+    trader, symbol: str, df: pd.DataFrame, estado
+) -> dict | None:
+    log.debug(f"⏳ Empezando verificación {symbol}")
     if df is None or df.empty:
         log.warning(f"🚫 [{symbol}] DataFrame vacío. Se aborta la evaluación")
         return None
@@ -39,12 +51,15 @@ async def verificar_entrada(
     if dinamica:
         config_actual.update(dinamica)
     config_actual = adaptar_configuracion_base(symbol, df, config_actual)
-    trader.config_por_simbolo[symbol] = config_actual
+    async with trader.state_lock:
+        trader.config_por_simbolo[symbol] = config_actual
 
-    tendencia_actual = trader.estado_tendencia.get(symbol)
+    async with trader.state_lock:
+        tendencia_actual = trader.estado_tendencia.get(symbol)
     if not tendencia_actual:
         tendencia_actual, _ = detectar_tendencia(symbol, df)
-        trader.estado_tendencia[symbol] = tendencia_actual
+        async with trader.state_lock:
+            trader.estado_tendencia[symbol] = tendencia_actual
     log.debug(f"[{symbol}] Tendencia detectada: {tendencia_actual}")
 
     evaluacion = trader.engine.evaluar_entrada(
@@ -81,11 +96,11 @@ async def verificar_entrada(
         persistencia=persistencia_score,
     )
 
-    estrategias_persistentes = {
-        e: True
-        for e, act in estrategias.items()
-        if act and trader.persistencia.es_persistente(symbol, e)
-    }
+    estrategias_persistentes: dict[str, bool] = {}
+    for e, act in estrategias.items():
+        if act and trader.persistencia.es_persistente(symbol, e):
+            estrategias_persistentes[e] = True
+        await asyncio.sleep(0)
     log.debug(f"[{symbol}] Estrategias persistentes: {estrategias_persistentes}")
 
     if not estrategias_persistentes:
@@ -114,7 +129,8 @@ async def verificar_entrada(
         f"[{symbol}] Puntaje preliminar {puntaje:.2f} (penalización {penalizacion:.2f})"
     )
 
-    cierre = trader.historial_cierres.get(symbol)
+    async with trader.state_lock:
+        cierre = trader.historial_cierres.get(symbol)
     if cierre:
         motivo = cierre.get("motivo")
         if motivo == "stop loss":
@@ -126,7 +142,8 @@ async def verificar_entrada(
                 log.info(f"🕒 [{symbol}] Cooldown activo por stop loss. Quedan {restante} velas.")
                 return None
             else:
-                trader.historial_cierres.pop(symbol, None)
+                async with trader.state_lock:
+                    trader.historial_cierres.pop(symbol, None)
         elif motivo == "cambio de tendencia":
             precio_actual = float(df["close"].iloc[-1])
             if not trader._validar_reentrada_tendencia(symbol, df, cierre, precio_actual):
@@ -134,7 +151,8 @@ async def verificar_entrada(
                 log.info(f"🚫 [{symbol}] Reentrada bloqueada por cambio de tendencia.")
                 return None
             else:
-                trader.historial_cierres.pop(symbol, None)
+                async with trader.state_lock:
+                    trader.historial_cierres.pop(symbol, None)
     registro = cierre or {}
     fecha_hoy = datetime.utcnow().date().isoformat()
     if (
@@ -144,9 +162,10 @@ async def verificar_entrada(
         log.info(f"🚫 [{symbol}] Bloqueo por pérdidas consecutivas en el día.")
         return None
 
-    estrategias_activas = {
-        e: pesos_symbol.get(e, 0.0) for e in estrategias_persistentes
-    }
+    estrategias_activas: dict[str, float] = {}
+    for e in estrategias_persistentes:
+        estrategias_activas[e] = pesos_symbol.get(e, 0.0)
+        await asyncio.sleep(0)
     peso_total = sum(estrategias_activas.values())
     peso_min_total = config_actual.get("peso_minimo_total", 0.5)
     diversidad_min = config_actual.get("diversidad_minima", 2)
