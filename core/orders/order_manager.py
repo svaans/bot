@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from typing import Dict, Optional
 from datetime import datetime
 
@@ -23,6 +24,20 @@ class OrderManager:
         self.historial: Dict[str, list] = {}
         self.risk = risk
         self.notificador = notificador
+
+    async def _run_with_timeout(self, func, *args, timeout: float = 10.0):
+        """Ejecuta ``func`` en un thread con ``timeout`` y mide su duración."""
+        inicio = time.monotonic()
+        try:
+            return await asyncio.wait_for(
+                asyncio.to_thread(func, *args), timeout=timeout
+            )
+        finally:
+            duracion = time.monotonic() - inicio
+            if duracion > 5:
+                log.warning(
+                    f"⏱️ {func.__name__} para {args[0]} tardó {duracion:.2f}s"
+                )
 
     # ------------------------------------------------------------------
     # Operaciones de apertura
@@ -166,13 +181,14 @@ class OrderManager:
             if self.modo_real:
                 cantidad = orden.cantidad if is_valid_number(orden.cantidad) else 0.0
                 if cantidad > 1e-8:
-                    await asyncio.to_thread(
+                    await self._run_with_timeout(
                         real_orders.ejecutar_orden_market_sell,
                         symbol,
                         cantidad,
+                        timeout=10.0,
                     )
         except Exception as e:
-            log.error(f"❌ No se pudo cerrar la orden real para {symbol}: {e}")
+            log.exception(f"❌ No se pudo cerrar la orden real para {symbol}: {e}")
             if self.notificador:
                 try:
                     await self.notificador.enviar_async(f"❌ Venta fallida en {symbol}: {e}")
@@ -180,9 +196,13 @@ class OrderManager:
                     log.error(f"❌ Error enviando notificación: {err}")
         finally:
             try:
-                await asyncio.to_thread(real_orders.eliminar_orden, symbol)
+                await self._run_with_timeout(
+                    real_orders.eliminar_orden, symbol, timeout=10.0
+                )
             except Exception as e:
-                log.error(f"❌ Error consultando o eliminando orden abierta: {e}")
+                log.exception(
+                    f"❌ Error consultando o eliminando orden abierta: {e}"
+                )
 
         self.ordenes.pop(symbol, None)
         orden.precio_cierre = precio
@@ -215,6 +235,7 @@ class OrderManager:
                 await self.notificador.enviar_async(mensaje)
             except Exception as e:
                 log.error(f"❌ Error enviando notificación: {e}")
+        log.info(f"✔️ Venta procesada correctamente para {symbol}")
         return True
 
     def cerrar(self, *args, **kwargs) -> bool:
@@ -242,11 +263,14 @@ class OrderManager:
 
         if self.modo_real:
             try:
-                await asyncio.to_thread(
-                    real_orders.ejecutar_orden_market_sell, symbol, cantidad
+                await self._run_with_timeout(
+                    real_orders.ejecutar_orden_market_sell,
+                    symbol,
+                    cantidad,
+                    timeout=10.0,
                 )
             except Exception as e:
-                log.error(f"❌ Error en venta parcial de {symbol}: {e}")
+                log.exception(f"❌ Error en venta parcial de {symbol}: {e}")
                 if self.notificador:
                     try:
                         await self.notificador.enviar_async(f"❌ Venta parcial fallida en {symbol}: {e}")
@@ -279,6 +303,7 @@ class OrderManager:
                 await self.notificador.enviar_async(mensaje)
             except Exception as e:
                 log.error(f"❌ Error enviando notificación: {e}")
+        log.info(f"✔️ Venta procesada correctamente para {symbol}")
 
         if orden.cantidad_abierta <= 0:
             self.ordenes.pop(symbol, None)
