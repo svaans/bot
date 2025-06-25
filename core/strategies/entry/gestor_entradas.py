@@ -17,7 +17,7 @@ from core.estrategias import (
     obtener_estrategias_por_tendencia,
     calcular_sinergia,
 )
-from core.score_tecnico import calcular_score_tecnico
+from core.scoring import calcular_score_tecnico
 from core.utils import configurar_logger, build_log_message
 
 log = configurar_logger("entradas")

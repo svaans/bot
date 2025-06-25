@@ -8,7 +8,7 @@ from .evaluador_tecnico import (
     cargar_pesos_tecnicos,
     actualizar_pesos_tecnicos,
 )
-from core.score_tecnico import calcular_score_tecnico
+from core.scoring import calcular_score_tecnico
 from core.estrategias import (
     obtener_estrategias_por_tendencia,
     filtrar_por_direccion,

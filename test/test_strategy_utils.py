@@ -1,6 +1,6 @@
 import pandas as pd
 import numpy as np
-from core.score_tecnico import calcular_score_tecnico
+from core.scoring import calcular_score_tecnico
 from core.strategies.entry.validaciones_tecnicas import hay_contradicciones
 from core.evaluacion_tecnica import evaluar_estrategias
 

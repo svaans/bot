@@ -9,7 +9,7 @@ from typing import Dict, Optional
 import pandas as pd
 
 from indicators import rsi as indicador_rsi, slope as indicador_slope
-from core.score_tecnico import calcular_score_tecnico
+from core.scoring import calcular_score_tecnico
 from core.utils.utils import configurar_logger
 from core.utils.umbral_helper import calcular_umbral_avanzado
 
