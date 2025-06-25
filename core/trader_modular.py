@@ -122,6 +122,7 @@ class Trader:
             config.persistencia_minima,
             config.peso_extra_persistencia,
         )
+        self.state_lock = asyncio.Lock()
         os.makedirs("logs/rechazos", exist_ok=True)
         os.makedirs(os.path.dirname(config.registro_tecnico_csv), exist_ok=True)
         self.umbral_score_tecnico = config.umbral_score_tecnico
@@ -1363,7 +1364,13 @@ class Trader:
         if not self._validar_config(symbol):
             return None
         self.watchdog.ping("verificar_entrada")
-        resultado = await verificar_entrada(self, symbol, df, estado)
+        try:
+            resultado = await asyncio.wait_for(
+                verificar_entrada(self, symbol, df, estado), timeout=15
+            )
+        except asyncio.TimeoutError:
+            log.warning(f"\u23F1\ufe0f Timeout en verificación de entrada para {symbol}")
+            return None
         self.watchdog.ping("verificar_entrada")
         return resultado
 
