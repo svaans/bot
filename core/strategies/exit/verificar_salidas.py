@@ -263,14 +263,15 @@ async def verificar_salidas(trader, symbol: str, df: pd.DataFrame) -> None:
             pesos_symbol,
             persistencia=0.0,
         )
-        if not validar_necesidad_de_salida(
+        validacion_salida = validar_necesidad_de_salida(
             df,
             orden.to_dict(),
             estrategias,
             puntaje=puntaje,
             umbral=umbral,
             config=config_actual,
-        ):
+        )
+        if validacion_salida < 0.5:
             log.info(
                 f"❌ Cierre por '{razon}' evitado: condiciones técnicas aún válidas."
             )

@@ -108,7 +108,9 @@ class StrategyEngine:
                 "slope": validar_slope(df, tendencia),
                 "bollinger": validar_bollinger(df),
             }
-            validaciones_fallidas = [k for k, v in validaciones.items() if not v]
+            val_score = sum(validaciones.values()) / len(validaciones)
+            umbral_validacion = (config or {}).get("umbral_validacion", 0.5)
+            validaciones_fallidas = [k for k, v in validaciones.items() if v < umbral_validacion]
 
             contradiccion = hay_contradicciones(estrategias_activas)
             score_tec = calcular_score_tecnico(
@@ -126,13 +128,13 @@ class StrategyEngine:
                 and score_tec >= umbral_score
                 and cumple_div
                 and not contradiccion
-                and not validaciones_fallidas
+                and val_score >= umbral_validacion
             )
             motivo = None
             if not permitido:
                 if contradiccion:
                     motivo = "contradiccion"
-                elif validaciones_fallidas:
+                elif val_score < umbral_validacion:
                     motivo = "validaciones_fallidas"
                 elif score_tec < umbral_score:
                     motivo = "score_tecnico_bajo"
@@ -158,6 +160,7 @@ class StrategyEngine:
                 "slope": slope_val,
                 "momentum": mom_val,
                 "validaciones_fallidas": validaciones_fallidas,
+                "score_validaciones": round(val_score, 2),
                 "score_tecnico": score_tec,
             }
 

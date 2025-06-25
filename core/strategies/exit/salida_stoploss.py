@@ -23,11 +23,11 @@ log = configurar_logger("salida_stoploss")
 
 pesos = gestor_pesos.pesos
 
-def validar_sl_tecnico(df: pd.DataFrame, direccion: str = "long") -> bool:
-    """Comprueba si existen razones técnicas sólidas para ejecutar el SL."""
+def validar_sl_tecnico(df: pd.DataFrame, direccion: str = "long") -> float:
+    """Devuelve un puntaje de 0 a 1 sobre la fortaleza de cerrar por SL."""
     try:
         if not validar_dataframe(df, ["close"]):
-            return True
+            return 1.0
 
         rsi = calcular_rsi(df)
         slope = calcular_slope(df.tail(5))
@@ -51,12 +51,17 @@ def validar_sl_tecnico(df: pd.DataFrame, direccion: str = "long") -> bool:
         )
 
         if direccion in ["long", "compra"]:
-            return score >= 2 and (debajo_vwap or debajo_ma) and persistencia
-        return True
+            condiciones = score / 4
+            if debajo_vwap or debajo_ma:
+                condiciones += 0.25
+            if persistencia:
+                condiciones += 0.25
+            return max(0.0, min(1.0, condiciones))
+        return 1.0
 
     except Exception as e:
         log.warning(f"Error validando SL técnico: {e}")
-        return True
+        return 1.0
     
 def salida_stoploss(orden: dict, df: pd.DataFrame, config: dict = None) -> dict:
     """
@@ -281,8 +286,9 @@ def verificar_salida_stoploss(
     intentos = len(orden.get("sl_evitar_info", []))
     max_evitar = config.get("max_evitar_sl", 2) if config else 2
 
+    sl_conf = validar_sl_tecnico(df, direccion)
     cerrar_forzado = (
-        validar_sl_tecnico(df, direccion)
+        sl_conf >= 0.5
         or puntaje < 0.75 * umbral
         or duracion >= max_velas
         or intentos >= max_evitar
