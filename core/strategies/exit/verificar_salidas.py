@@ -1,28 +1,20 @@
 from __future__ import annotations
 
-from datetime import datetime
+
 import pandas as pd
 
 from core.utils import configurar_logger
-from indicators.rsi import calcular_rsi
-from indicators.momentum import calcular_momentum
 from indicators.atr import calcular_atr
 from core.strategies.tendencia import detectar_tendencia
-from .salida_stoploss import verificar_salida_stoploss
-from .salida_trailing_stop import verificar_trailing_stop
+from .supervisor_salidas import SupervisorSalidas
 from .salida_por_tendencia import verificar_reversion_tendencia
 from .gestor_salidas import evaluar_salidas, verificar_filtro_tecnico
-from .analisis_previo_salida import (
-    permitir_cierre_tecnico,
-    evaluar_condiciones_de_cierre_anticipado,
-)
-from .analisis_salidas import patron_tecnico_fuerte
+from .analisis_previo_salida import permitir_cierre_tecnico
 from core.strategies.exit.filtro_salidas import validar_necesidad_de_salida
 from core.adaptador_dinamico import adaptar_configuracion as adaptar_configuracion_base
 from core.adaptador_configuracion_dinamica import adaptar_configuracion
 from core.adaptador_dinamico import calcular_umbral_adaptativo
-from core.adaptador_umbral import calcular_umbral_salida_adaptativo
-from core.metricas_semanales import metricas_tracker
+
 
 log = configurar_logger("verificar_salidas")
 
@@ -54,107 +46,21 @@ async def verificar_salidas(trader, symbol: str, df: pd.DataFrame) -> None:
         "tendencia": tendencia_detectada,
     }
 
-    # --- Stop Loss con validación ---
-    if precio_min <= orden.stop_loss:
-        rsi = calcular_rsi(df)
-        momentum = calcular_momentum(df)
-        tendencia_actual = trader.estado_tendencia.get(symbol)
-        if not tendencia_actual:
-            tendencia_actual, _ = detectar_tendencia(symbol, df)
-            trader.estado_tendencia[symbol] = tendencia_actual
-        score, _ = trader._calcular_score_tecnico(
-            df,
-            rsi,
-            momentum,
-            tendencia_actual,
-            orden.direccion,
-        )
-        umbral_sal = calcular_umbral_salida_adaptativo(
-            symbol,
-            df,
-            config_actual,
-            {
-                "estrategias_activas": orden.estrategias_activas,
-                "pesos_symbol": trader.pesos_por_simbolo.get(symbol, {}),
-            },
-        )
-        log.debug(
-            f"[{symbol}] Score SL {score:.2f} vs Umbral {umbral_sal:.2f}"
-        )
-        if score >= umbral_sal or patron_tecnico_fuerte(df):
-            log.info(f"🛡️ SL evitado por validación técnica — Score: {score:.1f}/4")
-            orden.sl_evitar_info = orden.sl_evitar_info or []
-            orden.sl_evitar_info.append(
-                {
-                    "timestamp": datetime.utcnow().isoformat(),
-                    "sl": orden.stop_loss,
-                    "precio": precio_cierre,
-                }
-            )
-            return
-        resultado = verificar_salida_stoploss(orden.to_dict(), df, config=config_actual)
-        if resultado.get("cerrar", False):
-            if score <= 1 and not evaluar_condiciones_de_cierre_anticipado(
-                symbol,
-                df,
-                orden.to_dict(),
-                score,
-                orden.estrategias_activas,
-            ):
-                log.info(f"🛡️ Cierre por SL evitado tras reevaluación técnica: {symbol}")
-                orden.sl_evitar_info = orden.sl_evitar_info or []
-                orden.sl_evitar_info.append(
-                    {
-                        "timestamp": datetime.utcnow().isoformat(),
-                        "sl": orden.stop_loss,
-                        "precio": precio_cierre,
-                    }
-                )
-            elif not permitir_cierre_tecnico(
-                symbol,
-                df,
-                precio_cierre,
-                orden.to_dict(),
-            ):
-                log.info(f"🛡️ Cierre evitado por análisis técnico: {symbol}")
-                orden.sl_evitar_info = orden.sl_evitar_info or []
-                orden.sl_evitar_info.append(
-                    {
-                        "timestamp": datetime.utcnow().isoformat(),
-                        "sl": orden.stop_loss,
-                        "precio": precio_cierre,
-                    }
-                )
-            else:
-                await trader._cerrar_y_reportar(
-                    orden, orden.stop_loss, "Stop Loss", df=df
-                )
-        else:
-            if resultado.get("evitado", False):
-                log.debug("SL evitado correctamente, no se notificará por Telegram")
-                metricas_tracker.registrar_sl_evitado()
-                orden.sl_evitar_info = orden.sl_evitar_info or []
-                orden.sl_evitar_info.append(
-                    {
-                        "timestamp": datetime.utcnow().isoformat(),
-                        "sl": orden.stop_loss,
-                        "precio": precio_cierre,
-                    }
-                )
-                log.info(f"🛡️ SL evitado para {symbol} → {resultado.get('motivo', '')}")
-            else:
-                log.info(f"ℹ️ {symbol} → {resultado.get('motivo', '')}")
-        return
+    supervisor = SupervisorSalidas(orden, config_actual)
+    resultado_basico = supervisor.evaluar(
+        df,
+        precio_cierre=precio_cierre,
+        precio_min=precio_min,
+        precio_max=precio_max,
+    )
 
-    # --- Take Profit ---
-    if precio_max >= orden.take_profit:
-        if not getattr(orden, "parcial_cerrado", False) and orden.cantidad_abierta > 0:
-            if trader.es_salida_parcial_valida(
-                orden,
-                orden.take_profit,
-                config_actual,
-                df,
-            ):
+    if resultado_basico.get("break_even"):
+        orden.break_even_activado = True
+
+    if resultado_basico.get("cerrar"):
+        motivo = resultado_basico.get("razon", "")
+        if motivo == "Take Profit" and not getattr(orden, "parcial_cerrado", False) and orden.cantidad_abierta > 0:
+            if trader.es_salida_parcial_valida(orden, orden.take_profit, config_actual, df):
                 cantidad_parcial = orden.cantidad_abierta * 0.5
                 if await trader._cerrar_parcial_y_reportar(
                     orden,
@@ -164,43 +70,12 @@ async def verificar_salidas(trader, symbol: str, df: pd.DataFrame) -> None:
                     df=df,
                 ):
                     orden.parcial_cerrado = True
-                    log.info(
-                        "💰 TP parcial alcanzado, se mantiene posición con trailing."
-                    )
-            else:
-                await trader._cerrar_y_reportar(
-                    orden, orden.take_profit, "Take Profit", df=df
-                )
-        elif orden.cantidad_abierta > 0:
-            await trader._cerrar_y_reportar(
-                orden, orden.take_profit, "Take Profit", df=df
-            )
-        return
-
-    # --- Trailing Stop ---
-    if orden.cantidad_abierta <= 0:
-        return
-    if precio_cierre > orden.max_price:
-        orden.max_price = precio_cierre
-
-    dinamica = adaptar_configuracion(symbol, df)
-    if dinamica:
-        config_actual.update(dinamica)
-    config_actual = adaptar_configuracion_base(symbol, df, config_actual)
-    trader.config_por_simbolo[symbol] = config_actual
-
-    try:
-        cerrar, motivo = verificar_trailing_stop(
-            orden.to_dict(), precio_cierre, df, config=config_actual
-        )
-    except Exception as e:
-        log.warning(f"⚠️ Error en trailing stop para {symbol}: {e}")
-        cerrar, motivo = False, ""
-    if cerrar:
+                    log.info("💰 TP parcial alcanzado, se mantiene posición con trailing.")
+                    return
         if not permitir_cierre_tecnico(symbol, df, precio_cierre, orden.to_dict()):
             log.info(f"🛡️ Cierre evitado por análisis técnico: {symbol}")
-        elif await trader._cerrar_y_reportar(orden, precio_cierre, motivo, df=df):
-            log.info(f"🔄 Trailing Stop activado para {symbol} a {precio_cierre:.2f}€")
+        else:
+            await trader._cerrar_y_reportar(orden, precio_cierre, motivo, df=df)
         return
 
     # --- Cambio de tendencia ---
