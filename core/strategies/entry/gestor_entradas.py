@@ -18,7 +18,7 @@ from core.estrategias import (
     calcular_sinergia,
 )
 from core.score_tecnico import calcular_score_tecnico
-from core.utils import configurar_logger
+from core.utils import configurar_logger, build_log_message
 
 log = configurar_logger("entradas")
 
@@ -67,7 +67,14 @@ def evaluar_estrategias(symbol: str, df: pd.DataFrame, tendencia: str) -> dict:
 
 def _validar_score(symbol: str, potencia: float, umbral: float) -> bool:
     if not superar_umbral(potencia, umbral):
-        log.info(f"🚫 [{symbol}] Rechazo por score {potencia:.2f} < {umbral:.2f}")
+        log.info(
+            build_log_message(
+                "score_check_failed",
+                symbol=symbol,
+                score=round(potencia, 2),
+                threshold=umbral,
+            )
+        )
         return False
     return True
 
@@ -104,12 +111,24 @@ def entrada_permitida(
     )
     potencia_ajustada = potencia * (1 + score_tecnico / 3)
 
-    if not validar_correlacion(symbol, df, df_referencia, umbral_correlacion):
-        return False
-    if not validar_diversidad(symbol, estrategias_activas):
-        return False
-    if not _validar_score(symbol, potencia_ajustada, umbral):
-        return False
-    if not validar_volumen(symbol, df, cantidad):
-        return False
-    return True
+    checks = {
+        "correlacion": validar_correlacion(symbol, df, df_referencia, umbral_correlacion),
+        "diversidad": validar_diversidad(symbol, estrategias_activas),
+    }
+    checks["score"] = _validar_score(symbol, potencia_ajustada, umbral)
+    checks["volumen"] = validar_volumen(symbol, df, cantidad)
+
+    if all(checks.values()):
+        return True
+
+    fallidas = [c for c, ok in checks.items() if not ok]
+    log.info(
+        build_log_message(
+            "entrada_rechazada",
+            symbol=symbol,
+            score=round(potencia_ajustada, 2),
+            threshold=umbral,
+            failed_checks=fallidas,
+        )
+    )
+    return False

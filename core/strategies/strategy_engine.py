@@ -29,6 +29,7 @@ from core.strategies.entry.validaciones_tecnicas import hay_contradicciones
 from core.strategies.exit.gestor_salidas import evaluar_salidas
 from core.strategies.tendencia import detectar_tendencia
 from core.utils.utils import configurar_logger
+from core.utils import build_log_message
 
 log = configurar_logger("engine", modo_silencioso=True)
 
@@ -144,6 +145,20 @@ class StrategyEngine:
                     motivo = "diversidad_baja"
                 else:
                     motivo = "desconocido"
+
+            log.info(
+                build_log_message(
+                    "entrada_evaluada",
+                    symbol=symbol,
+                    score=round(score_total, 2),
+                    threshold=umbral,
+                    score_tecnico=round(score_tec, 2),
+                    umbral_score=umbral_score,
+                    permitido=permitido,
+                    motivo=motivo,
+                    checks_fallidas=validaciones_fallidas if not permitido else [],
+                )
+            )
 
             return {
                 "permitido": permitido,
