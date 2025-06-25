@@ -38,6 +38,7 @@ from core.data import (
 from core.metricas_semanales import metricas_tracker, metricas_semanales
 from learning.entrenador_estrategias import actualizar_pesos_estrategias_symbol
 from core.utils.utils import configurar_logger
+import aiofiles
 from core.monitor_estado_bot import monitorear_estado_periodicamente
 from core.watchdog import Watchdog
 from core.contexto_externo import StreamContexto
@@ -222,9 +223,9 @@ class Trader:
         if not await self.orders.cerrar_async(symbol, precio, motivo):
             log.debug(f"🔁 Intento duplicado de cierre ignorado para {symbol}")
             return
-        actualizar_pesos_estrategias_symbol(symbol)
+        await asyncio.to_thread(actualizar_pesos_estrategias_symbol, symbol)
         try:
-            self.pesos_por_simbolo = cargar_pesos_estrategias()
+            self.pesos_por_simbolo = await asyncio.to_thread(cargar_pesos_estrategias)
         except ValueError as e:
             log.error(f"❌ {e}")
             return
@@ -281,22 +282,25 @@ class Trader:
                     else f"👍 Evitar SL en {orden.symbol} fue beneficioso"
                     f" ({precio:.2f} vs {sl_val:.2f})"
                 )
-                with open("logs/impacto_sl.log", "a") as f:
-                    f.write(mensaje + "\n")
+                async with aiofiles.open("logs/impacto_sl.log", "a") as f:
+                    await f.write(mensaje + "\n")
                 log.info(mensaje)
             orden.sl_evitar_info = []
-        reporter_diario.registrar_operacion(info)
-        registrar_resultado_trade(orden.symbol, info, retorno_total)
+        await asyncio.to_thread(reporter_diario.registrar_operacion, info)
+        await asyncio.to_thread(registrar_resultado_trade, orden.symbol, info, retorno_total)
         try:
             if orden.detalles_tecnicos:
-                actualizar_pesos_tecnicos(
-                    orden.symbol, orden.detalles_tecnicos, retorno_total
+                await asyncio.to_thread(
+                    actualizar_pesos_tecnicos,
+                    orden.symbol,
+                    orden.detalles_tecnicos,
+                    retorno_total,
                 )
         except Exception as e:  # noqa: BLE001
             log.debug(f"No se pudo actualizar pesos tecnicos: {e}")
-        actualizar_pesos_estrategias_symbol(orden.symbol)
+        await asyncio.to_thread(actualizar_pesos_estrategias_symbol, orden.symbol)
         try:
-            self.pesos_por_simbolo = cargar_pesos_estrategias()
+            self.pesos_por_simbolo = await asyncio.to_thread(cargar_pesos_estrategias)
         except ValueError as e:
             log.error(f"❌ {e}")
             return False
@@ -340,7 +344,7 @@ class Trader:
                 "beneficio": ganancia,
             },
         )
-        self._registrar_salida_profesional(
+        await self._registrar_salida_profesional(
             orden.symbol,
             {
                 "tipo_salida": motivo,
@@ -377,7 +381,8 @@ class Trader:
                 if df is not None
                 else (None, None)
             )
-            registrar_auditoria(
+            await asyncio.to_thread(
+                registrar_auditoria,
                 symbol=orden.symbol,
                 evento=motivo,
                 resultado="ganancia" if retorno_total > 0 else "pérdida",
@@ -392,7 +397,7 @@ class Trader:
             log.debug(f"No se pudo registrar auditoría de cierre: {e}")
         return True
     
-    def _registrar_salida_profesional(self, symbol: str, info: dict) -> None:
+    def _registrar_salida_profesional_sync(self, symbol: str, info: dict) -> None:
         archivo = "reportes_diarios/registro_salidas.parquet"
         os.makedirs(os.path.dirname(archivo), exist_ok=True)
         data = info.copy()
@@ -409,6 +414,9 @@ class Trader:
             df.to_parquet(archivo, index=False)
         except Exception as e:
             log.warning(f"⚠️ Error registrando salida en {archivo}: {e}")
+
+    async def _registrar_salida_profesional(self, symbol: str, info: dict) -> None:
+        await asyncio.to_thread(self._registrar_salida_profesional_sync, symbol, info)
     
     async def _cerrar_parcial_y_reportar(
         self,
@@ -445,8 +453,8 @@ class Trader:
                 "capital_inicial": self.capital_por_simbolo.get(orden.symbol, 0.0),
             }
         )
-        reporter_diario.registrar_operacion(info)
-        registrar_resultado_trade(orden.symbol, info, retorno_total)
+        await asyncio.to_thread(reporter_diario.registrar_operacion, info)
+        await asyncio.to_thread(registrar_resultado_trade, orden.symbol, info, retorno_total)
         capital_inicial = self.capital_por_simbolo.get(orden.symbol, 0.0)
         ganancia = capital_inicial * retorno_total
         capital_final = capital_inicial + ganancia
@@ -461,7 +469,7 @@ class Trader:
                 "beneficio": ganancia,
             },
         )
-        self._registrar_salida_profesional(
+        await self._registrar_salida_profesional(
             orden.symbol,
             {
                 "tipo_salida": "parcial",
@@ -495,7 +503,8 @@ class Trader:
                 if df is not None
                 else (None, None)
             )
-            registrar_auditoria(
+            await asyncio.to_thread(
+                registrar_auditoria,
                 symbol=orden.symbol,
                 evento=motivo,
                 resultado="ganancia" if retorno_total > 0 else "pérdida",
@@ -877,15 +886,19 @@ class Trader:
         registro_metrico.registrar("rechazo", registro)
 
         try:
-            registrar_auditoria(
-                symbol=symbol,
-                evento="Entrada rechazada",
-                resultado="rechazo",
-                estrategias_activas=estrategias,
-                score=puntaje,
-                razon=motivo,
-                capital_actual=self.capital_por_simbolo.get(symbol, 0.0),
-                config_usada=self.config_por_simbolo.get(symbol, {}),
+            loop = asyncio.get_running_loop()
+            loop.create_task(
+                asyncio.to_thread(
+                    registrar_auditoria,
+                    symbol=symbol,
+                    evento="Entrada rechazada",
+                    resultado="rechazo",
+                    estrategias_activas=estrategias,
+                    score=puntaje,
+                    razon=motivo,
+                    capital_actual=self.capital_por_simbolo.get(symbol, 0.0),
+                    config_usada=self.config_por_simbolo.get(symbol, {}),
+                )
             )
         except Exception as e:  # noqa: BLE001
             log.debug(f"No se pudo registrar auditoría de rechazo: {e}")
@@ -1340,7 +1353,8 @@ class Trader:
             },
         )
         try:
-            registrar_auditoria(
+            await asyncio.to_thread(
+                registrar_auditoria,
                 symbol=symbol,
                 evento="Entrada",
                 resultado="ejecutada",

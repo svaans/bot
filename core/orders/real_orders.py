@@ -241,7 +241,7 @@ def sincronizar_ordenes_binance(simbolos: list[str] | None = None) -> dict[str, 
                 ordenes_api.extend(cliente.fetch_open_orders(s))
         else:
             ordenes_api = cliente.fetch_open_orders()
-    except BaseError as e:
+    except Exception as e:
         log.error(f"❌ Error consultando órdenes abiertas: {e}")
         return cargar_ordenes()
 
@@ -595,7 +595,7 @@ async def flush_periodico(interval: int = _FLUSH_INTERVAL) -> None:
     while True:
         await asyncio.sleep(interval)
         try:
-            flush_operaciones()
+            await asyncio.to_thread(flush_operaciones)
         except Exception as e:  # noqa: BLE001
             log.error(f"❌ Error en flush periódico: {e}")
             

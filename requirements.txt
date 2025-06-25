@@ -32,6 +32,7 @@ frozenlist==1.6.0             # Listas inmutables (requerido por aiohttp)
 multidict==6.4.3              # Diccionarios multivalor (requerido por yarl)
 pycares==4.8.0                # Wrapper de c-ares para DNS
 asyncio==3.4.3                # Librería async (en versiones antiguas de Python)
+aiofiles==23.2.1              # Operaciones de archivo asíncronas
 
 # ───────── CONFIGURACIÓN Y UTILIDADES ─────────
 python-dotenv==1.1.0          # Carga de variables de entorno desde .env
