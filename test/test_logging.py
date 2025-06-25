@@ -71,3 +71,52 @@ def test_log_sl_evitar(monkeypatch, caplog):
     logger.removeHandler(handler)
     assert res["evitado"] is True
     assert any("sl_evitar" in r.getMessage() for r in handler.records)
+
+
+def test_sl_evitar_info_none(monkeypatch):
+    """No debe fallar cuando sl_evitar_info es None."""
+    df = pd.DataFrame({"close": [90] * 30, "high": [91] * 30, "low": [89] * 30})
+    orden = {
+        "symbol": "AAA",
+        "precio_entrada": 100,
+        "stop_loss": 90,
+        "direccion": "long",
+        "sl_evitar_info": None,
+        "duracion_en_velas": 0,
+    }
+
+    monkeypatch.setattr(
+        "core.strategies.exit.salida_stoploss.detectar_tendencia",
+        lambda symbol, df: ("alcista", None),
+    )
+    monkeypatch.setattr(
+        "core.strategies.exit.salida_stoploss.evaluar_estrategias",
+        lambda symbol, df, tendencia: {
+            "estrategias_activas": {"dummy": True},
+            "puntaje_total": 5,
+        },
+    )
+    monkeypatch.setattr(
+        "core.strategies.exit.salida_stoploss.calcular_umbral_adaptativo",
+        lambda *a, **k: 2,
+    )
+    monkeypatch.setattr(
+        "core.strategies.exit.salida_stoploss.calcular_umbral_salida_adaptativo",
+        lambda *a, **k: 1,
+    )
+    monkeypatch.setattr(
+        "core.strategies.exit.salida_stoploss.calcular_rsi", lambda df: 50
+    )
+    monkeypatch.setattr(
+        "core.strategies.exit.salida_stoploss.calcular_slope", lambda df: 0.1
+    )
+    monkeypatch.setattr(
+        "core.strategies.exit.salida_stoploss.calcular_momentum", lambda df: 0.1
+    )
+    monkeypatch.setattr(
+        "core.strategies.exit.salida_stoploss.validar_sl_tecnico",
+        lambda df, direccion="long": 0.0,
+    )
+
+    res = verificar_salida_stoploss(orden, df, config={})
+    assert "cerrar" in res  # No debe lanzar TypeError por len(None)

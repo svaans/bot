@@ -320,6 +320,7 @@ def verificar_salida_stoploss(
     duracion = orden.get("duracion_en_velas", 0)
     max_velas = config.get("max_velas_sin_tp", 10) if config else 10
     intentos = len(orden.get("sl_evitar_info", []))
+    intentos = len(orden.get("sl_evitar_info") or [])
     max_evitar = config.get("max_evitar_sl", 2) if config else 2
 
     sl_conf = validar_sl_tecnico(df, direccion)
