@@ -55,7 +55,9 @@ class CapitalManager:
             return None
         try:
             if self._markets is None:
-                self._markets = await load_markets_async(self.cliente)
+                self._markets = await asyncio.wait_for(
+                    load_markets_async(self.cliente), timeout=10
+                )
             info = self._markets.get(symbol.replace("/", ""))
             minimo = info.get("limits", {}).get("cost", {}).get("min") if info else None
             return float(minimo) if minimo else None
@@ -67,7 +69,9 @@ class CapitalManager:
         self, symbol: str, precio: float, factor_extra: float = 1.0
     ) -> float:
         if self.modo_real and self.cliente:
-            balance = await fetch_balance_async(self.cliente)
+            balance = await asyncio.wait_for(
+                fetch_balance_async(self.cliente), timeout=10
+            )
             euros = balance["total"].get("EUR", 0)
         else:
             euros = self.capital_por_simbolo.get(symbol, 0)
@@ -94,7 +98,9 @@ class CapitalManager:
         riesgo = max(riesgo_teorico, minimo_dinamico)
         riesgo = min(riesgo, euros * self.riesgo_maximo_diario)
         riesgo = min(riesgo, euros)
-        minimo_binance = await self._obtener_minimo_binance(symbol)
+        minimo_binance = await asyncio.wait_for(
+            self._obtener_minimo_binance(symbol), timeout=10
+        )
         cantidad = riesgo / precio
         if cantidad * precio < minimo_dinamico:
             log.debug(
