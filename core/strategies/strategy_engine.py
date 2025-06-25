@@ -7,7 +7,7 @@ from typing import Dict
 from core.adaptador_umbral import calcular_umbral_adaptativo
 from core.scoring import calcular_score_tecnico
 
-from core.utils.utils import validar_dataframe
+from core.utils.validacion import validar_dataframe
 from core.strategies.entry.validadores import (
     validar_volumen,
     validar_rsi,

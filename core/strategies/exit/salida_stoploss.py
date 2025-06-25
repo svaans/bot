@@ -7,7 +7,7 @@ from core.estrategias import (
     obtener_estrategias_por_tendencia,
     ESTRATEGIAS_POR_TENDENCIA,
 )
-from core.utils.utils import validar_dataframe
+from core.utils.validacion import validar_dataframe
 from core.adaptador_dinamico import calcular_umbral_adaptativo
 from core.adaptador_umbral import calcular_umbral_salida_adaptativo
 from core.strategies.entry.gestor_entradas import evaluar_estrategias

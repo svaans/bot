@@ -5,6 +5,7 @@ from __future__ import annotations
 import pandas as pd
 import numpy as np
 from core.utils.utils import configurar_logger
+from core.utils.validacion import validar_dataframe
 from indicators.atr import calcular_atr
 from indicators.rsi import calcular_rsi
 from indicators.slope import calcular_slope
@@ -14,8 +15,8 @@ log = configurar_logger("adaptador_dinamico")
 
 
 def _validar_dataframe(df: pd.DataFrame) -> bool:
-    columnas = {"open", "high", "low", "close", "volume"}
-    return df is not None and columnas.issubset(df.columns) and len(df) >= 30
+    columnas = ["open", "high", "low", "close", "volume"]
+    return validar_dataframe(df, columnas) and len(df) >= 30
 
 
 def adaptar_configuracion(symbol: str, df: pd.DataFrame) -> dict:

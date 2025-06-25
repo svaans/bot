@@ -1,5 +1,5 @@
 import pandas as pd
-from core.utils.utils import validar_dataframe
+from core.utils.validacion import validar_dataframe
 from core.strategies.tendencia import detectar_tendencia
 from core.utils import configurar_logger
 from core.strategies.exit.salida_utils import resultado_salida

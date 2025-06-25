@@ -1,7 +1,7 @@
 # estrategias_salida/gestor_salidas.py
 import pandas as pd
 import inspect
-from core.utils.utils import validar_dataframe
+from core.utils.validacion import validar_dataframe
 from core.strategies.tendencia import detectar_tendencia
 from core.strategies.entry.gestor_entradas import evaluar_estrategias
 from core.adaptador_dinamico import calcular_umbral_adaptativo
