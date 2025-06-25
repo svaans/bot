@@ -27,7 +27,11 @@ log = configurar_logger("ordenes")
 
 # Base absoluto del proyecto para almacenar la base de datos siempre en la
 # misma ubicación independientemente de desde dónde se ejecute el script.
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+# Usamos la raíz del proyecto para garantizar que la base de datos siempre
+# se ubique en ``ordenes_reales/`` independientemente de dónde se ejecute.
+BASE_DIR = os.path.dirname(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+)
 RUTA_DB = os.path.join(BASE_DIR, "ordenes_reales", "ordenes.db")
 
 _CACHE_ORDENES: dict[str, Order] | None = None
