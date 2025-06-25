@@ -916,7 +916,9 @@ class Trader:
             euros = 0
             if self.modo_real and self.cliente:
                 try:
-                    balance = await fetch_balance_async(self.cliente)
+                    balance = await asyncio.wait_for(
+                        fetch_balance_async(self.cliente), timeout=10
+                    )
                     euros = balance["total"].get("EUR", 0)
                 except BaseError:
                     euros = 0
@@ -1357,7 +1359,7 @@ class Trader:
 
     async def evaluar_condiciones_de_entrada(
         self, symbol: str, df: pd.DataFrame, estado: EstadoSimbolo
-        ) -> dict | None:
+    ) -> dict | None:
         if not self._validar_config(symbol):
             return None
         self.watchdog.ping("verificar_entrada")
