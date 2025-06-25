@@ -65,6 +65,40 @@ def esperar_balance(
         except Exception as e:
             log.warning(f"⚠️ Error al obtener balance en intento {intento + 1}/{max_intentos}: {e}")
         time.sleep(delay)
+
+    log.warning(
+        f"⏱️ Tiempo de espera agotado para obtener balance suficiente en {symbol}. "
+        f"Disponible: {disponible}, requerido: {cantidad_esperada}"
+    )
+    return disponible
+
+
+async def esperar_balance_async(
+    cliente,
+    symbol: str,
+    cantidad_esperada: float,
+    max_intentos: int = 10,
+    delay: float = 0.3,
+) -> float:
+    """Versión asíncrona de :func:`esperar_balance`."""
+    try:
+        base = symbol.split("/")[0]
+    except Exception as e:
+        log.error(f"❌ Error al interpretar símbolo {symbol}: {e}")
+        return 0.0
+
+    loop = asyncio.get_running_loop()
+    for intento in range(max_intentos):
+        try:
+            balance = await loop.run_in_executor(None, cliente.fetch_balance)
+            disponible = balance.get("free", {}).get(base, 0.0)
+            if disponible >= cantidad_esperada:
+                return disponible
+        except Exception as e:
+            log.warning(
+                f"⚠️ Error al obtener balance en intento {intento + 1}/{max_intentos}: {e}"
+            )
+        await asyncio.sleep(delay)
     
     log.warning(
         f"⏱️ Tiempo de espera agotado para obtener balance suficiente en {symbol}. "
@@ -95,8 +129,12 @@ def _init_db() -> None:
 
     try:
         with sqlite3.connect(RUTA_DB) as conn:
-            conn.execute(f"CREATE TABLE IF NOT EXISTS ordenes ({schema_base}, PRIMARY KEY(symbol))")
-            conn.execute(f"CREATE TABLE IF NOT EXISTS operaciones (id INTEGER PRIMARY KEY AUTOINCREMENT, {schema_base})")
+            conn.execute(
+                f"CREATE TABLE IF NOT EXISTS ordenes ({schema_base}, PRIMARY KEY(symbol))"
+            )
+            conn.execute(
+                f"CREATE TABLE IF NOT EXISTS operaciones (id INTEGER PRIMARY KEY AUTOINCREMENT, {schema_base})"
+            )
         log.info("🗃️ Tablas de órdenes y operaciones verificadas/creadas.")
     except sqlite3.Error as e:
         log.error(f"❌ Error al crear las tablas en SQLite: {e}")
@@ -419,7 +457,7 @@ def ejecutar_orden_market_sell(symbol: str, cantidad: float) -> float:
         info = markets.get(symbol.replace("/", ""), {})
 
         precision = info.get("precision", {}).get("amount", 8)
-        step_size = 10 ** -precision
+        step_size = 10**-precision
 
         # 3. Calcular la cantidad máxima exacta permitida (ajustada al step_size)
         cantidad_vender = math.floor(disponible / step_size) * step_size
@@ -468,7 +506,7 @@ def ejecutar_orden_market_sell(symbol: str, cantidad: float) -> float:
         raise
 
     except Exception as e:
-        log.error(f"❌ Error estructural al ejecutar venta para {symbol}: {e}")
+        log.exception(f"❌ Error estructural al ejecutar venta para {symbol}: {e}")
         raise
 
 
