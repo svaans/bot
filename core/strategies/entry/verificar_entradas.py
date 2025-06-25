@@ -223,7 +223,7 @@ async def verificar_entrada(trader, symbol: str, df: pd.DataFrame, estado) -> di
         log.info(f"[{symbol}] Entrada rechazada por score técnico {score_total:.2f} < {umbral_tecnico:.2f}")
         return None
 
-    return {
+    resultado = {
         "symbol": symbol,
         "precio": precio,
         "sl": sl,
@@ -237,3 +237,5 @@ async def verificar_entrada(trader, symbol: str, df: pd.DataFrame, estado) -> di
         "detalles_tecnicos": evaluacion.get("detalles", {}),
         "volatilidad": volatilidad,
     }
+    log.debug(f"✅ [{symbol}] Evaluación de entrada completada")
+    return resultado
