@@ -11,6 +11,7 @@ log = configurar_logger("procesar_vela")
 
 async def procesar_vela(trader, vela: dict) -> None:
     symbol = vela["symbol"]
+    log.debug(f"Inicio procesamiento vela {symbol}")
     estado = trader.estado[symbol]
     trader.watchdog.ping("procesar_vela")
     if datetime.utcnow().date() != trader.fecha_actual:
@@ -50,4 +51,5 @@ async def procesar_vela(trader, vela: dict) -> None:
     await trader.evaluar_condiciones_entrada(symbol, df)
     log.debug(f"🔄 Vela procesada {symbol}")
     trader.watchdog.ping("procesar_vela")
+    log.debug(f"Fin procesamiento vela {symbol}")
     return
