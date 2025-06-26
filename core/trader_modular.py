@@ -13,7 +13,8 @@ import pandas as pd
 
 from config.config_manager import Config
 from core.data import DataFeed
-from core.strategies import StrategyEngine
+from core.smart_decision import DecisionEngine
+from core.market_context import MarketContext
 from core.risk import RiskManager
 from core.orders import OrderService, OrderServiceReal, OrderServiceSimulado
 from core.notification_manager import NotificationManager
@@ -104,7 +105,8 @@ class Trader:
     def __init__(self, config: Config, order_service: Optional[OrderService] = None) -> None:
         self.config = config
         self.data_feed = DataFeed(config.intervalo_velas)
-        self.engine = StrategyEngine()
+        self.context = MarketContext()
+        self.engine = DecisionEngine(self.context)
         self.risk = RiskManager(config.umbral_riesgo_diario)
         self.notificador = NotificationManager(
             config.telegram_token, config.telegram_chat_id
