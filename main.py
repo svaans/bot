@@ -7,6 +7,19 @@ import fcntl
 import psutil
 
 
+def ya_esta_activo() -> bool:
+    """Comprueba si ya existe otra instancia activa de ``main.py``."""
+    actual = os.getpid()
+    for p in psutil.process_iter(["pid", "cmdline"]):
+        try:
+            cmd = " ".join(p.info.get("cmdline", []))
+            if p.pid != actual and "main.py" in cmd:
+                return True
+        except Exception:
+            continue
+    return False
+
+
 def acquire_lock(path: str = "/tmp/pegaso_bot.lock"):
     """Asegura que solo una instancia del bot esté activa."""
 
@@ -39,6 +52,10 @@ def acquire_lock(path: str = "/tmp/pegaso_bot.lock"):
             lock_fd.write(str(os.getpid()))
             lock_fd.flush()
             return lock_fd
+        
+if ya_esta_activo():
+    print("🚫 Ya hay una instancia corriendo.")
+    sys.exit(1)
 
 
 lock_fd = acquire_lock()
