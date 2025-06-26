@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Iterable
 import threading
 from core.utils.utils import configurar_logger
+import logging
 
 from watchdog.observers import Observer
 from watchdog.observers.polling import PollingObserver
@@ -133,14 +134,17 @@ def start_hot_reload(
     Cuando se detecta un cambio en un archivo ``.py`` se reinicia el proceso para
     cargar el código actualizado. Si ``modules`` es ``None`` o una lista vacía,
     se vigilarán todos los paquetes dentro de ``path`` salvo los indicados en
-    ``exclude``.
+    ``exclude``. Por defecto se excluye ``venv`` para evitar monitorear
+    dependencias instaladas.
     """
     _patch_watchdog_for_py313()
+    logging.getLogger("watchdog").setLevel(logging.WARNING)
     base = Path(path or Path.cwd())
     mods = list(modules) if modules is not None else []
+    excl = list(exclude or ["venv"])
     texto_mods = ", ".join(mods) if mods else "todos"
     log.info(f"👀 Observando carpeta {base} con módulos: {texto_mods}")
-    handler = _ReloadHandler(base, mods, exclude)
+    handler = _ReloadHandler(base, mods, excl)
     observer: Observer = Observer()
     observer.schedule(handler, str(base), recursive=True)
     try:
