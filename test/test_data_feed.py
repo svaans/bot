@@ -7,10 +7,10 @@ from core.data_feed import DataFeed
 def test_data_feed_streams_candles(monkeypatch):
     received = []
 
-    async def fake_listen(symbol, interval, handler):
+    async def fake_stream(self, symbol, handler):
         await handler({"symbol": symbol, "timestamp": 1})
 
-    monkeypatch.setattr("core.data_feed.escuchar_velas", fake_listen)
+    monkeypatch.setattr(DataFeed, "stream", fake_stream)
 
     feed = DataFeed("1m")
 

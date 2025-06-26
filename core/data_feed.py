@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from typing import Awaitable, Callable, Dict, Iterable
-from binance_api.websocket import escuchar_velas
+
 from core.utils.logger import configurar_logger
 from core.async_utils import log_exceptions_async
 
@@ -14,8 +15,10 @@ log = configurar_logger("datafeed", modo_silencioso=True)
 class DataFeed:
     """Maneja la recepción de velas de Binance en tiempo real."""
 
-    def __init__(self, intervalo: str) -> None:
+    def __init__(self, intervalo: str, host: str = "localhost", puerto: int = 9000) -> None:
         self.intervalo = intervalo
+        self.host = host
+        self.puerto = puerto
         self._tasks: Dict[str, asyncio.Task] = {}
 
     @property
@@ -27,12 +30,26 @@ class DataFeed:
     async def stream(self, symbol: str, handler: Callable[[dict], Awaitable[None]]) -> None:
         """Escucha las velas de ``symbol`` y reintenta ante fallos de conexión."""
         while True:
+            writer = None
             try:
-                await escuchar_velas(symbol, self.intervalo, handler)
-                break
+                reader, writer = await asyncio.open_connection(self.host, self.puerto)
+                req = json.dumps({"symbol": symbol, "interval": self.intervalo}) + "\n"
+                writer.write(req.encode())
+                await writer.drain()
+                log.info(f"🔌 Conectado al servicio para {symbol}")
+                while True:
+                    line = await reader.readline()
+                    if not line:
+                        raise ConnectionError("socket cerrado")
+                    data = json.loads(line.decode())
+                    await handler(data)
             except Exception as e:  # pragma: no cover - conexión externa
                 log.warning(f"⚠️ Stream {symbol} falló: {e}. Reintentando en 5s")
                 await asyncio.sleep(5)
+            finally:
+                if writer:
+                    writer.close()
+                    await writer.wait_closed()
                 
     @log_exceptions_async
     async def escuchar(self, symbols: Iterable[str], handler: Callable[[dict], Awaitable[None]]) -> None:

@@ -13,7 +13,27 @@ Este proyecto implementa un bot de trading para Binance.
    ```bash
    cd frontend
    npm install
-   ```
+  ```
+
+## Servicio de velas en Go
+
+El bot consume las velas de Binance a través de un servicio externo escrito en Go.
+Para compilarlo manualmente:
+
+```bash
+cd candle_service
+./build.sh
+./candle-service
+```
+
+También puedes ejecutarlo con Docker:
+
+```bash
+docker build -t candle_service ./candle_service
+docker run -p 9000:9000 candle_service
+```
+
+El bot Python asume que el servicio está disponible en `localhost:9000`.
 
 ## Persistencia de órdenes
 
