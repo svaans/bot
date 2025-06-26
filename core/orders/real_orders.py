@@ -18,6 +18,7 @@ from datetime import datetime
 from binance_api.cliente import obtener_cliente
 from .order_model import Order
 from core.utils.utils import configurar_logger
+from core.async_utils import log_exceptions_async
 from . import real_orders
 from core.utils.utils import guardar_orden_real
 
@@ -589,7 +590,7 @@ def flush_operaciones() -> None:
     else:
         log.warning(f"⚠️ Guardadas {len(operaciones)} operaciones con errores — SQLite: {errores_sqlite}, Parquet: {errores_parquet}")
 
-
+@log_exceptions_async
 async def flush_periodico(interval: int = _FLUSH_INTERVAL) -> None:
     """Ejecuta :func:`flush_operaciones` cada ``interval`` segundos."""
     while True:
