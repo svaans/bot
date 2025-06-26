@@ -66,6 +66,12 @@ En modo real el bot utiliza un logger en formato JSON cuya salida se guarda en
 `reportes_diarios/` y al finalizar el día se genera automáticamente un PDF con
 las métricas principales: ganancia acumulada, winrate y drawdown.
 
+Ejemplos de mensajes:
+
+```
+[BTC/USDT] persistencia_detectada | repetidas=2.00, minimo=1.50
+[ETH/USDT] score_tecnico | score=3.20, rsi=55.30, momentum=0.12, slope=0.45, tendencia=alcista
+```
 
 ## Instalación
 

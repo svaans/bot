@@ -106,3 +106,14 @@ def log_resumen_operacion(tipo, symbol, **kwargs):
         log.info(f"🔁 Señales técnicas fuertes repetidas {symbol}")
 
 
+def format_strategy_log(symbol: str, decision: str, **indicators: object) -> str:
+    """Return a standard log string for strategy evaluations."""
+    parts = []
+    for k, v in indicators.items():
+        if isinstance(v, float):
+            parts.append(f"{k}={v:.2f}")
+        else:
+            parts.append(f"{k}={v}")
+    datos = ", ".join(parts)
+    return f"[{symbol}] {decision} | {datos}"
+

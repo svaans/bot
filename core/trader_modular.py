@@ -38,6 +38,7 @@ from core.data import (
 from core.metricas_semanales import metricas_tracker, metricas_semanales
 from learning.entrenador_estrategias import actualizar_pesos_estrategias_symbol
 from core.utils.utils import configurar_logger
+from core.utils import format_strategy_log
 import aiofiles
 from core.monitor_estado_bot import monitorear_estado_periodicamente
 from core.watchdog import Watchdog
@@ -366,6 +367,7 @@ class Trader:
             score, _ = (
                 self._calcular_score_tecnico(
                     df,
+                    orden.symbol,
                     rsi_val,
                     calcular_momentum(df),
                     tendencia or "",
@@ -470,6 +472,7 @@ class Trader:
                 "score_tecnico_al_cierre": (
                     self._calcular_score_tecnico(
                         df,
+                        orden.symbol,
                         calcular_rsi(df),
                         calcular_momentum(df),
                         orden.tendencia,
@@ -488,6 +491,7 @@ class Trader:
             score, _ = (
                 self._calcular_score_tecnico(
                     df,
+                    orden.symbol,
                     rsi_val,
                     calcular_momentum(df),
                     orden.tendencia,
@@ -980,7 +984,12 @@ class Trader:
         )
 
         log.info(
-            f"Persistencia detectada {repetidas:.2f} | Mínimo requerido {minimo:.2f}"
+            format_strategy_log(
+                symbol,
+                "persistencia_detectada",
+                repetidas=repetidas,
+                minimo=minimo,
+            )
         )
 
         
@@ -1004,7 +1013,13 @@ class Trader:
             return False, repetidas, minimo
         elif repetidas < 1:
             log.info(
-                f"⚠️ Entrada débil en {symbol}: Coincidencia {repetidas:.2f} insuficiente pero puntaje alto ({puntaje}) > Umbral {umbral} — Permitida."
+                format_strategy_log(
+                    symbol,
+                    "entrada_debil",
+                    coincidencia=repetidas,
+                    puntaje=puntaje,
+                    umbral=umbral,
+                )
             )
             metricas_tracker.registrar_filtro("persistencia")
         return True, repetidas, minimo
@@ -1061,6 +1076,7 @@ class Trader:
     
     def _calcular_score_tecnico(
         self,
+        symbol: str,
         df: pd.DataFrame,
         rsi: float | None,
         momentum: float | None,
@@ -1111,15 +1127,15 @@ class Trader:
             score_total += PESOS_SCORE_TECNICO.get("Tendencia", 1.0)
 
         log.info(
-            "📊 Score técnico: %.2f | RSI: %s (%.2f), Momentum: %s (%.4f), Slope: %s (%.4f), Tendencia: %s",
-            score_total,
-            "✅" if resultados["RSI"] else "❌",
-            rsi if rsi is not None else 0.0,
-            "✅" if resultados["Momentum"] else "❌",
-            momentum if momentum is not None else 0.0,
-            "✅" if resultados["Slope"] else "❌",
-            slope,
-            "✅" if resultados["Tendencia"] else "❌",
+            format_strategy_log(
+                symbol,
+                "score_tecnico",
+                score=score_total,
+                rsi=rsi if rsi is not None else 0.0,
+                momentum=momentum if momentum is not None else 0.0,
+                slope=slope,
+                tendencia=tendencia,
+            )
         )
 
         return float(score_total), resultados
@@ -1246,6 +1262,7 @@ class Trader:
                 rsi = resultado.get("rsi")
                 mom = resultado.get("momentum")
                 score, puntos = self._calcular_score_tecnico(
+                    symbol,
                     df,
                     rsi,
                     mom,
