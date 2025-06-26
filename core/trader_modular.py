@@ -341,29 +341,35 @@ class Trader:
                 "beneficio": ganancia,
             },
         )
-        await self._registrar_salida_profesional(
-            orden.symbol,
-            {
-                "tipo_salida": motivo,
-                "estrategias_activas": orden.estrategias_activas,
-                "score_tecnico_al_cierre": (
-                    self._calcular_score_tecnico(
-                        orden.symbol,
-                        df,
-                        calcular_rsi(df),
-                        calcular_momentum(df),
-                        tendencia or "",
-                        orden.direccion,
-                    )[0]
-                    if df is not None
-                    else 0.0
+        info_salida = {
+            "tipo_salida": motivo,
+            "estrategias_activas": orden.estrategias_activas,
+            "score_tecnico_al_cierre": (
+                self._calcular_score_tecnico(
+                    orden.symbol,
+                    df,
+                    calcular_rsi(df),
+                    calcular_momentum(df),
+                    tendencia or "",
+                    orden.direccion,
+                )[0]
+                if df is not None
+                else 0.0
+            ),
+            "capital_final": capital_final,
+            "configuracion_usada": self.config_por_simbolo.get(orden.symbol, {}),
+            "tiempo_operacion": duracion,
+            "beneficio_relativo": retorno_total,
+        }
+        try:
+            await asyncio.wait_for(
+                asyncio.to_thread(
+                    self._registrar_salida_profesional_sync, orden.symbol, info_salida
                 ),
-                "capital_final": capital_final,
-                "configuracion_usada": self.config_por_simbolo.get(orden.symbol, {}),
-                "tiempo_operacion": duracion,
-                "beneficio_relativo": retorno_total,
-            },
-        )
+                timeout=10,
+            )
+        except asyncio.TimeoutError:
+            log.error("⚠️ Timeout registrando salida profesional")
         metricas = self._metricas_recientes()
         self.risk.ajustar_umbral(metricas)
         try:
@@ -380,18 +386,23 @@ class Trader:
                 if df is not None
                 else (None, None)
             )
-            await asyncio.to_thread(
-                registrar_auditoria,
-                symbol=orden.symbol,
-                evento=motivo,
-                resultado="ganancia" if retorno_total > 0 else "pérdida",
-                estrategias_activas=orden.estrategias_activas,
-                score=score,
-                rsi=rsi_val,
-                tendencia=tendencia,
-                capital_actual=capital_final,
-                config_usada=self.config_por_simbolo.get(orden.symbol, {}),
+            await asyncio.wait_for(
+                asyncio.to_thread(
+                    registrar_auditoria,
+                    symbol=orden.symbol,
+                    evento=motivo,
+                    resultado="ganancia" if retorno_total > 0 else "pérdida",
+                    estrategias_activas=orden.estrategias_activas,
+                    score=score,
+                    rsi=rsi_val,
+                    tendencia=tendencia,
+                    capital_actual=capital_final,
+                    config_usada=self.config_por_simbolo.get(orden.symbol, {}),
+                ),
+                timeout=10,
             )
+        except asyncio.TimeoutError:
+            log.error("⚠️ Timeout registrando auditoría de cierre")
         except Exception as e:  # noqa: BLE001
             log.exception("No se pudo registrar auditoría de cierre", exc_info=e)
         return True
@@ -414,8 +425,6 @@ class Trader:
         except Exception as e:
             log.exception(f"⚠️ Error registrando salida en {archivo}", exc_info=e)
 
-    async def _registrar_salida_profesional(self, symbol: str, info: dict) -> None:
-        await asyncio.to_thread(self._registrar_salida_profesional_sync, symbol, info)
     
     async def _cerrar_parcial_y_reportar(
         self,
@@ -453,7 +462,9 @@ class Trader:
             }
         )
         await asyncio.to_thread(reporter_diario.registrar_operacion, info)
-        await asyncio.to_thread(registrar_resultado_trade, orden.symbol, info, retorno_total)
+        await asyncio.to_thread(
+            registrar_resultado_trade, orden.symbol, info, retorno_total
+        )
         capital_inicial = self.capital_por_simbolo.get(orden.symbol, 0.0)
         ganancia = capital_inicial * retorno_total
         capital_final = capital_inicial + ganancia
@@ -468,28 +479,36 @@ class Trader:
                 "beneficio": ganancia,
             },
         )
-        await self._registrar_salida_profesional(
-            orden.symbol,
-            {
-                "tipo_salida": "parcial",
-                "estrategias_activas": orden.estrategias_activas,
-                "score_tecnico_al_cierre": (
-                    self._calcular_score_tecnico(
-                        orden.symbol,
-                        df,
-                        calcular_rsi(df),
-                        calcular_momentum(df),
-                        orden.tendencia,
-                        orden.direccion,
-                    )[0]
-                    if df is not None
-                    else 0.0
+        info_salida = {
+            "tipo_salida": "parcial",
+            "estrategias_activas": orden.estrategias_activas,
+            "score_tecnico_al_cierre": (
+                self._calcular_score_tecnico(
+                    orden.symbol,
+                    df,
+                    calcular_rsi(df),
+                    calcular_momentum(df),
+                    orden.tendencia,
+                    orden.direccion,
+                )[0]
+                if df is not None
+                else 0.0
+            ),
+            "configuracion_usada": self.config_por_simbolo.get(orden.symbol, {}),
+            "tiempo_operacion": 0.0,
+            "beneficio_relativo": retorno_total,
+        }
+        try:
+            await asyncio.wait_for(
+                asyncio.to_thread(
+                    self._registrar_salida_profesional_sync,
+                    orden.symbol,
+                    info_salida,
                 ),
-                "configuracion_usada": self.config_por_simbolo.get(orden.symbol, {}),
-                "tiempo_operacion": 0.0,
-                "beneficio_relativo": retorno_total,
-            },
-        )
+                timeout=10,
+            )
+        except asyncio.TimeoutError:
+            log.error("⚠️ Timeout registrando salida profesional")
         try:
             rsi_val = calcular_rsi(df) if df is not None else None
             score, _ = (
@@ -504,18 +523,23 @@ class Trader:
                 if df is not None
                 else (None, None)
             )
-            await asyncio.to_thread(
-                registrar_auditoria,
-                symbol=orden.symbol,
-                evento=motivo,
-                resultado="ganancia" if retorno_total > 0 else "pérdida",
-                estrategias_activas=orden.estrategias_activas,
-                score=score,
-                rsi=rsi_val,
-                tendencia=orden.tendencia,
-                capital_actual=capital_final,
-                config_usada=self.config_por_simbolo.get(orden.symbol, {}),
+            await asyncio.wait_for(
+                asyncio.to_thread(
+                    registrar_auditoria,
+                    symbol=orden.symbol,
+                    evento=motivo,
+                    resultado="ganancia" if retorno_total > 0 else "pérdida",
+                    estrategias_activas=orden.estrategias_activas,
+                    score=score,
+                    rsi=rsi_val,
+                    tendencia=orden.tendencia,
+                    capital_actual=capital_final,
+                    config_usada=self.config_por_simbolo.get(orden.symbol, {}),
+                ),
+                timeout=10,
             )
+        except asyncio.TimeoutError:
+            log.error("⚠️ Timeout registrando auditoría de cierre parcial")
         except Exception as e:  # noqa: BLE001
             log.exception("No se pudo registrar auditoría de cierre parcial", exc_info=e)
         return True
@@ -1097,6 +1121,7 @@ class Trader:
             momentum,
             slope,
             tendencia,
+            symbol=symbol,
         )
 
         resultados = {
@@ -1372,17 +1397,22 @@ class Trader:
             },
         )
         try:
-            await asyncio.to_thread(
-                registrar_auditoria,
-                symbol=symbol,
-                evento="Entrada",
-                resultado="ejecutada",
-                estrategias_activas=estrategias_dict,
-                score=puntaje,
-                tendencia=tendencia,
-                capital_actual=self.capital_por_simbolo.get(symbol, 0.0),
-                config_usada=self.config_por_simbolo.get(symbol, {}),
+            await asyncio.wait_for(
+                asyncio.to_thread(
+                    registrar_auditoria,
+                    symbol=symbol,
+                    evento="Entrada",
+                    resultado="ejecutada",
+                    estrategias_activas=estrategias_dict,
+                    score=puntaje,
+                    tendencia=tendencia,
+                    capital_actual=self.capital_por_simbolo.get(symbol, 0.0),
+                    config_usada=self.config_por_simbolo.get(symbol, {}),
+                ),
+                timeout=10,
             )
+        except asyncio.TimeoutError:
+            log.error("⚠️ Timeout registrando auditoría de entrada")
         except Exception as e:  # noqa: BLE001
             log.exception("No se pudo registrar auditoría de entrada", exc_info=e)
 

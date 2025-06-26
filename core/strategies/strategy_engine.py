@@ -115,7 +115,7 @@ class StrategyEngine:
 
             contradiccion = hay_contradicciones(estrategias_activas)
             score_tec = calcular_score_tecnico(
-                df, rsi_val, mom_val, slope_val, tendencia
+                df, rsi_val, mom_val, slope_val, tendencia, symbol=symbol
             )
 
             cumple_div = validar_diversidad(

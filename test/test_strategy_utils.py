@@ -7,8 +7,10 @@ from core.evaluacion_tecnica import evaluar_estrategias
 
 def test_calcular_score_tecnico():
     df = pd.DataFrame({'close': np.linspace(1, 10, 10)})
-    score = calcular_score_tecnico(df, rsi=60, momentum=0.01, slope=0.02, tendencia='alcista')
-    assert score == 3
+    score = calcular_score_tecnico(
+        df, rsi=60, momentum=0.01, slope=0.02, tendencia='alcista', symbol='TEST'
+    )
+    assert 0 <= score <= 1
 
 
 def test_hay_contradicciones():

@@ -68,6 +68,7 @@ def _score_tecnico_basico(df: pd.DataFrame, direccion: str) -> float:
             momentum,
             slope,
             tendencia_cierre if tendencia_cierre in {"alcista", "bajista"} else tendencia,
+            symbol=symbol,
         )
     )
 

@@ -49,6 +49,7 @@ def validar_sl_tecnico(df: pd.DataFrame, direccion: str = "long") -> float:
             momentum,
             slope,
             "bajista" if direccion in ["long", "compra"] else "alcista",
+            symbol=symbol,
         )
 
         if direccion in ["long", "compra"]:
@@ -285,6 +286,7 @@ def verificar_salida_stoploss(
         momentum,
         slope,
         "bajista" if direccion in ["long", "compra"] else "alcista",
+        symbol=symbol,
     )
 
     umbral_salida = calcular_umbral_salida_adaptativo(

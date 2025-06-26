@@ -107,6 +107,7 @@ def entrada_permitida(
             momentum,
             slope,
             tendencia or "lateral",
+            symbol=symbol,
         )
     )
     potencia_ajustada = potencia * (1 + score_tecnico / 3)
