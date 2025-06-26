@@ -23,7 +23,7 @@ async def escuchar_velas(symbol, intervalo, callback):
             intentos = 0  # reiniciar intentos al conectar
             try:
 
-                while True
+                while True:
                     try:
                         msg = await asyncio.wait_for(ws.recv(), timeout=60)
                         data = json.loads(msg)
