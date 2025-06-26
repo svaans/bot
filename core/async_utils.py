@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import functools
+import logging
 from typing import Set
 
 
@@ -29,4 +31,22 @@ class TaskManager:
         await asyncio.gather(*self._tasks, return_exceptions=True)
 
 
-__all__ = ["TaskManager"]
+def log_exceptions_async(func):
+    """Decorador para registrar excepciones de corrutinas."""
+
+    @functools.wraps(func)
+    async def wrapper(*args, **kwargs):
+        try:
+            return await func(*args, **kwargs)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # pragma: no cover - logging defensivo
+            logging.getLogger(func.__module__).exception(
+                f"Unhandled exception in {func.__name__}", exc_info=exc
+            )
+            raise
+
+    return wrapper
+
+
+__all__ = ["TaskManager", "log_exceptions_async"]
