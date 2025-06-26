@@ -34,9 +34,10 @@ def obtener_todos_puntajes() -> dict:
 class StreamContexto:
     """Conecta con Binance y actualiza el contexto en tiempo real."""
 
-    def __init__(self, url_template: str | None = None) -> None:
+    def __init__(self, url_template: str | None = None, max_conexiones: int = 5) -> None:
         self.url_template = url_template or CONTEXT_WS_URL
         self._tasks: Dict[str, asyncio.Task] = {}
+        self._sem = asyncio.Semaphore(max_conexiones)
         
     @log_exceptions_async
     async def _stream(
@@ -46,50 +47,56 @@ class StreamContexto:
         url = self.url_template.format(symbol=symbol_norm)
         while True:
             try:
-                async with asyncio.wait_for(
-                    websockets.connect(url, ping_interval=20, ping_timeout=20),
-                    timeout=10,
-                ) as ws:
-                    log.info(f"🔌 Contexto conectado para {symbol}")
-                    while True:
-                        try:
-                            msg = await asyncio.wait_for(ws.recv(), timeout=60)
-                            data = json.loads(msg)
-                            vela = data.get("k")
-                            if vela is None:
-                                continue
-                            close = float(vela.get("c", 0.0))
-                            open_ = float(vela.get("o", 0.0))
-                            vol = float(vela.get("v", 0.0))
-
-                            if open_ == 0 or vol < 1e-8:
-                                continue
-
-                            # Versión normalizada del puntaje
-                            variacion_pct = (close - open_) / open_
-                            puntaje = variacion_pct * vol
-
-                            _PUNTAJES[symbol] = puntaje
+                async with self._sem:
+                    async with websockets.connect(
+                        url,
+                        ping_interval=20,
+                        ping_timeout=20,
+                        open_timeout=10,
+                    ) as ws:
+                        log.info(f"🔌 Contexto conectado para {symbol}")
+                        while True:
                             try:
-                                await handler(symbol, puntaje)
+                                msg = await asyncio.wait_for(ws.recv(), timeout=60)
+                                data = json.loads(msg)
+                                vela = data.get("k")
+                                if vela is None:
+                                    continue
+                                close = float(vela.get("c", 0.0))
+                                open_ = float(vela.get("o", 0.0))
+                                vol = float(vela.get("v", 0.0))
+
+                                if open_ == 0 or vol < 1e-8:
+                                    continue
+
+                                variacion_pct = (close - open_) / open_
+                                puntaje = variacion_pct * vol
+
+                                _PUNTAJES[symbol] = puntaje
+                                try:
+                                    await handler(symbol, puntaje)
+                                except Exception as e:
+                                    log.warning(f"⚠️ Handler contexto {symbol} falló: {e}")
+                            except asyncio.TimeoutError:
+                                log.warning(f"⏳ Timeout contexto {symbol}")
+                                continue
+                            except asyncio.CancelledError:
+                                log.info(
+                                    f"🛑 Stream contexto {symbol} cancelado (mensaje)."
+                                )
+                                raise
                             except Exception as e:
-                                log.warning(f"⚠️ Handler contexto {symbol} falló: {e}")
-                                
-                        except asyncio.TimeoutError:
-                            log.warning(f"⏳ Timeout contexto {symbol}")
-                            continue
-                        except asyncio.CancelledError:
-                            log.info(f"🛑 Stream contexto {symbol} cancelado (mensaje).")
-                            raise
-                        except Exception as e:
-                            log.warning(f"⚠️ Error procesando contexto de {symbol}: {e}")
-                    break
+                                log.warning(
+                                    f"⚠️ Error procesando contexto de {symbol}: {e}"
+                                )
+                                break
+                # Al salir del bucle interno, reconectamos
+                continue
             except asyncio.CancelledError:
                 log.info(f"🛑 Conexión de contexto {symbol} cancelada")
                 break
             except Exception as e:
-                log.warning(f"⚠️ Stream de contexto {symbol} falló: {e}. Reintentando en 5s")
-                await asyncio.sleep(5)
+                log.exception(f"⚠️ Stream de contexto {symbol} falló", exc_info=e)
                 
     @log_exceptions_async
     async def escuchar(
