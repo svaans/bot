@@ -37,8 +37,8 @@ def _cargar_pesos(symbol: str) -> dict:
                 with open(RUTA_PESOS, "r", encoding="utf-8") as fh:
                     _pesos_cache = json.load(fh)
             except Exception as e:
-                log.warning(
-                    f"Error leyendo {RUTA_PESOS}: {e}. Usando pesos por defecto"
+                log.exception(
+                    f"Error leyendo {RUTA_PESOS}. Usando pesos por defecto", exc_info=e
                 )
                 _pesos_cache = {}
         else:
@@ -168,4 +168,4 @@ def actualizar_pesos_tecnicos(symbol: str, detalles: dict, retorno: float, facto
                 json.dump(_pesos_cache, fh, indent=2)
             log.info(f"[{symbol}] Pesos tecnicos actualizados")
         except Exception as e:  # noqa: BLE001
-            log.warning(f"[{symbol}] Error guardando pesos: {e}")
+            log.exception(f"[{symbol}] Error guardando pesos", exc_info=e)

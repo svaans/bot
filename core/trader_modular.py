@@ -151,7 +151,7 @@ class Trader:
             if factores:
                 factor_vol = min(factores)
         except Exception as e:  # noqa: BLE001
-            log.debug(f"No se pudo calcular factor de volatilidad: {e}")
+            log.exception("No se pudo calcular factor de volatilidad", exc_info=e)
 
         self.fraccion_kelly *= factor_vol
         log.info(
@@ -196,7 +196,7 @@ class Trader:
                     config.symbols
                 )
         except Exception as e:
-            log.warning(f"⚠️ Error cargando órdenes previas desde la base de datos: {e}")
+            log.exception("⚠️ Error cargando órdenes previas desde la base de datos", exc_info=e)
             raise
 
         if self.orders.ordenes:
@@ -290,7 +290,7 @@ class Trader:
                     retorno_total,
                 )
         except Exception as e:  # noqa: BLE001
-            log.debug(f"No se pudo actualizar pesos tecnicos: {e}")
+            log.exception("No se pudo actualizar pesos tecnicos", exc_info=e)
         await asyncio.to_thread(actualizar_pesos_estrategias_symbol, orden.symbol)
         try:
             self.pesos_por_simbolo = await asyncio.to_thread(cargar_pesos_estrategias)
@@ -302,8 +302,8 @@ class Trader:
         try:
             apertura = datetime.fromisoformat(orden.timestamp)
             duracion = (datetime.utcnow() - apertura).total_seconds() / 60
-        except Exception:
-            pass
+        except (ValueError, TypeError) as e:
+            log.exception("Error calculando duración de la operación", exc_info=e)
         prev = self.historial_cierres.get(orden.symbol, {})
         self.historial_cierres[orden.symbol] = {
             "timestamp": datetime.utcnow().isoformat(),
@@ -387,7 +387,7 @@ class Trader:
                 config_usada=self.config_por_simbolo.get(orden.symbol, {}),
             )
         except Exception as e:  # noqa: BLE001
-            log.debug(f"No se pudo registrar auditoría de cierre: {e}")
+            log.exception("No se pudo registrar auditoría de cierre", exc_info=e)
         return True
     
     def _registrar_salida_profesional_sync(self, symbol: str, info: dict) -> None:
@@ -406,7 +406,7 @@ class Trader:
                 df = pd.DataFrame([data])
             df.to_parquet(archivo, index=False)
         except Exception as e:
-            log.warning(f"⚠️ Error registrando salida en {archivo}: {e}")
+            log.exception(f"⚠️ Error registrando salida en {archivo}", exc_info=e)
 
     async def _registrar_salida_profesional(self, symbol: str, info: dict) -> None:
         await asyncio.to_thread(self._registrar_salida_profesional_sync, symbol, info)
@@ -509,7 +509,7 @@ class Trader:
                 config_usada=self.config_por_simbolo.get(orden.symbol, {}),
             )
         except Exception as e:  # noqa: BLE001
-            log.debug(f"No se pudo registrar auditoría de cierre parcial: {e}")
+            log.exception("No se pudo registrar auditoría de cierre parcial", exc_info=e)
         return True
     
     def es_salida_parcial_valida(
@@ -528,7 +528,8 @@ class Trader:
             retorno_potencial = (precio_tp - (orden.precio_entrada or 0.0)) * (
                 orden.cantidad or 0.0
             )
-        except Exception:
+        except (TypeError, ValueError) as e:
+            log.exception("Error calculando retorno potencial para salida parcial", exc_info=e)
             return False
 
         if inversion <= config.get("umbral_operacion_grande", 30.0):
@@ -684,7 +685,7 @@ class Trader:
                 log.warning(f"⚠️ Error cargando histórico para {symbol}: {e}")
                 continue
             except Exception as e:
-                log.warning(f"⚠️ Error inesperado cargando histórico para {symbol}: {e}")
+                log.exception(f"⚠️ Error inesperado cargando histórico para {symbol}", exc_info=e)
                 continue
 
             for ts, open_, high_, low_, close_, vol in datos:
@@ -713,7 +714,7 @@ class Trader:
                 await loop.run_in_executor(None, ciclo_aprendizaje)
                 log.info("🧠 Ciclo de aprendizaje completado")
             except Exception as e:  # noqa: BLE001
-                log.warning(f"⚠️ Error en ciclo de aprendizaje: {e}")
+                log.exception("⚠️ Error en ciclo de aprendizaje", exc_info=e)
             await asyncio.sleep(intervalo)
     
     async def _calcular_cantidad_async(
@@ -814,7 +815,7 @@ class Trader:
                 df = pd.read_parquet(archivo)
                 self.historicos[symbol] = df
             except Exception as e:
-                log.debug(f"No se pudo cargar histórico para {symbol}: {e}")
+                log.exception(f"No se pudo cargar histórico para {symbol}", exc_info=e)
                 self.historicos[symbol] = None
                 return None
         return df
@@ -894,7 +895,7 @@ class Trader:
                 )
             )
         except Exception as e:  # noqa: BLE001
-            log.debug(f"No se pudo registrar auditoría de rechazo: {e}")
+            log.exception("No se pudo registrar auditoría de rechazo", exc_info=e)
 
     def _validar_puntaje(self, symbol: str, puntaje: float, umbral: float) -> bool:
         """Comprueba si ``puntaje`` supera ``umbral``."""
@@ -1362,7 +1363,7 @@ class Trader:
                 config_usada=self.config_por_simbolo.get(symbol, {}),
             )
         except Exception as e:  # noqa: BLE001
-            log.debug(f"No se pudo registrar auditoría de entrada: {e}")
+            log.exception("No se pudo registrar auditoría de entrada", exc_info=e)
 
     async def _verificar_salidas(self, symbol: str, df: pd.DataFrame) -> None:
         self.watchdog.ping("verificar_salidas")
@@ -1437,7 +1438,7 @@ class Trader:
         try:
             await self.tasks.wait_all()
         except Exception as e:
-            log.error(f"❌ Error inesperado en ejecución de tareas: {e}")
+            log.exception("❌ Error inesperado en ejecución de tareas", exc_info=e)
             
         await self.tasks.wait_all()
 
