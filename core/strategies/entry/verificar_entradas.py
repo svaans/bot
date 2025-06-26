@@ -21,7 +21,7 @@ from core.strategies.evaluador_tecnico import (
 from indicators.rsi import calcular_rsi
 from indicators.momentum import calcular_momentum
 from indicators.slope import calcular_slope
-from core.utils.utils import distancia_minima_valida
+from core.utils.utils import distancia_minima_valida, validar_ratio_beneficio
 import asyncio
 
 log = configurar_logger("verificar_entrada")
@@ -254,6 +254,13 @@ async def _verificar_entrada_impl(
     if not distancia_minima_valida(precio, sl, tp):
         log.warning(
             f"📏 [{symbol}] Distancia SL/TP insuficiente. SL: {sl:.2f} TP: {tp:.2f}"
+        )
+        return None
+
+    ratio_min = config_actual.get("ratio_minimo_beneficio", 1.5)
+    if not validar_ratio_beneficio(precio, sl, tp, ratio_min):
+        log.warning(
+            f"🚫 [{symbol}] Ratio beneficio/riesgo < {ratio_min:.2f}"
         )
         return None
 
