@@ -1434,6 +1434,8 @@ class Trader:
             fracciones=fracciones,
             detalles_tecnicos=detalles_tecnicos or {},
         )
+        monto_invertido = precio * cantidad
+        self.capital_manager.reservar_capital(symbol, monto_invertido)
         estrategias_list = list(estrategias_dict.keys())
         log.info(
             f"🟢 ENTRADA: {symbol} | Puntaje: {puntaje:.2f} / Umbral: {umbral:.2f} | Estrategias: {estrategias_list}"
