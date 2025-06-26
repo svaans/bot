@@ -21,6 +21,7 @@ CONFIG_BASE = {
     "sl_ratio": 1.5,
     "tp_ratio": 3.0,
     "ratio_minimo_beneficio": 1.3,
+    "sl_atr_min": 1.0,
     "uso_trailing_technico": True,
     "trailing_buffer": 0.01,
     "trailing_por_atr": True,
