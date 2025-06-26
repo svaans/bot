@@ -229,9 +229,9 @@ class Trader:
         if not await self.orders.cerrar_async(symbol, precio, motivo):
             log.debug(f"🔁 Intento duplicado de cierre ignorado para {symbol}")
             return
-        await asyncio.to_thread(actualizar_pesos_estrategias_symbol, symbol)
+        await self._run_io(actualizar_pesos_estrategias_symbol, symbol)
         try:
-            self.pesos_por_simbolo = await asyncio.to_thread(cargar_pesos_estrategias)
+            self.pesos_por_simbolo = await self._run_io(cargar_pesos_estrategias)
         except ValueError as e:
             log.error(f"❌ {e}")
             return
@@ -270,6 +270,7 @@ class Trader:
                 "capital_inicial": capital_simbolo,
             }
         )
+        log.debug(f"🚪 Cerrando orden {orden.symbol} por '{motivo}'")
         if not await self.orders.cerrar_async(orden.symbol, precio, motivo):
             log.warning(
                 f"❌ No se pudo confirmar el cierre de {orden.symbol}. Se omitirá el registro."
@@ -302,21 +303,25 @@ class Trader:
                     await f.write(mensaje + "\n")
                 log.info(mensaje)
             orden.sl_evitar_info = []
-        await asyncio.to_thread(reporter_diario.registrar_operacion, info)
-        await asyncio.to_thread(registrar_resultado_trade, orden.symbol, info, retorno_total)
+        await self._run_io(reporter_diario.registrar_operacion, info)
+        log.debug("📑 Operación registrada")
+        await self._run_io(registrar_resultado_trade, orden.symbol, info, retorno_total)
+        log.debug("📈 Resultado de trade actualizado")
         try:
             if orden.detalles_tecnicos:
-                await asyncio.to_thread(
+                await self._run_io(
                     actualizar_pesos_tecnicos,
                     orden.symbol,
                     orden.detalles_tecnicos,
                     retorno_total,
                 )
+                log.debug("⚙️ Pesos técnicos actualizados")
         except Exception as e:  # noqa: BLE001
             log.exception("No se pudo actualizar pesos tecnicos", exc_info=e)
-        await asyncio.to_thread(actualizar_pesos_estrategias_symbol, orden.symbol)
+        await self._run_io(actualizar_pesos_estrategias_symbol, orden.symbol)
+        log.debug("⚙️ Pesos de estrategias actualizados")
         try:
-            self.pesos_por_simbolo = await asyncio.to_thread(cargar_pesos_estrategias)
+            self.pesos_por_simbolo = await self._run_io(cargar_pesos_estrategias)
         except ValueError as e:
             log.error(f"❌ {e}")
             return False
@@ -391,6 +396,7 @@ class Trader:
             log.error("⚠️ Timeout registrando salida profesional")
         metricas = self._metricas_recientes()
         self.risk.ajustar_umbral(metricas)
+        log.debug("📊 Umbral de riesgo ajustado")
         try:
             rsi_val = calcular_rsi(df) if df is not None else None
             score, _ = (
@@ -420,6 +426,7 @@ class Trader:
                 ),
                 timeout=10,
             )
+            log.debug("📝 Auditoría de cierre registrada")
         except asyncio.TimeoutError:
             log.error("⚠️ Timeout registrando auditoría de cierre")
         except Exception as e:  # noqa: BLE001
@@ -485,8 +492,8 @@ class Trader:
                 "capital_inicial": capital_simbolo,
             }
         )
-        await asyncio.to_thread(reporter_diario.registrar_operacion, info)
-        await asyncio.to_thread(
+        await self._run_io(reporter_diario.registrar_operacion, info)
+        await self._run_io(
             registrar_resultado_trade, orden.symbol, info, retorno_total
         )
         ganancia = capital_simbolo * retorno_total
@@ -563,6 +570,7 @@ class Trader:
                 ),
                 timeout=10,
             )
+            log.debug("📝 Auditoría parcial registrada")
         except asyncio.TimeoutError:
             log.error("⚠️ Timeout registrando auditoría de cierre parcial")
         except Exception as e:  # noqa: BLE001
@@ -857,6 +865,15 @@ class Trader:
         loop = asyncio.get_running_loop()
         self._ultima_actividad = loop.time()
 
+    async def _run_io(self, func, *args, timeout: float = 15.0):
+        """Ejecuta ``func`` en un thread con timeout y maneja excepciones."""
+        try:
+            log.debug(f"⏳ Ejecutando {func.__name__} para {args[0] if args else ''}")
+            return await asyncio.wait_for(asyncio.to_thread(func, *args), timeout)
+        except Exception as e:  # noqa: BLE001
+            log.exception(f"Error en {func.__name__}", exc_info=e)
+            return None
+
     @log_exceptions_async
     async def _vigilar_inactividad(self) -> None:
         """Reporta periodos prolongados sin actividad."""
@@ -991,8 +1008,7 @@ class Trader:
         registro_metrico.registrar("rechazo", registro)
 
         try:
-            loop = asyncio.get_running_loop()
-            loop.create_task(
+            task = asyncio.create_task(
                 asyncio.to_thread(
                     registrar_auditoria,
                     symbol=symbol,
@@ -1005,6 +1021,10 @@ class Trader:
                     config_usada=self.config_por_simbolo.get(symbol, {}),
                 )
             )
+            task.add_done_callback(
+                lambda t: log.error(f"❌ Error auditoría rechazo: {t.exception()}") if t.exception() else None
+            )
+            self.tasks.add_task(task)
         except Exception as e:  # noqa: BLE001
             log.exception("No se pudo registrar auditoría de rechazo", exc_info=e)
 
