@@ -602,7 +602,7 @@ class Trader:
                     correlaciones[symbol].drop(labels=[symbol], errors="ignore").abs()
                 )
                 corr_media = corr_series.mean()
-            if corr_media >= umbral_corr:
+            if corr_media is not None and not pd.isna(corr_media) and corr_media >= umbral_corr:
                 peso *= 1 - penalizacion_corr * corr_media
 
             # Extrae métricas previas del reporte para el símbolo actual

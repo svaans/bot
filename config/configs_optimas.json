@@ -1,0 +1,13 @@
+{
+    "instrucciones": "Copie la sección 'umbrales' debajo del simbolo deseado para sobreescribir los valores por defecto.",
+    "umbrales": {
+        "distancia_extremos_min": 0.002,
+        "min_cuerpo_no_doji": 0.3,
+        "tp_sl_minimo": 1.2,
+        "perdida_dia_max_pct": -2.0,
+        "volumen_rel_min": 0.6,
+        "rsi_sobrecompra": 75,
+        "factor_mecha_larga": 2.0,
+        "cuerpo_alcista_min": 0.6
+    }
+}

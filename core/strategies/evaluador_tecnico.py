@@ -3,6 +3,15 @@ import os
 import pandas as pd
 from indicators.rsi import calcular_rsi
 from core.utils.utils import configurar_logger
+from config.umbrales import (
+    DISTANCIA_EXTREMOS_MIN,
+    MIN_CUERPO_NO_DOJI,
+    TP_SL_MINIMO,
+    VOLUMEN_REL_MIN,
+    RSI_SOBRECOMPRA,
+    FACTOR_MECHA_LARGA,
+    CUERPO_ALCISTA_MIN,
+)
 
 log = configurar_logger("eval_tecnico")
 
@@ -101,14 +110,14 @@ def evaluar_puntaje_tecnico(symbol: str, df: pd.DataFrame, precio: float, sl: fl
     _add("rsi", rsi is not None and 40 <= rsi <= 70)
     _add("volumen", media_vol > 0 and volumen_actual > media_vol)
     ratio = (tp - precio) / (precio - sl) if precio != sl else None
-    _add("tp_sl", ratio is not None and ratio >= 1.2)
-    _add("no_doji", rango_total > 0 and cuerpo / rango_total >= 0.3)
-    _add("no_sobrecompra", rsi is None or rsi < 75)
-    _add("cuerpo_sano", cierre > apertura and cuerpo >= 0.6 * rango_total)
+    _add("tp_sl", ratio is not None and ratio >= TP_SL_MINIMO)
+    _add("no_doji", rango_total > 0 and cuerpo / rango_total >= MIN_CUERPO_NO_DOJI)
+    _add("no_sobrecompra", rsi is None or rsi < RSI_SOBRECOMPRA)
+    _add("cuerpo_sano", cierre > apertura and cuerpo >= CUERPO_ALCISTA_MIN * rango_total)
     _add("rsi_creciente", rsi is not None and rsi_ant is not None and rsi > rsi_ant)
     _add("volumen_creciente", volumen_actual > volumen_prev)
     mecha_sup = alto - max(cierre, apertura)
-    _add("sin_mecha_sup_larga", mecha_sup <= 2 * cuerpo)
+    _add("sin_mecha_sup_larga", mecha_sup <= FACTOR_MECHA_LARGA * cuerpo)
     max_dia = df["high"].max()
     min_dia = df["low"].min()
     distancia_max = (max_dia - precio) / max_dia if max_dia else None
@@ -116,8 +125,8 @@ def evaluar_puntaje_tecnico(symbol: str, df: pd.DataFrame, precio: float, sl: fl
     _add(
         "distancia_extremos",
         None not in (distancia_max, distancia_min)
-        and distancia_max > 0.002
-        and distancia_min > 0.002,
+        and distancia_max > DISTANCIA_EXTREMOS_MIN
+        and distancia_min > DISTANCIA_EXTREMOS_MIN,
     )
 
     log.info(f"[ENTRY ANALYSIS] {symbol}")
