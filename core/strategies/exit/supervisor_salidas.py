@@ -83,6 +83,13 @@ class SupervisorSalidas:
 
         # 4. Take Profit
         if not resultado["cerrar"] and precio_max >= self.orden.take_profit:
-            resultado.update({"cerrar": True, "razon": "Take Profit"})
+            direccion = 1 if self.orden.direccion in ("long", "compra") else -1
+            beneficio = (
+                (precio_cierre - self.orden.precio_entrada) / self.orden.precio_entrada
+            ) * direccion
+            if beneficio > 0:
+                resultado.update({"cerrar": True, "razon": "Take Profit"})
+            else:
+                resultado.update({"cerrar": True, "razon": "Debilidad"})
 
         return resultado

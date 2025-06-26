@@ -262,6 +262,13 @@ class Trader:
             capital_invertido / capital_simbolo if capital_simbolo else 0.0
         )
         retorno_total -= COMISION * 2 + SLIPPAGE
+        if motivo.lower().startswith("take profit") and retorno_total <= 0:
+            log.warning(
+                f"⚠️ {orden.symbol} cierre marcado como TP sin ganancia ({retorno_total:.4f}). "
+                "Reclasificando como 'Debilidad'"
+            )
+            motivo = "Debilidad"
+
         info = orden.to_dict()
         info.update(
             {
@@ -483,6 +490,12 @@ class Trader:
             capital_invertido / capital_simbolo if capital_simbolo else 0.0
         )
         retorno_total -= COMISION * 2 + SLIPPAGE
+        if motivo.lower().startswith("take profit") and retorno_total <= 0:
+            log.warning(
+                f"⚠️ {orden.symbol} cierre parcial TP sin ganancia ({retorno_total:.4f}). "
+                "Reclasificando como 'Debilidad'"
+            )
+            motivo = "Debilidad"
         info = orden.to_dict()
         info.update(
             {
