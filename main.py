@@ -1,3 +1,29 @@
+"""Script principal del bot de trading."""
+
+# --- Bloqueo para evitar múltiples instancias ---
+import os
+import sys
+import fcntl
+
+
+def acquire_lock(path: str = "/tmp/pegaso_bot.lock"):
+    """Adquiere un bloqueo exclusivo para asegurar una sola instancia."""
+    lock_fd = open(path, "w")
+    try:
+        # Intentar bloquear sin esperar
+        fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        # Registrar el PID de la instancia actual
+        lock_fd.write(str(os.getpid()))
+        lock_fd.flush()
+    except OSError:
+        print("⚠️ Ya hay una instancia del bot ejecutándose.")
+        lock_fd.close()
+        sys.exit(1)
+    return lock_fd
+
+
+lock_fd = acquire_lock()
+
 import asyncio
 import platform
 import signal
@@ -5,36 +31,6 @@ import traceback
 from pathlib import Path
 import logging
 from logging.handlers import RotatingFileHandler
-import fcntl
-import os
-import sys
-import io
-
-
-class SingleInstance:
-    """Garantiza que solo una instancia del bot se ejecute simultáneamente."""
-
-    def __init__(self, path: str = "/tmp/pegaso.lock") -> None:
-        self.path = path
-        self._file: io.TextIOWrapper | None = None
-
-    def __enter__(self) -> "SingleInstance":
-        self._file = open(self.path, "w")
-        try:
-            fcntl.flock(self._file, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            self._file.write(str(os.getpid()))
-            self._file.flush()
-        except OSError:
-            print("\u274c Otra instancia del bot ya está en ejecución.")
-            raise SystemExit(1)
-        return self
-
-    def __exit__(self, exc_type, exc, tb) -> None:
-        if self._file:
-            try:
-                fcntl.flock(self._file, fcntl.LOCK_UN)
-            finally:
-                self._file.close()
 
 from core.hot_reload import start_hot_reload, stop_hot_reload
 from learning.reset_configuracion import resetear_configuracion_diaria_si_corresponde
@@ -147,14 +143,19 @@ async def main():
         print("👋 Bot finalizado correctamente.")
 
 if __name__ == "__main__":
-    with SingleInstance():
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        print("\n🛑 Bot detenido manualmente.")
+    except Exception:
+        logging.getLogger(__name__).exception("Error inesperado")
+        print("\n❌ Error inesperado:")
+        traceback.print_exc()
+    finally:
+        # Liberar el bloqueo antes de salir
         try:
-            asyncio.run(main())
-        except KeyboardInterrupt:
-            print("\n🛑 Bot detenido manualmente.")
-        except Exception:
-            logging.getLogger(__name__).exception("Error inesperado")
-            print("\n❌ Error inesperado:")
-            traceback.print_exc()
+            fcntl.flock(lock_fd, fcntl.LOCK_UN)
+        finally:
+            lock_fd.close()
 
 
