@@ -4,22 +4,41 @@
 import os
 import sys
 import fcntl
+import psutil
 
 
 def acquire_lock(path: str = "/tmp/pegaso_bot.lock"):
-    """Adquiere un bloqueo exclusivo para asegurar una sola instancia."""
-    lock_fd = open(path, "w")
-    try:
-        # Intentar bloquear sin esperar
-        fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        # Registrar el PID de la instancia actual
-        lock_fd.write(str(os.getpid()))
-        lock_fd.flush()
-    except OSError:
-        print("⚠️ Ya hay una instancia del bot ejecutándose.")
-        lock_fd.close()
-        sys.exit(1)
-    return lock_fd
+    """Asegura que solo una instancia del bot esté activa."""
+
+    while True:
+        lock_fd = open(path, "a+")
+        try:
+            # Intentar obtener un bloqueo exclusivo sin esperar
+            fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            # El archivo está bloqueado: ¿la instancia sigue viva?
+            lock_fd.seek(0)
+            pid_str = lock_fd.read().strip()
+            lock_fd.close()
+            if pid_str.isdigit() and not psutil.pid_exists(int(pid_str)):
+                # El proceso registrado ya no existe -> lock huérfano
+                try:
+                    os.remove(path)
+                except OSError:
+                    pass
+                continue
+            mensaje = "🛑 Ya hay una instancia en ejecución"
+            if pid_str.isdigit():
+                mensaje += f" (PID {pid_str})"
+            print(mensaje + ". Finalizando esta ejecución.")
+            sys.exit(1)
+        else:
+            # Bloqueo adquirido correctamente -> escribir PID
+            lock_fd.seek(0)
+            lock_fd.truncate()
+            lock_fd.write(str(os.getpid()))
+            lock_fd.flush()
+            return lock_fd
 
 
 lock_fd = acquire_lock()
