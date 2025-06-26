@@ -21,7 +21,8 @@ class DataFeed:
     def activos(self) -> list[str]:
         """Lista de símbolos con streams activos."""
         return list(self._tasks.keys())
-
+        
+    @log_exceptions_async
     async def stream(self, symbol: str, handler: Callable[[dict], Awaitable[None]]) -> None:
         """Escucha las velas de ``symbol`` y reintenta ante fallos de conexión."""
         while True:
@@ -31,7 +32,8 @@ class DataFeed:
             except Exception as e:  # pragma: no cover - conexión externa
                 log.warning(f"⚠️ Stream {symbol} falló: {e}. Reintentando en 5s")
                 await asyncio.sleep(5)
-
+                
+    @log_exceptions_async
     async def escuchar(self, symbols: Iterable[str], handler: Callable[[dict], Awaitable[None]]) -> None:
         """Inicia un stream por cada símbolo y espera a que todos finalicen."""
         for sym in symbols:
