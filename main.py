@@ -5,6 +5,36 @@ import traceback
 from pathlib import Path
 import logging
 from logging.handlers import RotatingFileHandler
+import fcntl
+import os
+import sys
+import io
+
+
+class SingleInstance:
+    """Garantiza que solo una instancia del bot se ejecute simultáneamente."""
+
+    def __init__(self, path: str = "/tmp/pegaso.lock") -> None:
+        self.path = path
+        self._file: io.TextIOWrapper | None = None
+
+    def __enter__(self) -> "SingleInstance":
+        self._file = open(self.path, "w")
+        try:
+            fcntl.flock(self._file, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            self._file.write(str(os.getpid()))
+            self._file.flush()
+        except OSError:
+            print("\u274c Otra instancia del bot ya está en ejecución.")
+            raise SystemExit(1)
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> None:
+        if self._file:
+            try:
+                fcntl.flock(self._file, fcntl.LOCK_UN)
+            finally:
+                self._file.close()
 
 from core.hot_reload import start_hot_reload, stop_hot_reload
 from learning.reset_configuracion import resetear_configuracion_diaria_si_corresponde
@@ -20,6 +50,16 @@ async def auto_restart(event: asyncio.Event, delay: int = 1800) -> None:
     await asyncio.sleep(delay)
     logging.getLogger(__name__).warning("♻️ Reinicio automático ejecutado")
     event.set()
+
+async def heartbeat(event: asyncio.Event, interval: int = 30) -> None:
+    """Escribe periódicamente una señal de vida en los logs."""
+    log = logging.getLogger(__name__)
+    while not event.is_set():
+        log.info("bot vivo")
+        try:
+            await asyncio.wait_for(event.wait(), timeout=interval)
+        except asyncio.TimeoutError:
+            continue
 
 
 async def main():
@@ -73,6 +113,7 @@ async def main():
     stop_event = asyncio.Event()
     tarea_stop = asyncio.create_task(stop_event.wait())
     tarea_reinicio = asyncio.create_task(auto_restart(stop_event))
+    tarea_heartbeat = asyncio.create_task(heartbeat(stop_event))
 
     def detener_bot():
         print("\n🛑 Señal de detención recibida.")
@@ -85,7 +126,7 @@ async def main():
 
     try:
         await asyncio.wait(
-            [tarea_bot, tarea_stop, tarea_reinicio],
+            [tarea_bot, tarea_stop, tarea_reinicio, tarea_heartbeat],
             return_when=asyncio.FIRST_COMPLETED,
         )
     except asyncio.CancelledError:
@@ -97,20 +138,23 @@ async def main():
         tarea_bot.cancel()
         tarea_reinicio.cancel()
         tarea_stop.cancel()
+        tarea_heartbeat.cancel()
         await asyncio.gather(
-            tarea_bot, tarea_reinicio, tarea_stop, return_exceptions=True
+            tarea_bot, tarea_reinicio, tarea_stop, tarea_heartbeat, return_exceptions=True
         )
         stop_hot_reload(observer)
         await bot.cerrar()
         print("👋 Bot finalizado correctamente.")
 
 if __name__ == "__main__":
-    try:
-        asyncio.run(main())
-    except KeyboardInterrupt:
-        print("\n🛑 Bot detenido manualmente.")
-    except Exception:
-        print("\n❌ Error inesperado:")
-        traceback.print_exc()
+    with SingleInstance():
+        try:
+            asyncio.run(main())
+        except KeyboardInterrupt:
+            print("\n🛑 Bot detenido manualmente.")
+        except Exception:
+            logging.getLogger(__name__).exception("Error inesperado")
+            print("\n❌ Error inesperado:")
+            traceback.print_exc()
 
 
