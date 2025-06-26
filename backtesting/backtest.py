@@ -13,6 +13,7 @@ from tqdm import tqdm
 from config.config_manager import Config
 from core.trader_modular import Trader
 from core.orders import OrderServiceSimulado
+from core.config import COMISION, SLIPPAGE
 
 BUFFER_INICIAL = 120
 CAPITAL_INICIAL = 300.0  # Capital inicial para el backtest
@@ -53,6 +54,7 @@ class BacktestTrader(Trader):
             if orden.precio_entrada
             else 0.0
         )
+        retorno_total -= COMISION * 2 + SLIPPAGE
         cerrado = await self.orders.cerrar_async(orden.symbol, precio, motivo)
         if not cerrado:
             return False
