@@ -15,13 +15,17 @@ async def escuchar_velas(symbol, intervalo, callback):
 
     while True:
         try:
-            ws = await websockets.connect(url, ping_interval=20, ping_timeout=20)
+            ws = await asyncio.wait_for(
+                websockets.connect(url, ping_interval=20, ping_timeout=20),
+                timeout=10,
+            )
             log.info(f"🔌 WebSocket conectado para {symbol} ({intervalo})")
             intentos = 0  # reiniciar intentos al conectar
             try:
 
-                async for msg in ws:
+                while True
                     try:
+                        msg = await asyncio.wait_for(ws.recv(), timeout=60)
                         data = json.loads(msg)
                         vela = data["k"]
                         if vela["x"]:
@@ -39,6 +43,9 @@ async def escuchar_velas(symbol, intervalo, callback):
                                     "volume": float(vela["v"]),
                                 }
                             )
+                    except asyncio.TimeoutError:
+                        log.warning(f"⏳ Timeout recibiendo datos de {symbol}")
+                        continue
 
                     except asyncio.CancelledError:
                         log.info(f"🛑 WebSocket de {symbol} cancelado (salida ordenada).")
