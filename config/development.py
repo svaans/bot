@@ -27,3 +27,5 @@ class DevelopmentConfig:
     fracciones_piramide: int = 1
     reserva_piramide: float = 0.0
     umbral_piramide: float = 0.006
+    candle_host: str = "localhost"
+    candle_port: int = 9000

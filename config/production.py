@@ -15,3 +15,5 @@ class ProductionConfig(DevelopmentConfig):
         "SOL/EUR",
         "BNB/EUR",
     ])
+    candle_host: str = "localhost"
+    candle_port: int = 9000

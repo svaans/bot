@@ -34,6 +34,8 @@ docker run -p 9000:9000 candle_service
 ```
 
 El bot Python asume que el servicio está disponible en `localhost:9000`.
+Puedes cambiar esta dirección con las variables de entorno `CANDLE_HOST` y
+`CANDLE_PORT`.
 
 ## Persistencia de órdenes
 

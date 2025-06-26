@@ -104,7 +104,11 @@ class Trader:
 
     def __init__(self, config: Config, order_service: Optional[OrderService] = None) -> None:
         self.config = config
-        self.data_feed = DataFeed(config.intervalo_velas)
+        self.data_feed = DataFeed(
+            config.intervalo_velas,
+            host=getattr(config, "candle_host", "localhost"),
+            puerto=getattr(config, "candle_port", 9000),
+        )
         self.context = MarketContext()
         self.engine = DecisionEngine(self.context)
         self.risk = RiskManager(config.umbral_riesgo_diario)

@@ -50,6 +50,8 @@ class Config:
     fracciones_piramide: int = 1
     reserva_piramide: float = 0.0
     umbral_piramide: float = 0.005
+    candle_host: str = "localhost"
+    candle_port: int = 9000
 
 
 class ConfigManager:
@@ -108,4 +110,6 @@ class ConfigManager:
             fracciones_piramide=int(os.getenv("FRACCIONES_PIRAMIDE", defaults.fracciones_piramide)),
             reserva_piramide=float(os.getenv("RESERVA_PIRAMIDE", defaults.reserva_piramide)),
             umbral_piramide=float(os.getenv("UMBRAL_PIRAMIDE", defaults.umbral_piramide)),
+            candle_host=os.getenv("CANDLE_HOST", defaults.candle_host),
+            candle_port=_cargar_int("CANDLE_PORT", defaults.candle_port),
         )
