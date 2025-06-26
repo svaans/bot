@@ -19,7 +19,7 @@ async def main():
     config = ConfigManager.load_from_env()
 
     # ✅ Observador sin usar hilos externos
-    observer = start_hot_reload(path=Path.cwd(), modules=None)
+    observer = start_hot_reload(path=Path.cwd(), modules=None, exclude=("venv",))
 
     try:
         from learning.reset_pesos import resetear_pesos_diarios_si_corresponde
