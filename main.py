@@ -3,6 +3,7 @@ import platform
 import signal
 import traceback
 from pathlib import Path
+import logging
 
 from core.hot_reload import start_hot_reload, stop_hot_reload
 from learning.reset_configuracion import resetear_configuracion_diaria_si_corresponde
@@ -14,6 +15,7 @@ def mostrar_banner():
     print("===============================\n")
 
 async def main():
+    logging.basicConfig(level=logging.DEBUG)
     config = ConfigManager.load_from_env()
 
     # ✅ Observador sin usar hilos externos
