@@ -20,5 +20,4 @@ def test_data_feed_streams_candles(monkeypatch):
     asyncio.run(feed.escuchar(["BTC/EUR"], handler))
 
     assert received == [{"symbol": "BTC/EUR", "timestamp": 1}]
-    assert "BTC/EUR" in feed._tasks
-    assert feed._tasks["BTC/EUR"].done()
+    assert "BTC/EUR" not in feed._tasks

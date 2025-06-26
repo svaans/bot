@@ -117,7 +117,7 @@ def actualizar_pesos_estrategias_symbol(symbol: str):
 
     print(f"✅ Pesos suavizados para {symbol} en modo {'REAL' if MODO_REAL else 'SIMULADO'}:")
     for estrategia, peso in pesos_suavizados.items():
-        print(f"  - {estrategia}: {peso:.3f}")
+        pass
 
     # --------- Validación básica usando el conjunto de prueba ---------
     datos_test = evaluar_estrategias(test_df)

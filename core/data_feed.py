@@ -47,6 +47,7 @@ class DataFeed:
             )
             reiniciar = {}
             for (sym, task), resultado in zip(tareas_actuales, resultados):
+                self._tasks.pop(sym, None)
                 if isinstance(resultado, asyncio.CancelledError):
                     continue
                 if isinstance(resultado, Exception):
@@ -55,12 +56,11 @@ class DataFeed:
                     )
                     await asyncio.sleep(5)
                     reiniciar[sym] = asyncio.create_task(self.stream(sym, handler))
-                else:
-                    self._tasks[sym] = task
+                
 
             if reiniciar:
                 self._tasks.update(reiniciar)
-            else:
+            elif not self._tasks:
                 break
 
     async def detener(self) -> None:
