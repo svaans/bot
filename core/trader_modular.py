@@ -83,6 +83,7 @@ from core.strategies.entry.verificar_entradas import verificar_entrada
 from core.procesar_vela import procesar_vela
 from core.scoring import calcular_score_tecnico
 from core.config.pesos import PESOS_SCORE_TECNICO
+from core.config import COMISION, SLIPPAGE
 from core.storage.persistencia import cargar_estado, guardar_estado
    
 
@@ -249,6 +250,7 @@ class Trader:
         retorno_total *= direccion * (
             capital_invertido / capital_simbolo if capital_simbolo else 0.0
         )
+        retorno_total -= COMISION * 2 + SLIPPAGE
         info = orden.to_dict()
         info.update(
             {
@@ -462,6 +464,7 @@ class Trader:
         retorno_total = retorno_unitario * direccion * (
             capital_invertido / capital_simbolo if capital_simbolo else 0.0
         )
+        retorno_total -= COMISION * 2 + SLIPPAGE
         info = orden.to_dict()
         info.update(
             {
