@@ -11,6 +11,7 @@ from core.orders.order_model import Order
 from core.utils.logger import configurar_logger
 from core.orders import real_orders
 from core.utils.utils import is_valid_number  # ✅ validación segura
+from core.config import COMISION, SLIPPAGE
 
 log = configurar_logger("orders", modo_silencioso=True)
 
@@ -220,6 +221,7 @@ class OrderManager:
         retorno_total = retorno * direccion * (
             capital_invertido / capital_simbolo if capital_simbolo else 0.0
         )
+        retorno_total -= COMISION * 2 + SLIPPAGE
         orden.retorno_total = retorno_total
         self.historial.setdefault(symbol, []).append(orden.to_dict())
 
@@ -296,6 +298,7 @@ class OrderManager:
         retorno_total = retorno_unitario * direccion * (
             capital_invertido / capital_simbolo if capital_simbolo else 0.0
         )
+        retorno_total -= COMISION * 2 + SLIPPAGE
         if retorno_total < 0 and self.risk is not None:
             try:
                 self.risk.registrar_perdida(symbol, retorno_total)
