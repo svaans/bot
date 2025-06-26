@@ -4,6 +4,7 @@ import signal
 import traceback
 from pathlib import Path
 import logging
+from logging.handlers import RotatingFileHandler
 
 from core.hot_reload import start_hot_reload, stop_hot_reload
 from learning.reset_configuracion import resetear_configuracion_diaria_si_corresponde
@@ -14,8 +15,27 @@ def mostrar_banner():
     print("    🤖 BOT DE TRADING ACTIVO")
     print("===============================\n")
 
+async def auto_restart(event: asyncio.Event, delay: int = 1800) -> None:
+    """Reinicia el bot de forma controlada tras ``delay`` segundos."""
+    await asyncio.sleep(delay)
+    logging.getLogger(__name__).warning("♻️ Reinicio automático ejecutado")
+    event.set()
+
+
 async def main():
-    logging.basicConfig(level=logging.DEBUG)
+    logging.basicConfig(level=logging.INFO)
+
+    formatter = logging.Formatter(
+        "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
+    )
+    handler = RotatingFileHandler(
+        "logs/bot.log", maxBytes=5_000_000, backupCount=3
+    )
+    handler.setFormatter(formatter)
+    root_logger = logging.getLogger()
+    root_logger.addHandler(handler)
+    logging.getLogger("websockets").setLevel(logging.WARNING)
+
     config = ConfigManager.load_from_env()
 
     # ✅ Observador sin usar hilos externos
@@ -52,6 +72,7 @@ async def main():
     tarea_bot = asyncio.create_task(bot.ejecutar())
     stop_event = asyncio.Event()
     tarea_stop = asyncio.create_task(stop_event.wait())
+    tarea_reinicio = asyncio.create_task(auto_restart(stop_event))
 
     def detener_bot():
         print("\n🛑 Señal de detención recibida.")
@@ -64,7 +85,7 @@ async def main():
 
     try:
         await asyncio.wait(
-            [tarea_bot, tarea_stop],
+            [tarea_bot, tarea_stop, tarea_reinicio],
             return_when=asyncio.FIRST_COMPLETED,
         )
     except asyncio.CancelledError:
@@ -74,7 +95,11 @@ async def main():
     finally:
         stop_event.set()
         tarea_bot.cancel()
-        await asyncio.gather(tarea_bot, return_exceptions=True)
+        tarea_reinicio.cancel()
+        tarea_stop.cancel()
+        await asyncio.gather(
+            tarea_bot, tarea_reinicio, tarea_stop, return_exceptions=True
+        )
         stop_hot_reload(observer)
         await bot.cerrar()
         print("👋 Bot finalizado correctamente.")

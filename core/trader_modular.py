@@ -853,7 +853,8 @@ class Trader:
     async def _heartbeat(self, intervalo: int = 30) -> None:
         """Emite logs periódicos para confirmar que el bot sigue activo."""
         while True:
-            log.info("💓 Bot vivo - heartbeat")
+            active = len(asyncio.all_tasks())
+            log.info("💓 Bot vivo - %d tareas activas", active)
             self.watchdog.ping("heartbeat")
             await asyncio.sleep(intervalo)
             
