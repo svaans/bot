@@ -130,6 +130,36 @@ class CapitalManager:
             self.calcular_cantidad_async(symbol, precio, factor_extra=factor_extra)
         )
 
+    def reservar_capital(self, symbol: str, monto: float) -> bool:
+        """Reserva ``monto`` del capital disponible para ``symbol``.
+
+        Si ``monto`` es positivo y existe capital suficiente, se descuenta del
+        balance asignado al símbolo. Devuelve ``True`` si la reserva se realizó
+        correctamente.
+        """
+        if monto <= 0:
+            return True
+        disponible = self.capital_por_simbolo.get(symbol, 0.0)
+        if disponible >= monto:
+            self.capital_por_simbolo[symbol] = disponible - monto
+            return True
+        log.warning(
+            f"Fondos insuficientes para reservar {monto:.2f}€ en {symbol}"
+        )
+        return False
+
+    def liberar_capital(self, symbol: str, monto: float) -> float:
+        """Agrega ``monto`` al capital disponible del símbolo.
+
+        Retorna el capital final tras la operación.
+        """
+        if monto <= 0:
+            return self.capital_por_simbolo.get(symbol, 0.0)
+        self.capital_por_simbolo[symbol] = (
+            self.capital_por_simbolo.get(symbol, 0.0) + monto
+        )
+        return self.capital_por_simbolo[symbol]
+
     def actualizar_capital(self, symbol: str, retorno_total: float) -> float:
         capital_inicial = self.capital_por_simbolo.get(symbol, 0.0)
         ganancia = capital_inicial * retorno_total
