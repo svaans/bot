@@ -43,7 +43,7 @@ import aiofiles
 from core.monitor_estado_bot import monitorear_estado_periodicamente
 from core.watchdog import Watchdog
 from core.contexto_externo import StreamContexto
-from core.async_utils import TaskManager
+from core.async_utils import TaskManager, log_exceptions_async
 from core.adaptador_dinamico import adaptar_configuracion as adaptar_configuracion_base
 from core.adaptador_configuracion_dinamica import adaptar_configuracion
 from ccxt.base.errors import BaseError
@@ -194,6 +194,13 @@ class Trader:
         self.watchdog = Watchdog(timeout=60)
         self.tasks = TaskManager()
         self.context_stream = StreamContexto()
+        try:
+            loop = asyncio.get_event_loop()
+        except RuntimeError:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+        self._ultima_actividad = loop.time()
+        self._max_inactividad = 300
 
         try:
             self.orders.ordenes = self.orders.cargar_ordenes(config.symbols)
@@ -218,6 +225,7 @@ class Trader:
 
     async def cerrar_operacion(self, symbol: str, precio: float, motivo: str) -> None:
         """Cierra una orden y actualiza los pesos si corresponden."""
+        self.registrar_actividad()
         if not await self.orders.cerrar_async(symbol, precio, motivo):
             log.debug(f"🔁 Intento duplicado de cierre ignorado para {symbol}")
             return
@@ -228,6 +236,7 @@ class Trader:
             log.error(f"❌ {e}")
             return
         log.info(f"✅ Orden cerrada: {symbol} a {precio:.2f}€ por '{motivo}'")
+        self.registrar_actividad()
 
     async def _cerrar_y_reportar(
         self,
@@ -829,17 +838,41 @@ class Trader:
         drawdown = float((serie - serie.cummax()).min())
         ganancia = float(serie.iloc[-1])
         return {"ganancia_semana": ganancia, "drawdown": drawdown}
-
+        
+    @log_exceptions_async
     async def _heartbeat(self, intervalo: int = 30) -> None:
         """Emite logs periódicos para confirmar que el bot sigue activo."""
         while True:
             log.info("💓 Bot vivo - heartbeat")
             self.watchdog.ping("heartbeat")
             await asyncio.sleep(intervalo)
-
+            
+    @log_exceptions_async
     async def _run_watchdog(self) -> None:
         """Lanza el monitor de tareas internas."""
         await self.watchdog.monitor()
+
+    def registrar_actividad(self) -> None:
+        """Actualiza la marca de actividad global."""
+        loop = asyncio.get_running_loop()
+        self._ultima_actividad = loop.time()
+
+    @log_exceptions_async
+    async def _vigilar_inactividad(self) -> None:
+        """Reporta periodos prolongados sin actividad."""
+        loop = asyncio.get_running_loop()
+        while True:
+            await asyncio.sleep(60)
+            if loop.time() - self._ultima_actividad > self._max_inactividad:
+                log.warning("⏱️ Inactividad detectada >5m")
+                if self.notificador:
+                    try:
+                        await self.notificador.enviar_async(
+                            "⏱️ Bot inactivo desde hace más de 5 minutos"
+                        )
+                    except Exception as e:  # noqa: BLE001
+                        log.error(f"❌ Error enviando notificación de inactividad: {e}")
+                self._ultima_actividad = loop.time()
     
     def _contar_senales(self, symbol: str, minutos: int = 60) -> int:
         """Cuenta señales válidas recientes para ``symbol``."""
@@ -1531,6 +1564,10 @@ class Trader:
         task = asyncio.create_task(self._heartbeat())
         task.add_done_callback(_log_fallo_task)
         self.tasks.add_task(task)
+        
+        task = asyncio.create_task(self._vigilar_inactividad())
+        task.add_done_callback(_log_fallo_task)
+        self.tasks.add_task(task)
 
         task = asyncio.create_task(self._run_watchdog())
         task.add_done_callback(_log_fallo_task)
@@ -1551,10 +1588,11 @@ class Trader:
         symbol = vela.get("symbol")
         if not self._validar_config(symbol):
             return
-
+        self.registrar_actividad()
         self.watchdog.ping("procesar_vela")
         await procesar_vela(self, vela)
         self.watchdog.ping("procesar_vela")
+        self.registrar_actividad()
         log.debug(f"✅ Procesamiento de vela completado {symbol}")
         return
 
