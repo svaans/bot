@@ -40,10 +40,7 @@ def test_trader_init_logs_exception(monkeypatch):
     handler = LogCaptureHandler()
     logger.addHandler(handler)
     with pytest.raises(RuntimeError):
-        monkeypatch.setattr(
-        "core.orders.order_service.OrderServiceSimulado.cargar_ordenes",
-        fail,
-    )
+        Trader(cfg, order_service=OrderServiceSimulado())
     logger.removeHandler(handler)
     assert any("Error cargando" in r.getMessage() for r in handler.records)
 

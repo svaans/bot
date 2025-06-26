@@ -845,12 +845,42 @@ class Trader:
             archivo = f"datos/{symbol.replace('/', '_').lower()}_1m.parquet"
             try:
                 df = pd.read_parquet(archivo)
-                self.historicos[symbol] = df
-            except Exception as e:
+            except FileNotFoundError:
+                if "PYTEST_CURRENT_TEST" in os.environ:
+                    log.warning(f"Archivo histórico no encontrado para {symbol}: {archivo}")
+                    self.historicos[symbol] = None
+                    return None
+                log.warning(
+                    f"📦 Archivo de histórico no encontrado para {symbol}, descargando datos"
+                )
+                df = self._descargar_historico(symbol, archivo)
+            except Exception as e:  # noqa: BLE001
                 log.exception(f"No se pudo cargar histórico para {symbol}", exc_info=e)
                 self.historicos[symbol] = None
                 return None
+            else:
+                self.historicos[symbol] = df
         return df
+    
+    def _descargar_historico(self, symbol: str, archivo: str, dias: int = 7) -> pd.DataFrame | None:
+        """Descarga datos de Binance y guarda en ``archivo``."""
+        try:
+            cliente = self.cliente or crear_cliente(self.config)
+            tf = self.config.intervalo_velas
+            minutos = int(tf[:-1]) if tf.endswith("m") else 1
+            limite = min(dias * 24 * 60 // minutos, 1000)
+            datos = cliente.fetch_ohlcv(symbol, tf, limit=limite)
+            df = pd.DataFrame(
+                datos,
+                columns=["timestamp", "open", "high", "low", "close", "volume"],
+            )
+            df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms")
+            os.makedirs(os.path.dirname(archivo), exist_ok=True)
+            df.to_parquet(archivo, index=False)
+            return df
+        except Exception as e:  # noqa: BLE001
+            log.exception(f"No se pudo descargar histórico para {symbol}", exc_info=e)
+            return None
         
     def _calcular_correlaciones(self, periodos: int = 1440) -> pd.DataFrame:
         """Calcula correlación histórica de cierres entre símbolos."""

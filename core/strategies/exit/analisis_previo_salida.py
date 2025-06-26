@@ -53,8 +53,12 @@ def es_vela_envolvente_alcista(df: pd.DataFrame) -> bool:
     )
 
 
-def _score_tecnico_basico(df: pd.DataFrame, direccion: str) -> float:
-    """Calcula un score técnico utilizando ``calcular_score_tecnico``."""
+def _score_tecnico_basico(df: pd.DataFrame, direccion: str, symbol: str) -> float:
+    """Calcula un score técnico utilizando ``calcular_score_tecnico``.
+
+    Se requiere ``symbol`` para poder normalizar correctamente el score
+    mediante :func:`calcular_score_tecnico`.
+    """
     rsi = calcular_rsi(df)
     momentum = calcular_momentum(df)
     slope = calcular_slope(df)
@@ -167,7 +171,7 @@ def permitir_cierre_tecnico(symbol: str, df: pd.DataFrame, sl: float, precio: fl
     )
 
     direccion = orden.get("direccion", "long") if orden else "long"
-    score = _score_tecnico_basico(df, direccion)
+    score = _score_tecnico_basico(df, direccion, symbol)
     envolvente = es_vela_envolvente_alcista(df)
     soporte_cerca = precio_cerca_de_soporte(df, precio)
     divergencia = detectar_divergencia_alcista(df)
