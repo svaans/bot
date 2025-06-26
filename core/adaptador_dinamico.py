@@ -176,6 +176,7 @@ def calcular_tp_sl_adaptativos(
 
     multiplicador_sl = config.get("sl_ratio", 1.5)
     multiplicador_tp = config.get("tp_ratio", 2.5)
+    sl_atr_min = config.get("sl_atr_min", 1.0)
     if regimen == "lateral":
         multiplicador_sl *= 0.8
         multiplicador_tp *= 0.8
@@ -188,8 +189,15 @@ def calcular_tp_sl_adaptativos(
         multiplicador_tp *= factor
         multiplicador_sl *= max(0.5, 1 - (1 - capital_actual / 500) * 0.1)
 
-    sl = round(precio_actual - atr * multiplicador_sl, 6)
+    dist_sl = max(atr * multiplicador_sl, atr * sl_atr_min)
+    sl = round(precio_actual - dist_sl, 6)
     tp = round(precio_actual + atr * multiplicador_tp, 6)
+
+    ratio_min = config.get("ratio_minimo_beneficio", 1.5)
+    riesgo = precio_actual - sl
+    beneficio = tp - precio_actual
+    if riesgo > 0 and beneficio / riesgo < ratio_min:
+        tp = round(precio_actual + ratio_min * riesgo, 6)
 
     log.debug(
         f"[{symbol}] TP/SL adaptativos | Regimen: {regimen} | Precio: {precio_actual:.2f} | ATR: {atr:.5f} | "
