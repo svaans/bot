@@ -3,6 +3,9 @@ from importlib import import_module
 __all__ = [
     'OrderManager',
     'Order',
+    'OrderService',
+    'OrderServiceReal',
+    'OrderServiceSimulado',
     'ejecutar_orden_market',
     'ejecutar_orden_market_sell',
     'registrar_orden',
@@ -16,8 +19,10 @@ __all__ = [
 def __getattr__(name):
     if name == 'OrderManager':
         return import_module('.order_manager', __name__).OrderManager
-    if name == 'Orden':
+    if name == 'Order':
         return import_module('.order_model', __name__).Order
+    if name in ('OrderService', 'OrderServiceReal', 'OrderServiceSimulado'):
+        return getattr(import_module('.order_service', __name__), name)
     if name in __all__:
         return getattr(import_module('.real_orders', __name__), name)
     raise AttributeError(name)

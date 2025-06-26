@@ -12,6 +12,7 @@ from tqdm import tqdm
 
 from config.config_manager import Config
 from core.trader_modular import Trader
+from core.orders import OrderServiceSimulado
 
 BUFFER_INICIAL = 120
 CAPITAL_INICIAL = 300.0  # Capital inicial para el backtest
@@ -34,7 +35,7 @@ class BacktestTrader(Trader):
     """Versión fiel de ``Trader`` para backtesting."""
 
     def __init__(self, config: Config) -> None:
-        super().__init__(config)
+        super().__init__(config, order_service=OrderServiceSimulado())
         self.notificador = None
         self.orders.notificador = None
         self.orders.risk = DummyRisk()

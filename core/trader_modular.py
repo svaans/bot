@@ -3,7 +3,7 @@
 from __future__ import annotations
 import asyncio
 from dataclasses import dataclass
-from typing import Dict, List
+from typing import Dict, List, Optional
 from datetime import datetime, timedelta, date
 import json
 import os
@@ -15,7 +15,7 @@ from config.config_manager import Config
 from core.data import DataFeed
 from core.strategies import StrategyEngine
 from core.risk import RiskManager
-from core.position_manager import PositionManager
+from core.orders import OrderService, OrderServiceReal, OrderServiceSimulado
 from core.notification_manager import NotificationManager
 from core.capital_manager import CapitalManager
 from binance_api.cliente import (
@@ -43,7 +43,6 @@ import aiofiles
 from core.monitor_estado_bot import monitorear_estado_periodicamente
 from core.watchdog import Watchdog
 from core.contexto_externo import StreamContexto
-from core.orders import real_orders
 from core.async_utils import TaskManager
 from core.adaptador_dinamico import adaptar_configuracion as adaptar_configuracion_base
 from core.adaptador_configuracion_dinamica import adaptar_configuracion
@@ -101,7 +100,7 @@ class EstadoSimbolo:
 class Trader:
     """Orquesta el flujo de datos y las operaciones de trading."""
 
-    def __init__(self, config: Config) -> None:
+    def __init__(self, config: Config, order_service: Optional[OrderService] = None) -> None:
         self.config = config
         self.data_feed = DataFeed(config.intervalo_velas)
         self.engine = StrategyEngine()
@@ -110,7 +109,12 @@ class Trader:
             config.telegram_token, config.telegram_chat_id
         )
         self.modo_real = getattr(config, "modo_real", False)
-        self.orders = PositionManager(self.modo_real, self.risk, self.notificador)
+        if order_service is None:
+            if self.modo_real:
+                order_service = OrderServiceReal(self.risk, self.notificador)
+            else:
+                order_service = OrderServiceSimulado(self.risk, self.notificador)
+        self.orders = order_service
         self.cliente = crear_cliente(config) if self.modo_real else None
         if not self.modo_real:
             log.info("🧪 Modo simulado activado. No se inicializará cliente Binance")
@@ -191,13 +195,12 @@ class Trader:
         self.context_stream = StreamContexto()
 
         try:
-            self.orders.ordenes = real_orders.obtener_todas_las_ordenes()
-            if self.modo_real and not self.orders.ordenes:
-                self.orders.ordenes = real_orders.sincronizar_ordenes_binance(
-                    config.symbols
-                )
+            self.orders.ordenes = self.orders.cargar_ordenes(config.symbols)
         except Exception as e:
-            log.exception("⚠️ Error cargando órdenes previas desde la base de datos", exc_info=e)
+            log.exception(
+                "⚠️ Error cargando órdenes previas desde la base de datos",
+                exc_info=e,
+            )
             raise
 
         if self.orders.ordenes:
@@ -1437,7 +1440,7 @@ class Trader:
         task.add_done_callback(_log_fallo_task)
         self.tasks.add_task(task)
 
-        task = asyncio.create_task(real_orders.flush_periodico())
+        task = asyncio.create_task(self.orders.flush_periodico())
         task.add_done_callback(_log_fallo_task)
         self.tasks.add_task(task)
 

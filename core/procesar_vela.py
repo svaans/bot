@@ -43,6 +43,9 @@ async def procesar_vela(trader, vela: dict) -> None:
                 except Exception as e:
                     log.error(f"❌ Error enviando notificación: {e}")
         return
+    else:
+        # Mantiene vivo el watchdog aunque no haya órdenes abiertas
+        trader.watchdog.ping("verificar_salidas")
 
     await trader.evaluar_condiciones_entrada(symbol, df)
     log.debug(f"🔄 Vela procesada {symbol}")

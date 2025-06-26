@@ -223,7 +223,7 @@ async def _verificar_entrada_impl(
         )
     except Exception as e:  # noqa: BLE001
         log.exception(f"[{symbol}] Error calculando cantidad: {e}")
-        return None
+        raise
     log.debug(f"[{symbol}] Cantidad simulada calculada: {cantidad_simulada}")
 
     if trader.usar_score_tecnico:

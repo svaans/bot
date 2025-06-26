@@ -6,6 +6,7 @@ from _pytest.logging import LogCaptureHandler
 
 from config.config_manager import Config
 from core.trader_modular import Trader
+from core.orders.order_service import OrderServiceSimulado
 from core.strategies.evaluador_tecnico import cargar_pesos_tecnicos, _pesos_cache
 from core.strategies.entry.verificar_entradas import _verificar_entrada_impl
 
@@ -20,22 +21,29 @@ def _patch_trader_base(monkeypatch):
     monkeypatch.setattr("core.trader_modular.crear_cliente", lambda config=None: DummyClient())
     monkeypatch.setattr("core.trader_modular.calcular_fraccion_kelly", lambda: 1.0)
     monkeypatch.setattr("core.trader_modular.cargar_pesos_estrategias", lambda: {})
-    monkeypatch.setattr("core.orders.real_orders.sincronizar_ordenes_binance", lambda symbols: {})
-
+    monkeypatch.setattr(
+        "core.orders.order_service.OrderServiceReal.cargar_ordenes",
+        lambda self, symbols=None: {},
+    )
 
 def test_trader_init_logs_exception(monkeypatch):
     _patch_trader_base(monkeypatch)
-    def fail():
+    def fail(*a, **k):
         raise RuntimeError("boom")
-    monkeypatch.setattr("core.orders.real_orders.obtener_todas_las_ordenes", fail)
-
+    monkeypatch.setattr(
+        "core.orders.order_service.OrderServiceSimulado.cargar_ordenes",
+        fail,
+    )
     cfg = Config(api_key="k", api_secret="s", modo_real=False, intervalo_velas="1m", symbols=["BTC/EUR"], umbral_riesgo_diario=0.1, min_order_eur=10)
 
     logger = logging.getLogger("trader")
     handler = LogCaptureHandler()
     logger.addHandler(handler)
     with pytest.raises(RuntimeError):
-        Trader(cfg)
+        monkeypatch.setattr(
+        "core.orders.order_service.OrderServiceSimulado.cargar_ordenes",
+        fail,
+    )
     logger.removeHandler(handler)
     assert any("Error cargando" in r.getMessage() for r in handler.records)
 

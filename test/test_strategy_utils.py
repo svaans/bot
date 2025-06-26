@@ -29,7 +29,10 @@ def test_evaluar_estrategias(monkeypatch):
     def fake_eval(symbol, df, tendencia):
         return resultado
 
-    monkeypatch.setattr('estrategias_entrada.gestor_entradas.evaluar_estrategias', fake_eval)
+    monkeypatch.setattr(
+        'core.strategies.entry.gestor_entradas.evaluar_estrategias',
+        fake_eval,
+    )
     df = pd.DataFrame({'close': [1], 'high': [1], 'low': [1], 'volume': [1]})
     res = evaluar_estrategias('BTC/EUR', df, 'alcista')
     assert res == resultado

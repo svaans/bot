@@ -1,6 +1,7 @@
 import asyncio
 from config.config_manager import Config
 from core.trader_modular import Trader
+from core.orders.order_service import OrderServiceSimulado
 
 
 class DummyClient:
@@ -13,8 +14,7 @@ def test_calcular_cantidad(monkeypatch):
     monkeypatch.setattr("core.trader_modular.crear_cliente", lambda config=None: DummyClient())
     monkeypatch.setattr("core.trader_modular.calcular_fraccion_kelly", lambda: 1.0)
     monkeypatch.setattr("core.trader_modular.cargar_pesos_estrategias", lambda: {})
-    monkeypatch.setattr("core.ordenes_reales.obtener_todas_las_ordenes", lambda: {})
-
+    
     cfg = Config(
         api_key="k",
         api_secret="s",
@@ -25,7 +25,7 @@ def test_calcular_cantidad(monkeypatch):
         min_order_eur=10,
     )
 
-    trader = Trader(cfg)
+    trader = Trader(cfg, order_service=OrderServiceSimulado())
     qty = trader._calcular_cantidad("BTC/EUR", 10)
     assert qty == 10.0
 
@@ -35,7 +35,8 @@ def _patch_trader_deps(monkeypatch):
     monkeypatch.setattr("core.trader_modular.crear_cliente", lambda config=None: DummyClient())
     monkeypatch.setattr("core.trader_modular.calcular_fraccion_kelly", lambda: 1.0)
     monkeypatch.setattr("core.trader_modular.cargar_pesos_estrategias", lambda: {})
-    monkeypatch.setattr("core.orders.real_orders.obtener_todas_las_ordenes", lambda: {})
+    monkeypatch.setattr("core.data_feed.DataFeed.detener", lambda self: asyncio.sleep(0))
+    monkeypatch.setattr("core.contexto_externo.StreamContexto.detener", lambda self: asyncio.sleep(0))
 
 
 def test_trader_carga_estado(monkeypatch):
@@ -47,7 +48,7 @@ def test_trader_carga_estado(monkeypatch):
         called["ok"] = True
         return {"x": {}}, {"x": 1.0}
 
-    monkeypatch.setattr("core.storage.persistencia.cargar_estado", fake_cargar)
+    monkeypatch.setattr("core.trader_modular.cargar_estado", fake_cargar)
     monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
 
     cfg = Config(
@@ -60,7 +61,7 @@ def test_trader_carga_estado(monkeypatch):
         min_order_eur=10,
     )
 
-    trader = Trader(cfg)
+    trader = Trader(cfg, order_service=OrderServiceSimulado())
     assert called.get("ok")
     assert trader.historial_cierres == {"x": {}}
     assert trader.capital_por_simbolo.get("x") == 1.0
@@ -75,7 +76,7 @@ def test_trader_guarda_estado(monkeypatch):
         saved["hist"] = hist
         saved["cap"] = cap
 
-    monkeypatch.setattr("core.storage.persistencia.guardar_estado", fake_guardar)
+    monkeypatch.setattr("core.trader_modular.guardar_estado", fake_guardar)
 
     cfg = Config(
         api_key="k",
@@ -87,7 +88,7 @@ def test_trader_guarda_estado(monkeypatch):
         min_order_eur=10,
     )
 
-    trader = Trader(cfg)
+    trader = Trader(cfg, order_service=OrderServiceSimulado())
     asyncio.run(trader.cerrar())
 
     assert saved["hist"] is trader.historial_cierres
@@ -121,7 +122,10 @@ def test_tareas_se_cancelan_al_cerrar(monkeypatch):
     monkeypatch.setattr(
         "core.contexto_externo.StreamContexto.detener", lambda self: asyncio.sleep(0)
     )
-    monkeypatch.setattr("core.orders.real_orders.flush_periodico", dummy("flush"))
+    monkeypatch.setattr(
+        "core.orders.order_service.OrderServiceSimulado.flush_periodico",
+        dummy("flush"),
+    )
     monkeypatch.setattr("core.trader_modular.Trader._heartbeat", dummy("hb"))
     monkeypatch.setattr("core.trader_modular.Trader._run_watchdog", dummy("wd"))
 
@@ -135,7 +139,7 @@ def test_tareas_se_cancelan_al_cerrar(monkeypatch):
         min_order_eur=10,
     )
 
-    trader = Trader(cfg)
+    trader = Trader(cfg, order_service=OrderServiceSimulado())
 
     async def run():
         t = asyncio.create_task(trader.ejecutar())
