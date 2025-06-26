@@ -266,9 +266,10 @@ class Trader:
             return False
         
         ganancia = capital_simbolo * retorno_total
-        capital_final = self.capital_manager.actualizar_capital(
-            orden.symbol, retorno_total
+        self.capital_manager.liberar_capital(
+            orden.symbol, capital_invertido + ganancia
         )
+        capital_final = self.capital_por_simbolo.get(orden.symbol, 0.0)
         info["capital_final"] = capital_final
         if getattr(orden, "sl_evitar_info", None):
             os.makedirs("logs", exist_ok=True)
@@ -477,9 +478,10 @@ class Trader:
             registrar_resultado_trade, orden.symbol, info, retorno_total
         )
         ganancia = capital_simbolo * retorno_total
-        capital_final = self.capital_manager.actualizar_capital(
-            orden.symbol, retorno_total
+        self.capital_manager.liberar_capital(
+            orden.symbol, capital_invertido + ganancia
         )
+        capital_final = self.capital_por_simbolo.get(orden.symbol, 0.0)
         info["capital_final"] = capital_final
         log.info(f"✅ CIERRE PARCIAL: {orden.symbol} | Beneficio: {ganancia:.2f} €")
         registro_metrico.registrar(
@@ -1401,6 +1403,12 @@ class Trader:
         )
         if cantidad_total <= 0:
             return
+        inversion = precio * cantidad_total
+        if not self.capital_manager.reservar_capital(symbol, inversion):
+            log.warning(
+                f"⚠️ No se pudo reservar capital para {symbol}: {inversion:.2f}€"
+            )
+            return   
         fracciones = self.piramide_fracciones
         cantidad = cantidad_total / fracciones
         if isinstance(estrategias, dict):
