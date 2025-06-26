@@ -8,6 +8,7 @@ from typing import Awaitable, Callable, Dict, Iterable
 
 import websockets
 from core.utils.utils import configurar_logger
+from core.async_utils import log_exceptions_async
 
 log = configurar_logger("contexto_externo")
 
@@ -36,7 +37,8 @@ class StreamContexto:
     def __init__(self, url_template: str | None = None) -> None:
         self.url_template = url_template or CONTEXT_WS_URL
         self._tasks: Dict[str, asyncio.Task] = {}
-
+        
+    @log_exceptions_async
     async def _stream(
         self, symbol: str, handler: Callable[[str, float], Awaitable[None]]
     ) -> None:
@@ -44,12 +46,14 @@ class StreamContexto:
         url = self.url_template.format(symbol=symbol_norm)
         while True:
             try:
-                async with websockets.connect(
-                    url, ping_interval=20, ping_timeout=20
+                async with asyncio.wait_for(
+                    websockets.connect(url, ping_interval=20, ping_timeout=20),
+                    timeout=10,
                 ) as ws:
                     log.info(f"🔌 Contexto conectado para {symbol}")
-                    async for msg in ws:
+                    while True:
                         try:
+                            msg = await asyncio.wait_for(ws.recv(), timeout=60)
                             data = json.loads(msg)
                             vela = data.get("k")
                             if vela is None:
@@ -70,6 +74,10 @@ class StreamContexto:
                                 await handler(symbol, puntaje)
                             except Exception as e:
                                 log.warning(f"⚠️ Handler contexto {symbol} falló: {e}")
+                                
+                        except asyncio.TimeoutError:
+                            log.warning(f"⏳ Timeout contexto {symbol}")
+                            continue
                         except asyncio.CancelledError:
                             log.info(f"🛑 Stream contexto {symbol} cancelado (mensaje).")
                             raise
@@ -82,7 +90,8 @@ class StreamContexto:
             except Exception as e:
                 log.warning(f"⚠️ Stream de contexto {symbol} falló: {e}. Reintentando en 5s")
                 await asyncio.sleep(5)
-
+                
+    @log_exceptions_async
     async def escuchar(
         self, symbols: Iterable[str], handler: Callable[[str, float], Awaitable[None]]
     ) -> None:
