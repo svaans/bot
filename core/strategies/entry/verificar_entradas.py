@@ -228,7 +228,12 @@ async def _verificar_entrada_impl(
 
     if trader.usar_score_tecnico:
         score_tecnico, puntos = trader._calcular_score_tecnico(
-            df, rsi, momentum, tendencia_actual, direccion
+            symbol,
+            df,
+            rsi,
+            momentum,
+            tendencia_actual,
+            direccion,
         )
         log.debug(f"[{symbol}] Score técnico: {score_tecnico:.2f}, Componentes: {puntos}")
 

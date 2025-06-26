@@ -345,6 +345,7 @@ class Trader:
                 "estrategias_activas": orden.estrategias_activas,
                 "score_tecnico_al_cierre": (
                     self._calcular_score_tecnico(
+                        orden.symbol,
                         df,
                         calcular_rsi(df),
                         calcular_momentum(df),
@@ -366,8 +367,8 @@ class Trader:
             rsi_val = calcular_rsi(df) if df is not None else None
             score, _ = (
                 self._calcular_score_tecnico(
-                    df,
                     orden.symbol,
+                    df,
                     rsi_val,
                     calcular_momentum(df),
                     tendencia or "",
@@ -471,8 +472,8 @@ class Trader:
                 "estrategias_activas": orden.estrategias_activas,
                 "score_tecnico_al_cierre": (
                     self._calcular_score_tecnico(
-                        df,
                         orden.symbol,
+                        df,
                         calcular_rsi(df),
                         calcular_momentum(df),
                         orden.tendencia,
@@ -490,8 +491,8 @@ class Trader:
             rsi_val = calcular_rsi(df) if df is not None else None
             score, _ = (
                 self._calcular_score_tecnico(
-                    df,
                     orden.symbol,
+                    df,
                     rsi_val,
                     calcular_momentum(df),
                     orden.tendencia,
