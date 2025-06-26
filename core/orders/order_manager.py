@@ -208,18 +208,24 @@ class OrderManager:
         orden.precio_cierre = precio
         orden.fecha_cierre = datetime.utcnow().isoformat()
         orden.motivo_cierre = motivo
-
+        
+        direccion = 1 if orden.direccion in ("long", "compra") else -1
+        capital_invertido = orden.precio_entrada * (orden.cantidad or 0.0)
+        capital_simbolo = capital_invertido
         retorno = (
             (precio - orden.precio_entrada) / orden.precio_entrada
             if orden.precio_entrada
             else 0.0
         )
-        orden.retorno_total = retorno
+        retorno_total = retorno * direccion * (
+            capital_invertido / capital_simbolo if capital_simbolo else 0.0
+        )
+        orden.retorno_total = retorno_total
         self.historial.setdefault(symbol, []).append(orden.to_dict())
 
-        if retorno < 0 and self.risk is not None:
+        if retorno_total < 0 and self.risk is not None:
             try:
-                self.risk.registrar_perdida(symbol, retorno)
+                self.risk.registrar_perdida(symbol, retorno_total)
             except Exception as e:
                 log.warning(f"⚠️ No se pudo registrar pérdida para {symbol}: {e}")
 
@@ -228,7 +234,7 @@ class OrderManager:
             mensaje = (
                 f"📤 Venta {symbol}\n"
                 f"Entrada: {orden.precio_entrada:.2f} Salida: {precio:.2f}\n"
-                f"Retorno: {retorno * 100:.2f}%\n"
+                f"Retorno: {retorno_total * 100:.2f}%\n"
                 f"Motivo: {motivo}"
             )
             try:
@@ -279,13 +285,17 @@ class OrderManager:
                 return False
 
         orden.cantidad_abierta -= cantidad
+        direccion = 1 if orden.direccion in ("long", "compra") else -1
+        capital_invertido = orden.precio_entrada * cantidad
+        capital_simbolo = orden.precio_entrada * (orden.cantidad or 0.0)
         retorno_unitario = (
             (precio - orden.precio_entrada) / orden.precio_entrada
             if orden.precio_entrada
             else 0.0
         )
-        fraccion = cantidad / orden.cantidad if orden.cantidad else 0.0
-        retorno_total = retorno_unitario * fraccion
+        retorno_total = retorno_unitario * direccion * (
+            capital_invertido / capital_simbolo if capital_simbolo else 0.0
+        )
         if retorno_total < 0 and self.risk is not None:
             try:
                 self.risk.registrar_perdida(symbol, retorno_total)

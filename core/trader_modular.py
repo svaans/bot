@@ -237,10 +237,17 @@ class Trader:
         df: pd.DataFrame | None = None,
     ) -> None:
         """Cierra ``orden`` y registra la operación para el reporte diario."""
+        direccion = 1 if orden.direccion in ("long", "compra") else -1
+        cantidad_operada = orden.cantidad
+        capital_invertido = orden.precio_entrada * cantidad_operada
+        capital_simbolo = self.capital_por_simbolo.get(orden.symbol, 0.0)
         retorno_total = (
-            (precio - orden.precio_entrada) / orden.precio_entrada
+            ((precio - orden.precio_entrada) / orden.precio_entrada)
             if orden.precio_entrada
             else 0.0
+        )
+        retorno_total *= direccion * (
+            capital_invertido / capital_simbolo if capital_simbolo else 0.0
         )
         info = orden.to_dict()
         info.update(
@@ -249,7 +256,7 @@ class Trader:
                 "fecha_cierre": datetime.utcnow().isoformat(),
                 "motivo_cierre": motivo,
                 "retorno_total": retorno_total,
-                "capital_inicial": self.capital_por_simbolo.get(orden.symbol, 0.0),
+                "capital_inicial": capital_simbolo,
             }
         )
         if not await self.orders.cerrar_async(orden.symbol, precio, motivo):
@@ -258,10 +265,10 @@ class Trader:
             )
             return False
         
-        capital_inicial = self.capital_por_simbolo.get(orden.symbol, 0.0)
-        ganancia = capital_inicial * retorno_total
-        capital_final = capital_inicial + ganancia
-        self.capital_por_simbolo[orden.symbol] = capital_final
+        ganancia = capital_simbolo * retorno_total
+        capital_final = self.capital_manager.actualizar_capital(
+            orden.symbol, retorno_total
+        )
         info["capital_final"] = capital_final
         if getattr(orden, "sl_evitar_info", None):
             os.makedirs("logs", exist_ok=True)
@@ -442,14 +449,18 @@ class Trader:
                 f"❌ No se pudo confirmar el cierre parcial de {orden.symbol}. Se omitirá el registro."
             )
             return False
-
+        
+        direccion = 1 if orden.direccion in ("long", "compra") else -1
+        capital_simbolo = self.capital_por_simbolo.get(orden.symbol, 0.0)
+        capital_invertido = orden.precio_entrada * cantidad
         retorno_unitario = (
             (precio - orden.precio_entrada) / orden.precio_entrada
             if orden.precio_entrada
             else 0.0
         )
-        fraccion = cantidad / orden.cantidad if orden.cantidad else 0.0
-        retorno_total = retorno_unitario * fraccion
+        retorno_total = retorno_unitario * direccion * (
+            capital_invertido / capital_simbolo if capital_simbolo else 0.0
+        )
         info = orden.to_dict()
         info.update(
             {
@@ -458,17 +469,17 @@ class Trader:
                 "motivo_cierre": motivo,
                 "retorno_total": retorno_total,
                 "cantidad_cerrada": cantidad,
-                "capital_inicial": self.capital_por_simbolo.get(orden.symbol, 0.0),
+                "capital_inicial": capital_simbolo,
             }
         )
         await asyncio.to_thread(reporter_diario.registrar_operacion, info)
         await asyncio.to_thread(
             registrar_resultado_trade, orden.symbol, info, retorno_total
         )
-        capital_inicial = self.capital_por_simbolo.get(orden.symbol, 0.0)
-        ganancia = capital_inicial * retorno_total
-        capital_final = capital_inicial + ganancia
-        self.capital_por_simbolo[orden.symbol] = capital_final
+        ganancia = capital_simbolo * retorno_total
+        capital_final = self.capital_manager.actualizar_capital(
+            orden.symbol, retorno_total
+        )
         info["capital_final"] = capital_final
         log.info(f"✅ CIERRE PARCIAL: {orden.symbol} | Beneficio: {ganancia:.2f} €")
         registro_metrico.registrar(
