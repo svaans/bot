@@ -42,6 +42,9 @@ El bot Python asume que el servicio está disponible en `localhost:9000`.
 Puedes cambiar esta dirección con las variables de entorno `CANDLE_HOST` y
 `CANDLE_PORT`.
 
+Los intervalos soportados coinciden con los de Binance: `1m`, `3m`, `5m`, `15m`,
+`30m`, `1h`, `2h`, `4h`, `6h`, `8h`, `12h`, `1d`, `3d`, `1w` y `1M`.
+
 ## Persistencia de órdenes
 
 Las órdenes abiertas ahora se guardan en una base SQLite ubicada en `ordenes_reales/ordenes.db`. Si el proceso se reinicia, las órdenes se cargan automáticamente desde esa base de datos para continuar su seguimiento.
