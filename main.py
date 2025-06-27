@@ -6,6 +6,7 @@ import sys
 import fcntl
 import psutil
 import subprocess
+import shutil
 
 
 def ya_esta_activo() -> bool:
@@ -81,6 +82,11 @@ def start_candle_service() -> subprocess.Popen | None:
 
     root = Path(__file__).resolve().parent
     use_docker = os.getenv("USE_DOCKER_CANDLE", "0").lower() in {"1", "true", "yes"}
+
+    # If the 'go' executable is missing fall back to Docker automatically
+    if not use_docker and shutil.which("go") is None:
+        print("⚠️  Comando 'go' no encontrado. Usando Docker para iniciar candle_service")
+        use_docker = True
 
     try:
         if use_docker:
