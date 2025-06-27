@@ -11,7 +11,7 @@ ordenes_simuladas/
 
 # Configuraciones sensibles
 .env
-
+config/claves.env
 # Entornos virtuales
 venv/
 .env/

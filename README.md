@@ -114,8 +114,15 @@ Después de instalar los paquetes, el bot quedará listo para ejecutarse.
 ## Configuración por entorno
 
 El gestor de configuración carga variables desde `config/claves.env` y puede
-ajustar valores por defecto según el entorno. Usa la variable de entorno
-`BOT_ENV` para elegir entre `development` o `production`. Por ejemplo:
+ajustar valores por defecto según el entorno. Primero copia el archivo de
+ejemplo y completa tus credenciales reales:
+
+```bash
+cp config/claves.env.example config/claves.env
+```
+
+Luego usa la variable de entorno `BOT_ENV` para elegir entre `development` o
+`production`. Por ejemplo:
 
 ```bash
 BOT_ENV=production python main.py
