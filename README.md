@@ -119,6 +119,25 @@ BOT_ENV=production python main.py
 Los valores base de cada modo se definen en `config/development.py` y
 `config/production.py`.
 
+## Ejecución completa en producción
+
+Para iniciar el bot junto a sus microservicios se incluye el script
+`scripts/supervisor.py`. Este script lanza el servicio de velas y el worker de
+persistencia antes de ejecutar `main.py`:
+
+```bash
+python scripts/supervisor.py
+```
+
+Las direcciones de cada servicio pueden ajustarse con las variables de entorno
+`CANDLE_HOST`/`CANDLE_PORT`, `WS_SERVICE_HOST`/`WS_SERVICE_PORT` y
+`ORDERS_WORKER_HOST`/`ORDERS_WORKER_PORT`.
+
+Si prefieres usar contenedores puedes levantar todo con Docker Compose:
+
+```bash
+docker-compose up --build
+``
 ## Ajuste de pesos y umbrales
 
 La ponderación que recibe cada indicador técnico se encuentra en

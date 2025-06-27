@@ -52,6 +52,10 @@ class Config:
     umbral_piramide: float = 0.005
     candle_host: str = "localhost"
     candle_port: int = 9000
+    ws_service_host: str = "localhost"
+    ws_service_port: int = 8765
+    orders_worker_host: str = "localhost"
+    orders_worker_port: int = 9100
 
 
 class ConfigManager:
@@ -112,4 +116,8 @@ class ConfigManager:
             umbral_piramide=float(os.getenv("UMBRAL_PIRAMIDE", defaults.umbral_piramide)),
             candle_host=os.getenv("CANDLE_HOST", defaults.candle_host),
             candle_port=_cargar_int("CANDLE_PORT", defaults.candle_port),
+            ws_service_host=os.getenv("WS_SERVICE_HOST", defaults.ws_service_host),
+            ws_service_port=_cargar_int("WS_SERVICE_PORT", defaults.ws_service_port),
+            orders_worker_host=os.getenv("ORDERS_WORKER_HOST", defaults.orders_worker_host),
+            orders_worker_port=_cargar_int("ORDERS_WORKER_PORT", defaults.orders_worker_port),
         )

@@ -1,0 +1,24 @@
+version: '3.8'
+services:
+  candle-service:
+    build: ./candle_service
+    ports:
+      - "9000:9000"
+
+  orders-worker:
+    build: ./orders_worker
+    ports:
+      - "9100:9100"
+
+  bot:
+    build: .
+    depends_on:
+      - candle-service
+      - orders-worker
+    environment:
+      CANDLE_HOST: candle-service
+      CANDLE_PORT: 9000
+      ORDERS_WORKER_HOST: orders-worker
+      ORDERS_WORKER_PORT: 9100
+    ports:
+      - "8000:8000"

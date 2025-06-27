@@ -29,3 +29,7 @@ class DevelopmentConfig:
     umbral_piramide: float = 0.006
     candle_host: str = "localhost"
     candle_port: int = 9000
+    ws_service_host: str = "localhost"
+    ws_service_port: int = 8765
+    orders_worker_host: str = "localhost"
+    orders_worker_port: int = 9100
