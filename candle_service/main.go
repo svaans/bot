@@ -78,7 +78,8 @@ func handleConn(conn net.Conn) {
 					X bool   `json:"x"`
 				} `json:"k"`
 			}
-			if json.Unmarshal(msg, &data) != nil {
+			if err := json.Unmarshal(msg, &data); err != nil {
+				log.Printf("json unmarshal error: %v raw: %s", err, string(msg))
 				continue
 			}
 			if data.K.X {
