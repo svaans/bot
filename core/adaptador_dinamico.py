@@ -16,6 +16,10 @@ from core.utils.umbral_helper import (
 from core.market_regime import detectar_regimen
 from core.config.gestor_config import cargar_config_optima
 
+try:
+    from fast_tp_sl import calcular_tp_sl_adaptativos as _fast_tp_sl
+except Exception:
+    _fast_tp_sl = None
 
 log = configurar_logger("adaptador_dinamico")
 
@@ -143,7 +147,7 @@ def calcular_umbral_adaptativo(
 
 # --- TP/SL adaptativos ------------------------------------------------------
 
-def calcular_tp_sl_adaptativos(
+def _calcular_tp_sl_adaptativos_py(
     symbol: str,
     df: pd.DataFrame,
     config: dict | None = None,
@@ -206,5 +210,23 @@ def calcular_tp_sl_adaptativos(
     )
     return sl, tp
 
+
+
+
+
+def calcular_tp_sl_adaptativos(
+    symbol: str,
+    df: pd.DataFrame,
+    config: dict | None = None,
+    capital_actual: float | None = None,
+    precio_actual: float | None = None,
+) -> tuple[float, float]:
+    """Versión que intenta usar la extensión compilada."""
+    if _fast_tp_sl is not None:
+        try:
+            return _fast_tp_sl(symbol, df, config, capital_actual, precio_actual)
+        except Exception:
+            log.exception("Extensión fast_tp_sl falló, usando Python puro")
+    return _calcular_tp_sl_adaptativos_py(symbol, df, config, capital_actual, precio_actual)
 
 

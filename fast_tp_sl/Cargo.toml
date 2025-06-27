@@ -1,0 +1,14 @@
+[package]
+name = "fast_tp_sl"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "fast_tp_sl"
+crate-type = ["cdylib"]
+
+[dependencies]
+pyo3 = { version = "0.21", features = ["extension-module"] }
+numpy = "0.21"
+
+[build-dependencies]

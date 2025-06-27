@@ -126,3 +126,21 @@ La ponderación que recibe cada indicador técnico se encuentra en
 el umbral mínimo requerido por el score técnico usa la variable de entorno
 `UMBRAL_SCORE_TECNICO` o edita los valores por defecto en
 `config/development.py` o `config/production.py`.
+
+## Extensión acelerada con Rust
+
+Para obtener mejores tiempos de cálculo en el ajuste de TP/SL se incluye una extensión opcional escrita en Rust usando **PyO3**.
+
+### Compilación
+
+1. Instala el toolchain de Rust desde [rustup.rs](https://rustup.rs/).
+2. Instala `maturin`:
+   ```bash
+   pip install maturin
+   ```
+3. Compila la extensión desde la raíz del proyecto:
+   ```bash
+   maturin develop --release -m fast_tp_sl/Cargo.toml
+   ```
+
+Si la extensión se encuentra disponible, `core.adaptador_dinamico` la cargará automáticamente. En caso contrario se utilizará la implementación en Python.
