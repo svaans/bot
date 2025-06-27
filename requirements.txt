@@ -72,3 +72,5 @@ propcache==0.3.1              # Caché de propiedades
 dotenv==0.9.9                 # ⚠️ OBSOLETO, mantenido solo si requerido por alguna librería
 six==1.17.0                   # Compatibilidad entre Python 2 y 3
 pybind11==2.12.0
+grpcio==1.63.0          # gRPC runtime
+grpcio-tools==1.63.0    # gRPC compiler (protoc + bindings)
