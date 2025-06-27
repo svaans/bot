@@ -512,12 +512,8 @@ def ejecutar_orden_market_sell(symbol: str, cantidad: float) -> float:
 
 
 
-def flush_operaciones() -> None:
-    """Guarda en disco todas las operaciones acumuladas en el buffer de forma segura y eficiente."""
-
-    with _BUFFER_LOCK:
-        operaciones = list(_BUFFER_OPERACIONES)
-        _BUFFER_OPERACIONES.clear()
+def _persist_operations(operaciones: list[dict]) -> None:
+    """Guarda en disco una lista de operaciones de forma segura y eficiente."""
 
     if not operaciones:
         return
@@ -582,13 +578,30 @@ def flush_operaciones() -> None:
                 log.error(f"❌ Error guardando operación en Parquet para {symbol}: {e}")
                 errores_parquet += 1
 
-    global _ULTIMO_FLUSH
-    _ULTIMO_FLUSH = time.time()
 
     if errores_sqlite == 0 and errores_parquet == 0:
         log.info(f"✅ {len(operaciones)} operaciones guardadas correctamente.")
     else:
-        log.warning(f"⚠️ Guardadas {len(operaciones)} operaciones con errores — SQLite: {errores_sqlite}, Parquet: {errores_parquet}")
+        log.warning(
+            f"⚠️ Guardadas {len(operaciones)} operaciones con errores — SQLite: {errores_sqlite}, Parquet: {errores_parquet}"
+        )
+
+
+def flush_operaciones() -> None:
+    """Envía las operaciones acumuladas al worker de persistencia."""
+
+    with _BUFFER_LOCK:
+        operaciones = list(_BUFFER_OPERACIONES)
+        _BUFFER_OPERACIONES.clear()
+
+    if not operaciones:
+        return
+
+    from core.workers.order_worker_client import send_async
+
+    send_async(operaciones)
+    global _ULTIMO_FLUSH
+    _ULTIMO_FLUSH = time.time()
 
 @log_exceptions_async
 async def flush_periodico(interval: int = _FLUSH_INTERVAL) -> None:
@@ -604,6 +617,8 @@ def _handle_exit(signum, frame) -> None:
     log.info(f"📴 Señal de salida recibida ({signal.Signals(signum).name}). Guardando operaciones...")
     try:
         flush_operaciones()
+        from core.workers.order_worker_client import wait_pending
+        wait_pending()
         log.info("✅ Buffer de operaciones guardado correctamente al salir.")
     except Exception as e:
         log.error(f"❌ Error al guardar operaciones en la salida: {e}")
@@ -619,4 +634,9 @@ for _sig in (signal.SIGTERM, signal.SIGINT):
         log.warning(f"⚠️ No se pudo registrar la señal {_sig}: {e}")
 
 # Registro a la salida normal del proceso
-atexit.register(flush_operaciones)
+def _flush_and_wait() -> None:
+    flush_operaciones()
+    from core.workers.order_worker_client import wait_pending
+    wait_pending()
+
+atexit.register(_flush_and_wait)

@@ -1,0 +1,31 @@
+syntax = "proto3";
+package worker;
+
+message Order {
+  string symbol = 1;
+  double precio_entrada = 2;
+  double cantidad = 3;
+  double stop_loss = 4;
+  double take_profit = 5;
+  string timestamp = 6;
+  string estrategias_activas = 7;
+  string tendencia = 8;
+  double max_price = 9;
+  string direccion = 10;
+  double precio_cierre = 11;
+  string fecha_cierre = 12;
+  string motivo_cierre = 13;
+  double retorno_total = 14;
+}
+
+message OrdersBatch {
+  repeated Order orders = 1;
+}
+
+message WriteResponse {
+  bool ok = 1;
+}
+
+service OrderWriter {
+  rpc WriteOrders(OrdersBatch) returns (WriteResponse);
+}
