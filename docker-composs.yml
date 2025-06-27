@@ -20,5 +20,6 @@ services:
       CANDLE_PORT: 9000
       ORDERS_WORKER_HOST: orders-worker
       ORDERS_WORKER_PORT: 9100
+    command: ["python", "scripts/supervisor.py"]
     ports:
       - "8000:8000"

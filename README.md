@@ -136,8 +136,9 @@ Las direcciones de cada servicio pueden ajustarse con las variables de entorno
 Si prefieres usar contenedores puedes levantar todo con Docker Compose:
 
 ```bash
-docker-compose up --build
-``
+El archivo `docker-compose.yml` crea los servicios `candle-service`,
+`orders-worker` y `bot`. El contenedor del bot ejecuta automáticamente
+`scripts/supervisor.py` para iniciar todos los microservicios.
 ## Ajuste de pesos y umbrales
 
 La ponderación que recibe cada indicador técnico se encuentra en
