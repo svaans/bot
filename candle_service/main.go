@@ -65,6 +65,7 @@ func handleConn(conn net.Conn) {
 			if err != nil {
 				log.Printf("read error: %v", err)
 				ws.Close()
+				log.Printf("connection closed, reconnecting %s %s", req.Symbol, req.Interval)
 				break
 			}
 			var data struct {
@@ -109,6 +110,7 @@ func handleConn(conn net.Conn) {
 					continue
 				}
 				if err := enc.Encode(&c); err != nil {
+					log.Printf("write error: %v", err)
 					ws.Close()
 					return
 				}
