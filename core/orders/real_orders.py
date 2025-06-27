@@ -14,7 +14,7 @@ import atexit
 import signal
 import threading
 import asyncio
-from datetime import datetime, UTC
+from datetime import datetime, timezone
 from binance_api.cliente import obtener_cliente
 from .order_model import Order
 from core.utils.utils import configurar_logger
@@ -360,7 +360,7 @@ def registrar_orden(
         cantidad=cantidad,
         stop_loss=sl,
         take_profit=tp,
-        timestamp=datetime.now(UTC).isoformat(),
+        timestamp=datetime.now(timezone.utc).isoformat(),
         estrategias_activas=estrategias,
         tendencia=tendencia,
         max_price=precio,

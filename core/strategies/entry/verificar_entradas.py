@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, UTC
+from datetime import datetime, timezone
 import pandas as pd
 
 from core.utils import configurar_logger
@@ -154,7 +154,7 @@ async def _verificar_entrada_impl(
                 async with trader.state_lock:
                     trader.historial_cierres.pop(symbol, None)
     registro = cierre or {}
-    fecha_hoy = datetime.now(UTC).date().isoformat()
+    fecha_hoy = datetime.now(timezone.utc).date().isoformat()
     if (
         registro.get("fecha_perdidas") == fecha_hoy
         and registro.get("perdidas_consecutivas", 0) >= 6

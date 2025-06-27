@@ -3,7 +3,7 @@
 import os
 import pandas as pd
 import numpy as np
-from datetime import datetime, timedelta, UTC
+from datetime import datetime, timedelta, timezone
 
 RUTA_RESULTADOS = "backtesting"
 
@@ -25,7 +25,7 @@ def calcular_promedios_sl_tp(symbol, dias=1):
 
     # Convertir fechas y filtrar por rango
     df["fecha_cierre"] = pd.to_datetime(df["fecha_cierre"], errors='coerce')
-    hace_dias = datetime.now(UTC) - timedelta(days=dias)
+    hace_dias = datetime.now(timezone.utc) - timedelta(days=dias)
     df = df[df["fecha_cierre"] >= hace_dias]
 
     if df.empty:

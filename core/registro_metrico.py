@@ -1,5 +1,5 @@
 import os
-from datetime import datetime, UTC
+from datetime import datetime, timezone
 import pandas as pd
 import threading
 
@@ -15,7 +15,7 @@ class RegistroMetrico:
 
     def registrar(self, tipo: str, datos: dict, guardar_inmediatamente=False) -> None:
         """Agrega un nuevo registro. Guarda si se supera el límite o si se indica guardar ya."""
-        registro = {"timestamp": datetime.now(UTC).isoformat(), "tipo": tipo}
+        registro = {"timestamp": datetime.now(timezone.utc).isoformat(), "tipo": tipo}
         registro.update(datos)
         with self.lock:
             self.buffer.append(registro)
@@ -29,7 +29,7 @@ class RegistroMetrico:
                 return
 
             df = pd.DataFrame(self.buffer)
-            fecha = datetime.now(UTC).strftime("%Y%m%d")
+            fecha = datetime.now(timezone.utc).strftime("%Y%m%d")
             archivo = os.path.join(self.carpeta, f"{fecha}.csv")
 
             try:

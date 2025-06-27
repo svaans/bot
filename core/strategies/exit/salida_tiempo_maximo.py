@@ -1,5 +1,5 @@
 import pandas as pd
-from datetime import datetime, timedelta, UTC
+from datetime import datetime, timedelta, timezone
 from core.utils import configurar_logger
 from core.strategies.exit.salida_utils import resultado_salida
 
@@ -28,7 +28,7 @@ def salida_tiempo_maximo(orden: dict, df: pd.DataFrame) -> dict:
             )
 
         tiempo_maximo = timedelta(hours=4)  # límite de vida de una orden
-        ahora = datetime.now(UTC)
+        ahora = datetime.now(timezone.utc)
         tiempo_abierta = ahora - timestamp_dt
 
         if tiempo_abierta > tiempo_maximo:

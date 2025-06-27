@@ -1,6 +1,6 @@
 import os
 import json
-from datetime import datetime, UTC
+from datetime import datetime, timezone
 import pandas as pd
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_pdf import PdfPages
@@ -12,7 +12,7 @@ class ReporterDiario:
     def __init__(self, carpeta="reportes_diarios"):
         self.carpeta = carpeta
         os.makedirs(self.carpeta, exist_ok=True)
-        self.fecha_actual = datetime.now(UTC).date()
+        self.fecha_actual = datetime.now(timezone.utc).date()
         self.log = configurar_logger("reporte")
         self.estadisticas_archivo = os.path.join(self.carpeta, "estadisticas.csv")
         self._cargar_estadisticas()
@@ -90,7 +90,7 @@ class ReporterDiario:
         self._guardar_estadisticas()
 
     def registrar_operacion(self, info: dict):
-        fecha = datetime.now(UTC).date()
+        fecha = datetime.now(timezone.utc).date()
         archivo = os.path.join(self.carpeta, f"{fecha}.csv")
         df = pd.DataFrame([info])
         if os.path.exists(archivo):

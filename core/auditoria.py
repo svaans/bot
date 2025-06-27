@@ -1,6 +1,6 @@
 import json
 import os
-from datetime import datetime, UTC
+from datetime import datetime, timezone
 from threading import Lock
 import pandas as pd
 
@@ -37,7 +37,7 @@ def registrar_auditoria(
     os.makedirs(os.path.dirname(archivo), exist_ok=True)
 
     registro = {
-        "timestamp": datetime.now(UTC).isoformat(),
+        "timestamp": datetime.now(timezone.utc).isoformat(),
         "symbol": symbol,
         "evento": evento,
         "resultado": resultado,

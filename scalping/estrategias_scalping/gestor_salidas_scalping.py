@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import pandas as pd
-from datetime import datetime, timedelta, UTC
+from datetime import datetime, timedelta, timezone
 from dataclasses import dataclass
 
 from utils_scalping.indicadores import atr
@@ -24,7 +24,7 @@ def evaluar_salida(df: pd.DataFrame, estado: EstadoOperacion) -> tuple[bool, str
         return False, "sin_config"
 
     precio_actual = df["close"].iloc[-1]
-    duracion = datetime.now(UTC) - estado.timestamp
+    duracion = datetime.now(timezone.utc) - estado.timestamp
     atr_actual = atr(df).iloc[-1]
     if atr_actual and config.stop_loss_pct <= 1:
         sl = estado.precio_entrada * (1 - config.stop_loss_pct / 100)

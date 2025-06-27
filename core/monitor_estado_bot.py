@@ -1,6 +1,6 @@
 import os
 import asyncio
-from datetime import datetime, UTC
+from datetime import datetime, timezone
 import sqlite3
 from binance_api.cliente import crear_cliente
 from ccxt.base.errors import AuthenticationError, NetworkError
@@ -96,7 +96,7 @@ def monitorear_estado_bot(ordenes_memoria: dict | None = None):
 
         log.info("======= 🤖 ESTADO ACTUAL DEL BOT =======")
         log.info(
-            f"🕒 Hora actual: {datetime.now(UTC).strftime('%Y-%m-%d %H:%M:%S')} UTC"
+            f"🕒 Hora actual: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')} UTC"
         )
         log.info(f"💶 Saldo disponible (EUR): {euros:.2f}")
 

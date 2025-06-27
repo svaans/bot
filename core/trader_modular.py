@@ -4,7 +4,7 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass
 from typing import Dict, List, Optional
-from datetime import datetime, timedelta, date, UTC
+from datetime import datetime, timedelta, date, timezone
 import json
 import os
 import numpy as np
@@ -258,7 +258,7 @@ class Trader:
         info.update(
             {
                 "precio_cierre": precio,
-                "fecha_cierre": datetime.now(UTC).isoformat(),
+                "fecha_cierre": datetime.now(timezone.utc).isoformat(),
                 "motivo_cierre": motivo,
                 "retorno_total": retorno_total,
                 "capital_inicial": capital_simbolo,
@@ -323,12 +323,12 @@ class Trader:
         duracion = 0.0
         try:
             apertura = datetime.fromisoformat(orden.timestamp)
-            duracion = (datetime.now(UTC) - apertura).total_seconds() / 60
+            duracion = (datetime.now(timezone.utc) - apertura).total_seconds() / 60
         except (ValueError, TypeError) as e:
             log.exception("Error calculando duración de la operación", exc_info=e)
         prev = self.historial_cierres.get(orden.symbol, {})
         self.historial_cierres[orden.symbol] = {
-            "timestamp": datetime.now(UTC).isoformat(),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
             "motivo": motivo.lower().strip(),
             "velas": 0,
             "precio": precio,
@@ -337,7 +337,7 @@ class Trader:
             "retorno_total": retorno_total,
         }
         if retorno_total < 0:
-            fecha_hoy = datetime.now(UTC).date().isoformat()
+            fecha_hoy = datetime.now(timezone.utc).date().isoformat()
             if prev.get("fecha_perdidas") != fecha_hoy:
                 perdidas = 0
             else:
@@ -432,7 +432,7 @@ class Trader:
         os.makedirs(os.path.dirname(archivo), exist_ok=True)
         data = info.copy()
         data["symbol"] = symbol
-        data["timestamp"] = datetime.now(UTC).isoformat()
+        data["timestamp"] = datetime.now(timezone.utc).isoformat()
         if isinstance(data.get("estrategias_activas"), dict):
             data["estrategias_activas"] = json.dumps(data["estrategias_activas"])
         try:
@@ -485,7 +485,7 @@ class Trader:
         info.update(
             {
                 "precio_cierre": precio,
-                "fecha_cierre": datetime.now(UTC).isoformat(),
+                "fecha_cierre": datetime.now(timezone.utc).isoformat(),
                 "motivo_cierre": motivo,
                 "retorno_total": retorno_total,
                 "cantidad_cerrada": cantidad,
@@ -729,7 +729,7 @@ class Trader:
             self.reservas_piramide[symbol] = round(reserva, 2)
 
         self.capital_inicial_diario = self.capital_por_simbolo.copy()
-        self.fecha_actual = fecha or datetime.now(UTC).date()
+        self.fecha_actual = fecha or datetime.now(timezone.utc).date()
         log.info(f"💰 Capital redistribuido: {self.capital_por_simbolo}")
 
 
@@ -810,7 +810,7 @@ class Trader:
                 "capital_inicial": sum(self.capital_inicial_diario.values()),
             }
 
-        fecha_limite = datetime.now(UTC).date() - timedelta(days=dias)
+        fecha_limite = datetime.now(timezone.utc).date() - timedelta(days=dias)
         retornos: list[float] = []
 
         archivos = sorted(
@@ -897,7 +897,7 @@ class Trader:
         estado = self.estado.get(symbol)
         if not estado:
             return 0
-        limite = datetime.now(UTC).timestamp() * 1000 - minutos * 60 * 1000
+        limite = datetime.now(timezone.utc).timestamp() * 1000 - minutos * 60 * 1000
         return sum(
             1
             for v in estado.buffer
@@ -999,7 +999,7 @@ class Trader:
                 else ""
             ),
         }
-        fecha = datetime.now(UTC).strftime("%Y%m%d")
+        fecha = datetime.now(timezone.utc).strftime("%Y%m%d")
         archivo = os.path.join(
             "logs/rechazos", f"{symbol.replace('/', '_')}_{fecha}.csv"
         )
@@ -1338,7 +1338,7 @@ class Trader:
         if not self.registro_tecnico_csv:
             return
         fila = {
-            "timestamp": datetime.now(UTC).isoformat(),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
             "symbol": symbol,
             "puntaje_total": score,
             "indicadores_fallidos": ",".join([k for k, v in puntos.items() if not v]),

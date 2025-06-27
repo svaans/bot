@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import time
 from typing import Dict, Optional
-from datetime import datetime, UTC
+from datetime import datetime, timezone
 
 from core.orders.order_model import Order
 from core.utils.logger import configurar_logger
@@ -71,7 +71,7 @@ class OrderManager:
             take_profit=tp,
             estrategias_activas=estrategias,
             tendencia=tendencia,
-            timestamp=datetime.now(UTC).isoformat(),
+            timestamp=datetime.now(timezone.utc).isoformat(),
             max_price=precio,
             direccion=direccion,
             entradas=[{"precio": precio, "cantidad": cantidad}],
@@ -207,7 +207,7 @@ class OrderManager:
 
         self.ordenes.pop(symbol, None)
         orden.precio_cierre = precio
-        orden.fecha_cierre = datetime.now(UTC).isoformat()
+        orden.fecha_cierre = datetime.now(timezone.utc).isoformat()
         orden.motivo_cierre = motivo
         
         direccion = 1 if orden.direccion in ("long", "compra") else -1
