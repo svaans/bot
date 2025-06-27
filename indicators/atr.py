@@ -1,4 +1,5 @@
 import pandas as pd
+from fast_indicators import atr as _atr_fast
 
 def calcular_atr(df: pd.DataFrame, periodo: int = 14) -> float:
     """Calcula el Average True Range (ATR) usando el metodo de Wilder."""
@@ -17,3 +18,15 @@ def calcular_atr(df: pd.DataFrame, periodo: int = 14) -> float:
     atr = tr.ewm(alpha=1 / periodo, adjust=False, min_periods=periodo).mean()
 
     return atr.iloc[-1] if not atr.empty else None
+
+
+def calcular_atr_fast(df: pd.DataFrame, periodo: int = 14) -> float:
+    """Versión acelerada de :func:`calcular_atr` usando la extensión en C++."""
+    columnas = {"high", "low", "close"}
+    if not columnas.issubset(df.columns) or len(df) < periodo + 1:
+        return None
+
+    high = df["high"].to_numpy(dtype=float)
+    low = df["low"].to_numpy(dtype=float)
+    close = df["close"].to_numpy(dtype=float)
+    return float(_atr_fast(high, low, close, periodo))
