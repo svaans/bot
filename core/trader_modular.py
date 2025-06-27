@@ -17,7 +17,7 @@ from core.smart_decision import DecisionEngine
 from core.market_context import MarketContext
 from core.risk import RiskManager
 from core.orders import OrderService, OrderServiceReal, OrderServiceSimulado
-from core.notification_manager import NotificationManager
+from core.notificador import Notificador
 from core.capital_manager import CapitalManager
 from binance_api.cliente import (
     crear_cliente,
@@ -112,7 +112,7 @@ class Trader:
         self.context = MarketContext()
         self.engine = DecisionEngine(self.context)
         self.risk = RiskManager(config.umbral_riesgo_diario)
-        self.notificador = NotificationManager(
+        self.notificador = Notificador(
             config.telegram_token, config.telegram_chat_id
         )
         self.modo_real = getattr(config, "modo_real", False)

@@ -5,6 +5,7 @@ import os
 import sys
 import fcntl
 import psutil
+import subprocess
 
 
 def ya_esta_activo() -> bool:
@@ -71,6 +72,42 @@ from logging.handlers import RotatingFileHandler
 from core.hot_reload import start_hot_reload, stop_hot_reload
 from learning.reset_configuracion import resetear_configuracion_diaria_si_corresponde
 from config.config_manager import ConfigManager
+
+def start_candle_service() -> subprocess.Popen | None:
+    """Lanza el servicio de velas si no está deshabilitado."""
+
+    if os.getenv("NO_AUTO_CANDLE"):
+        return None
+
+    root = Path(__file__).resolve().parent
+    use_docker = os.getenv("USE_DOCKER_CANDLE", "0").lower() in {"1", "true", "yes"}
+
+    try:
+        if use_docker:
+            subprocess.run(
+                ["docker", "build", "-t", "candle_service", "./candle_service"],
+                cwd=root,
+                check=True,
+            )
+            return subprocess.Popen(
+                ["docker", "run", "--rm", "-p", "9000:9000", "candle_service"],
+                cwd=root,
+            )
+        return subprocess.Popen(["go", "run", "main.go"], cwd=root / "candle_service")
+    except Exception as exc:
+        print(f"❌ No se pudo iniciar candle_service: {exc}")
+        return None
+
+
+def stop_candle_service(proc: subprocess.Popen | None) -> None:
+    """Detiene el proceso lanzado por ``start_candle_service``."""
+
+    if proc and proc.poll() is None:
+        proc.terminate()
+        try:
+            proc.wait(timeout=5)
+        except Exception:
+            proc.kill()
 
 def mostrar_banner():
     print("\n===============================")
@@ -179,7 +216,9 @@ async def main():
         print("👋 Bot finalizado correctamente.")
 
 if __name__ == "__main__":
+    candle_proc = None
     try:
+        candle_proc = start_candle_service()
         asyncio.run(main())
     except KeyboardInterrupt:
         print("\n🛑 Bot detenido manualmente.")
@@ -188,6 +227,7 @@ if __name__ == "__main__":
         print("\n❌ Error inesperado:")
         traceback.print_exc()
     finally:
+        stop_candle_service(candle_proc)
         # Liberar el bloqueo antes de salir
         try:
             fcntl.flock(lock_fd, fcntl.LOCK_UN)

@@ -33,6 +33,11 @@ docker build -t candle_service ./candle_service
 docker run -p 9000:9000 candle_service
 ```
 
+`main.py` inicia automáticamente este servicio cuando se ejecuta el bot. Si
+prefieres levantarlo dentro de un contenedor usa la variable de entorno
+`USE_DOCKER_CANDLE=1`. Para desactivar este comportamiento establece
+`NO_AUTO_CANDLE=1`.
+
 El bot Python asume que el servicio está disponible en `localhost:9000`.
 Puedes cambiar esta dirección con las variables de entorno `CANDLE_HOST` y
 `CANDLE_PORT`.
