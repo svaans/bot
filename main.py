@@ -83,23 +83,34 @@ def start_candle_service() -> subprocess.Popen | None:
     root = Path(__file__).resolve().parent
     use_docker = os.getenv("USE_DOCKER_CANDLE", "0").lower() in {"1", "true", "yes"}
 
-    # If the 'go' executable is missing fall back to Docker automatically
-    if not use_docker and shutil.which("go") is None:
-        print("⚠️  Comando 'go' no encontrado. Usando Docker para iniciar candle_service")
-        use_docker = True
+    go_bin = shutil.which("go")
+    docker_bin = shutil.which("docker")
+
+    if not use_docker and go_bin is None:
+        print("⚠️  Comando 'go' no encontrado.")
+        if docker_bin:
+            print("   Usando Docker para iniciar candle_service")
+            use_docker = True
+        else:
+            print("   No se encontraron ni 'go' ni 'docker'. Candle_service deshabilitado")
+            return None
+
+    if use_docker and docker_bin is None:
+        print("⚠️  Docker no está instalado. Candle_service deshabilitado")
+        return None
 
     try:
         if use_docker:
             subprocess.run(
-                ["docker", "build", "-t", "candle_service", "./candle_service"],
+                [docker_bin, "build", "-t", "candle_service", "./candle_service"],
                 cwd=root,
                 check=True,
             )
             return subprocess.Popen(
-                ["docker", "run", "--rm", "-p", "9000:9000", "candle_service"],
+                [docker_bin, "run", "--rm", "-p", "9000:9000", "candle_service"],
                 cwd=root,
             )
-        return subprocess.Popen(["go", "run", "main.go"], cwd=root / "candle_service")
+        return subprocess.Popen([go_bin, "run", "main.go"], cwd=root / "candle_service")
     except Exception as exc:
         print(f"❌ No se pudo iniciar candle_service: {exc}")
         return None
