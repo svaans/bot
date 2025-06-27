@@ -2,6 +2,7 @@ import asyncio
 import pytest
 
 from core.data_feed import DataFeed
+from core import candle_pb2, candle_pb2_grpc
 
 
 def test_data_feed_streams_candles(monkeypatch):
@@ -24,31 +25,11 @@ def test_data_feed_streams_candles(monkeypatch):
 
 
 def test_stream_reraises_unexpected(monkeypatch):
-    async def fake_open_connection(host, port):
-        class R:
-            async def readline(self):
-                return b"{}"
+    class FakeStub:
+        def Subscribe(self, req):
+            raise TypeError("boom")
 
-        class W:
-            def write(self, d):
-                pass
-
-            async def drain(self):
-                pass
-
-            def close(self):
-                pass
-
-            async def wait_closed(self):
-                pass
-
-        return R(), W()
-
-    def bad_json(_):
-        raise TypeError("boom")
-
-    monkeypatch.setattr(asyncio, "open_connection", fake_open_connection)
-    monkeypatch.setattr("core.data_feed.json.loads", bad_json)
+        monkeypatch.setattr(candle_pb2_grpc, "CandleServiceStub", lambda ch: FakeStub())
 
     feed = DataFeed("1m")
 

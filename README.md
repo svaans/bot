@@ -17,7 +17,7 @@ Este proyecto implementa un bot de trading para Binance.
 
 ## Servicio de velas en Go
 
-El bot consume las velas de Binance a través de un servicio externo escrito en Go.
+El bot consume las velas de Binance a través de un microservicio implementado en Go que ahora expone **gRPC** de forma definitiva.
 Para compilarlo manualmente:
 
 ```bash
@@ -26,12 +26,35 @@ cd candle_service
 ./candle-service
 ```
 
+Las definiciones de gRPC se encuentran en `candle_service/proto/candle.proto`.
+Para generar el código a partir de este archivo necesitas `protoc` y los
+plugins de Go. Instálalos de la siguiente forma:
+
+```bash
+go install google.golang.org/protobuf/cmd/protoc-gen-go@latest
+go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@latest
+```
+
+Luego ejecuta:
+
+```bash
+protoc --go_out=. --go-grpc_out=. candle_service/proto/candle.proto
+```
+
+En tus programas Go importa el paquete generado `candle_service/proto` y crea un
+`grpc.Server` para registrar `proto.RegisterCandleServiceServer`. Los clientes se
+conectan usando `proto.NewCandleServiceClient` y llaman al método
+`Subscribe` para recibir velas en streaming.
+
 También puedes ejecutarlo con Docker:
 
 ```bash
 docker build -t candle_service ./candle_service
 docker run -p 9000:9000 candle_service
 ```
+
+El `Dockerfile` de este servicio instala los plugins de `protoc` y genera los
+stubs de Go automáticamente antes de compilar el binario.
 
 `main.py` inicia automáticamente este servicio cuando se ejecuta el bot. Si
 prefieres levantarlo dentro de un contenedor usa la variable de entorno
@@ -41,6 +64,20 @@ prefieres levantarlo dentro de un contenedor usa la variable de entorno
 El bot Python asume que el servicio está disponible en `localhost:9000`.
 Puedes cambiar esta dirección con las variables de entorno `CANDLE_HOST` y
 `CANDLE_PORT`.
+
+Para consumir este servicio desde otro programa Go simplemente crea un canal gRPC
+al endpoint y utiliza el cliente generado:
+
+```go
+conn, _ := grpc.Dial("localhost:9000", grpc.WithInsecure())
+cli := proto.NewCandleServiceClient(conn)
+stream, _ := cli.Subscribe(context.Background(), &proto.CandleRequest{Symbol: "BTCUSDT", Interval: "1m"})
+for {
+    candle, err := stream.Recv()
+    if err != nil { break }
+    fmt.Println(candle)
+}
+```
 
 Los intervalos soportados coinciden con los de Binance: `1m`, `3m`, `5m`, `15m`,
 `30m`, `1h`, `2h`, `4h`, `6h`, `8h`, `12h`, `1d`, `3d`, `1w` y `1M`.

@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import asyncio
-import json
 from typing import Awaitable, Callable, Dict, Iterable
+
+import grpc
+from core import candle_pb2, candle_pb2_grpc
 
 from core.utils.logger import configurar_logger
 from core.async_utils import log_exceptions_async
@@ -28,33 +30,34 @@ class DataFeed:
         
     @log_exceptions_async
     async def stream(self, symbol: str, handler: Callable[[dict], Awaitable[None]]) -> None:
-        """Escucha las velas de ``symbol`` y reintenta ante fallos de conexión."""
+        """Escucha las velas de ``symbol`` via gRPC y reintenta ante fallos."""
+        address = f"{self.host}:{self.puerto}"
         while True:
-            writer = None
+            channel = grpc.aio.insecure_channel(address)
+            stub = candle_pb2_grpc.CandleServiceStub(channel)
             try:
-                reader, writer = await asyncio.open_connection(self.host, self.puerto)
-                req = json.dumps({"symbol": symbol, "interval": self.intervalo}) + "\n"
-                writer.write(req.encode())
-                await writer.drain()
-                log.info(f"🔌 Conectado al servicio para {symbol}")
-                while True:
-                    line = await reader.readline()
-                    if not line:
-                        raise ConnectionError("socket cerrado")
-                    data = json.loads(line.decode())
+                req = candle_pb2.CandleRequest(symbol=symbol, interval=self.intervalo)
+                async for candle in stub.Subscribe(req):
+                    data = {
+                        "symbol": candle.symbol,
+                        "timestamp": candle.timestamp,
+                        "open": candle.open,
+                        "high": candle.high,
+                        "low": candle.low,
+                        "close": candle.close,
+                        "volume": candle.volume,
+                    }
                     await handler(data)
-            except (OSError, ConnectionError, json.JSONDecodeError) as e:  # pragma: no cover - conexión externa
+            except (grpc.aio.AioRpcError, OSError, ConnectionError) as e:  # pragma: no cover - conexión externa
                 log.warning(f"⚠️ Stream {symbol} falló: {e}. Reintentando en 5s")
                 await asyncio.sleep(5)
             except asyncio.CancelledError:
                 raise
-            except Exception as e:
+            except Exception as e:  # pragma: no cover - inesperado
                 log.exception(f"❌ Error inesperado en stream {symbol}: {e}")
                 raise
             finally:
-                if writer:
-                    writer.close()
-                    await writer.wait_closed()
+                await channel.close()
                 
     @log_exceptions_async
     async def escuchar(self, symbols: Iterable[str], handler: Callable[[dict], Awaitable[None]]) -> None:
