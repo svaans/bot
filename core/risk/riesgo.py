@@ -1,6 +1,6 @@
 import os
 import json
-from datetime import datetime
+from datetime import datetime, UTC
 from filelock import FileLock
 from core.utils.utils import configurar_logger
 
@@ -52,7 +52,7 @@ def guardar_estado_riesgo(estado: dict) -> None:
 def actualizar_perdida(simbolo: str, perdida: float):
     """Registra una pérdida para el día actual (valor absoluto)."""
     estado = cargar_estado_riesgo_seguro()
-    hoy = datetime.utcnow().date().isoformat()
+    hoy = datetime.now(UTC).date().isoformat()
 
     if estado.get("fecha") != hoy:
         estado = {"fecha": hoy, "perdida_acumulada": 0.0}
@@ -66,7 +66,7 @@ def actualizar_perdida(simbolo: str, perdida: float):
 def riesgo_superado(umbral: float, capital_total: float) -> bool:
     """Evalúa si el umbral de pérdida diaria ha sido superado."""
     estado = cargar_estado_riesgo_seguro()
-    hoy = datetime.utcnow().date().isoformat()
+    hoy = datetime.now(UTC).date().isoformat()
 
     if estado.get("fecha") != hoy:
         return False

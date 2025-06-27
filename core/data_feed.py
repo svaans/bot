@@ -43,9 +43,14 @@ class DataFeed:
                         raise ConnectionError("socket cerrado")
                     data = json.loads(line.decode())
                     await handler(data)
-            except Exception as e:  # pragma: no cover - conexión externa
+            except (OSError, ConnectionError, json.JSONDecodeError) as e:  # pragma: no cover - conexión externa
                 log.warning(f"⚠️ Stream {symbol} falló: {e}. Reintentando en 5s")
                 await asyncio.sleep(5)
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                log.exception(f"❌ Error inesperado en stream {symbol}: {e}")
+                raise
             finally:
                 if writer:
                     writer.close()

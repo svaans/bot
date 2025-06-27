@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import time
 from typing import Dict, Optional
-from datetime import datetime
+from datetime import datetime, UTC
 
 from core.orders.order_model import Order
 from core.utils.logger import configurar_logger
@@ -71,7 +71,7 @@ class OrderManager:
             take_profit=tp,
             estrategias_activas=estrategias,
             tendencia=tendencia,
-            timestamp=datetime.utcnow().isoformat(),
+            timestamp=datetime.now(UTC).isoformat(),
             max_price=precio,
             direccion=direccion,
             entradas=[{"precio": precio, "cantidad": cantidad}],
@@ -92,7 +92,7 @@ class OrderManager:
                 )
                 try:
                     cantidad = float(cantidad)
-                except Exception:
+                except (TypeError, ValueError):
                     cantidad = float(orden.cantidad_abierta) if is_valid_number(orden.cantidad_abierta) else 0.0
 
             if cantidad > 0:
@@ -113,7 +113,7 @@ class OrderManager:
                 orden.entradas[0]["cantidad"] = cantidad
         except Exception as e:
             log.error(f"❌ No se pudo abrir la orden para {symbol}: {e}")
-            return
+            raise
 
         self.ordenes[symbol] = orden
         log.info(f"🟢 Orden abierta para {symbol} @ {precio:.2f}")
@@ -128,7 +128,7 @@ class OrderManager:
             try:
                 await self.notificador.enviar_async(mensaje)
             except Exception as e:
-                log.error(f"❌ Error enviando notificación: {e}")
+                log.error(f"❌ Error enviando notificación: {e}", exc_info=True)
 
     def abrir(self, *args, **kwargs) -> None:
         """Versión síncrona de :meth:`abrir_async`."""
@@ -207,7 +207,7 @@ class OrderManager:
 
         self.ordenes.pop(symbol, None)
         orden.precio_cierre = precio
-        orden.fecha_cierre = datetime.utcnow().isoformat()
+        orden.fecha_cierre = datetime.now(UTC).isoformat()
         orden.motivo_cierre = motivo
         
         direccion = 1 if orden.direccion in ("long", "compra") else -1

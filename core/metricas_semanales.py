@@ -1,6 +1,6 @@
 import os
 import json
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, UTC
 import pandas as pd
 from core.utils.utils import leer_csv_seguro
 
@@ -71,7 +71,7 @@ def metricas_semanales(carpeta: str = "reportes_diarios") -> pd.DataFrame:
     if not os.path.isdir(carpeta):
         return pd.DataFrame()
 
-    fin = datetime.utcnow().date()
+    fin = datetime.now(UTC).date()
     inicio = fin - timedelta(days=7)
     datos = []
 

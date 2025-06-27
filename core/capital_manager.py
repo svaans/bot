@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime
+from datetime import datetime, UTC
 from typing import Dict
 
 from config.config_manager import Config
@@ -48,7 +48,7 @@ class CapitalManager:
         }
         self.capital_inicial_diario = self.capital_por_simbolo.copy()
         self.reservas_piramide: Dict[str, float] = {s: 0.0 for s in config.symbols}
-        self.fecha_actual = datetime.utcnow().date()
+        self.fecha_actual = datetime.now(UTC).date()
 
     async def _obtener_minimo_binance(self, symbol: str) -> float | None:
         if not self.modo_real or not self.cliente:

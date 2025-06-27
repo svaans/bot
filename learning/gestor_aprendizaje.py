@@ -2,7 +2,7 @@ import os
 import json
 from pathlib import Path
 import pandas as pd
-from datetime import datetime
+from datetime import datetime, UTC
 from .analisis_resultados import analizar_estrategias_en_ordenes
 from core.strategies.ajustador_pesos import ajustar_pesos_por_desempeno
 from core.strategies.pesos import gestor_pesos
@@ -28,7 +28,7 @@ def registrar_resultado_trade(orden: dict):
         print("⚠️ Orden incompleta, no se puede registrar.")
         return
 
-    timestamp = orden.get("timestamp", datetime.utcnow().timestamp())
+    timestamp = orden.get("timestamp", datetime.now(UTC).timestamp())
     orden["timestamp"] = timestamp
 
     # Convertir a DataFrame para análisis incremental

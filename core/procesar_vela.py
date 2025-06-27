@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime
+from datetime import datetime, UTC
 import pandas as pd
 
 from core.utils.utils import configurar_logger
@@ -14,7 +14,7 @@ async def procesar_vela(trader, vela: dict) -> None:
     log.debug(f"Inicio procesamiento vela {symbol}")
     estado = trader.estado[symbol]
     trader.watchdog.ping("procesar_vela")
-    if datetime.utcnow().date() != trader.fecha_actual:
+    if datetime.now(UTC).date() != trader.fecha_actual:
         trader.ajustar_capital_diario()
 
     estado.buffer.append(vela)

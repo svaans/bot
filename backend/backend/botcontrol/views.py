@@ -93,7 +93,7 @@ class ConfigUploadView(APIView):
     def post(self, request):
         try:
             configs = json.loads(request.body.decode("utf-8"))
-        except Exception:
+        except json.JSONDecodeError:
             return Response({"detail": "JSON inválido"}, status=status.HTTP_400_BAD_REQUEST)
 
         if not isinstance(configs, list):

@@ -6,7 +6,7 @@ import shutil
 import threading
 import json
 import pandas as pd
-from datetime import datetime
+from datetime import datetime, UTC
 from typing import TYPE_CHECKING
 from .logger import configurar_logger
 
@@ -127,7 +127,7 @@ def segundos_transcurridos(timestamp_iso):
             inicio = datetime.utcfromtimestamp(ts)
         else:
             inicio = datetime.fromisoformat(str(timestamp_iso))
-        ahora = datetime.utcnow()
+        ahora = datetime.now(UTC)
         return (ahora - inicio).total_seconds()
     except (ValueError, TypeError) as e:
         log.warning(f"⚠️ Error calculando segundos desde {timestamp_iso}: {e}")
