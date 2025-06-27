@@ -21,6 +21,7 @@ from core.utils.utils import configurar_logger
 from core.async_utils import log_exceptions_async
 from . import real_orders
 from core.utils.utils import guardar_orden_real
+from core import orders_pb2
 
 import math
 
