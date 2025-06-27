@@ -176,3 +176,11 @@ Para obtener mejores tiempos de cálculo en el ajuste de TP/SL se incluye una ex
    ```
 
 Si la extensión se encuentra disponible, `core.adaptador_dinamico` la cargará automáticamente. En caso contrario se utilizará la implementación en Python.
+
+
+## Compilación completa
+
+Se ha incluido un `Makefile` que automatiza la construcción de las extensiones en Rust y C++, los códigos gRPC, los servicios en Go y los assets del frontend. Para generar todo de una sola vez ejecuta:
+
+```bash
+make 
