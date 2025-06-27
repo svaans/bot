@@ -1,6 +1,7 @@
 import os
 import json
 import time
+from pathlib import Path
 import pandas as pd
 from collections import defaultdict
 from dotenv import dotenv_values
@@ -11,9 +12,9 @@ from core.utils.utils import configurar_logger
 CONFIG = dotenv_values("config/claves.env")
 MODO_REAL = CONFIG.get("MODO_REAL", "False") == "True"
 CARPETA_ORDENES = "ordenes_reales" if MODO_REAL else "ordenes_simuladas"
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-CARPETA_HISTORICO = os.path.join(BASE_DIR, "ultimas_operaciones")
-RUTA_PESOS = "config/estrategias_pesos.json"
+BASE_DIR = Path(__file__).resolve().parents[1]
+CARPETA_HISTORICO = BASE_DIR / "ultimas_operaciones"
+RUTA_PESOS = BASE_DIR / "config" / "estrategias_pesos.json"
 MIN_OPERACIONES = 5
 
 log = configurar_logger("trader_simulado", modo_silencioso=True)

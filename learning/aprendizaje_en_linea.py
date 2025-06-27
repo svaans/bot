@@ -1,5 +1,6 @@
 import os
 import json
+from pathlib import Path
 import pandas as pd
 from collections import defaultdict
 from core.strategies.pesos import gestor_pesos
@@ -13,9 +14,9 @@ from config.configuracion import (
 )
 from core.utils.utils import configurar_logger
 
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-CARPETA_OPERACIONES = os.path.join(BASE_DIR, "ultimas_operaciones")
-RUTA_PESOS = "config/estrategias_pesos.json"
+BASE_DIR = Path(__file__).resolve().parents[1]
+CARPETA_OPERACIONES = BASE_DIR / "ultimas_operaciones"
+RUTA_PESOS = BASE_DIR / "config" / "estrategias_pesos.json"
 MAX_OPERACIONES = 30
 MIN_OPERACIONES = 5
 # Nuevo tamaño de ventana para actualizar pesos

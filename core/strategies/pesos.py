@@ -1,5 +1,6 @@
 import json
 import os
+from pathlib import Path
 from dataclasses import dataclass, field
 from typing import Dict, Optional
 import pandas as pd
@@ -43,10 +44,13 @@ def normalizar_pesos(
 # -----------------------------------------------------------
 # Clase principal de gestión
 # -----------------------------------------------------------
+BASE_DIR = Path(__file__).resolve().parents[2]
+
+
 @dataclass
 class GestorPesos:
     """Maneja la carga, almacenamiento y cálculo de pesos por estrategia."""
-    ruta: str = "config/estrategias_pesos.json"
+    ruta: Path = BASE_DIR / "config" / "estrategias_pesos.json"
     pesos: Dict[str, Dict[str, float]] = field(init=False, default_factory=dict)
 
     def __post_init__(self) -> None:
@@ -70,7 +74,7 @@ class GestorPesos:
 
     def _restaurar_desde_base(self) -> dict:
         """Restaura pesos desde una copia base."""
-        ruta_base = "config/estrategias_pesos_base.json"
+        ruta_base = BASE_DIR / "config" / "estrategias_pesos_base.json"
         if not os.path.exists(ruta_base):
             raise ValueError("No hay copia base para recuperar pesos")
 
@@ -155,7 +159,7 @@ class GestorPesos:
 @dataclass
 class GestorPesosSalidas:
     """Maneja la carga de pesos para estrategias de salida."""
-    ruta: str = "config/pesos_salidas.json"
+    ruta: Path = BASE_DIR / "config" / "pesos_salidas.json"
     pesos: Dict[str, Dict[str, float]] = field(init=False, default_factory=dict)
 
     def __post_init__(self) -> None:

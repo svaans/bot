@@ -24,11 +24,8 @@ from binance_api.cliente import (
     fetch_balance_async,
     fetch_ohlcv_async,
 )
-from core.adaptador_dinamico import (
-    calcular_umbral_adaptativo,
-    calcular_tp_sl_adaptativos,
-)
-from core.utils.utils import distancia_minima_valida, leer_reporte_seguro
+
+from core.utils.utils import leer_reporte_seguro
 from core.strategies import cargar_pesos_estrategias
 from core.risk import calcular_fraccion_kelly
 from core.data import (
@@ -52,33 +49,17 @@ from core.reporting import reporter_diario
 from core.registro_metrico import registro_metrico
 from learning.aprendizaje_en_linea import registrar_resultado_trade
 from learning.aprendizaje_continuo import ejecutar_ciclo as ciclo_aprendizaje
-from core.strategies.exit.salida_trailing_stop import verificar_trailing_stop
-from core.strategies.exit.salida_por_tendencia import verificar_reversion_tendencia
-from core.strategies.exit.gestor_salidas import (
-    evaluar_salidas,
-    verificar_filtro_tecnico,
-)
-from core.strategies.exit.salida_stoploss import verificar_salida_stoploss
-from core.strategies.exit.filtro_salidas import validar_necesidad_de_salida
+from core.strategies.exit.gestor_salidas import verificar_filtro_tecnico
 from core.strategies.tendencia import detectar_tendencia
-from core.strategies.exit.analisis_salidas import patron_tecnico_fuerte
 from core.strategies.entry.validador_entradas import evaluar_validez_estrategica
-from core.estrategias import filtrar_por_direccion
 from indicators.rsi import calcular_rsi
 from indicators.momentum import calcular_momentum
 from indicators.slope import calcular_slope
 from core.strategies.evaluador_tecnico import (
-    evaluar_puntaje_tecnico,
-    calcular_umbral_adaptativo as calc_umbral_tecnico,
-    cargar_pesos_tecnicos,
     actualizar_pesos_tecnicos,
 )
-from core.strategies.exit.analisis_previo_salida import (
-    permitir_cierre_tecnico,
-    evaluar_condiciones_de_cierre_anticipado,
-)
+
 from core.auditoria import registrar_auditoria
-from indicators.atr import calcular_atr
 from core.strategies.exit.verificar_salidas import verificar_salidas
 from core.strategies.entry.verificar_entradas import verificar_entrada
 from core.procesar_vela import procesar_vela

@@ -1,6 +1,7 @@
 import asyncio
 import json
 import os
+from pathlib import Path
 from typing import Dict, Iterable, List
 
 import numpy as np
@@ -162,7 +163,8 @@ if __name__ == "__main__":
     if not datos:
         raise SystemExit("No se encontraron históricos en la carpeta 'datos'")
 
-    with open("config/estrategias_pesos.json", "r") as f:
+    base_dir = Path(__file__).resolve().parents[1]
+    with open(base_dir / "config" / "estrategias_pesos.json", "r") as f:
         pesos_base = json.load(f)
     estrategias = list(next(iter(pesos_base.values())).keys()) if pesos_base else []
 

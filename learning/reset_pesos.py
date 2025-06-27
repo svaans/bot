@@ -1,11 +1,13 @@
 import os
 import json
 from datetime import datetime
+from pathlib import Path
 from core.strategies.pesos import gestor_pesos
 
-RUTA_BASE = "config/estrategias_pesos_base.json"
-RUTA_ACTUAL = "config/estrategias_pesos.json"
-RUTA_CONTROL = "config/reset_pesos_fecha.txt"
+BASE_DIR = Path(__file__).resolve().parents[1]
+RUTA_BASE = BASE_DIR / "config" / "estrategias_pesos_base.json"
+RUTA_ACTUAL = BASE_DIR / "config" / "estrategias_pesos.json"
+RUTA_CONTROL = BASE_DIR / "config" / "reset_pesos_fecha.txt"
 
 def resetear_pesos_diarios_si_corresponde():
     hoy = datetime.utcnow().strftime("%Y-%m-%d")
@@ -25,7 +27,7 @@ def resetear_pesos_diarios_si_corresponde():
     if os.path.exists(RUTA_ACTUAL):
         with open(RUTA_ACTUAL, "r", encoding="utf-8") as f:
             pesos_actuales = json.load(f)
-        backup_name = f"config/estrategias_pesos_BACKUP_{hoy}.json"
+        backup_name = BASE_DIR / f"config/estrategias_pesos_BACKUP_{hoy}.json"
         with open(backup_name, "w", encoding="utf-8") as f:
             json.dump(pesos_actuales, f, indent=2)
 

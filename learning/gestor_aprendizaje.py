@@ -1,5 +1,6 @@
 import os
 import json
+from pathlib import Path
 import pandas as pd
 from datetime import datetime
 from .analisis_resultados import analizar_estrategias_en_ordenes
@@ -12,7 +13,8 @@ from dotenv import dotenv_values
 CONFIG = dotenv_values("config/claves.env")
 MODO_REAL = CONFIG.get("MODO_REAL", "False") == "True"
 CARPETA_ORDENES = "ordenes_reales" if MODO_REAL else "ordenes_simuladas"
-RUTA_PESOS = "config/estrategias_pesos.json"
+BASE_DIR = Path(__file__).resolve().parents[1]
+RUTA_PESOS = BASE_DIR / "config" / "estrategias_pesos.json"
 
 
 
@@ -49,7 +51,7 @@ def registrar_resultado_trade(orden: dict):
         df_metricas = analizar_estrategias_en_ordenes(ruta_archivo)
         if not df_metricas.empty:
             valores = dict(zip(df_metricas["estrategia"], df_metricas["retorno_total"]))
-            temp_path = RUTA_PESOS + ".tmp"
+            temp_path = str(RUTA_PESOS) + ".tmp"
             calculados = ajustar_pesos_por_desempeno({symbol: valores}, temp_path)
             nuevos_pesos = calculados.get(symbol, {})
 
