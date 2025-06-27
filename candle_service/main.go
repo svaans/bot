@@ -87,11 +87,27 @@ func handleConn(conn net.Conn) {
 					Symbol:    req.Symbol,
 					Timestamp: data.K.T,
 				}
-				fmt.Sscan(data.K.O, &c.Open)
-				fmt.Sscan(data.K.H, &c.High)
-				fmt.Sscan(data.K.L, &c.Low)
-				fmt.Sscan(data.K.C, &c.Close)
-				fmt.Sscan(data.K.V, &c.Volume)
+				var err error
+				if c.Open, err = strconv.ParseFloat(data.K.O, 64); err != nil {
+					log.Printf("parse error open: %v", err)
+					continue
+				}
+				if c.High, err = strconv.ParseFloat(data.K.H, 64); err != nil {
+					log.Printf("parse error high: %v", err)
+					continue
+				}
+				if c.Low, err = strconv.ParseFloat(data.K.L, 64); err != nil {
+					log.Printf("parse error low: %v", err)
+					continue
+				}
+				if c.Close, err = strconv.ParseFloat(data.K.C, 64); err != nil {
+					log.Printf("parse error close: %v", err)
+					continue
+				}
+				if c.Volume, err = strconv.ParseFloat(data.K.V, 64); err != nil {
+					log.Printf("parse error volume: %v", err)
+					continue
+				}
 				if err := enc.Encode(&c); err != nil {
 					ws.Close()
 					return
