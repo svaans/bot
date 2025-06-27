@@ -1,14 +1,16 @@
 import os
 import threading
-import asyncio
 import sqlite3
-from aiohttp import web
+import json
+from concurrent import futures
+import grpc
 import pandas as pd
 import pytest
 
 from core.orders import real_orders
 from core.utils import utils
 from core.workers import order_worker_client
+from core import orders_pb2, orders_pb2_grpc
 
 
 def make_guardar(tmpdir):
@@ -24,32 +26,52 @@ def make_guardar(tmpdir):
 
 
 def start_fake_worker(tmpdir, db_path, port):
-    async def handle(request):
-        ops = await request.json()
-        real_orders.RUTA_DB = str(db_path)
-        patch = make_guardar(tmpdir)
-        utils.guardar_orden_real = patch
-        real_orders.guardar_orden_real = patch
-        real_orders._persist_operations(ops)
-        return web.json_response({"ok": True})
+    patch = make_guardar(tmpdir)
+    utils.guardar_orden_real = patch
+    real_orders.guardar_orden_real = patch
+    real_orders.RUTA_DB = str(db_path)
 
-    app = web.Application()
-    app.router.add_post('/orders', handle)
-    runner = web.AppRunner(app)
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
+    class Servicer(orders_pb2_grpc.OrderWriterServicer):
+        def WriteOrders(self, request, context):
+            ops = []
+            for o in request.orders:
+                if o.estrategias_activas:
+                    estrategias = json.loads(o.estrategias_activas)
+                else:
+                    estrategias = ""
+                ops.append(
+                    {
+                        "symbol": o.symbol,
+                        "precio_entrada": o.precio_entrada,
+                        "cantidad": o.cantidad,
+                        "stop_loss": o.stop_loss,
+                        "take_profit": o.take_profit,
+                        "timestamp": o.timestamp,
+                        "estrategias_activas": estrategias,
+                        "tendencia": o.tendencia,
+                        "max_price": o.max_price,
+                        "direccion": o.direccion,
+                        "precio_cierre": o.precio_cierre,
+                        "fecha_cierre": o.fecha_cierre,
+                        "motivo_cierre": o.motivo_cierre,
+                        "retorno_total": o.retorno_total,
+                    }
+                )
+            real_orders._persist_operations(ops)
+            return orders_pb2.WriteResponse(ok=True)
+
+    server = grpc.server(futures.ThreadPoolExecutor(max_workers=1))
+    orders_pb2_grpc.add_OrderWriterServicer_to_server(Servicer(), server)
+    server.add_insecure_port(f"[::]:{port}")
+    server.start()
     ready = threading.Event()
-    async def run():
-        await runner.setup()
-        site = web.TCPSite(runner, 'localhost', port)
-        await site.start()
+    def run():
         ready.set()
-        await stop.wait()
-        await runner.cleanup()
-    stop = asyncio.Event()
-    thread = threading.Thread(target=loop.run_until_complete, args=(run(),))
+        server.wait_for_termination()
+
+    thread = threading.Thread(target=run)
     thread.start()
-    return stop, thread, ready
+    return server, thread, ready
 
 
 def test_worker_persistence(tmp_path, monkeypatch):
@@ -84,11 +106,15 @@ def test_worker_persistence(tmp_path, monkeypatch):
     new_db = tmp_path / 'new.db'
     new_dir = tmp_path / 'new'
     port = 9102
-    stop, thread, ready = start_fake_worker(new_dir, new_db, port)
+    server, thread, ready = start_fake_worker(new_dir, new_db, port)
     ready.wait()
-    url = f'http://localhost:{port}/orders'
-    os.environ['ORDER_WORKER_URL'] = url
-    order_worker_client.WORKER_URL = url
+    os.environ['ORDERS_WORKER_HOST'] = 'localhost'
+    os.environ['ORDERS_WORKER_PORT'] = str(port)
+    order_worker_client.WORKER_HOST = 'localhost'
+    order_worker_client.WORKER_PORT = port
+    order_worker_client._ADDRESS = f'localhost:{port}'
+    order_worker_client._channel = grpc.insecure_channel(order_worker_client._ADDRESS)
+    order_worker_client._stub = orders_pb2_grpc.OrderWriterStub(order_worker_client._channel)
 
     patch_new = make_guardar(new_dir)
     utils.guardar_orden_real = patch_new
@@ -100,7 +126,7 @@ def test_worker_persistence(tmp_path, monkeypatch):
     real_orders.flush_operaciones()
     order_worker_client.wait_pending()
 
-    stop.set()
+    server.stop(None)
     thread.join()
 
     row_new = sqlite3.connect(new_db).execute('SELECT symbol FROM operaciones').fetchall()

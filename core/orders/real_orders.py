@@ -599,7 +599,33 @@ def flush_operaciones() -> None:
 
     from core.workers.order_worker_client import send_async
 
-    send_async(operaciones)
+    batch = orders_pb2.OrdersBatch(
+        orders=[
+            orders_pb2.Order(
+                symbol=op.get("symbol", ""),
+                precio_entrada=op.get("precio_entrada", 0.0),
+                cantidad=op.get("cantidad", 0.0),
+                stop_loss=op.get("stop_loss", 0.0),
+                take_profit=op.get("take_profit", 0.0),
+                timestamp=op.get("timestamp", ""),
+                estrategias_activas=(
+                    json.dumps(op["estrategias_activas"])
+                    if isinstance(op.get("estrategias_activas"), dict)
+                    else op.get("estrategias_activas", "")
+                ),
+                tendencia=op.get("tendencia", ""),
+                max_price=op.get("max_price", 0.0),
+                direccion=op.get("direccion", ""),
+                precio_cierre=op.get("precio_cierre", 0.0),
+                fecha_cierre=op.get("fecha_cierre", ""),
+                motivo_cierre=op.get("motivo_cierre", ""),
+                retorno_total=op.get("retorno_total", 0.0),
+            )
+            for op in operaciones
+        ]
+    )
+
+    send_async(batch)
     global _ULTIMO_FLUSH
     _ULTIMO_FLUSH = time.time()
 
