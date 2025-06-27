@@ -2,12 +2,12 @@ package main
 
 import (
     "bufio"
-	"encoding/json"
-	"fmt"
-	"log"
-	"net"
-	"strings"
-	"time"
+		"encoding/json"
+		"fmt"
+		"log"
+		"net"
+		"strings"
+		"time"
 
     "github.com/gorilla/websocket"
 )
@@ -109,11 +109,11 @@ func handleConn(conn net.Conn) {
 					log.Printf("parse error volume: %v", err)
 					continue
 				}
-				if err := enc.Encode(&c); err != nil {
-					log.Printf("write error: %v", err)
-					ws.Close()
-					return
-				}
+								if err := enc.Encode(&c); err != nil {
+									log.Printf("write error: %v", err)
+									ws.Close()
+									return
+								}
 			}
 		}
 	}
