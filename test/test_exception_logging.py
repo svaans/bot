@@ -63,6 +63,8 @@ class DummyPersistencia:
         pass
     def es_persistente(self, *a, **k):
         return True
+    def ajustar_minimo(self, *a, **k):
+        pass
 
 class DummyEngine:
     def evaluar_entrada(self, *a, **k):
@@ -99,7 +101,10 @@ def test_verificar_entrada_log_exception(monkeypatch):
     monkeypatch.setattr("core.strategies.entry.verificar_entradas.coincidencia_parcial", lambda *a, **k: 1.0)
     monkeypatch.setattr("core.strategies.entry.verificar_entradas.calcular_umbral_adaptativo", lambda *a, **k: 0.0)
     monkeypatch.setattr("core.strategies.entry.verificar_entradas.filtrar_por_direccion", lambda e, d: (e, []))
-
+    monkeypatch.setattr(
+        "core.strategies.entry.verificar_entradas.obtener_parametros_persistencia",
+        lambda *a, **k: (0.0, 1),
+    )
     trader = DummyTrader()
     estado = type("E", (), {"buffer": [{"close": 1, "open":1, "high":1, "low":1, "volume":1}], "ultimo_umbral":0})()
     df = pd.DataFrame({"close": [1]*30, "open": [1]*30, "high": [1]*30, "low": [1]*30, "volume": [1]*30})

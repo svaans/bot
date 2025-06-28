@@ -12,7 +12,10 @@ from core.adaptador_dinamico import adaptar_configuracion as adaptar_configuraci
 from core.adaptador_configuracion_dinamica import adaptar_configuracion
 from core.data import coincidencia_parcial
 from core.estrategias import filtrar_por_direccion
-from core.strategies.tendencia import detectar_tendencia
+from core.strategies.tendencia import (
+    detectar_tendencia,
+    obtener_parametros_persistencia,
+)
 from core.strategies.evaluador_tecnico import (
     evaluar_puntaje_tecnico,
     calcular_umbral_adaptativo as calc_umbral_tecnico,
@@ -62,6 +65,9 @@ async def _verificar_entrada_impl(
             trader.estado_tendencia[symbol] = tendencia_actual
     log.debug(f"[{symbol}] Tendencia detectada: {tendencia_actual}")
 
+    volatilidad_actual = df["close"].pct_change().tail(20).std()
+    trader.persistencia.ajustar_minimo(symbol, volatilidad_actual)
+
     evaluacion = trader.engine.evaluar_entrada(
         symbol,
         df,
@@ -80,11 +86,15 @@ async def _verificar_entrada_impl(
     trader.persistencia.actualizar(symbol, estrategias)
 
     pesos_symbol = trader.pesos_por_simbolo.get(symbol, {})
+    peso_max = sum(pesos_symbol.values()) or 1.0
+    peso_minimo, min_estrategias = obtener_parametros_persistencia(
+        tendencia_actual, volatilidad_actual
+    )
 
     if len(estado.buffer) < 30:
         persistencia = coincidencia_parcial(estado.buffer, pesos_symbol, ventanas=5)
         log.debug(f"[{symbol}] Persistencia parcial (buffer corto): {persistencia:.2f}")
-        if persistencia < 1:
+        if persistencia < peso_minimo * peso_max:
             return None
 
     persistencia_score = coincidencia_parcial(estado.buffer, pesos_symbol, ventanas=5)
@@ -102,6 +112,17 @@ async def _verificar_entrada_impl(
             estrategias_persistentes[e] = True
         await asyncio.sleep(0)
     log.debug(f"[{symbol}] Estrategias persistentes: {estrategias_persistentes}")
+
+    peso_persistente = sum(pesos_symbol.get(k, 0.0) for k in estrategias_persistentes)
+    if (
+        len(estrategias_persistentes) < min_estrategias
+        or peso_persistente < peso_minimo * peso_max
+    ):
+        log.warning(
+            f"[{symbol}] Persistencia insuficiente: {len(estrategias_persistentes)} < {min_estrategias} "
+            f"o peso {peso_persistente:.2f} < {peso_minimo * peso_max:.2f}"
+        )
+        return None
 
     if not estrategias_persistentes:
         log.warning(f"[{symbol}] Ninguna estrategia pasó el filtro de persistencia.")
@@ -269,7 +290,7 @@ async def _verificar_entrada_impl(
     vol = 0.0
     if "volume" in df.columns and len(df) > 20:
         vol = df["volume"].iloc[-1] / (df["volume"].rolling(20).mean().iloc[-1] or 1)
-    volatilidad = df["close"].pct_change().tail(20).std()
+    volatilidad = volatilidad_actual
     pesos_simbolo = cargar_pesos_tecnicos(symbol)
     score_max = sum(pesos_simbolo.values())
     umbral_tecnico = calc_umbral_tecnico(

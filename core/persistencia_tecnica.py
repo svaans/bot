@@ -8,6 +8,17 @@ class PersistenciaTecnica:
     minimo: int = 1
     peso_extra: float = 0.5
     conteo: Dict[str, Dict[str, int]] = field(default_factory=dict)
+    minimos: Dict[str, int] = field(default_factory=dict)
+
+    def ajustar_minimo(self, symbol: str, volatilidad: float) -> None:
+        """Ajusta el requisito mínimo según la volatilidad."""
+        if volatilidad > 0.02:
+            minimo = max(1, self.minimo - 1)
+        elif volatilidad < 0.01:
+            minimo = self.minimo + 1
+        else:
+            minimo = self.minimo
+        self.minimos[symbol] = minimo
 
     def actualizar(self, symbol: str, estrategias: Dict[str, bool]) -> None:
         """Actualiza los contadores de persistencia."""
@@ -21,8 +32,9 @@ class PersistenciaTecnica:
             actual[nombre] = actual.get(nombre, 0) + 1 if activa else 0
 
     def es_persistente(self, symbol: str, estrategia: str) -> bool:
-        """Devuelve ``True`` si ``estrategia`` ha estado activa ``minimo`` velas."""
-        return self.conteo.get(symbol, {}).get(estrategia, 0) >= self.minimo
+        """Devuelve ``True`` si ``estrategia`` ha estado activa el mínimo requerido."""
+        minimo = self.minimos.get(symbol, self.minimo)
+        return self.conteo.get(symbol, {}).get(estrategia, 0) >= minimo
 
     def filtrar_persistentes(self, symbol: str, estrategias: Dict[str, bool]) -> Dict[str, bool]:
         """Actualiza contadores y retorna solo estrategias persistentes."""
