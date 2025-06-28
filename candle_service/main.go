@@ -1,7 +1,6 @@
 package main
 
 import (
-	"strconv"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -56,58 +55,47 @@ func (s *server) Subscribe(req *pb.CandleRequest, stream pb.CandleService_Subscr
         for {
 			if err := stream.Context().Err(); err != nil {
                 ws.Close()
-                return err
-            }
-            _, msg, err := ws.ReadMessage()
-            if err != nil {
-			log.Printf("read error: %v", err)
-                ws.Close()
-                break
-            }
-            var data struct {
-                K struct {
-                    T int64  `json:"t"`
-                    O string `json:"o"`
-                    H string `json:"h"`
-                    L string `json:"l"`
-                    C string `json:"c"`
-                    V string `json:"v"`
-                    X bool   `json:"x"`
-                } `json:"k"`
-            }
-            if err := json.Unmarshal(msg, &data); err != nil {
-                log.Printf("json error: %v", err)
-                continue
-            }
-            if !data.K.X {
-                continue
-            }
-            candle := &pb.Candle{Symbol: req.Symbol, Timestamp: data.K.T}
-            if candle.Open, err = parseFloat(data.K.O); err != nil {
-                continue
-            }
-            if candle.High, err = parseFloat(data.K.H); err != nil {
-                continue
-            }
-            if candle.Low, err = parseFloat(data.K.L); err != nil {
-                continue
-            }
-            if candle.Close, err = parseFloat(data.K.C); err != nil {
-                continue
-            }
-            if candle.Volume, err = parseFloat(data.K.V); err != nil {
-                continue
-            }
-            if err := stream.Send(candle); err != nil {
-                ws.Close()
-                return err
-            }
-        }
-    }
-}
-
-func parseFloat(s string) (float64, error) {
-    return strconv.ParseFloat(s, 64)
+				return err
+			}
+			_, msg, err := ws.ReadMessage()
+			if err != nil {
+				log.Printf("read error: %v", err)
+				ws.Close()
+				break
+			}
+			var data struct {
+				K struct {
+					T int64   `json:"t"`
+					O float64 `json:"o"`
+					H float64 `json:"h"`
+					L float64 `json:"l"`
+					C float64 `json:"c"`
+					V float64 `json:"v"`
+					X bool    `json:"x"`
+				} `json:"k"`
+			}
+			if err := json.Unmarshal(msg, &data); err != nil {
+				log.Printf("json error: %v", err)
+				continue
+			}
+			if !data.K.X {
+				continue
+			}
+			candle := &pb.Candle{
+				Symbol:    req.Symbol,
+				Timestamp: data.K.T,
+				Open:      data.K.O,
+				High:      data.K.H,
+				Low:       data.K.L,
+				Close:     data.K.C,
+				Volume:    data.K.V,
+			}
+			if err := stream.Send(candle); err != nil {
+				ws.Close()
+				return err
+			}
+		}
+	}
 }
 
 func main() {
