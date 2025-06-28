@@ -107,10 +107,19 @@ class CapitalManager:
         minimo_binance = await asyncio.wait_for(
             self._obtener_minimo_binance(symbol), timeout=10
         )
+        minimo_dinamico = max(minimo_dinamico, minimo_binance or 0.0)
+        log.debug(
+            f"Mínimo aplicado para {symbol}: {minimo_dinamico:.2f}€"
+        )
         cantidad = riesgo / precio
         if cantidad * precio < minimo_dinamico:
             log.debug(
                 f"Orden mínima {minimo_dinamico:.2f}€, intento {cantidad * precio:.2f}€"
+            )
+            return 0.0
+        if minimo_binance and cantidad * precio < minimo_binance:
+            log.debug(
+                f"Orden mínima Binance {minimo_binance:.2f}€, intento {cantidad * precio:.2f}€"
             )
             return 0.0
         log.info(
