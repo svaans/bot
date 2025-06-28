@@ -20,10 +20,13 @@ def validar_volumen(df: pd.DataFrame) -> float:
     if df is None or len(df) < 30:
         return 1.0
     vol_act = float(df["volume"].iloc[-1])
-    vol_med = float(df["volume"].rolling(30).mean().iloc[-1])
+    ventana = df["volume"].rolling(30)
+    vol_med = float(ventana.mean().iloc[-1])
     if vol_med == 0:
         return 1.0
-    ratio = vol_act / vol_med
+    vol_std = float(ventana.std().iloc[-1])
+    den = vol_med + vol_std
+    ratio = vol_act / den if den > 0 else 1.0
     return max(0.0, min(1.0, ratio))
 
 
@@ -86,15 +89,22 @@ def validar_max_min(
 
 
 def validar_volumen_real(
-    df: pd.DataFrame, factor: float = 1.0, ventana: int = 30
+    df: pd.DataFrame, factor: float | None = None, ventana: int = 30
 ) -> float:
     """Calcula la confianza basada en el volumen real respecto a su media."""
     if df is None or len(df) < ventana:
         return 1.0
     vol_act = float(df["volume"].iloc[-1])
-    vol_med = float(df["volume"].tail(ventana).mean())
+    ventana_vol = df["volume"].tail(ventana)
+    vol_med = float(ventana_vol.mean())
     if vol_med == 0:
         return 1.0
+    
+    if factor is None:
+        vol_std = float(ventana_vol.std())
+        coef = vol_std / vol_med
+        factor = max(0.8, min(1.0 + coef, 1.5))
+        
     ratio = vol_act / (vol_med * factor)
     return max(0.0, min(1.0, ratio))
 

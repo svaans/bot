@@ -44,10 +44,19 @@ def validar_volumen(
     df: pd.DataFrame | None,
     cantidad: float,
     ventana: int = 20,
-    factor: float = 0.2,
+    factor: float | None = None,
 ) -> bool:
     """Comprueba la liquidez disponible en ``df`` para una orden dada."""
     if df is not None and cantidad > 0:
+        if factor is None:
+            ventana_vol = df["volume"].tail(ventana)
+            vol_mean = float(ventana_vol.mean())
+            vol_std = float(ventana_vol.std())
+            if vol_mean > 0:
+                coef = vol_std / vol_mean
+                factor = max(0.05, min(0.2 + coef / 2, 0.5))
+            else:
+                factor = 0.2
         if not verificar_liquidez_orden(df, cantidad, ventana=ventana, factor=factor):
             log.info(
                 f"🚫 [{symbol}] Rechazo por volumen insuficiente para {cantidad}"
