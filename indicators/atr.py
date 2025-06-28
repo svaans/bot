@@ -1,7 +1,11 @@
 import pandas as pd
-import numpy as np
 from fast_indicators import atr as _atr_fast
-from core.utils.cache_indicadores import cached_indicator
+try:  # pragma: no cover - optional rust extension
+    from fast_indicators_rust import atr as _atr_rust
+    HAS_RUST = True
+except Exception:  # pragma: no cover - missing rust module
+    _atr_rust = None
+    HAS_RUST = False
 
 def calcular_atr(df: pd.DataFrame, periodo: int = 14) -> float:
     """Calcula el Average True Range (ATR) usando el método de Wilder."""
@@ -31,4 +35,6 @@ def calcular_atr_fast(df: pd.DataFrame, periodo: int = 14) -> float:
     high = df["high"].to_numpy(dtype=float)
     low = df["low"].to_numpy(dtype=float)
     close = df["close"].to_numpy(dtype=float)
+    if HAS_RUST:
+        return float(_atr_rust(high, low, close, periodo))
     return float(_atr_fast(high, low, close, periodo))
