@@ -99,11 +99,11 @@ def evaluar_salida_inteligente(
     if res_rsi.get("cerrar"):
         resultados.append({"razon": "RSI bajo", "detalle": res_rsi["razon"]})
 
-    res_sl_atr = salida_stoploss_atr(orden, df)
+    res_sl_atr = salida_stoploss_atr(orden, df, config=config)
     if res_sl_atr.get("cerrar"):
         resultados.append({"razon": "SL-ATR", "detalle": res_sl_atr["razon"]})
 
-    res_tp_atr = salida_takeprofit_atr(orden, df)
+    res_tp_atr = salida_takeprofit_atr(orden, df, config=config)
     if res_tp_atr.get("cerrar"):
         resultados.append({"razon": "TP-ATR", "detalle": res_tp_atr["razon"]})
 

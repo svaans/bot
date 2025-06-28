@@ -5,7 +5,7 @@ from core.strategies.exit.salida_utils import resultado_salida
 
 log = configurar_logger("salida_takeprofit_atr")
 
-def salida_takeprofit_atr(orden: dict, df: pd.DataFrame) -> dict:
+def salida_takeprofit_atr(orden: dict, df: pd.DataFrame, config: dict | None = None) -> dict:
     try:
         if len(df) < 20 or "close" not in df.columns:
             return resultado_salida(
@@ -26,7 +26,8 @@ def salida_takeprofit_atr(orden: dict, df: pd.DataFrame) -> dict:
                 "ATR o entrada no disponibles",
             )
 
-        margen_tp = 2.5 * atr  # Take Profit a 2.5 ATR
+        ratio = config.get("tp_ratio", 2.5) if config else 2.5
+        margen_tp = ratio * atr  # Take Profit basado en ATR
 
         if direccion in ["long", "compra"]:
             tp_tecnico = entrada + margen_tp

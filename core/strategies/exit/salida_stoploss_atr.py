@@ -5,7 +5,7 @@ from core.strategies.exit.salida_utils import resultado_salida
 
 log = configurar_logger("salida_stoploss_atr")
 
-def salida_stoploss_atr(orden: dict, df: pd.DataFrame) -> dict:
+def salida_stoploss_atr(orden: dict, df: pd.DataFrame, config: dict | None = None) -> dict:
     try:
         if len(df) < 20 or "close" not in df.columns:
             return resultado_salida(
@@ -26,7 +26,8 @@ def salida_stoploss_atr(orden: dict, df: pd.DataFrame) -> dict:
                 "ATR o entrada no disponibles",
             )
 
-        margen = 1.5 * atr  # SL a 1.5 ATR
+        ratio = config.get("sl_ratio", 1.5) if config else 1.5
+        margen = ratio * atr  # SL ajustado por ATR
 
         if direccion in ["long", "compra"]:
             sl_tecnico = entrada - margen

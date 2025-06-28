@@ -17,6 +17,7 @@ from core.strategies.entry.validadores import (
     validar_volumen_real,
     validar_spread,
 )
+from core.strategies.entry.validacion_volumen_atipico import factor_volumen_atipico
 from core.validaciones_comunes import validar_diversidad
 from indicators.slope import calcular_slope
 from indicators.momentum import calcular_momentum
@@ -90,6 +91,9 @@ class StrategyEngine:
             sinergia = resultado.get("sinergia", 0.0)
             score_total = score_base * (1 + sinergia)
 
+            factor_volumen = factor_volumen_atipico(df)
+            score_total *= factor_volumen
+
             rsi_val = calcular_rsi(df)
             slope_val = calcular_slope(df)
             mom_val = calcular_momentum(df)
@@ -156,6 +160,7 @@ class StrategyEngine:
                     threshold=umbral,
                     score_tecnico=round(score_tec, 2),
                     umbral_score=umbral_score,
+                    factor_volumen=factor_volumen,
                     permitido=permitido,
                     motivo=motivo,
                     checks_fallidas=validaciones_fallidas if not permitido else [],
@@ -167,6 +172,7 @@ class StrategyEngine:
                 "motivo_rechazo": motivo,
                 "estrategias_activas": estrategias_activas,
                 "score_total": round(score_total, 2),
+                "factor_volumen": factor_volumen,
                 "score_base": round(score_base, 2),
                 "sinergia": round(sinergia, 2),
                 "umbral": umbral,
