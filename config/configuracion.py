@@ -27,7 +27,8 @@ CONFIG_BASE = {
     "trailing_por_atr": True,
     "usar_cierre_parcial": True,
     "umbral_operacion_grande": 30.0,
-    "beneficio_minimo_parcial": 5.0
+    "beneficio_minimo_parcial": 5.0,
+    "max_spread": 0.002,
 }
 
 

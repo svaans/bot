@@ -70,7 +70,7 @@ class StrategyEngine:
                 "diversidad": 0,
                 "max_min": validar_max_min(df),
                 "volumen_real": validar_volumen_real(df),
-                "spread": validar_spread(df),
+                "spread": validar_spread(df, (config or {}).get("max_spread", 0.002)),
             }
 
         try:
@@ -103,11 +103,13 @@ class StrategyEngine:
             }
             umbral = calcular_umbral_adaptativo(symbol, df, contexto)
 
+            max_spread = (config or {}).get("max_spread", 0.002)
             validaciones = {
                 "volumen": validar_volumen(df),
                 "rsi": validar_rsi(df),
                 "slope": validar_slope(df, tendencia),
                 "bollinger": validar_bollinger(df),
+                "spread": validar_spread(df, max_spread),
             }
             val_score = sum(validaciones.values()) / len(validaciones)
             umbral_validacion = (config or {}).get("umbral_validacion", 0.5)

@@ -25,6 +25,7 @@ from indicators.rsi import calcular_rsi
 from indicators.momentum import calcular_momentum
 from indicators.slope import calcular_slope
 from core.utils.utils import distancia_minima_valida, validar_ratio_beneficio
+from core.strategies.entry.validadores import validar_spread
 import asyncio
 
 log = configurar_logger("verificar_entrada")
@@ -54,6 +55,17 @@ async def _verificar_entrada_impl(
     if dinamica:
         config_actual.update(dinamica)
     config_actual = adaptar_configuracion_base(symbol, df, config_actual)
+    max_spread = config_actual.get("max_spread", 0.002)
+    spread_conf = validar_spread(df, max_spread)
+    if spread_conf <= 0:
+        alto = float(df["high"].iloc[-1])
+        bajo = float(df["low"].iloc[-1])
+        cierre = float(df["close"].iloc[-1]) or 1.0
+        spread = (alto - bajo) / cierre
+        log.warning(
+            f"🚫 [{symbol}] Spread {spread:.4f} supera umbral {max_spread:.4f}."
+        )
+        return None
     async with trader.state_lock:
         trader.config_por_simbolo[symbol] = config_actual
 
@@ -145,9 +157,11 @@ async def _verificar_entrada_impl(
     puntaje = sum(pesos_symbol.get(k, 0) for k in estrategias_persistentes)
     puntaje += trader.persistencia.peso_extra * len(estrategias_persistentes)
     puntaje -= penalizacion
+    puntaje *= spread_conf
     estado.ultimo_umbral = umbral
     log.debug(
-        f"[{symbol}] Puntaje preliminar {puntaje:.2f} (penalización {penalizacion:.2f})"
+        f"[{symbol}] Puntaje preliminar {puntaje:.2f} "
+        f"(penalización {penalizacion:.2f}, spread {spread_conf:.2f})"
     )
 
     async with trader.state_lock:
