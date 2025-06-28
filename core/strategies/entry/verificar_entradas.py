@@ -240,6 +240,7 @@ async def _verificar_entrada_impl(
         raise
     log.debug(f"[{symbol}] Cantidad simulada calculada: {cantidad_simulada}")
 
+    score_tecnico = 1.0
     if trader.usar_score_tecnico:
         score_tecnico, puntos = trader._calcular_score_tecnico(
             symbol,
@@ -251,8 +252,20 @@ async def _verificar_entrada_impl(
         )
         log.debug(f"[{symbol}] Score técnico: {score_tecnico:.2f}, Componentes: {puntos}")
 
-    if puntaje < umbral or not estrategias_persistentes:
-        log.info(f"❌ [{symbol}] Filtro técnico final bloqueó la entrada.")
+    permitido, motivo = trader.engine._verificar_checks(
+        symbol,
+        estrategias_persistentes,
+        puntaje,
+        score_tecnico,
+        umbral=umbral,
+        umbral_score=config_actual.get("umbral_score_tecnico", 1.0),
+        val_score=evaluacion.get("score_validaciones", 1.0),
+        umbral_validacion=config_actual.get("umbral_validacion", 0.5),
+        diversidad_minima=config_actual.get("diversidad_minima", 1),
+        contradiccion=False,
+    )
+    if not permitido:
+        log.info(f"❌ [{symbol}] Filtro técnico final bloqueó la entrada: {motivo}")
         return None
 
     log.info(f"✅ [{symbol}] Señal de entrada generada con {len(estrategias_activas)} estrategias.")

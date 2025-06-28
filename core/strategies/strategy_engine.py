@@ -39,6 +39,46 @@ class StrategyEngine:
     """Evalúa estrategias de entrada y salida."""
 
     @staticmethod
+    def _verificar_checks(
+        symbol: str,
+        estrategias: dict[str, bool],
+        score_total: float,
+        score_tecnico: float,
+        *,
+        umbral: float,
+        umbral_score: float,
+        val_score: float,
+        umbral_validacion: float,
+        diversidad_minima: int,
+        contradiccion: bool,
+    ) -> tuple[bool, str | None]:
+        """Evalúa diversidad, puntaje y coherencia y retorna el permiso."""
+
+        cumple_div = validar_diversidad(symbol, estrategias, diversidad_minima)
+        permitido = (
+            score_total >= umbral
+            and score_tecnico >= umbral_score
+            and cumple_div
+            and not contradiccion
+            and val_score >= umbral_validacion
+        )
+
+        if permitido:
+            return True, None
+
+        if contradiccion:
+            return False, "contradiccion"
+        if val_score < umbral_validacion:
+            return False, "validaciones_fallidas"
+        if score_tecnico < umbral_score:
+            return False, "score_tecnico_bajo"
+        if score_total < umbral:
+            return False, "score_bajo"
+        if not cumple_div:
+            return False, "diversidad_baja"
+        return False, "desconocido"
+
+    @staticmethod
     def evaluar_entrada(
         symbol: str,
         df: pd.DataFrame,
@@ -124,33 +164,19 @@ class StrategyEngine:
                 df, rsi_val, mom_val, slope_val, tendencia, symbol=symbol
             )
 
-            cumple_div = validar_diversidad(
+            umbral_score = (config or {}).get("umbral_score_tecnico", 1.0)
+            permitido, motivo = StrategyEngine._verificar_checks(
                 symbol,
                 estrategias_activas,
-                (config or {}).get("diversidad_minima", 1),
+                score_total,
+                score_tec,
+                umbral=umbral,
+                umbral_score=umbral_score,
+                val_score=val_score,
+                umbral_validacion=umbral_validacion,
+                diversidad_minima=(config or {}).get("diversidad_minima", 1),
+                contradiccion=contradiccion,
             )
-            umbral_score = (config or {}).get("umbral_score_tecnico", 1.0)
-            permitido = (
-                score_total >= umbral
-                and score_tec >= umbral_score
-                and cumple_div
-                and not contradiccion
-                and val_score >= umbral_validacion
-            )
-            motivo = None
-            if not permitido:
-                if contradiccion:
-                    motivo = "contradiccion"
-                elif val_score < umbral_validacion:
-                    motivo = "validaciones_fallidas"
-                elif score_tec < umbral_score:
-                    motivo = "score_tecnico_bajo"
-                elif score_total < umbral:
-                    motivo = "score_bajo"
-                elif not cumple_div:
-                    motivo = "diversidad_baja"
-                else:
-                    motivo = "desconocido"
 
             log.info(
                 build_log_message(
