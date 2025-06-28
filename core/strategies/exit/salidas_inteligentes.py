@@ -107,7 +107,7 @@ def evaluar_salida_inteligente(
     if res_tp_atr.get("cerrar"):
         resultados.append({"razon": "TP-ATR", "detalle": res_tp_atr["razon"]})
 
-    res_time = salida_tiempo_maximo(orden, df)
+    res_time = salida_tiempo_maximo(orden, df, config=config)
     if res_time.get("cerrar"):
         resultados.append({"razon": "Tiempo máximo", "detalle": res_time["razon"]})
 

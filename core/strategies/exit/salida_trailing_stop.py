@@ -117,10 +117,35 @@ def verificar_trailing_stop(
     trailing_trigger = entrada * trailing_start_ratio
     if max_price >= trailing_trigger:
         if usar_atr:
-            trailing_stop = max_price - atr * atr_mult
+            trailing_dist = atr * atr_mult
         else:
             distancia_ratio = config.get("trailing_distance_ratio", 0.02) if config else 0.02
-            trailing_stop = max_price * (1 - distancia_ratio)
+            trailing_dist = max_price * distancia_ratio
+
+        atr_ratio = atr / precio_actual if precio_actual else 0.0
+        low_vol = config.get("umbral_volatilidad_baja", 0.001) if config else 0.001
+        dist_min_pct = config.get("trailing_dist_min_pct", 0.005) if config else 0.005
+        if atr_ratio < low_vol:
+            if dist_min_pct <= 0:
+                log.info(
+                    f"Volatilidad baja ({atr_ratio:.5f}). Trailing desactivado"
+                )
+                return False, "Trailing desactivado por baja volatilidad"
+            dist_min = precio_actual * dist_min_pct
+            if trailing_dist < dist_min:
+                trailing_dist = dist_min
+                log.info(
+                    f"Volatilidad baja ({atr_ratio:.5f}). Distancia ampliada a {trailing_dist:.5f}"
+                )
+            else:
+                log.info(
+                    f"Volatilidad baja ({atr_ratio:.5f}). Distancia mínima {dist_min:.5f}"
+                )
+
+        if info.get("direccion", "long") in ("long", "compra"):
+            trailing_stop = max_price - trailing_dist
+        else:
+            trailing_stop = max_price + trailing_dist
 
         if config.get("uso_trailing_technico", False) and df is not None and len(df) >= 5:
             soporte = df["low"].rolling(window=5).min().iloc[-1]

@@ -5,7 +5,9 @@ from core.strategies.exit.salida_utils import resultado_salida
 
 log = configurar_logger("salida_tiempo_maximo")
 
-def salida_tiempo_maximo(orden: dict, df: pd.DataFrame) -> dict:
+def salida_tiempo_maximo(
+    orden: dict, df: pd.DataFrame, config: dict | None = None
+) -> dict:
     try:
         timestamp = orden.get("timestamp")
         if not timestamp:
@@ -27,7 +29,8 @@ def salida_tiempo_maximo(orden: dict, df: pd.DataFrame) -> dict:
                 "Formato de timestamp no válido",
             )
 
-        tiempo_maximo = timedelta(hours=4)  # límite de vida de una orden
+        horas = config.get("duracion_max_horas", 4) if config else 4
+        tiempo_maximo = timedelta(hours=horas)  # límite de vida de una orden
         ahora = datetime.now(timezone.utc)
         tiempo_abierta = ahora - timestamp_dt
 
