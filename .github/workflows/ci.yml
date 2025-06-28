@@ -22,6 +22,7 @@ jobs:
         with:
           go-version: '1.20'
       - uses: dtolnay/rust-toolchain@stable
+      - run: cargo install cargo-audit
       - uses: actions/setup-node@v3
         with:
           node-version: '18'
@@ -31,6 +32,25 @@ jobs:
           pip install -r requirements.txt
           pip install maturin build
           pip install pybind11
+      - name: Install clang-tidy
+        if: matrix.os == 'ubuntu-latest'
+        run: sudo apt-get update && sudo apt-get install -y clang-tidy
+
+      - name: Run cargo clippy
+        run: |
+          cargo clippy --manifest-path fast_tp_sl/Cargo.toml --all-targets -- -D warnings
+          cargo clippy --manifest-path fast_indicators_rust/Cargo.toml --all-targets -- -D warnings
+          cargo clippy --manifest-path rust_backtesting/Cargo.toml --all-targets -- -D warnings
+
+      - name: Run cargo audit
+        run: |
+          cargo audit --manifest-path fast_tp_sl/Cargo.toml
+          cargo audit --manifest-path fast_indicators_rust/Cargo.toml
+          cargo audit --manifest-path rust_backtesting/Cargo.toml
+
+      - name: Run clang-tidy
+        if: matrix.os == 'ubuntu-latest'
+        run: clang-tidy fast_indicators/fast_indicators.cpp -- -std=c++17
 
       - name: Build Rust wheels
         run: |
@@ -38,6 +58,9 @@ jobs:
           maturin build --release -m fast_indicators_rust/Cargo.toml -o dist
 
       - name: Build pybind11 wheel
+        env:
+          CXXFLAGS: "-fsanitize=address -O1 -fno-omit-frame-pointer"
+          LDFLAGS: "-fsanitize=address"
         run: python setup.py bdist_wheel
 
       - name: Install built wheels

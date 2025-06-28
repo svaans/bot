@@ -1,12 +1,25 @@
-.PHONY: all rust cpp proto go_services frontend
+.PHONY: all rust cpp proto go_services frontend clippy audit cpp_lint
 
-all: rust cpp proto go_services frontend
+all: clippy audit cpp_lint rust cpp proto go_services frontend
 
 rust:
-		maturin develop --release -m fast_tp_sl/Cargo.toml
-        maturin develop --release -m fast_indicators_rust/Cargo.toml
+aturin develop --release -m fast_tp_sl/Cargo.toml
+maturin develop --release -m fast_indicators_rust/Cargo.toml
+
+clippy:
+	cargo clippy --manifest-path fast_tp_sl/Cargo.toml --all-targets -- -D warnings
+	cargo clippy --manifest-path fast_indicators_rust/Cargo.toml --all-targets -- -D warnings
+	cargo clippy --manifest-path rust_backtesting/Cargo.toml --all-targets -- -D warnings
+
+audit:
+	cargo audit --manifest-path fast_tp_sl/Cargo.toml
+	cargo audit --manifest-path fast_indicators_rust/Cargo.toml
+	cargo audit --manifest-path rust_backtesting/Cargo.toml
 
 cpp:
+	clang-tidy fast_indicators/fast_indicators.cpp -- -std=c++17
+	CXXFLAGS="-fsanitize=address -O1 -fno-omit-frame-pointer" \
+	LDFLAGS="-fsanitize=address" \
 	python -m pip install .
 
 proto:
