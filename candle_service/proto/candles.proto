@@ -1,6 +1,8 @@
 syntax = "proto3";
 package candle;
 
+option go_package = "candle_service/proto;proto";
+
 message CandleRequest {
   string symbol = 1;
   string interval = 2;
