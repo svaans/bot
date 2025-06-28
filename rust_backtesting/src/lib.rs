@@ -1,5 +1,37 @@
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
+use tonic::{Request, Response, Status};
+
+pub mod pb {
+    tonic::include_proto!("backtesting");
+}
+
+pub struct BacktestService;
+
+#[tonic::async_trait]
+impl pb::backtest_service_server::BacktestService for BacktestService {
+    async fn run_backtest(
+        &self,
+        request: Request<pb::BacktestRequest>,
+    ) -> Result<Response<pb::BacktestResponse>, Status> {
+        let req = request.into_inner();
+        let result = tokio::task::spawn_blocking(move || {
+            Python::with_gil(|py| {
+                run_backtest(py, req.symbols, &req.dataset_path).and_then(|d| {
+                    let json = py
+                        .import("json")?
+                        .call_method1("dumps", (d.as_ref(py),))?
+                        .extract::<String>()?;
+                    Ok(json)
+                })
+            })
+        })
+        .await
+        .map_err(|e| Status::internal(format!("join error: {e}")))??;
+
+        Ok(Response::new(pb::BacktestResponse { json_result: result }))
+    }
+}
 
 const BUFFER_INICIAL: usize = 120;
 

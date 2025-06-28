@@ -1,0 +1,42 @@
+syntax = "proto3";
+package backtesting;
+
+message Candle {
+  string symbol = 1;
+  int64 timestamp = 2;
+  double open = 3;
+  double high = 4;
+  double low = 5;
+  double close = 6;
+  double volume = 7;
+}
+
+message Order {
+  string symbol = 1;
+  double precio_entrada = 2;
+  double cantidad = 3;
+  double stop_loss = 4;
+  double take_profit = 5;
+  string timestamp = 6;
+  string estrategias_activas = 7;
+  string tendencia = 8;
+  double max_price = 9;
+  string direccion = 10;
+  double precio_cierre = 11;
+  string fecha_cierre = 12;
+  string motivo_cierre = 13;
+  double retorno_total = 14;
+}
+
+message BacktestRequest {
+  repeated string symbols = 1;
+  string dataset_path = 2;
+}
+
+message BacktestResponse {
+  string json_result = 1;
+}
+
+service BacktestService {
+  rpc RunBacktest(BacktestRequest) returns (BacktestResponse);
+}

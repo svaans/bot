@@ -5,7 +5,13 @@ edition = "2021"
 
 [lib]
 name = "rust_backtesting"
-crate-type = ["cdylib"]
+crate-type = ["cdylib", "rlib"]
+
+[[bin]]
+name = "backtest_server"
+path = "src/bin/server.rs"
 
 [dependencies]
 pyo3 = { version = "0.21", features = ["extension-module"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+tonic = "0.11"

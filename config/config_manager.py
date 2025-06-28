@@ -56,6 +56,9 @@ class Config:
     ws_service_port: int = 8765
     orders_worker_host: str = "localhost"
     orders_worker_port: int = 9100
+    backtest_grpc_host: str = "localhost"
+    backtest_grpc_port: int = 9200
+    use_grpc_backtest: bool = False
 
 
 class ConfigManager:
@@ -120,4 +123,7 @@ class ConfigManager:
             ws_service_port=_cargar_int("WS_SERVICE_PORT", defaults.ws_service_port),
             orders_worker_host=os.getenv("ORDERS_WORKER_HOST", defaults.orders_worker_host),
             orders_worker_port=_cargar_int("ORDERS_WORKER_PORT", defaults.orders_worker_port),
+            backtest_grpc_host=os.getenv("BACKTEST_GRPC_HOST", defaults.backtest_grpc_host),
+            backtest_grpc_port=_cargar_int("BACKTEST_GRPC_PORT", defaults.backtest_grpc_port),
+            use_grpc_backtest=os.getenv("USE_GRPC_BACKTEST", str(defaults.use_grpc_backtest)).lower() == "true",
         )
