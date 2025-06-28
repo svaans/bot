@@ -11,8 +11,8 @@ import (
     pb "orders_worker/proto"
 
     _ "github.com/mattn/go-sqlite3"
-    "github.com/xitongsys/parquet-go/v4/parquet"
-    "github.com/xitongsys/parquet-go/v4/writer"
+    "github.com/xitongsys/parquet-go/parquet"
+    "github.com/xitongsys/parquet-go/writer"
     "google.golang.org/grpc"
 )
 
