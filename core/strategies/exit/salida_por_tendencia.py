@@ -33,11 +33,36 @@ def salida_por_tendencia(orden, df):
         return resultado_salida("Tecnico", False, f"Error evaluando tendencia: {e}")
     
 
-def verificar_reversion_tendencia(symbol, df, tendencia_anterior):
+def confirmar_reversion_multi(df: pd.DataFrame, tendencia_anterior: str, velas: int = 3) -> bool:
+    """Confirma una reversión validando máximos o mínimos consecutivos."""
+
+    if not validar_dataframe(df, ["high", "low"]) or len(df) < velas + 1:
+        return False
+
+    ventana = df.tail(velas + 1)
+
+    if tendencia_anterior == "bajista":
+        highs = ventana["high"].reset_index(drop=True)
+        return all(highs[i] > highs[i - 1] for i in range(1, len(highs)))
+
+    if tendencia_anterior == "alcista":
+        lows = ventana["low"].reset_index(drop=True)
+        return all(lows[i] < lows[i - 1] for i in range(1, len(lows)))
+
+    return False
+
+
+def verificar_reversion_tendencia(symbol, df, tendencia_anterior, velas: int = 1):
     if not validar_dataframe(df, ["high", "low", "close"]):
         return False
 
     nueva_tendencia, _ = detectar_tendencia(symbol, df)
-    return nueva_tendencia != tendencia_anterior
+    if nueva_tendencia == tendencia_anterior:
+        return False
+
+    if velas > 1:
+        return confirmar_reversion_multi(df, tendencia_anterior, velas)
+
+    return True
 
 

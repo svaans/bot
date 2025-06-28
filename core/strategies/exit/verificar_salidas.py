@@ -79,7 +79,8 @@ async def verificar_salidas(trader, symbol: str, df: pd.DataFrame) -> None:
         return
 
     # --- Cambio de tendencia ---
-    if verificar_reversion_tendencia(symbol, df, orden.tendencia):
+    velas_confirm = config_actual.get("velas_confirmacion_reversion", 2)
+    if verificar_reversion_tendencia(symbol, df, orden.tendencia, velas=velas_confirm):
         pesos_symbol = trader.pesos_por_simbolo.get(symbol, {})
         if not verificar_filtro_tecnico(
             symbol, df, orden.estrategias_activas, pesos_symbol, config=config_actual
