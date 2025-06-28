@@ -26,3 +26,6 @@ def cup_with_handle(df: pd.DataFrame) -> dict:
         return {"activo": True, "mensaje": "Posible Cup with Handle"}
 
     return {"activo": False, "mensaje": "Sin patrón Cup with Handle"}
+
+# Orientación alcista de la estrategia
+cup_with_handle.tipo = "alcista"

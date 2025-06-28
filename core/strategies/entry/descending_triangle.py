@@ -19,3 +19,5 @@ def descending_triangle(df: pd.DataFrame) -> dict:
 
     return {"activo": False, "mensaje": "Sin triángulo descendente"}
 
+# Indica un patrón de continuación bajista
+descending_triangle.tipo = "bajista"

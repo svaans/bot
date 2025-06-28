@@ -12,3 +12,6 @@ def estrategia_ema(df: pd.DataFrame) -> dict:
 
     return {"activo": False, "mensaje": "Sin cruce EMA"}
 
+# Estrategia alcista basada en medias exponenciales
+estrategia_ema.tipo = "alcista"
+

@@ -21,3 +21,5 @@ def descending_scallop(df: pd.DataFrame) -> dict:
 
     return {"activo": False, "mensaje": "Sin patrón Descending Scallop"}
 
+# Estrategia con tendencia bajista
+descending_scallop.tipo = "bajista"

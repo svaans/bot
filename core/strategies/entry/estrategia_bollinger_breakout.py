@@ -16,3 +16,6 @@ def estrategia_bollinger_breakout(df: pd.DataFrame) -> dict:
         return {"activo": True, "mensaje": "Breakout inferior de Bollinger"}
 
     return {"activo": False, "mensaje": "Dentro de bandas de Bollinger"}
+
+# Estrategia de corte alcista (ruptura al alza)
+estrategia_bollinger_breakout.tipo = "alcista"

@@ -23,3 +23,7 @@ def wedge_breakout(df: pd.DataFrame) -> dict:
         return {"activo": True, "mensaje": "Ruptura de cuña descendente detectada"}
 
     return {"activo": False, "mensaje": "Sin ruptura de cuña"}
+
+
+# Orientación alcista para control de contradicciones
+wedge_breakout.tipo = "alcista"

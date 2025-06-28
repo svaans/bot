@@ -26,4 +26,6 @@ def estrategia_macd_hist_inversion(df: pd.DataFrame) -> dict:
         "mensaje": "Sin inversión MACD"
     }
 
+# Estrategia bajista basada en MACD
+estrategia_macd_hist_inversion.tipo = "bajista"
 

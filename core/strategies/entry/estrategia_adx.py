@@ -15,3 +15,5 @@ def estrategia_adx(df: pd.DataFrame) -> dict:
 
     return {"activo": False, "mensaje": f"ADX bajo ({adx:.2f})"}
 
+# Señal orientada a mercado alcista
+estrategia_adx.tipo = "alcista"

@@ -14,3 +14,6 @@ def double_bottom(df: pd.DataFrame) -> dict:
 
     return {"activo": False, "mensaje": "Sin Double Bottom"}
 
+
+# Tipo de señal para verificación de contradicciones
+double_bottom.tipo = "alcista"

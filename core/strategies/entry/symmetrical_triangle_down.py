@@ -15,3 +15,6 @@ def symmetrical_triangle_down(df: pd.DataFrame) -> dict:
 
     return {"activo": False, "mensaje": "Sin triángulo simétrico bajista"}
 
+
+# Estrategia bajista
+symmetrical_triangle_down.tipo = "bajista"

@@ -18,3 +18,5 @@ def ascending_scallop(df: pd.DataFrame) -> dict:
 
     return {"activo": False, "mensaje": "Sin patrón Ascending Scallop"}
 
+# Etiqueta de orientación para detección de contradicciones
+ascending_scallop.tipo = "alcista"

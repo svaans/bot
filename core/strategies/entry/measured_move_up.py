@@ -13,3 +13,6 @@ def measured_move_up(df: pd.DataFrame) -> dict:
 
     return {"activo": False, "mensaje": "Sin movimiento medido alcista"}
 
+
+# Estrategia orientada a subidas de precio
+measured_move_up.tipo = "alcista"

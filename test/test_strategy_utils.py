@@ -14,9 +14,9 @@ def test_calcular_score_tecnico():
 
 
 def test_hay_contradicciones():
-    estrategias = {'rsi_alcista': True, 'rsi_bajista': True}
+    estrategias = {'estrategia_macd': True, 'estrategia_rsi_invertida': True}
     assert hay_contradicciones(estrategias)
-    estrategias = {'rsi_alcista': True, 'rsi_bajista': False}
+    estrategias = {'estrategia_macd': True, 'estrategia_rsi_invertida': False}
     assert not hay_contradicciones(estrategias)
 
 

@@ -14,3 +14,7 @@ def estrategia_rsi_invertida(df: pd.DataFrame) -> dict:
         return {"activo": True, "mensaje": "RSI cruzando hacia abajo desde sobrecompra"}
 
     return {"activo": False, "mensaje": "Sin cruce descendente de RSI"}
+
+
+# Estrategia bajista basada en RSI
+estrategia_rsi_invertida.tipo = "bajista"

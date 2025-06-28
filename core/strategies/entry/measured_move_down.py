@@ -12,3 +12,7 @@ def measured_move_down(df: pd.DataFrame) -> dict:
         return {"activo": True, "mensaje": "Movimiento medido bajista detectado"}
 
     return {"activo": False, "mensaje": "Sin movimiento medido bajista"}
+
+
+# Estrategia bajista de continuación
+measured_move_down.tipo = "bajista"

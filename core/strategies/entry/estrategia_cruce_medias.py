@@ -11,3 +11,7 @@ def estrategia_cruce_medias(df: pd.DataFrame) -> dict:
         return {"activo": True, "mensaje": "Cruce alcista de medias detectado"}
 
     return {"activo": False, "mensaje": "Sin cruce de medias"}
+
+
+# Tipo de señal: alcista
+estrategia_cruce_medias.tipo = "alcista"

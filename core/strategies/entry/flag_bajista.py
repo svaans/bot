@@ -16,3 +16,6 @@ def flag_bajista(df: pd.DataFrame) -> dict:
 
     return {"activo": False, "mensaje": "Sin patrón flag bajista"}
 
+
+# Marca bajista para contradicciones
+flag_bajista.tipo = "bajista"

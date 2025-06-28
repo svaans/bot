@@ -18,3 +18,6 @@ def pennant(df: pd.DataFrame) -> dict:
 
     return {"activo": False, "mensaje": "Sin patrón Pennant"}
 
+
+# Indicamos que es una estrategia alcista
+pennant.tipo = "alcista"

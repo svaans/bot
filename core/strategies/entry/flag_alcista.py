@@ -17,3 +17,6 @@ def flag_alcista(df: pd.DataFrame) -> dict:
 
     return {"activo": False, "mensaje": "Sin patrón flag alcista"}
 
+# Marca alcista para comprobación de contradicciones
+flag_alcista.tipo = "alcista"
+

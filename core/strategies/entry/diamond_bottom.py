@@ -17,3 +17,6 @@ def diamond_bottom(df: pd.DataFrame) -> dict:
 
     return {"activo": False, "mensaje": "Sin patrón Diamond Bottom"}
 
+
+# Patrones típicamente bajistas
+diamond_bottom.tipo = "bajista"

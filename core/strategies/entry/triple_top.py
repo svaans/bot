@@ -24,3 +24,7 @@ def triple_top(df: pd.DataFrame) -> dict:
         return {"activo": True, "mensaje": "Triple Top detectado"}
 
     return {"activo": False, "mensaje": "Sin Triple Top"}
+
+
+# Patrón de reversión bajista
+triple_top.tipo = "bajista"

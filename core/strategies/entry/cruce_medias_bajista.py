@@ -11,3 +11,6 @@ def cruce_medias_bajista(df: pd.DataFrame) -> dict:
         return {"activo": True, "mensaje": "Cruce EMA bajista detectado"}
 
     return {"activo": False, "mensaje": "Sin cruce bajista"}
+
+# Estrategia de sesgo bajista
+cruce_medias_bajista.tipo = "bajista"

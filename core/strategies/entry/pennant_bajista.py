@@ -17,3 +17,7 @@ def pennant_bajista(df: pd.DataFrame) -> dict:
         return {"activo": True, "mensaje": "Pennant bajista detectado"}
 
     return {"activo": False, "mensaje": "Sin patrón Pennant bajista"}
+
+
+# Indicador de continuación bajista
+pennant_bajista.tipo = "bajista"

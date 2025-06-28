@@ -28,3 +28,7 @@ def triple_bottom(df: pd.DataFrame) -> dict:
         return {"activo": True, "mensaje": "Triple Bottom detectado"}
 
     return {"activo": False, "mensaje": "Sin Triple Bottom"}
+
+
+# Estrategia de reversión alcista
+triple_bottom.tipo = "alcista"

@@ -11,3 +11,7 @@ def three_descending_peaks(df: pd.DataFrame) -> dict:
         return {"activo": True, "mensaje": "Tres picos descendentes detectados"}
 
     return {"activo": False, "mensaje": "Sin patrón de tres picos descendentes"}
+
+
+# Estrategia bajista de agotamiento
+three_descending_peaks.tipo = "bajista"

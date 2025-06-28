@@ -11,3 +11,6 @@ def estrategia_sma_bajista(df: pd.DataFrame) -> dict:
         return {"activo": True, "mensaje": "Cruce SMA bajista detectado"}
 
     return {"activo": False, "mensaje": "Sin cruce SMA bajista"}
+
+# Estrategia bajista simple
+estrategia_sma_bajista.tipo = "bajista"

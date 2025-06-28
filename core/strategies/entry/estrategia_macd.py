@@ -26,4 +26,7 @@ def estrategia_macd(df: pd.DataFrame) -> dict:
         "mensaje": "Sin cruce MACD"
     }
 
+# Orientación alcista de la estrategia MACD
+estrategia_macd.tipo = "alcista"
+
 

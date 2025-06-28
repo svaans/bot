@@ -15,3 +15,7 @@ def inverted_cup_with_handle(df: pd.DataFrame) -> dict:
         return {"activo": True, "mensaje": "Inverted Cup with Handle detectado"}
 
     return {"activo": False, "mensaje": "Sin patrón inverted cup"}
+
+
+# Señal bajista por ruptura de soporte
+inverted_cup_with_handle.tipo = "bajista"

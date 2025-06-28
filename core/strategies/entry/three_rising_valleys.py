@@ -11,3 +11,7 @@ def three_rising_valleys(df: pd.DataFrame) -> dict:
         return {"activo": True, "mensaje": "Tres valles ascendentes detectados"}
 
     return {"activo": False, "mensaje": "Sin patrón de tres valles ascendentes"}
+
+
+# Estrategia con sesgo alcista
+three_rising_valleys.tipo = "alcista"

@@ -17,3 +17,5 @@ def ascending_triangle(df: pd.DataFrame) -> dict:
 
     return {"activo": False, "mensaje": "Sin triángulo ascendente"}
 
+# Orientación de la estrategia para validaciones de contradicciones
+ascending_triangle.tipo = "alcista"
