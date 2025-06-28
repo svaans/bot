@@ -1,6 +1,5 @@
 syntax = "proto3";
 package candle;
-
 option go_package = "candle_service/proto;proto";
 
 message CandleRequest {
@@ -20,4 +19,5 @@ message Candle {
 
 service CandleService {
   rpc Subscribe(CandleRequest) returns (stream Candle);
+  
 }

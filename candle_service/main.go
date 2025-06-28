@@ -36,70 +36,79 @@ func (s *server) Subscribe(req *pb.CandleRequest, stream pb.CandleService_Subscr
         return status.Errorf(codes.InvalidArgument, "invalid interval: %s", req.Interval)
     }
     url := fmt.Sprintf("wss://stream.binance.com:9443/ws/%s@kline_%s", normalizeSymbol(req.Symbol), req.Interval)
-    // failures counts consecutive connection errors to apply exponential backoff
-	for {
-		ws, _, err := websocket.DefaultDialer.Dial(url, nil)
+    backoff := time.Second
+
+    for {
+        if err := stream.Context().Err(); err != nil {
+            return err
+        }
+
+        ws, _, err := websocket.DefaultDialer.Dial(url, nil)
         if err != nil {
             log.Printf("connect error: %v", err)
-            time.Sleep(5 * time.Second)
+            time.Sleep(backoff)
+            if backoff < 30*time.Second {
+                backoff *= 2
+            }
             continue
         }
         log.Printf("connected %s %s", req.Symbol, req.Interval)
+		backoff = time.Second
         for {
+			if err := stream.Context().Err(); err != nil {
+                ws.Close()
+                return err
+            }
             _, msg, err := ws.ReadMessage()
             if err != nil {
-			log.Printf("connect error: %v", err)
-			time.Sleep(5 * time.Second)
-			continue
-		}
-		log.Printf("connected %s %s", req.Symbol, req.Interval)
-		for {
-			_, msg, err := ws.ReadMessage()
-			if err != nil {
-				log.Printf("read error: %v", err)
-				ws.Close()
-				log.Printf("connection closed, reconnecting %s %s", req.Symbol, req.Interval)
-				break
-			}
-			var data struct {
-				K struct {
-					T int64  `json:"t"`
-					O string `json:"o"`
-					H string `json:"h"`
-					L string `json:"l"`
-					C string `json:"c"`
-					V string `json:"v"`
-					X bool   `json:"x"`
-				} `json:"k"`
-			}
-			if err := json.Unmarshal(msg, &data); err != nil {
-				log.Printf("json unmarshal error: %v raw: %s", err, string(msg))
-				continue
-			}
-			if data.K.X {
-				c := pb.Candle{Symbol: req.Symbol, Timestamp: data.K.T}
-				if c.Open, err = strconv.ParseFloat(data.K.O, 64); err != nil {
-					continue
-				}
-				if c.High, err = strconv.ParseFloat(data.K.H, 64); err != nil {
-					continue
-				}
-				if c.Low, err = strconv.ParseFloat(data.K.L, 64); err != nil {
-					continue
-				}
-				if c.Close, err = strconv.ParseFloat(data.K.C, 64); err != nil {
-					continue
-				}
-				if c.Volume, err = strconv.ParseFloat(data.K.V, 64); err != nil {
-					continue
-				}
-				if err := stream.Send(&c); err != nil {
-					ws.Close()
-					return err
-				}
-			}
-		}
-	}
+			log.Printf("read error: %v", err)
+                ws.Close()
+                break
+            }
+            var data struct {
+                K struct {
+                    T int64  `json:"t"`
+                    O string `json:"o"`
+                    H string `json:"h"`
+                    L string `json:"l"`
+                    C string `json:"c"`
+                    V string `json:"v"`
+                    X bool   `json:"x"`
+                } `json:"k"`
+            }
+            if err := json.Unmarshal(msg, &data); err != nil {
+                log.Printf("json error: %v", err)
+                continue
+            }
+            if !data.K.X {
+                continue
+            }
+            candle := &pb.Candle{Symbol: req.Symbol, Timestamp: data.K.T}
+            if candle.Open, err = parseFloat(data.K.O); err != nil {
+                continue
+            }
+            if candle.High, err = parseFloat(data.K.H); err != nil {
+                continue
+            }
+            if candle.Low, err = parseFloat(data.K.L); err != nil {
+                continue
+            }
+            if candle.Close, err = parseFloat(data.K.C); err != nil {
+                continue
+            }
+            if candle.Volume, err = parseFloat(data.K.V); err != nil {
+                continue
+            }
+            if err := stream.Send(candle); err != nil {
+                ws.Close()
+                return err
+            }
+        }
+    }
+}
+
+func parseFloat(s string) (float64, error) {
+    return strconv.ParseFloat(s, 64)
 }
 
 func main() {
