@@ -216,10 +216,39 @@ Para obtener mejores tiempos de cálculo en el ajuste de TP/SL se incluye una ex
    ```bash
    maturin develop --release -m fast_tp_sl/Cargo.toml
    maturin develop --release -m fast_indicators_rust/Cargo.toml
+   maturin develop --release -m rust_backtesting/Cargo.toml
+   cargo build --release --manifest-path rust_backtesting/Cargo.toml --bin backtest_server
    ```
 
 Si la extensión se encuentra disponible, `core.adaptador_dinamico` la cargará automáticamente. En caso contrario se utilizará la implementación en Python.
 
+### Ejemplo de uso
+
+```python
+from rust_backtesting import run_backtest
+from fast_indicators_rust import atr, rsi, slope
+import pandas as pd
+
+# Ejecutar backtest sobre los datos en ``datos/``
+resultado = run_backtest(["BTCUSDT"], "datos")
+print(resultado["resultados"])
+
+# Calcular indicadores con la extensión en Rust
+df = pd.read_parquet("datos/btcusdt_1m.parquet")
+atr_val = atr(df["high"].to_numpy(), df["low"].to_numpy(), df["close"].to_numpy(), 14)
+rsi_vals = rsi(df["close"].to_numpy(), 14)
+slope_val = slope(df["close"].to_numpy(), 20)
+```
+
+### Benchmarks
+
+Para comparar el rendimiento de las implementaciones en Python, C++ y Rust ejecuta:
+
+```bash
+python scripts/benchmarks/benchmark_indicators.py
+```
+
+El script carga el conjunto más grande en ``datos/`` y muestra una tabla con el tiempo medio de cada versión en segundos. Un número menor indica una ejecución más rápida.
 
 ## Compilación completa
 
