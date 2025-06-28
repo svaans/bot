@@ -439,7 +439,9 @@ class Trader:
         except asyncio.TimeoutError:
             log.error("⚠️ Timeout registrando salida profesional")
         metricas = self._metricas_recientes()
-        self.risk.ajustar_umbral(metricas)
+        nuevo = self.risk.ajustar_umbral(metricas)
+        if nuevo is not None:
+            self.capital_manager.set_umbral_riesgo(nuevo)
         log.debug("📊 Umbral de riesgo ajustado")
         try:
             rsi_val = calcular_rsi(df) if df is not None else None
@@ -724,6 +726,9 @@ class Trader:
         total = sum(self.capital_por_simbolo.values())
         # Métricas generales de rendimiento (ganancia y drawdown recientes)
         metricas_globales = self._metricas_recientes()
+        nuevo = self.risk.ajustar_umbral(metricas_globales)
+        if nuevo is not None:
+            self.capital_manager.set_umbral_riesgo(nuevo)
         semanales = metricas_semanales()
 
         pesos: dict[str, float] = {}

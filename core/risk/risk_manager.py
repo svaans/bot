@@ -25,7 +25,7 @@ class RiskManager:
         if perdida < 0:
             actualizar_perdida(symbol, perdida)
 
-    def ajustar_umbral(self, segun_metricas: dict) -> None:
+    def ajustar_umbral(self, segun_metricas: dict) -> float | None:
         """Ajusta ``self.umbral`` usando métricas recientes.
 
         ``segun_metricas`` puede incluir las siguientes claves:
@@ -75,7 +75,11 @@ class RiskManager:
                 self.umbral = round(min(0.06, self.umbral * 1.2), 4)
 
         if self.umbral != umbral_anterior:
-            log.info(f"🔧 Umbral ajustado de {umbral_anterior:.4f} → {self.umbral:.4f}")
+            log.info(
+                f"🔧 Umbral ajustado de {umbral_anterior:.4f} → {self.umbral:.4f}"
+            )
+            return self.umbral
+        return None
 
     def multiplicador_kelly(self, n_trades: int = 10) -> float:
         """

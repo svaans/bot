@@ -188,3 +188,11 @@ class CapitalManager:
             log.warning("⚠️ fraccion_kelly inválida, se ignora actualización")
             return
         self.fraccion_kelly = float(max(0.0, min(1.0, f)))
+
+    def set_umbral_riesgo(self, umbral: float) -> None:
+            """Actualiza el umbral de riesgo empleado por :class:`RiskManager`."""
+            if not isinstance(umbral, (int, float)):
+                log.warning("⚠️ umbral_riesgo inválido, se ignora actualización")
+                return
+            self.risk.umbral = float(max(0.0, min(1.0, umbral)))
+            log.info(f"📉 Umbral de riesgo actualizado a {self.risk.umbral:.4f}")
