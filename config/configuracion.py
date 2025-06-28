@@ -28,6 +28,8 @@ CONFIG_BASE = {
     "usar_cierre_parcial": True,
     "umbral_operacion_grande": 30.0,
     "beneficio_minimo_parcial": 5.0,
+    "fraccion_parcial_min": 0.3,
+    "fraccion_parcial_max": 0.7,
     "max_spread": 0.002,
 }
 

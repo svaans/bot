@@ -61,7 +61,8 @@ async def verificar_salidas(trader, symbol: str, df: pd.DataFrame) -> None:
         motivo = resultado_basico.get("razon", "")
         if motivo == "Take Profit" and not getattr(orden, "parcial_cerrado", False) and orden.cantidad_abierta > 0:
             if trader.es_salida_parcial_valida(orden, orden.take_profit, config_actual, df):
-                cantidad_parcial = orden.cantidad_abierta * 0.5
+                fraccion = trader.calcular_fraccion_parcial(orden, df, config_actual)
+                cantidad_parcial = orden.cantidad_abierta * fraccion
                 if await trader._cerrar_parcial_y_reportar(
                     orden,
                     cantidad_parcial,

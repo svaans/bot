@@ -55,6 +55,7 @@ from core.strategies.entry.validador_entradas import evaluar_validez_estrategica
 from indicators.rsi import calcular_rsi
 from indicators.momentum import calcular_momentum
 from indicators.slope import calcular_slope
+from indicators.atr import calcular_atr
 from core.strategies.evaluador_tecnico import (
     actualizar_pesos_tecnicos,
 )
@@ -609,6 +610,40 @@ class Trader:
             return False
 
         return True
+    
+    def calcular_fraccion_parcial(
+        self,
+        orden,
+        df: pd.DataFrame,
+        config: dict,
+    ) -> float:
+        """Determina la fracción a cerrar considerando volatilidad y ratio."""
+
+        min_frac = config.get("fraccion_parcial_min", 0.3)
+        max_frac = config.get("fraccion_parcial_max", 0.7)
+
+        atr = calcular_atr(df)
+        try:
+            precio_ref = float(df["close"].iloc[-1])
+        except Exception:
+            precio_ref = orden.precio_entrada or 0.0
+
+        if not precio_ref or atr is None:
+            return max(min_frac, min(max_frac, 0.5))
+
+        vol_rel = atr / precio_ref
+
+        if orden.direccion in ("long", "compra"):
+            riesgo = orden.precio_entrada - orden.stop_loss
+            beneficio = orden.take_profit - orden.precio_entrada
+        else:
+            riesgo = orden.stop_loss - orden.precio_entrada
+            beneficio = orden.precio_entrada - orden.take_profit
+
+        ratio = beneficio / riesgo if riesgo else 1.0
+
+        fraccion = 0.5 + vol_rel - (ratio - 2.0) * 0.1
+        return max(min_frac, min(max_frac, fraccion))
     
     async def _piramidar(self, symbol: str, orden, df: pd.DataFrame) -> None:
         """Añade posiciones si el precio avanza a favor."""
