@@ -38,6 +38,7 @@ class Config:
     symbols: List[str]
     umbral_riesgo_diario: float
     min_order_eur: float
+    min_order_symbol: dict[str, float] | None = None
     persistencia_minima: int = 2
     peso_extra_persistencia: float = 0.5
     modo_capital_bajo: bool = False
@@ -77,6 +78,17 @@ class ConfigManager:
         symbols_env = os.getenv("SYMBOLS", ",".join(defaults.symbols))
         symbols = [s.strip().upper() for s in symbols_env.split(",") if s.strip()]
 
+        min_order_symbol: dict[str, float] = {}
+        for sym in symbols:
+            key = f"MIN_ORDER_EUR_{sym.replace('/', '_').upper()}"
+            val = os.getenv(key)
+            if val is None:
+                continue
+            try:
+                min_order_symbol[sym] = float(val)
+            except ValueError:
+                log.warning(f"⚠️ Valor inválido para {key}. Se omite")
+
         api_key = os.environ.get("BINANCE_API_KEY")
         api_secret = os.environ.get("BINANCE_API_SECRET")
 
@@ -101,6 +113,7 @@ class ConfigManager:
             symbols=symbols,
             umbral_riesgo_diario=_cargar_float("UMBRAL_RIESGO_DIARIO", defaults.umbral_riesgo_diario),
             min_order_eur=_cargar_float("MIN_ORDER_EUR", defaults.min_order_eur),
+            min_order_symbol=min_order_symbol or None,
             persistencia_minima=_cargar_int("PERSISTENCIA_MINIMA", defaults.persistencia_minima),
             peso_extra_persistencia=_cargar_float("PESO_EXTRA_PERSISTENCIA", defaults.peso_extra_persistencia),
             modo_capital_bajo=os.getenv("MODO_CAPITAL_BAJO", str(defaults.modo_capital_bajo)).lower() == "true",

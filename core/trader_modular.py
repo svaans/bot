@@ -161,6 +161,8 @@ class Trader:
             self.cliente,
             self.risk,
             self.fraccion_kelly,
+            config.min_order_eur,
+            config.min_order_symbol,
         )
         self.capital_por_simbolo = self.capital_manager.capital_por_simbolo
         self.capital_inicial_diario = self.capital_manager.capital_inicial_diario

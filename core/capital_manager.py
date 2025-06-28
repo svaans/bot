@@ -21,6 +21,8 @@ class CapitalManager:
         cliente,
         risk: RiskManager,
         fraccion_kelly: float,
+        min_order_eur: float,
+        min_order_symbol: dict[str, float] | None,
     ) -> None:
         self.config = config
         self.cliente = cliente
@@ -28,6 +30,8 @@ class CapitalManager:
         self.fraccion_kelly = fraccion_kelly
         self.modo_real = getattr(config, "modo_real", False)
         self.modo_capital_bajo = config.modo_capital_bajo
+        self.min_order_eur = min_order_eur
+        self.min_order_symbol = min_order_symbol or {}
         self.riesgo_maximo_diario = 1.0
         self._markets = None
 
@@ -41,14 +45,16 @@ class CapitalManager:
         else:
             euros = 1000.0
 
-        inicial = euros / max(len(config.symbols), 1)
-        inicial = max(inicial, 20.0)
+        inicial_base = euros / max(len(config.symbols), 1)
         self.capital_por_simbolo: Dict[str, float] = {
-            s: inicial for s in config.symbols
+            s: max(inicial_base, self._min_order(s)) for s in config.symbols
         }
         self.capital_inicial_diario = self.capital_por_simbolo.copy()
         self.reservas_piramide: Dict[str, float] = {s: 0.0 for s in config.symbols}
         self.fecha_actual = datetime.now(timezone.utc).date()
+
+    def _min_order(self, symbol: str) -> float:
+        return self.min_order_symbol.get(symbol, self.min_order_eur)
 
     async def _obtener_minimo_binance(self, symbol: str) -> float | None:
         if not self.modo_real or not self.cliente:
@@ -94,7 +100,7 @@ class CapitalManager:
             capital_symbol,
             self.fraccion_kelly,
         )
-        minimo_dinamico = max(20.0, euros * 0.02)
+        minimo_dinamico = max(self._min_order(symbol), euros * 0.02)
         riesgo = max(riesgo_teorico, minimo_dinamico)
         riesgo = min(riesgo, euros * self.riesgo_maximo_diario)
         riesgo = min(riesgo, euros)
