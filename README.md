@@ -212,9 +212,10 @@ Para obtener mejores tiempos de cálculo en el ajuste de TP/SL se incluye una ex
    ```bash
    pip install maturin
    ```
-3. Compila la extensión desde la raíz del proyecto:
+3. Compila las extensiones desde la raíz del proyecto:
    ```bash
    maturin develop --release -m fast_tp_sl/Cargo.toml
+   maturin develop --release -m fast_indicators_rust/Cargo.toml
    ```
 
 Si la extensión se encuentra disponible, `core.adaptador_dinamico` la cargará automáticamente. En caso contrario se utilizará la implementación en Python.

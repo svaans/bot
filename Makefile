@@ -3,7 +3,8 @@
 all: rust cpp proto go_services frontend
 
 rust:
-	maturin develop --release -m fast_tp_sl/Cargo.toml
+		maturin develop --release -m fast_tp_sl/Cargo.toml
+        maturin develop --release -m fast_indicators_rust/Cargo.toml
 
 cpp:
 	python -m pip install .
