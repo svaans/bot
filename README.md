@@ -28,7 +28,7 @@ cd candle_service
 
 Las definiciones de gRPC se encuentran en `candle_service/proto/candle.proto`.
 Para generar el código a partir de este archivo necesitas `protoc` y los
-plugins de Go. Instálalos de la siguiente forma:
+plugins de Go. Instala primero `protoc` (por ejemplo con `apt-get install -y protobuf-compiler` o `brew install protobuf`) y luego los plugins de Go:
 
 ```bash
 go install google.golang.org/protobuf/cmd/protoc-gen-go@latest
