@@ -94,6 +94,11 @@ async def _verificar_entrada_impl(
     else:
         log.info(f"🧪 [{symbol}] Estrategias activas: {list(estrategias.keys())}")
 
+    if not evaluacion.get("permitido", True):
+        motivo = evaluacion.get("motivo_rechazo", "desconocido")
+        log.info(f"🚫 [{symbol}] Engine rechazó la entrada por: {motivo}")
+        return None
+    
     estado.buffer[-1]["estrategias_activas"] = estrategias
     trader.persistencia.actualizar(symbol, estrategias)
 
@@ -202,8 +207,6 @@ async def _verificar_entrada_impl(
         estrategias_activas[e] = pesos_symbol.get(e, 0.0)
         await asyncio.sleep(0)
     peso_total = sum(estrategias_activas.values())
-    peso_min_total = config_actual.get("peso_minimo_total", 0.5)
-    diversidad_min = config_actual.get("diversidad_minima", 2)
     persistencia = coincidencia_parcial(estado.buffer, pesos_symbol, ventanas=5)
 
     log.info(
@@ -211,30 +214,6 @@ async def _verificar_entrada_impl(
         f"Persistencia: {persistencia:.2f}, Estrategias activas: {estrategias_activas}"
     )
     razones: list[str] = []
-
-    if not trader._validar_puntaje(
-        symbol,
-        puntaje,
-        umbral,
-    ):
-        razones.append("puntaje")
-
-    if not await asyncio.wait_for(
-        trader._validar_diversidad(
-            symbol,
-            peso_total,
-            peso_min_total,
-            estrategias_activas,
-            diversidad_min,
-            pesos_symbol,
-            df,
-        ),
-        timeout=10,
-    ):
-        razones.append("diversidad")
-
-    if not trader._validar_estrategia(symbol, df, estrategias):
-        razones.append("estrategia")
 
     ok_pers, valor_pers, minimo_pers = trader._evaluar_persistencia(
         symbol, estado, df, pesos_symbol, tendencia_actual, puntaje, umbral, estrategias
