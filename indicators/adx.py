@@ -1,6 +1,8 @@
 import pandas as pd
 import numpy as np
+from core.utils.cache_indicadores import cached_indicator
 
+@cached_indicator
 def calcular_adx(df: pd.DataFrame, periodo: int = 14) -> float:
     if not all(col in df for col in ["high", "low", "close"]) or len(df) < periodo + 1:
         return None

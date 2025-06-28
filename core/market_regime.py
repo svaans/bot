@@ -1,6 +1,9 @@
 import pandas as pd
 from indicators.atr import calcular_atr
 from indicators.slope import calcular_slope
+from core.utils.cache_indicadores import cached_indicator
+
+_CACHE = {"hash": None, "regimen": "lateral"}
 
 
 def medir_volatilidad(df: pd.DataFrame, periodo: int = 14) -> float:
@@ -28,7 +31,7 @@ def pendiente_medias(df: pd.DataFrame, ventana: int = 30) -> float:
     return slope / base
 
 
-def detectar_regimen(df: pd.DataFrame) -> str:
+def _detectar_regimen(df: pd.DataFrame) -> str:
     """Clasifica el régimen de mercado según volatilidad y pendiente."""
     vol = medir_volatilidad(df)
     slope = pendiente_medias(df)
@@ -38,5 +41,19 @@ def detectar_regimen(df: pd.DataFrame) -> str:
         return "tendencial"
     return "lateral"
 
+
+@cached_indicator
+def detectar_regimen(df: pd.DataFrame, actualizar_cada: int = 5) -> str:
+    """Detecta régimen de mercado con cache para reducir cálculos."""
+    if "close" in df:
+        h = hash(df["close"].values.tobytes())
+    else:
+        h = len(df)
+    if _CACHE["hash"] == h:
+        return _CACHE["regimen"]
+    regimen = _detectar_regimen(df)
+    _CACHE["hash"] = h
+    _CACHE["regimen"] = regimen
+    return regimen
 
 

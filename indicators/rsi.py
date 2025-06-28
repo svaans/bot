@@ -2,15 +2,13 @@ import pandas as pd
 import numpy as np
 
 from fast_indicators import rsi as _rsi_fast
+from core.utils.cache_indicadores import cached_indicator
 
+@cached_indicator
 def calcular_rsi(
     df: pd.DataFrame, periodo: int = 14, serie_completa: bool = False
 ) -> float | pd.Series:
-    """Calcula el RSI usando el método de Wilder (EMA).
-
-    Si ``serie_completa`` es ``True`` devuelve la serie completa del RSI.
-    En caso contrario se retorna solo el último valor.
-    """
+    """Calcula el RSI de forma vectorizada usando NumPy."""
 
     if "close" not in df or len(df) < periodo + 1:
         return None

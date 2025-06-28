@@ -2,15 +2,18 @@ from __future__ import annotations
 
 import asyncio
 from datetime import datetime, timezone
+from time import perf_counter
 import pandas as pd
 
 from core.utils.utils import configurar_logger
+from core.registro_metrico import registro_metrico
 from core.strategies.tendencia import detectar_tendencia
 
 log = configurar_logger("procesar_vela")
 
 async def procesar_vela(trader, vela: dict) -> None:
     symbol = vela["symbol"]
+    inicio = perf_counter()
     log.debug(f"Inicio procesamiento vela {symbol}")
     estado = trader.estado[symbol]
     trader.watchdog.ping("procesar_vela")
@@ -51,5 +54,7 @@ async def procesar_vela(trader, vela: dict) -> None:
     await trader.evaluar_condiciones_entrada(symbol, df)
     log.debug(f"🔄 Vela procesada {symbol}")
     trader.watchdog.ping("procesar_vela")
-    log.debug(f"Fin procesamiento vela {symbol}")
+    duracion = (perf_counter() - inicio) * 1000.0
+    registro_metrico.registrar("proc_vela", {"symbol": symbol, "ms": duracion})
+    log.debug(f"Fin procesamiento vela {symbol} ({duracion:.2f} ms)")
     return

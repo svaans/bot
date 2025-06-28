@@ -1,8 +1,10 @@
 import pandas as pd
+import numpy as np
 from fast_indicators import atr as _atr_fast
+from core.utils.cache_indicadores import cached_indicator
 
 def calcular_atr(df: pd.DataFrame, periodo: int = 14) -> float:
-    """Calcula el Average True Range (ATR) usando el metodo de Wilder."""
+    """Calcula el Average True Range (ATR) usando el método de Wilder."""
 
     columnas = {"high", "low", "close"}
     if not columnas.issubset(df.columns) or len(df) < periodo + 1:

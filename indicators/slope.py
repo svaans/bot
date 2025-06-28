@@ -2,12 +2,14 @@
 import pandas as pd
 import numpy as np
 from fast_indicators import slope as _slope_fast
+from core.utils.cache_indicadores import cached_indicator
 
+@cached_indicator
 def calcular_slope(df: pd.DataFrame, periodo: int = 5) -> float:
     if "close" not in df or len(df) < periodo:
         return 0.0
 
-    y = df["close"].tail(periodo).to_numpy()
+    y = df["close"].tail(periodo).to_numpy(dtype=float)
     x = np.arange(len(y))
     if len(y) < 2:
         return 0.0
