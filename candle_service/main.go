@@ -1,7 +1,6 @@
 package main
 
 import (
-    "bufio"
 	"strconv"
 	"encoding/json"
 	"fmt"
