@@ -3,10 +3,7 @@
 import pandas as pd
 
 from core.strategies.tendencia import detectar_tendencia
-from core.estrategias import (
-    obtener_estrategias_por_tendencia,
-    ESTRATEGIAS_POR_TENDENCIA,
-)
+from core.estrategias import ESTRATEGIAS_POR_TENDENCIA
 from core.utils.validacion import validar_dataframe
 from core.adaptador_dinamico import calcular_umbral_adaptativo
 from core.adaptador_umbral import calcular_umbral_salida_adaptativo
@@ -24,8 +21,20 @@ log = configurar_logger("salida_stoploss")
 
 pesos = gestor_pesos.pesos
 
-def validar_sl_tecnico(df: pd.DataFrame, direccion: str = "long") -> float:
-    """Devuelve un puntaje de 0 a 1 sobre la fortaleza de cerrar por SL."""
+def validar_sl_tecnico(
+    df: pd.DataFrame, direccion: str = "long", symbol: str | None = None
+) -> float:
+    """Devuelve un puntaje de 0 a 1 sobre la fortaleza de cerrar por SL.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        DataFrame con los datos de precios.
+    direccion : str, optional
+        Dirección de la operación, "long" por defecto.
+    symbol : str | None, optional
+        Símbolo del activo para los logs y el cálculo de score.
+    """
     try:
         if not validar_dataframe(df, ["close"]):
             return 1.0
@@ -324,7 +333,7 @@ def verificar_salida_stoploss(
     intentos = len(orden.get("sl_evitar_info") or [])
     max_evitar = config.get("max_evitar_sl", 2) if config else 2
 
-    sl_conf = validar_sl_tecnico(df, direccion)
+    sl_conf = validar_sl_tecnico(df, direccion, symbol)
     cerrar_forzado = (
         sl_conf >= 0.5
         or puntaje < 0.75 * umbral

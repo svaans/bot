@@ -60,7 +60,7 @@ def test_log_sl_evitar(monkeypatch, caplog):
     )
     monkeypatch.setattr(
         "core.strategies.exit.salida_stoploss.validar_sl_tecnico",
-        lambda df, direccion="long": 0.0,
+        lambda df, direccion="long", symbol=None: 0.0,
     )
 
     logger = logging.getLogger("salida_stoploss")
@@ -115,7 +115,7 @@ def test_sl_evitar_info_none(monkeypatch):
     )
     monkeypatch.setattr(
         "core.strategies.exit.salida_stoploss.validar_sl_tecnico",
-        lambda df, direccion="long": 0.0,
+        lambda df, direccion="long", symbol=None: 0.0,
     )
 
     res = verificar_salida_stoploss(orden, df, config={})
