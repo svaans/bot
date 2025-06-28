@@ -52,6 +52,10 @@ async def procesar_vela(trader, vela: dict) -> None:
         trader.watchdog.ping("verificar_salidas")
 
     await trader.evaluar_condiciones_entrada(symbol, df)
+    try:
+        trader.actualizar_fraccion_kelly()
+    except Exception as e:  # noqa: BLE001
+        log.exception("No se pudo actualizar fracción Kelly", exc_info=e)
     log.debug(f"🔄 Vela procesada {symbol}")
     trader.watchdog.ping("procesar_vela")
     duracion = (perf_counter() - inicio) * 1000.0

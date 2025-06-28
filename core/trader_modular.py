@@ -213,6 +213,53 @@ class Trader:
         else:
             log.debug("🔍 Modo prueba: se omite carga de estado persistente")
 
+    def actualizar_fraccion_kelly(self) -> float:
+        """Recalcula la fracción de Kelly con los parámetros de configuración."""
+        dias = getattr(self.config, "KELLY_DIAS", getattr(self.config, "KELLY_HISTORY_DAYS", 30))
+        suavizado = getattr(self.config, "KELLY_SMOOTHING", 0.4)
+        fallback = getattr(self.config, "KELLY_FALLBACK", 0.2)
+
+        fraccion = calcular_fraccion_kelly(
+            dias_historia=dias,
+            fallback=fallback,
+            suavizado=suavizado,
+        )
+
+        factor_kelly = self.risk.multiplicador_kelly()
+        fraccion *= factor_kelly
+
+        factor_vol = 1.0
+        try:
+            factores = []
+            for sym in self.config.symbols:
+                df = self._obtener_historico(sym)
+                if df is None or "close" not in df:
+                    continue
+                cambios = df["close"].pct_change().dropna()
+                if cambios.empty:
+                    continue
+                volatilidad_actual = cambios.tail(1440).std()
+                volatilidad_media = cambios.std()
+                factores.append(
+                    self.risk.factor_volatilidad(
+                        float(volatilidad_actual),
+                        float(volatilidad_media),
+                    )
+                )
+            if factores:
+                factor_vol = min(factores)
+        except Exception as e:  # noqa: BLE001
+            log.exception("No se pudo calcular factor de volatilidad", exc_info=e)
+
+        fraccion *= factor_vol
+        self.fraccion_kelly = fraccion
+        self.capital_manager.set_fraccion_kelly(fraccion)
+        log.info(
+            f"⚖️ Fracción Kelly actualizada: {fraccion:.4f}"
+            f" (x{factor_kelly:.3f}, x{factor_vol:.3f})"
+        )
+        return fraccion
+    
     async def cerrar_operacion(self, symbol: str, precio: float, motivo: str) -> None:
         """Cierra una orden y actualiza los pesos si corresponden."""
         self.registrar_actividad()

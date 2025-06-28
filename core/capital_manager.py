@@ -181,3 +181,10 @@ class CapitalManager:
         capital_final = capital_inicial + ganancia
         self.capital_por_simbolo[symbol] = capital_final
         return capital_final
+    
+    def set_fraccion_kelly(self, f: float) -> None:
+        """Actualiza la fracción de Kelly utilizada para calcular riesgos."""
+        if not isinstance(f, (int, float)):
+            log.warning("⚠️ fraccion_kelly inválida, se ignora actualización")
+            return
+        self.fraccion_kelly = float(max(0.0, min(1.0, f)))
