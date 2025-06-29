@@ -27,3 +27,6 @@ class ProductionConfig(DevelopmentConfig):
     kelly_smoothing: float = 0.4
     kelly_fallback: float = 0.2
     riesgo_maximo_simbolo: dict[str, float] | None = field(default_factory=dict)
+    max_concurrent_entradas: int = 5
+    max_concurrent_salidas: int = 5
+    watchdog_timeout: int = 60

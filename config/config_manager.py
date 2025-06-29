@@ -63,6 +63,9 @@ class Config:
     kelly_smoothing: float = 0.4
     kelly_fallback: float = 0.2
     riesgo_maximo_simbolo: dict[str, float] | None = None
+    max_concurrent_entradas: int = 5
+    max_concurrent_salidas: int = 5
+    watchdog_timeout: int = 60
 
 
 class ConfigManager:
@@ -156,5 +159,14 @@ class ConfigManager:
             kelly_smoothing=_cargar_float("KELLY_SMOOTHING", defaults.kelly_smoothing),
             kelly_fallback=_cargar_float("KELLY_FALLBACK", defaults.kelly_fallback),
             riesgo_maximo_simbolo=riesgo_maximo_simbolo or None,
+            max_concurrent_entradas=_cargar_int(
+                "MAX_CONCURRENT_ENTRADAS", defaults.max_concurrent_entradas
+            ),
+            max_concurrent_salidas=_cargar_int(
+                "MAX_CONCURRENT_SALIDAS", defaults.max_concurrent_salidas
+            ),
+            watchdog_timeout=_cargar_int(
+                "WATCHDOG_TIMEOUT", defaults.watchdog_timeout
+            ),
         )
     

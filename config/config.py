@@ -25,3 +25,6 @@ UMBRAL_SCORE_TECNICO = cfg.umbral_score_tecnico
 USAR_SCORE_TECNICO = cfg.usar_score_tecnico
 CONTRADICCIONES_BLOQUEAN_ENTRADA = cfg.contradicciones_bloquean_entrada
 REGISTRO_TECNICO_CSV = cfg.registro_tecnico_csv
+MAX_CONCURRENT_ENTRADAS = cfg.max_concurrent_entradas
+MAX_CONCURRENT_SALIDAS = cfg.max_concurrent_salidas
+WATCHDOG_TIMEOUT = cfg.watchdog_timeout

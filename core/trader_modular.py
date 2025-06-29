@@ -190,7 +190,10 @@ class Trader:
             log.error(f"❌ {e}")
             raise
         self.historial_cierres: Dict[str, dict] = {}
-        self.watchdog = Watchdog(timeout=60)
+        self.watchdog = Watchdog(timeout=config.watchdog_timeout)
+        # Semáforos para limitar concurrencia de evaluaciones
+        self.sem_entradas = asyncio.Semaphore(config.max_concurrent_entradas)
+        self.sem_salidas = asyncio.Semaphore(config.max_concurrent_salidas)
         self.tasks = TaskManager()
         self.context_stream = StreamContexto()
         try:
@@ -1627,7 +1630,8 @@ class Trader:
 
     async def _verificar_salidas(self, symbol: str, df: pd.DataFrame) -> None:
         self.watchdog.ping("verificar_salidas")
-        await verificar_salidas(self, symbol, df)
+        async with self.sem_salidas:
+            await verificar_salidas(self, symbol, df)
         self.watchdog.ping("verificar_salidas")
 
     async def evaluar_condiciones_de_entrada(
@@ -1637,9 +1641,10 @@ class Trader:
             return None
         self.watchdog.ping("verificar_entrada")
         try:
-            resultado = await asyncio.wait_for(
-                verificar_entrada(self, symbol, df, estado), timeout=15
-            )
+            async with self.sem_entradas:
+                resultado = await asyncio.wait_for(
+                    verificar_entrada(self, symbol, df, estado), timeout=15
+                )
         except asyncio.TimeoutError:
             log.warning(f"\u23F1\ufe0f Timeout en verificación de entrada para {symbol}")
             return None

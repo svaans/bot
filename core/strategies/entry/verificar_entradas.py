@@ -57,10 +57,13 @@ async def _verificar_entrada_impl(
         log.warning(f"🚫 [{symbol}] DataFrame vacío. Se aborta la evaluación")
         return None
     config_actual = trader.config_por_simbolo.get(symbol, {})
+    t_cfg = perf_counter()
     dinamica = adaptar_configuracion(symbol, df)
     if dinamica:
         config_actual.update(dinamica)
     config_actual = adaptar_configuracion_base(symbol, df, config_actual)
+    dur_cfg = (perf_counter() - t_cfg) * 1000.0
+    log.debug(f"[{symbol}] adaptar_config tomó {dur_cfg:.2f} ms")
     max_spread = config_actual.get("max_spread", 0.002)
     spread_conf = validar_spread(df, max_spread)
     if spread_conf <= 0:
@@ -90,6 +93,7 @@ async def _verificar_entrada_impl(
     volatilidad_actual = df["close"].pct_change().tail(20).std()
     trader.persistencia.ajustar_minimo(symbol, volatilidad_actual)
 
+    t_engine = perf_counter()
     evaluacion = trader.engine.evaluar_entrada(
         symbol,
         df,
@@ -97,6 +101,8 @@ async def _verificar_entrada_impl(
         config=config_actual,
         pesos_symbol=trader.pesos_por_simbolo.get(symbol, {}),
     )
+    dur_engine = (perf_counter() - t_engine) * 1000.0
+    log.debug(f"[{symbol}] engine tomó {dur_engine:.2f} ms")
     estrategias = evaluacion.get("estrategias_activas", {})
     log.debug(f"[{symbol}] Estrategias iniciales desde engine: {estrategias}")
     if not estrategias:
@@ -305,7 +311,7 @@ async def _verificar_entrada_impl(
         return None
 
     ratio_min = config_actual.get("ratio_minimo_beneficio", 1.5)
-    if not validar_ratio_beneficio(precio, sl, tp, ratio_min):
+    if not await asyncio.to_thread(distancia_minima_valida, precio, sl, tp):
         log.warning(
             f"🚫 [{symbol}] Ratio beneficio/riesgo < {ratio_min:.2f}"
         )

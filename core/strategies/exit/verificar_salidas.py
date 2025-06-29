@@ -24,14 +24,31 @@ log = configurar_logger("verificar_salidas")
 async def verificar_salidas(trader, symbol: str, df: pd.DataFrame) -> None:
     """Evalúa si la orden abierta debe cerrarse."""
     inicio = perf_counter()
+    try:
+        await asyncio.wait_for(
+            _verificar_salidas_impl(trader, symbol, df), timeout=20
+        )
+    except asyncio.TimeoutError:
+        log.error(f"⏱️ Timeout verificando salidas de {symbol}")
+        return
+    finally:
+        dur = (perf_counter() - inicio) * 1000.0
+        registro_metrico.registrar("verif_salidas", {"symbol": symbol, "ms": dur})
+        log.debug(f"[{symbol}] verificar_salidas completado en {dur:.2f} ms")
+
+
+async def _verificar_salidas_impl(trader, symbol: str, df: pd.DataFrame) -> None:
+    """Implementación interna de :func:`verificar_salidas`."""
+    inicio = perf_counter()
     orden = trader.orders.obtener(symbol)
     if not orden:
         log.warning(f"⚠️ Se intentó verificar TP/SL sin orden activa en {symbol}")
-        dur = (perf_counter() - inicio) * 1000.0
-        registro_metrico.registrar("verif_salidas", {"symbol": symbol, "ms": dur})
-        log.debug(f"[{symbol}] verificar_salidas sin orden tomó {dur:.2f} ms")
         return
-
+    
+    # Fragmenta el DataFrame para ceder control al event loop
+    for i in range(0, len(df), 50):
+        df.iloc[i : i + 50]
+        await asyncio.sleep(0)
     orden.duracion_en_velas = getattr(orden, "duracion_en_velas", 0) + 1
 
     await trader._piramidar(symbol, orden, df)
@@ -54,12 +71,16 @@ async def verificar_salidas(trader, symbol: str, df: pd.DataFrame) -> None:
     }
 
     supervisor = SupervisorSalidas(orden, config_actual)
-    resultado_basico = supervisor.evaluar(
-        df,
-        precio_cierre=precio_cierre,
-        precio_min=precio_min,
-        precio_max=precio_max,
-    )
+    try:
+        resultado_basico = supervisor.evaluar(
+            df,
+            precio_cierre=precio_cierre,
+            precio_min=precio_min,
+            precio_max=precio_max,
+        )
+    except Exception as e:
+        log.exception(f"Error evaluando salida básica {symbol}: {e}")
+        return
 
     if resultado_basico.get("break_even"):
         orden.break_even_activado = True
@@ -214,6 +235,3 @@ async def verificar_salidas(trader, symbol: str, df: pd.DataFrame) -> None:
         await trader._cerrar_y_reportar(
             orden, precio_cierre, f"Estrategia: {razon}", df=df
         )
-    dur = (perf_counter() - inicio) * 1000.0
-    registro_metrico.registrar("verif_salidas", {"symbol": symbol, "ms": dur})
-    log.debug(f"[{symbol}] verificar_salidas completado en {dur:.2f} ms")
