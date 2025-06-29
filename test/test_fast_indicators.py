@@ -2,6 +2,7 @@ import numpy as np
 import pandas as pd
 
 from indicators.rsi import calcular_rsi, calcular_rsi_fast
+import indicators.rsi as rsi_mod
 from indicators.atr import calcular_atr, calcular_atr_fast
 from indicators.slope import calcular_slope, calcular_slope_fast
 import fast_indicators as fi
@@ -46,3 +47,21 @@ def test_extension_import():
         # simple call to ensure the extension works
         arr = fi.rsi(np.array([1.0, 2.0, 3.0]), 2)
         assert arr.size == 3
+
+
+def test_rsi_fast_rust_path(monkeypatch):
+    df = generate_df()
+    called = []
+
+    def fake_rust(close: np.ndarray, periodo: int) -> np.ndarray:
+        called.append(True)
+        return fi.rsi(close, periodo)
+
+    monkeypatch.setattr(rsi_mod, "HAS_RUST", True)
+    monkeypatch.setattr(rsi_mod, "_rsi_rust", fake_rust)
+    monkeypatch.setattr(rsi_mod, "_rsi_fast", lambda *a, **k: (_ for _ in ()).throw(AssertionError("_rsi_fast used")))
+
+    fast_series = calcular_rsi_fast(df, periodo=14, serie_completa=True)
+    py_series = calcular_rsi(df, periodo=14, serie_completa=True)
+
+    assert called and np.allclose(fast_series, py_series, equal_nan=True)

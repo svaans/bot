@@ -2,6 +2,12 @@ import pandas as pd
 import numpy as np
 
 from fast_indicators import rsi as _rsi_fast
+try:  # pragma: no cover - optional rust extension
+    from fast_indicators_rust import rsi as _rsi_rust
+    HAS_RUST = True
+except Exception:  # pragma: no cover - missing rust module
+    _rsi_rust = None
+    HAS_RUST = False
 from core.utils.cache_indicadores import cached_indicator
 
 @cached_indicator
@@ -40,7 +46,7 @@ def calcular_rsi_fast(
         return None
 
     close = df["close"].to_numpy(dtype=float)
-    valores = _rsi_fast(close, periodo)
+    valores = _rsi_rust(close, periodo) if HAS_RUST else _rsi_fast(close, periodo)
     if valores.size == 0:
         return None
 
