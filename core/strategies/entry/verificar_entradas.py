@@ -47,6 +47,7 @@ async def verificar_entrada(
     finally:
         dur = (perf_counter() - inicio) * 1000.0
         registro_metrico.registrar("verif_entrada", {"symbol": symbol, "ms": dur})
+        log.debug(f"[{symbol}] verificar_entrada completado en {dur:.2f} ms")
 
 async def _verificar_entrada_impl(
     trader, symbol: str, df: pd.DataFrame, estado
@@ -118,12 +119,18 @@ async def _verificar_entrada_impl(
     )
 
     if len(estado.buffer) < 30:
-        persistencia = coincidencia_parcial(estado.buffer, pesos_symbol, ventanas=5)
-        log.debug(f"[{symbol}] Persistencia parcial (buffer corto): {persistencia:.2f}")
+        persistencia = await asyncio.to_thread(
+            coincidencia_parcial, estado.buffer, pesos_symbol, ventanas=5
+        )
+        log.debug(
+            f"[{symbol}] Persistencia parcial (buffer corto): {persistencia:.2f}"
+        )
         if persistencia < peso_minimo * peso_max:
             return None
 
-    persistencia_score = coincidencia_parcial(estado.buffer, pesos_symbol, ventanas=5)
+    persistencia_score = await asyncio.to_thread(
+        coincidencia_parcial, estado.buffer, pesos_symbol, ventanas=5
+    )
     umbral = calcular_umbral_adaptativo(
         symbol,
         df,
@@ -133,10 +140,11 @@ async def _verificar_entrada_impl(
     )
 
     estrategias_persistentes: dict[str, bool] = {}
-    for e, act in estrategias.items():
+    for idx, (e, act) in enumerate(estrategias.items()):
         if act and trader.persistencia.es_persistente(symbol, e):
             estrategias_persistentes[e] = True
-        await asyncio.sleep(0)
+        if idx % 5 == 0:
+            await asyncio.sleep(0)
     log.debug(f"[{symbol}] Estrategias persistentes: {estrategias_persistentes}")
 
     peso_persistente = sum(pesos_symbol.get(k, 0.0) for k in estrategias_persistentes)
@@ -212,11 +220,14 @@ async def _verificar_entrada_impl(
         return None
 
     estrategias_activas: dict[str, float] = {}
-    for e in estrategias_persistentes:
+    for idx, e in enumerate(estrategias_persistentes):
         estrategias_activas[e] = pesos_symbol.get(e, 0.0)
-        await asyncio.sleep(0)
+        if idx % 5 == 0:
+            await asyncio.sleep(0)
     peso_total = sum(estrategias_activas.values())
-    persistencia = coincidencia_parcial(estado.buffer, pesos_symbol, ventanas=5)
+    persistencia = await asyncio.to_thread(
+        coincidencia_parcial, estado.buffer, pesos_symbol, ventanas=5
+    )
 
     log.info(
         f"📊 [{symbol}] Puntaje: {puntaje:.2f}, Umbral: {umbral:.2f}, Peso total: {peso_total:.2f}, "

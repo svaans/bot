@@ -2,6 +2,7 @@ from __future__ import annotations
 
 
 import pandas as pd
+import asyncio
 from time import perf_counter
 
 from core.utils import configurar_logger
@@ -28,6 +29,7 @@ async def verificar_salidas(trader, symbol: str, df: pd.DataFrame) -> None:
         log.warning(f"⚠️ Se intentó verificar TP/SL sin orden activa en {symbol}")
         dur = (perf_counter() - inicio) * 1000.0
         registro_metrico.registrar("verif_salidas", {"symbol": symbol, "ms": dur})
+        log.debug(f"[{symbol}] verificar_salidas sin orden tomó {dur:.2f} ms")
         return
 
     orden.duracion_en_velas = getattr(orden, "duracion_en_velas", 0) + 1
@@ -83,6 +85,9 @@ async def verificar_salidas(trader, symbol: str, df: pd.DataFrame) -> None:
                     registro_metrico.registrar(
                         "verif_salidas", {"symbol": symbol, "ms": dur}
                     )
+                    log.debug(
+                        f"[{symbol}] verificar_salidas TP parcial tomó {dur:.2f} ms"
+                    )
                     return
         if not permitir_cierre_tecnico(symbol, df, precio_cierre, orden.to_dict()):
             log.info(f"🛡️ Cierre evitado por análisis técnico: {symbol}")
@@ -90,6 +95,7 @@ async def verificar_salidas(trader, symbol: str, df: pd.DataFrame) -> None:
             await trader._cerrar_y_reportar(orden, precio_cierre, motivo, df=df)
         dur = (perf_counter() - inicio) * 1000.0
         registro_metrico.registrar("verif_salidas", {"symbol": symbol, "ms": dur})
+        log.debug(f"[{symbol}] verificar_salidas cierre simple tomó {dur:.2f} ms")
         return
 
     # --- Cambio de tendencia ---
@@ -118,6 +124,9 @@ async def verificar_salidas(trader, symbol: str, df: pd.DataFrame) -> None:
             dur = (perf_counter() - inicio) * 1000.0
             registro_metrico.registrar(
                 "verif_salidas", {"symbol": symbol, "ms": dur}
+            )
+            log.debug(
+                f"[{symbol}] verificar_salidas cambio tendencia tomó {dur:.2f} ms"
             )
             return
 
@@ -163,14 +172,17 @@ async def verificar_salidas(trader, symbol: str, df: pd.DataFrame) -> None:
         estrategias = evaluacion.get("estrategias_activas", {})
         puntaje = evaluacion.get("puntaje_total", 0)
         pesos_symbol = trader.pesos_por_simbolo.get(symbol, {})
-        umbral = calcular_umbral_adaptativo(
+        t_eval = perf_counter()
+        umbral = await asyncio.to_thread(
+            calcular_umbral_adaptativo,
             symbol,
             df,
             estrategias,
             pesos_symbol,
             persistencia=0.0,
         )
-        validacion_salida = validar_necesidad_de_salida(
+        validacion_salida = await asyncio.to_thread(
+            validar_necesidad_de_salida,
             df,
             orden.to_dict(),
             estrategias,
@@ -178,6 +190,9 @@ async def verificar_salidas(trader, symbol: str, df: pd.DataFrame) -> None:
             umbral=umbral,
             config=config_actual,
         )
+        dur_eval = (perf_counter() - t_eval) * 1000.0
+        log.debug(f"[{symbol}] Validación técnica tomó {dur_eval:.2f} ms")
+        await asyncio.sleep(0)
         if validacion_salida < 0.5:
             log.info(
                 f"❌ Cierre por '{razon}' evitado: condiciones técnicas aún válidas."
@@ -186,6 +201,7 @@ async def verificar_salidas(trader, symbol: str, df: pd.DataFrame) -> None:
             registro_metrico.registrar(
                 "verif_salidas", {"symbol": symbol, "ms": dur}
             )
+            log.debug(f"[{symbol}] verificar_salidas rechazo técnico tomó {dur:.2f} ms")
             return
         if not permitir_cierre_tecnico(symbol, df, precio_cierre, orden.to_dict()):
             log.info(f"🛡️ Cierre evitado por análisis técnico: {symbol}")
@@ -193,9 +209,11 @@ async def verificar_salidas(trader, symbol: str, df: pd.DataFrame) -> None:
             registro_metrico.registrar(
                 "verif_salidas", {"symbol": symbol, "ms": dur}
             )
+            log.debug(f"[{symbol}] verificar_salidas bloqueo técnico tomó {dur:.2f} ms")
             return
         await trader._cerrar_y_reportar(
             orden, precio_cierre, f"Estrategia: {razon}", df=df
         )
     dur = (perf_counter() - inicio) * 1000.0
     registro_metrico.registrar("verif_salidas", {"symbol": symbol, "ms": dur})
+    log.debug(f"[{symbol}] verificar_salidas completado en {dur:.2f} ms")
