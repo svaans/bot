@@ -194,6 +194,37 @@ async def main():
     except ValueError as e:
         print(f"❌ {e}")
         return
+    
+    # -- Cola de trabajos y pool de workers --
+    job_queue: asyncio.Queue = asyncio.Queue(maxsize=config.job_queue_size)
+    bot.job_queue = job_queue
+    workers: list[asyncio.Task] = []
+
+    def start_worker(idx: int) -> asyncio.Task:
+        from core.job_queue import worker
+        task = asyncio.create_task(
+            worker(
+                f"W{idx}",
+                bot,
+                job_queue,
+                timeout=config.job_timeout,
+                drop_policy=config.job_drop_policy,
+            )
+        )
+        return task
+
+    for i in range(config.job_workers):
+        workers.append(start_worker(i))
+
+    from core.job_queue import queue_watchdog
+    watchdog_task = asyncio.create_task(
+        queue_watchdog(
+            job_queue,
+            workers,
+            start_worker,
+            warn_threshold=config.job_queue_size // 2,
+        )
+    )
 
     tarea_bot = asyncio.create_task(bot.ejecutar())
     stop_event = asyncio.Event()
@@ -212,7 +243,7 @@ async def main():
 
     try:
         await asyncio.wait(
-            [tarea_bot, tarea_stop, tarea_reinicio, tarea_heartbeat],
+            [tarea_bot, tarea_stop, tarea_reinicio, tarea_heartbeat, watchdog_task, *workers],
             return_when=asyncio.FIRST_COMPLETED,
         )
     except asyncio.CancelledError:
@@ -225,8 +256,17 @@ async def main():
         tarea_reinicio.cancel()
         tarea_stop.cancel()
         tarea_heartbeat.cancel()
+        watchdog_task.cancel()
+        for w in workers:
+            w.cancel()
         await asyncio.gather(
-            tarea_bot, tarea_reinicio, tarea_stop, tarea_heartbeat, return_exceptions=True
+            tarea_bot,
+            tarea_reinicio,
+            tarea_stop,
+            tarea_heartbeat,
+            watchdog_task,
+            *workers,
+            return_exceptions=True,
         )
         stop_hot_reload(observer)
         await bot.cerrar()

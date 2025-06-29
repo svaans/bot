@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 import pytest
 
 from core.procesar_vela import procesar_vela
+from core.job_queue import worker
 
 
 class DummyOrders:
@@ -29,7 +30,8 @@ class DummyTrader:
         self.estado_tendencia = {}
         self.notificador = None
         self.actualizar_fraccion_kelly = lambda: None
-        self.config = type("C", (), {"symbols": ["AAA"]})()
+        self.config = type("C", (), {"symbols": ["AAA"], "job_drop_policy": "drop_oldest"})()
+        self.job_queue = asyncio.Queue()
 
         async def _verificar_salidas(symbol, df):
             await asyncio.sleep(0)
@@ -44,9 +46,21 @@ class DummyTrader:
 @pytest.mark.asyncio
 async def test_procesar_vela_concurrente():
     trader = DummyTrader()
+    worker_task = asyncio.create_task(
+        worker(
+            "t",
+            trader,
+            trader.job_queue,
+            timeout=1,
+            drop_policy=trader.config.job_drop_policy,
+        )
+    )
     tareas = []
     for i in range(50):
         vela = {"symbol": "AAA", "timestamp": i, "close": 1}
         tareas.append(asyncio.create_task(procesar_vela(trader, vela)))
     await asyncio.wait_for(asyncio.gather(*tareas), timeout=30)
+    await trader.job_queue.join()
+    worker_task.cancel()
+    await asyncio.gather(worker_task, return_exceptions=True)
     assert all(t.done() for t in tareas)

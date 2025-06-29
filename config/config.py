@@ -30,3 +30,7 @@ MAX_CONCURRENT_SALIDAS = cfg.max_concurrent_salidas
 MAX_CONCURRENT_TASKS = cfg.max_concurrent_tasks
 CANDLE_PROCESS_INTERVAL = cfg.candle_process_interval
 WATCHDOG_TIMEOUT = cfg.watchdog_timeout
+JOB_QUEUE_SIZE = cfg.job_queue_size
+JOB_WORKERS = cfg.job_workers
+JOB_TIMEOUT = cfg.job_timeout
+JOB_DROP_POLICY = cfg.job_drop_policy

@@ -68,6 +68,10 @@ class Config:
     max_concurrent_tasks: int = 10
     candle_process_interval: float = 0.0
     watchdog_timeout: int = 60
+    job_queue_size: int = 100
+    job_workers: int = 5
+    job_timeout: int = 20
+    job_drop_policy: str = "drop_oldest"
 
 
 class ConfigManager:
@@ -174,5 +178,9 @@ class ConfigManager:
                 "CANDLE_PROCESS_INTERVAL", defaults.candle_process_interval
             ),
             watchdog_timeout=_cargar_int("WATCHDOG_TIMEOUT", defaults.watchdog_timeout),
+            job_queue_size=_cargar_int("JOB_QUEUE_SIZE", defaults.job_queue_size),
+            job_workers=_cargar_int("JOB_WORKERS", defaults.job_workers),
+            job_timeout=_cargar_int("JOB_TIMEOUT", defaults.job_timeout),
+            job_drop_policy=os.getenv("JOB_DROP_POLICY", defaults.job_drop_policy),        
         )
     
