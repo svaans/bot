@@ -116,7 +116,9 @@ class Trader:
             config.persistencia_minima,
             config.peso_extra_persistencia,
         )
-        self.state_lock = asyncio.Lock()
+        self.state_locks: Dict[str, asyncio.Lock] = {
+            s: asyncio.Lock() for s in config.symbols
+        }
         os.makedirs("logs/rechazos", exist_ok=True)
         os.makedirs(os.path.dirname(config.registro_tecnico_csv), exist_ok=True)
         self.umbral_score_tecnico = config.umbral_score_tecnico

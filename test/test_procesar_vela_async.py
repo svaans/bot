@@ -31,7 +31,7 @@ class DummyTrader:
         self.notificador = None
         self.actualizar_fraccion_kelly = lambda: None
         self.config = type("C", (), {"symbols": ["AAA"], "job_drop_policy": "drop_oldest"})()
-        self.job_queue = asyncio.Queue()
+        self.job_queue = asyncio.PriorityQueue()
 
         async def _verificar_salidas(symbol, df):
             await asyncio.sleep(0)

@@ -78,7 +78,7 @@ class DummyTrader:
         self.persistencia = DummyPersistencia()
         self.pesos_por_simbolo = {"AAA": {}}
         self.historial_cierres = {}
-        self.state_lock = asyncio.Lock()
+        self.state_locks = {"AAA": asyncio.Lock()}
         self.usar_score_tecnico = False
     async def _calcular_cantidad_async(self, *a, **k):
         raise ValueError("fail")

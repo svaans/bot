@@ -83,7 +83,7 @@ async def _verificar_entrada_impl(
     log.debug(
         f"[{symbol}] 🔒 solicitando state_lock config @ {datetime.now(timezone.utc).isoformat()}"
     )
-    async with trader.state_lock:
+    async with trader.state_locks[symbol]:
         log.debug(
             f"[{symbol}] ✅ state_lock config adquirido @ {datetime.now(timezone.utc).isoformat()}"
         )
@@ -100,7 +100,7 @@ async def _verificar_entrada_impl(
         f"[{symbol}] 🔒 solicitando state_lock tendencia @ {datetime.now(timezone.utc).isoformat()}"
     )
 
-    async with trader.state_lock:
+    async with trader.state_locks[symbol]:
         log.debug(
             f"[{symbol}] ✅ state_lock tendencia adquirido @ {datetime.now(timezone.utc).isoformat()}"
         )
@@ -114,7 +114,7 @@ async def _verificar_entrada_impl(
         log.debug(
             f"[{symbol}] 🔒 solicitando state_lock set tendencia @ {datetime.now(timezone.utc).isoformat()}"
         )
-        async with trader.state_lock:
+        async with trader.state_locks[symbol]:
             log.debug(
                 f"[{symbol}] ✅ state_lock set tendencia adquirido @ {datetime.now(timezone.utc).isoformat()}"
             )
@@ -128,7 +128,8 @@ async def _verificar_entrada_impl(
     trader.persistencia.ajustar_minimo(symbol, volatilidad_actual)
 
     t_engine = perf_counter()
-    evaluacion = trader.engine.evaluar_entrada(
+    evaluacion = await asyncio.to_thread(
+        trader.engine.evaluar_entrada,
         symbol,
         df,
         tendencia=tendencia_actual,
@@ -230,7 +231,7 @@ async def _verificar_entrada_impl(
         f"[{symbol}] 🔒 solicitando state_lock cierre @ {datetime.now(timezone.utc).isoformat()}"
     )
 
-    async with trader.state_lock:
+    async with trader.state_locks[symbol]:
         log.debug(
             f"[{symbol}] ✅ state_lock cierre adquirido @ {datetime.now(timezone.utc).isoformat()}"
         )
@@ -252,7 +253,7 @@ async def _verificar_entrada_impl(
                 log.debug(
                     f"[{symbol}] 🔒 solicitando state_lock borrar cierre @ {datetime.now(timezone.utc).isoformat()}"
                 )
-                async with trader.state_lock:
+                async with trader.state_locks[symbol]:
                     log.debug(
                         f"[{symbol}] ✅ state_lock borrar cierre adquirido @ {datetime.now(timezone.utc).isoformat()}"
                     )
@@ -270,7 +271,7 @@ async def _verificar_entrada_impl(
                 log.debug(
                     f"[{symbol}] 🔒 solicitando state_lock borrar cierre @ {datetime.now(timezone.utc).isoformat()}"
                 )
-                async with trader.state_lock:
+                async with trader.state_locks[symbol]:
                     log.debug(
                         f"[{symbol}] ✅ state_lock borrar cierre adquirido @ {datetime.now(timezone.utc).isoformat()}"
                     )

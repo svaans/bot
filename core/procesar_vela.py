@@ -55,7 +55,7 @@ async def procesar_vela(trader, vela: dict) -> None:
         if trader.orders.obtener(symbol):
             await enqueue_job(
                 trader.job_queue,
-                Job("exit", symbol, df),
+                Job(0, "exit", symbol, df),
                 drop_policy=trader.config.job_drop_policy,
             )
             return
@@ -65,7 +65,7 @@ async def procesar_vela(trader, vela: dict) -> None:
 
         await enqueue_job(
             trader.job_queue,
-            Job("entry", symbol, df),
+            Job(1, "entry", symbol, df),
             drop_policy=trader.config.job_drop_policy,
         )
     finally:
