@@ -171,6 +171,14 @@ BOT_ENV=production python main.py
 Los valores base de cada modo se definen en `config/development.py` y
 `config/production.py`.
 
+Para personalizar la fracción de Kelly y el riesgo máximo por símbolo puedes
+establecer las siguientes variables de entorno:
+
+- `KELLY_SMOOTHING`: factor de suavizado aplicado al resultado de la fórmula.
+- `KELLY_FALLBACK`: fracción empleada cuando no hay historial suficiente.
+- `RIESGO_MAXIMO_SIMBOLO_<SYM>`: límite diario de riesgo para un símbolo
+  concreto (por ejemplo `RIESGO_MAXIMO_SIMBOLO_BTC_EUR=1.5`).
+
 ## Ejecución completa en producción
 
 Para iniciar el bot junto a sus microservicios se incluye el script

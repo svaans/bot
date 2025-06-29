@@ -60,6 +60,9 @@ class Config:
     backtest_grpc_host: str = "localhost"
     backtest_grpc_port: int = 9200
     use_grpc_backtest: bool = False
+    elly_smoothing: float = 0.4
+    kelly_fallback: float = 0.2
+    riesgo_maximo_simbolo: dict[str, float] | None = None
 
 
 class ConfigManager:
@@ -86,6 +89,17 @@ class ConfigManager:
                 continue
             try:
                 min_order_symbol[sym] = float(val)
+            except ValueError:
+                log.warning(f"⚠️ Valor inválido para {key}. Se omite")
+
+        riesgo_maximo_simbolo: dict[str, float] = {}
+        for sym in symbols:
+            key = f"RIESGO_MAXIMO_SIMBOLO_{sym.replace('/', '_').upper()}"
+            val = os.getenv(key)
+            if val is None:
+                continue
+            try:
+                riesgo_maximo_simbolo[sym] = float(val)
             except ValueError:
                 log.warning(f"⚠️ Valor inválido para {key}. Se omite")
 
@@ -139,4 +153,8 @@ class ConfigManager:
             backtest_grpc_host=os.getenv("BACKTEST_GRPC_HOST", defaults.backtest_grpc_host),
             backtest_grpc_port=_cargar_int("BACKTEST_GRPC_PORT", defaults.backtest_grpc_port),
             use_grpc_backtest=os.getenv("USE_GRPC_BACKTEST", str(defaults.use_grpc_backtest)).lower() == "true",
+            kelly_smoothing=_cargar_float("KELLY_SMOOTHING", defaults.kelly_smoothing),
+            kelly_fallback=_cargar_float("KELLY_FALLBACK", defaults.kelly_fallback),
+            riesgo_maximo_simbolo=riesgo_maximo_simbolo or None,
         )
+    
