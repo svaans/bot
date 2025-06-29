@@ -54,9 +54,16 @@ async def procesar_vela(trader, vela: dict) -> None:
         if trader.orders.obtener(symbol):
             t_sal = perf_counter()
             try:
-                await asyncio.wait_for(
-                    trader._verificar_salidas(symbol, df), timeout=20
-                )
+                sem = getattr(trader, "sem_global", None)
+                if sem:
+                    async with sem:  # limita concurrencia global
+                        await asyncio.wait_for(
+                            trader._verificar_salidas(symbol, df), timeout=20
+                        )
+                else:
+                    await asyncio.wait_for(
+                        trader._verificar_salidas(symbol, df), timeout=20
+                    )
             except asyncio.TimeoutError:
                 log.error(f"Timeout verificando salidas de {symbol}")
                 log.error("Tareas:\n%s", dump_tasks_stacktraces(asyncio.all_tasks()))
@@ -78,9 +85,16 @@ async def procesar_vela(trader, vela: dict) -> None:
 
         t_ent = perf_counter()
         try:
-            await asyncio.wait_for(
-                trader.evaluar_condiciones_entrada(symbol, df), timeout=20
-            )
+            sem = getattr(trader, "sem_global", None)
+            if sem:
+                async with sem:  # limita concurrencia global
+                    await asyncio.wait_for(
+                        trader.evaluar_condiciones_entrada(symbol, df), timeout=20
+                    )
+            else:
+                await asyncio.wait_for(
+                    trader.evaluar_condiciones_entrada(symbol, df), timeout=20
+                )
         except asyncio.TimeoutError:
             log.error(f"Timeout evaluando entrada de {symbol}")
             log.error("Tareas:\n%s", dump_tasks_stacktraces(asyncio.all_tasks()))
@@ -103,9 +117,7 @@ async def procesar_vela(trader, vela: dict) -> None:
             log.exception("No se pudo actualizar fracción Kelly", exc_info=e)
         finally:
             dur_kelly = (perf_counter() - t_kelly) * 1000.0
-            log.debug(
-                f"[{symbol}] actualizar_fraccion_kelly tomó {dur_kelly:.2f} ms"
-            )
+            log.debug(f"[{symbol}] actualizar_fraccion_kelly tomó {dur_kelly:.2f} ms")
     finally:
         log.debug(f"🔄 Vela procesada {symbol}")
         trader.watchdog.ping("procesar_vela")

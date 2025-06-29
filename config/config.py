@@ -27,4 +27,6 @@ CONTRADICCIONES_BLOQUEAN_ENTRADA = cfg.contradicciones_bloquean_entrada
 REGISTRO_TECNICO_CSV = cfg.registro_tecnico_csv
 MAX_CONCURRENT_ENTRADAS = cfg.max_concurrent_entradas
 MAX_CONCURRENT_SALIDAS = cfg.max_concurrent_salidas
+MAX_CONCURRENT_TASKS = cfg.max_concurrent_tasks
+CANDLE_PROCESS_INTERVAL = cfg.candle_process_interval
 WATCHDOG_TIMEOUT = cfg.watchdog_timeout

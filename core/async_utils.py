@@ -66,4 +66,36 @@ def dump_tasks_stacktraces(tasks: Iterable[asyncio.Task] | None = None) -> str:
     return "".join(lines)
 
 
-__all__ = ["TaskManager", "log_exceptions_async", "dump_tasks_stacktraces"]
+async def run_with_timeout(
+    coro: asyncio.coroutine,
+    timeout: float,
+    *,
+    logger: logging.Logger,
+    name: str | None = None,
+):
+    """Ejecuta ``coro`` con ``timeout`` cancelando la tarea si se agota.
+
+    Se registra un mensaje cuando la tarea es cancelada para evitar que
+    queden referencias colgadas en el event loop.
+    """
+
+    task = asyncio.create_task(coro)
+    nombre = name or getattr(coro, "__name__", "coro")
+    try:
+        return await asyncio.wait_for(task, timeout)
+    except asyncio.TimeoutError:
+        logger.error(f"⏱️ Timeout en {nombre}")
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            logger.debug(f"{nombre} cancelado tras timeout")
+        return None
+
+
+__all__ = [
+    "TaskManager",
+    "log_exceptions_async",
+    "dump_tasks_stacktraces",
+    "run_with_timeout",
+]

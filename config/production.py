@@ -29,4 +29,6 @@ class ProductionConfig(DevelopmentConfig):
     riesgo_maximo_simbolo: dict[str, float] | None = field(default_factory=dict)
     max_concurrent_entradas: int = 5
     max_concurrent_salidas: int = 5
+    max_concurrent_tasks: int = 10
+    candle_process_interval: float = 0.0
     watchdog_timeout: int = 60

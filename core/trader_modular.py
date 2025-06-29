@@ -69,6 +69,8 @@ from core.scoring import calcular_score_tecnico
 from core.config.pesos import PESOS_SCORE_TECNICO
 from core.config import COMISION, SLIPPAGE
 from core.storage.persistencia import cargar_estado, guardar_estado
+
+from collections import defaultdict
    
 
 log = configurar_logger("trader")
@@ -195,6 +197,11 @@ class Trader:
         self.sem_entradas = asyncio.Semaphore(config.max_concurrent_entradas)
         self.sem_salidas = asyncio.Semaphore(config.max_concurrent_salidas)
         self.sem_velas = asyncio.Semaphore(5)
+        self.sem_global = asyncio.Semaphore(config.max_concurrent_tasks)
+        self._ultimo_procesamiento = defaultdict(float)
+        self.intervalo_procesar_vela = float(
+            getattr(config, "candle_process_interval", 0.0)
+        )
         self.tasks = TaskManager()
         self.context_stream = StreamContexto()
         try:
@@ -1719,6 +1726,10 @@ class Trader:
         if not self._validar_config(symbol):
             return
         self.registrar_actividad()
+        now = asyncio.get_event_loop().time()
+        diff = now - self._ultimo_procesamiento[symbol]
+        if diff < self.intervalo_procesar_vela:
+            await asyncio.sleep(self.intervalo_procesar_vela - diff)
         self.watchdog.ping("procesar_vela")
         async with self.sem_velas:
             log.debug(
@@ -1728,6 +1739,7 @@ class Trader:
             log.debug(
                 f"[{symbol}] 🔓 sem_velas liberado @ {datetime.now(timezone.utc).isoformat()}"
             )
+        self._ultimo_procesamiento[symbol] = asyncio.get_event_loop().time()
         self.watchdog.ping("procesar_vela")
         self.registrar_actividad()
         log.debug(f"✅ Procesamiento de vela completado {symbol}")

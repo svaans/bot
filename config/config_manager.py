@@ -65,6 +65,8 @@ class Config:
     riesgo_maximo_simbolo: dict[str, float] | None = None
     max_concurrent_entradas: int = 5
     max_concurrent_salidas: int = 5
+    max_concurrent_tasks: int = 10
+    candle_process_interval: float = 0.0
     watchdog_timeout: int = 60
 
 
@@ -165,8 +167,12 @@ class ConfigManager:
             max_concurrent_salidas=_cargar_int(
                 "MAX_CONCURRENT_SALIDAS", defaults.max_concurrent_salidas
             ),
-            watchdog_timeout=_cargar_int(
-                "WATCHDOG_TIMEOUT", defaults.watchdog_timeout
+            max_concurrent_tasks=_cargar_int(
+                "MAX_CONCURRENT_TASKS", defaults.max_concurrent_tasks
             ),
+            candle_process_interval=_cargar_float(
+                "CANDLE_PROCESS_INTERVAL", defaults.candle_process_interval
+            ),
+            watchdog_timeout=_cargar_int("WATCHDOG_TIMEOUT", defaults.watchdog_timeout),
         )
     

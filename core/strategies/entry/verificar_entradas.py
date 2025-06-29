@@ -183,7 +183,7 @@ async def _verificar_entrada_impl(
     for idx, (e, act) in enumerate(estrategias.items()):
         if act and trader.persistencia.es_persistente(symbol, e):
             estrategias_persistentes[e] = True
-        if idx % 10 == 0:
+        if idx % 200 == 0:
             await asyncio.sleep(0)
     log.debug(f"[{symbol}] Estrategias persistentes: {estrategias_persistentes}")
 
@@ -290,7 +290,7 @@ async def _verificar_entrada_impl(
     estrategias_activas: dict[str, float] = {}
     for idx, e in enumerate(estrategias_persistentes):
         estrategias_activas[e] = pesos_symbol.get(e, 0.0)
-        if idx % 10 == 0:
+        if idx % 200 == 0:
             await asyncio.sleep(0)
     peso_total = sum(estrategias_activas.values())
     persistencia = await asyncio.to_thread(
