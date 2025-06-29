@@ -1,5 +1,6 @@
 import asyncio
 from config.config_manager import Config
+from config.development import DevelopmentConfig
 from core.trader_modular import Trader
 from core.orders.order_service import OrderServiceSimulado
 
@@ -25,12 +26,12 @@ def test_calcular_cantidad(monkeypatch):
         intervalo_velas="1m",
         symbols=["BTC/EUR"],
         umbral_riesgo_diario=0.1,
-        min_order_eur=10,
+        min_order_eur=DevelopmentConfig().min_order_eur,
     )
 
     trader = Trader(cfg, order_service=OrderServiceSimulado())
     qty = trader._calcular_cantidad("BTC/EUR", 10)
-    assert qty == 10.0
+    assert qty == cfg.min_order_eur
 
 
 def _patch_trader_deps(monkeypatch):
@@ -64,7 +65,7 @@ def test_trader_carga_estado(monkeypatch):
         intervalo_velas="1m",
         symbols=["BTC/EUR"],
         umbral_riesgo_diario=0.1,
-        min_order_eur=10,
+        min_order_eur=DevelopmentConfig().min_order_eur,
     )
 
     trader = Trader(cfg, order_service=OrderServiceSimulado())
@@ -91,7 +92,7 @@ def test_trader_guarda_estado(monkeypatch):
         intervalo_velas="1m",
         symbols=["BTC/EUR"],
         umbral_riesgo_diario=0.1,
-        min_order_eur=10,
+        min_order_eur=DevelopmentConfig().min_order_eur,
     )
 
     trader = Trader(cfg, order_service=OrderServiceSimulado())
@@ -142,7 +143,7 @@ def test_tareas_se_cancelan_al_cerrar(monkeypatch):
         intervalo_velas="1m",
         symbols=["BTC/EUR"],
         umbral_riesgo_diario=0.1,
-        min_order_eur=10,
+        min_order_eur=DevelopmentConfig().min_order_eur,
     )
 
     trader = Trader(cfg, order_service=OrderServiceSimulado())

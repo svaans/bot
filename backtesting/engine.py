@@ -8,6 +8,7 @@ import pandas as pd
 from tqdm import tqdm
 
 from config.config_manager import Config
+from config.development import DevelopmentConfig
 from core.trader_simulado import TraderSimulado
 
 
@@ -18,7 +19,8 @@ class BacktestConfig:
     start: Optional[datetime] = None
     end: Optional[datetime] = None
     initial_capital: float = 1000.0
-    intervalo: str = "1m"
+    intervalo: str = "5m"
+    min_order_eur: float = DevelopmentConfig().min_order_eur
 
 
 class BacktestRunner:
@@ -35,7 +37,7 @@ class BacktestRunner:
             intervalo_velas=self.config.intervalo,
             symbols=self.config.symbols,
             umbral_riesgo_diario=0.05,
-            min_order_eur=10.0,
+            min_order_eur=self.config.min_order_eur,
             persistencia_minima=1,
         )
         self.trader = TraderSimulado(trader_cfg)

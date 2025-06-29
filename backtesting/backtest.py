@@ -11,6 +11,7 @@ import pandas as pd
 from tqdm import tqdm
 
 from config.config_manager import Config
+from config.development import DevelopmentConfig
 from core.trader_modular import Trader
 from core.orders import OrderServiceSimulado
 from core.config import COMISION, SLIPPAGE
@@ -44,7 +45,7 @@ class BacktestTrader(Trader):
         self.orders.ordenes = {}
         self.resultados: Dict[str, list] = {s: [] for s in config.symbols}
         capital_unit = CAPITAL_INICIAL / max(len(config.symbols), 1)
-        capital_unit = max(capital_unit, 20.0)
+        capital_unit = max(capital_unit, config.min_order_eur)
         self.capital_por_simbolo = {s: capital_unit for s in config.symbols}
         self.capital_inicial_diario = self.capital_por_simbolo.copy()
 
@@ -101,7 +102,7 @@ async def backtest_modular(
         intervalo_velas="1m",
         symbols=list(datos.keys()),
         umbral_riesgo_diario=0.03,
-        min_order_eur=10.0,
+        min_order_eur=DevelopmentConfig().min_order_eur,
         persistencia_minima=1,
     )
 

@@ -5,6 +5,7 @@ import pytest
 from _pytest.logging import LogCaptureHandler
 
 from config.config_manager import Config
+from config.development import DevelopmentConfig
 from core.trader_modular import Trader
 from core.orders.order_service import OrderServiceSimulado
 from core.strategies.evaluador_tecnico import cargar_pesos_tecnicos, _pesos_cache
@@ -34,8 +35,7 @@ def test_trader_init_logs_exception(monkeypatch):
         "core.orders.order_service.OrderServiceSimulado.cargar_ordenes",
         fail,
     )
-    cfg = Config(api_key="k", api_secret="s", modo_real=False, intervalo_velas="1m", symbols=["BTC/EUR"], umbral_riesgo_diario=0.1, min_order_eur=10)
-
+    cfg = Config(api_key="k", api_secret="s", modo_real=False, intervalo_velas="1m", symbols=["BTC/EUR"], umbral_riesgo_diario=0.1, min_order_eur=DevelopmentConfig().min_order_eur)
     logger = logging.getLogger("trader")
     handler = LogCaptureHandler()
     logger.addHandler(handler)
