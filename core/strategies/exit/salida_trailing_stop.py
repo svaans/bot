@@ -3,6 +3,13 @@ from indicators.atr import calcular_atr
 from core.utils import configurar_logger
 from core.strategies.exit.salida_utils import resultado_salida
 
+try:  # optional rust extension
+    from trailing_rust import verificar_trailing_stop as _verificar_trailing_stop_rust
+    HAS_RUST = True
+except Exception:  # pragma: no cover - extension optional
+    _verificar_trailing_stop_rust = None
+    HAS_RUST = False
+
 log = configurar_logger("salida_trailing_stop")
 
 def salida_trailing_stop(orden: dict, df: pd.DataFrame, config: dict = None) -> dict:
@@ -81,7 +88,7 @@ def salida_trailing_stop(orden: dict, df: pd.DataFrame, config: dict = None) -> 
 
 
 
-def verificar_trailing_stop(
+def _verificar_trailing_stop_py(
     info: dict, precio_actual: float, df: pd.DataFrame | None = None, config: dict = None
 ) -> tuple[bool, str]:
     """
@@ -164,3 +171,22 @@ def verificar_trailing_stop(
         return False, f"Trailing supervisando — Máx {max_price:.2f}, Límite {trailing_stop:.2f}"
 
     return False, ""
+
+
+def verificar_trailing_stop(
+    info: dict, precio_actual: float, df: pd.DataFrame | None = None, config: dict | None = None
+) -> tuple[bool, str]:
+    """Wrapper que usa la versión en Rust si está disponible."""
+    if HAS_RUST and df is not None and {"high", "low", "close"}.issubset(df.columns):
+        try:
+            return _verificar_trailing_stop_rust(
+                info,
+                float(precio_actual),
+                df["high"].to_numpy(dtype=float),
+                df["low"].to_numpy(dtype=float),
+                df["close"].to_numpy(dtype=float),
+                config or {},
+            )
+        except Exception:  # pragma: no cover - fallback to python
+            pass
+    return _verificar_trailing_stop_py(info, precio_actual, df, config)
