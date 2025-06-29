@@ -196,7 +196,7 @@ async def main():
         return
     
     # -- Cola de trabajos y pool de workers --
-    ob_queue: asyncio.PriorityQueue = asyncio.PriorityQueue(maxsize=config.job_queue_size)
+    job_queue: asyncio.PriorityQueue = asyncio.PriorityQueue(maxsize=config.job_queue_size)
     bot.job_queue = job_queue
     workers: list[asyncio.Task] = []
 
