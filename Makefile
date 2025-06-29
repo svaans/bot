@@ -3,8 +3,12 @@
 all: clippy audit cpp_lint rust cpp proto go_services frontend
 
 rust:
-aturin develop --release -m fast_tp_sl/Cargo.toml
-maturin develop --release -m fast_indicators_rust/Cargo.toml
+	maturin develop --release -m fast_tp_sl/Cargo.toml
+	maturin develop --release -m fast_indicators_rust/Cargo.toml
+	maturin develop --release -m score_rust/Cargo.toml
+	maturin develop --release -m trailing_rust/Cargo.toml
+	maturin develop --release -m umbral_rust/Cargo.toml
+	maturin develop --release -m rust_backtesting/Cargo.toml
 
 clippy:
 	cargo clippy --manifest-path fast_tp_sl/Cargo.toml --all-targets -- -D warnings

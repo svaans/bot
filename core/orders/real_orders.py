@@ -14,6 +14,8 @@ import atexit
 import signal
 import threading
 import asyncio
+from pathlib import Path
+import pandas as pd
 from datetime import datetime, timezone
 from binance_api.cliente import obtener_cliente
 from .order_model import Order
@@ -523,15 +525,58 @@ def _persist_operations(operaciones: list[dict]) -> None:
 
     try:
         import orders_persist_rust
+    except Exception as e:  # pragma: no cover - fallback to Python
+        log.error(f"❌ Error al cargar módulo Rust: {e}")
+        _persist_operations_py(operaciones)
+        return
 
-    except sqlite3.Error as e:
-        log.error(f"❌ Error global al guardar operaciones en SQLite: {e}")
-        errores_sqlite += 1
+    orders_persist_rust.persist_operations(operaciones, RUTA_DB)
+    log.info(f"✅ {len(operaciones)} operaciones guardadas correctamente.")
 
-        orders_persist_rust.persist_operations(operaciones, RUTA_DB)
-        log.info(f"✅ {len(operaciones)} operaciones guardadas correctamente.")
-    except Exception as e:
-        log.error(f"❌ Error al guardar operaciones con módulo Rust: {e}")
+def _persist_operations_py(operaciones: list[dict]) -> None:
+    """Implementación pura en Python usada si el módulo Rust falla."""
+    if not operaciones:
+        return
+    _init_db()
+    out_dir = Path("ordenes_reales")
+    out_dir.mkdir(parents=True, exist_ok=True)
+    with sqlite3.connect(RUTA_DB) as conn:
+        for op in operaciones:
+            data = op.copy()
+            if isinstance(data.get("estrategias_activas"), dict):
+                data["estrategias_activas"] = json.dumps(data["estrategias_activas"])
+            conn.execute(
+                """
+                INSERT INTO operaciones (
+                    symbol, precio_entrada, cantidad, stop_loss, take_profit,
+                    timestamp, estrategias_activas, tendencia, max_price,
+                    direccion, precio_cierre, fecha_cierre, motivo_cierre,
+                    retorno_total
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    data.get("symbol"),
+                    data.get("precio_entrada"),
+                    data.get("cantidad"),
+                    data.get("stop_loss"),
+                    data.get("take_profit"),
+                    data.get("timestamp"),
+                    data.get("estrategias_activas"),
+                    data.get("tendencia"),
+                    data.get("max_price"),
+                    data.get("direccion"),
+                    data.get("precio_cierre"),
+                    data.get("fecha_cierre"),
+                    data.get("motivo_cierre"),
+                    data.get("retorno_total"),
+                ),
+            )
+            fname = out_dir / f"{data.get('symbol','').replace('/', '_').lower()}.parquet"
+            df = pd.DataFrame([data])
+            if fname.exists():
+                df = pd.concat([pd.read_parquet(fname), df])
+            df.to_parquet(fname, index=False)
+        conn.commit()
 
 
 def flush_operaciones() -> None:
