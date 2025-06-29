@@ -1,25 +1,28 @@
-# Build stage
-FROM golang:1.23 AS build
-WORKDIR /app
-# Copy go module and proto definitions
-COPY candle_service/go.mod ./
-COPY candle_service/proto ./proto
-RUN go mod download
+FROM python:3.11-slim
 
-# Install protoc and plugins
-RUN apt-get update && apt-get install -y --no-install-recommends protobuf-compiler && rm -rf /var/lib/apt/lists/*
-RUN go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.31.0
-RUN go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@v1.3.0
+# Instala compiladores y toolchain de Rust
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends build-essential rustc cargo && \
+    rm -rf /var/lib/apt/lists/*
 
-# Generate gRPC code
-RUN protoc --go_out=. --go-grpc_out=. proto/candles.proto
+WORKDIR /bot
 
-# Copy source and build
-COPY candle_service .
-RUN go build -o candle-service
+# Dependencias de Python
+COPY requirements.txt backend/requirements.txt ./
+RUN pip install --no-cache-dir -r requirements.txt -r backend/requirements.txt \
+    && pip install maturin
 
-# Final image
-FROM gcr.io/distroless/base-debian11
-COPY --from=build /app/candle-service /candle-service
-EXPOSE 9000
-ENTRYPOINT ["/candle-service"]
+# Copia el proyecto
+COPY . .
+
+# Compila todas las extensiones de Rust
+RUN maturin develop --release -m fast_tp_sl/Cargo.toml && \
+    maturin develop --release -m fast_indicators_rust/Cargo.toml && \
+    maturin develop --release -m rust_backtesting/Cargo.toml && \
+    cargo build --release --manifest-path rust_backtesting/Cargo.toml --bin backtest_server && \
+    maturin develop --release -m score_rust/Cargo.toml && \
+    maturin develop --release -m umbral_rust/Cargo.toml && \
+    maturin develop --release -m trailing_rust/Cargo.toml && \
+    maturin develop --release -m orders_persist_rust/Cargo.toml
+
+CMD ["python", "scripts/supervisor.py"]

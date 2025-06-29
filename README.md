@@ -201,6 +201,8 @@ docker compose up
 El archivo `docker-compose.yml` crea los servicios `candle-service`,
 `orders-worker` y `bot`. El contenedor del bot ejecuta automáticamente
 `scripts/supervisor.py` para iniciar todos los microservicios.
+El `Dockerfile` compila también todas las extensiones en Rust, incluidas
+`score_rust`, `umbral_rust`, `trailing_rust` y `orders_persist_rust`.
 ## Ajuste de pesos y umbrales
 
 La ponderación que recibe cada indicador técnico se encuentra en
@@ -226,7 +228,14 @@ Para obtener mejores tiempos de cálculo en el ajuste de TP/SL se incluye una ex
    maturin develop --release -m fast_indicators_rust/Cargo.toml
    maturin develop --release -m rust_backtesting/Cargo.toml
    cargo build --release --manifest-path rust_backtesting/Cargo.toml --bin backtest_server
+   maturin develop --release -m score_rust/Cargo.toml
+   maturin develop --release -m umbral_rust/Cargo.toml
+   maturin develop --release -m trailing_rust/Cargo.toml
+   maturin develop --release -m orders_persist_rust/Cargo.toml
    ```
+
+No se requieren variables de entorno adicionales para estas crates, únicamente el
+flag `--release` mostrado en los ejemplos.
 
 Si la extensión se encuentra disponible, `core.adaptador_dinamico` la cargará automáticamente. En caso contrario se utilizará la implementación en Python.
 
