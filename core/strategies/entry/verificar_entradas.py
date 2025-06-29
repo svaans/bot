@@ -68,6 +68,10 @@ async def _verificar_entrada_impl(
         return None
     async with trader.state_lock:
         trader.config_por_simbolo[symbol] = config_actual
+        if hasattr(trader, "capital_manager"):
+            trader.capital_manager.set_riesgo_maximo(
+                symbol, config_actual.get("riesgo_maximo_diario", 1.0)
+            )
 
     async with trader.state_lock:
         tendencia_actual = trader.estado_tendencia.get(symbol)

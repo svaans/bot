@@ -23,6 +23,7 @@ class CapitalManager:
         fraccion_kelly: float,
         min_order_eur: float,
         min_order_symbol: dict[str, float] | None,
+        riesgo_maximo_diario: dict[str, float] | None = None,
     ) -> None:
         self.config = config
         self.cliente = cliente
@@ -32,7 +33,13 @@ class CapitalManager:
         self.modo_capital_bajo = config.modo_capital_bajo
         self.min_order_eur = min_order_eur
         self.min_order_symbol = min_order_symbol or {}
-        self.riesgo_maximo_diario = 1.0
+        self.riesgo_maximo_diario: Dict[str, float] = {}
+        for s in config.symbols:
+            try:
+                val = float(riesgo_maximo_diario.get(s, 1.0)) if riesgo_maximo_diario else 1.0
+            except Exception:
+                val = 1.0
+            self.riesgo_maximo_diario[s] = max(0.0, val)
         self._markets = None
 
         euros = 0.0
@@ -102,7 +109,8 @@ class CapitalManager:
         )
         minimo_dinamico = max(self._min_order(symbol), euros * 0.02)
         riesgo = max(riesgo_teorico, minimo_dinamico)
-        riesgo = min(riesgo, euros * self.riesgo_maximo_diario)
+        riesgo_max = self.riesgo_maximo_diario.get(symbol, 1.0)
+        riesgo = min(riesgo, euros * riesgo_max)
         riesgo = min(riesgo, euros)
         minimo_binance = await asyncio.wait_for(
             self._obtener_minimo_binance(symbol), timeout=10
@@ -190,9 +198,16 @@ class CapitalManager:
         self.fraccion_kelly = float(max(0.0, min(1.0, f)))
 
     def set_umbral_riesgo(self, umbral: float) -> None:
-            """Actualiza el umbral de riesgo empleado por :class:`RiskManager`."""
-            if not isinstance(umbral, (int, float)):
-                log.warning("⚠️ umbral_riesgo inválido, se ignora actualización")
-                return
-            self.risk.umbral = float(max(0.0, min(1.0, umbral)))
-            log.info(f"📉 Umbral de riesgo actualizado a {self.risk.umbral:.4f}")
+        """Actualiza el umbral de riesgo empleado por :class:`RiskManager`."""
+        if not isinstance(umbral, (int, float)):
+            log.warning("⚠️ umbral_riesgo inválido, se ignora actualización")
+            return
+        self.risk.umbral = float(max(0.0, min(1.0, umbral)))
+        log.info(f"📉 Umbral de riesgo actualizado a {self.risk.umbral:.4f}")
+
+    def set_riesgo_maximo(self, symbol: str, valor: float) -> None:
+        """Establece el límite de riesgo diario para ``symbol``."""
+        if not isinstance(valor, (int, float)):
+            log.warning("⚠️ valor de riesgo_maximo inválido, se ignora")
+            return
+        self.riesgo_maximo_diario[symbol] = max(0.0, float(valor))

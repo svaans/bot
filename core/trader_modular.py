@@ -12,6 +12,7 @@ import numpy as np
 import pandas as pd
 
 from config.config_manager import Config
+from config.configuracion import cargar_configuracion_simbolo
 from core.data import DataFeed
 from core.smart_decision import DecisionEngine
 from core.market_context import MarketContext
@@ -155,7 +156,14 @@ class Trader:
         self.piramide_fracciones = max(1, config.fracciones_piramide)
         self.reserva_piramide = max(0.0, min(1.0, config.reserva_piramide))
         self.umbral_piramide = max(0.0, config.umbral_piramide)
-        self.riesgo_maximo_diario = 1.0
+        self.riesgo_maximo_diario: Dict[str, float] = {}
+        for sym in config.symbols:
+            try:
+                cfg = cargar_configuracion_simbolo(sym)
+            except Exception as e:  # noqa: BLE001
+                log.warning(f"⚠️ Error cargando config {sym}: {e}")
+                cfg = {}
+            self.riesgo_maximo_diario[sym] = float(cfg.get("riesgo_maximo_diario", 1.0))
         self.capital_manager = CapitalManager(
             config,
             self.cliente,
@@ -163,6 +171,7 @@ class Trader:
             self.fraccion_kelly,
             config.min_order_eur,
             config.min_order_symbol,
+            self.riesgo_maximo_diario,
         )
         self.capital_por_simbolo = self.capital_manager.capital_por_simbolo
         self.capital_inicial_diario = self.capital_manager.capital_inicial_diario
@@ -1456,6 +1465,9 @@ class Trader:
             config_actual.update(dinamica)
         config_actual = adaptar_configuracion_base(symbol, df, config_actual)
         self.config_por_simbolo[symbol] = config_actual
+        self.capital_manager.set_riesgo_maximo(
+            symbol, config_actual.get("riesgo_maximo_diario", 1.0)
+        )
 
         tendencia_actual = self.estado_tendencia.get(symbol)
         if not tendencia_actual:

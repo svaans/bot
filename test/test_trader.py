@@ -14,7 +14,10 @@ def test_calcular_cantidad(monkeypatch):
     monkeypatch.setattr("core.trader_modular.crear_cliente", lambda config=None: DummyClient())
     monkeypatch.setattr("core.trader_modular.calcular_fraccion_kelly", lambda: 1.0)
     monkeypatch.setattr("core.trader_modular.cargar_pesos_estrategias", lambda: {})
-    
+    monkeypatch.setattr(
+        "config.configuracion.cargar_configuracion_simbolo",
+        lambda s: {"riesgo_maximo_diario": 1.0},
+    )
     cfg = Config(
         api_key="k",
         api_secret="s",
@@ -37,7 +40,10 @@ def _patch_trader_deps(monkeypatch):
     monkeypatch.setattr("core.trader_modular.cargar_pesos_estrategias", lambda: {})
     monkeypatch.setattr("core.data_feed.DataFeed.detener", lambda self: asyncio.sleep(0))
     monkeypatch.setattr("core.contexto_externo.StreamContexto.detener", lambda self: asyncio.sleep(0))
-
+    monkeypatch.setattr(
+        "config.configuracion.cargar_configuracion_simbolo",
+        lambda s: {"riesgo_maximo_diario": 1.0},
+    )
 
 def test_trader_carga_estado(monkeypatch):
     _patch_trader_deps(monkeypatch)
