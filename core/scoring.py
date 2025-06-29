@@ -7,6 +7,12 @@ import pandas as pd
 
 from core.market_regime import detectar_regimen
 from core.config.pesos import PESOS_SCORE_TECNICO, PESOS_SCORE_REGIMEN
+try:  # pragma: no cover - optional rust module
+    from score_rust import calcular_score_tecnico as _score_rust
+    HAS_RUST = True
+except Exception:  # pragma: no cover - missing rust module
+    _score_rust = None
+    HAS_RUST = False
 
 # Estadísticas para normalización por símbolo
 _STATS: Dict[str, Dict[str, float]] = {}
@@ -48,6 +54,15 @@ def calcular_score_tecnico(
     symbol: str | None = None,
 ) -> float:
     """Calcula un score técnico continuo entre 0 y 1."""
+    if HAS_RUST:
+        try:
+            high = df["high"].to_numpy(dtype=float)
+            low = df["low"].to_numpy(dtype=float)
+            close = df["close"].to_numpy(dtype=float)
+        except Exception:
+            pass
+        else:
+            return float(_score_rust(high, low, close, rsi, momentum, slope, tendencia, symbol))
     regimen = detectar_regimen(df)
     pesos = PESOS_SCORE_REGIMEN.get(regimen, PESOS_SCORE_TECNICO)
     total_pesos = sum(pesos.values()) or 1.0

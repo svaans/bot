@@ -40,13 +40,15 @@ jobs:
         run: |
           cargo clippy --manifest-path fast_tp_sl/Cargo.toml --all-targets -- -D warnings
           cargo clippy --manifest-path fast_indicators_rust/Cargo.toml --all-targets -- -D warnings
-          cargo clippy --manifest-path rust_backtesting/Cargo.toml --all-targets -- -D warnings
+          cargo clippy --manifest-path rust_backtesting/Cargo.toml --all-targets
+          cargo clippy --manifest-path score_rust/Cargo.toml --all-targets -- -D warnings -- -D warnings
 
       - name: Run cargo audit
         run: |
           cargo audit --manifest-path fast_tp_sl/Cargo.toml
           cargo audit --manifest-path fast_indicators_rust/Cargo.toml
           cargo audit --manifest-path rust_backtesting/Cargo.toml
+          cargo audit --manifest-path score_rust/Cargo.toml
 
       - name: Run clang-tidy
         if: matrix.os == 'ubuntu-latest'
@@ -56,6 +58,7 @@ jobs:
         run: |
           maturin build --release -m fast_tp_sl/Cargo.toml -o dist
           maturin build --release -m fast_indicators_rust/Cargo.toml -o dist
+          maturin build --release -m score_rust/Cargo.toml -o dist
 
       - name: Build pybind11 wheel
         env:
