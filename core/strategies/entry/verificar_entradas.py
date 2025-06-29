@@ -26,6 +26,8 @@ from core.strategies.evaluador_tecnico import (
 from indicators.rsi import calcular_rsi
 from indicators.momentum import calcular_momentum
 from indicators.slope import calcular_slope
+import traceback
+from core.async_utils import dump_tasks_stacktraces
 from core.utils.utils import distancia_minima_valida, validar_ratio_beneficio
 from core.strategies.entry.validadores import validar_spread
 import asyncio
@@ -43,6 +45,8 @@ async def verificar_entrada(
         )
     except asyncio.TimeoutError:
         log.warning(f"⏱️ Timeout interno en verificación de entrada para {symbol}")
+        log.error("Tareas:\n%s", dump_tasks_stacktraces(asyncio.all_tasks()))
+        log.error("Stack actual:\n%s", "".join(traceback.format_stack()))
         return None
     finally:
         dur = (perf_counter() - inicio) * 1000.0
@@ -53,6 +57,7 @@ async def _verificar_entrada_impl(
     trader, symbol: str, df: pd.DataFrame, estado
 ) -> dict | None:
     log.debug(f"⏳ Empezando verificación {symbol}")
+    log.debug(f"[{symbol}] tamaño DataFrame: {len(df)}")
     if df is None or df.empty:
         log.warning(f"🚫 [{symbol}] DataFrame vacío. Se aborta la evaluación")
         return None
@@ -178,7 +183,7 @@ async def _verificar_entrada_impl(
     for idx, (e, act) in enumerate(estrategias.items()):
         if act and trader.persistencia.es_persistente(symbol, e):
             estrategias_persistentes[e] = True
-        if idx % 5 == 0:
+        if idx % 10 == 0:
             await asyncio.sleep(0)
     log.debug(f"[{symbol}] Estrategias persistentes: {estrategias_persistentes}")
 
@@ -285,7 +290,7 @@ async def _verificar_entrada_impl(
     estrategias_activas: dict[str, float] = {}
     for idx, e in enumerate(estrategias_persistentes):
         estrategias_activas[e] = pesos_symbol.get(e, 0.0)
-        if idx % 5 == 0:
+        if idx % 10 == 0:
             await asyncio.sleep(0)
     peso_total = sum(estrategias_activas.values())
     persistencia = await asyncio.to_thread(
@@ -310,14 +315,19 @@ async def _verificar_entrada_impl(
             log.info(f"❌ [{symbol}] Rechazo acumulado por: {razones}")
             return None
 
-    rsi = calcular_rsi(df)
-    momentum = calcular_momentum(df)
-    slope = calcular_slope(df)
+    rsi = await asyncio.to_thread(calcular_rsi, df)
+    momentum = await asyncio.to_thread(calcular_momentum, df)
+    slope = await asyncio.to_thread(calcular_slope, df)
     precio_actual = float(df["close"].iloc[-1])
     try:
         cantidad_simulada = await asyncio.wait_for(
             trader._calcular_cantidad_async(symbol, precio_actual), timeout=10
         )
+    except asyncio.TimeoutError:
+        log.error(f"Timeout calculando cantidad para {symbol}")
+        log.error("Tareas:\n%s", dump_tasks_stacktraces(asyncio.all_tasks()))
+        log.error("Stack actual:\n%s", "".join(traceback.format_stack()))
+        raise
     except Exception as e:  # noqa: BLE001
         log.exception(f"[{symbol}] Error calculando cantidad: {e}")
         raise

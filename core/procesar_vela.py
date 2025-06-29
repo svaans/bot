@@ -4,6 +4,9 @@ import asyncio
 from datetime import datetime, timezone
 from time import perf_counter
 import pandas as pd
+import traceback
+
+from core.async_utils import dump_tasks_stacktraces
 
 from core.utils.utils import configurar_logger
 from core.registro_metrico import registro_metrico
@@ -15,8 +18,11 @@ async def procesar_vela(trader, vela: dict) -> None:
     symbol = vela["symbol"]
     inicio = perf_counter()
     log.debug(f"Inicio procesamiento vela {symbol}")
+    log.debug(f"Símbolos gestionados: {len(getattr(trader.config, 'symbols', []))}")
     estado = trader.estado[symbol]
+    loop = asyncio.get_event_loop()
     trader.watchdog.ping("procesar_vela")
+    log.debug(f"[{symbol}] watchdog ping procesar_vela @ {loop.time():.6f}")
     try:
         if datetime.now(timezone.utc).date() != trader.fecha_actual:
             trader.ajustar_capital_diario()
@@ -32,8 +38,14 @@ async def procesar_vela(trader, vela: dict) -> None:
         log.debug(f"[{symbol}] cargar_vela tomó {dur_load:.2f} ms")
 
         t_trend = perf_counter()
-        df = pd.DataFrame(estado.buffer)
-        estado.tendencia_detectada, _ = detectar_tendencia(symbol, df)
+        df_size_before = len(estado.buffer)
+        df = await asyncio.to_thread(pd.DataFrame, estado.buffer)
+        estado.tendencia_detectada, _ = await asyncio.to_thread(
+            detectar_tendencia, symbol, df
+        )
+        log.debug(
+            f"[{symbol}] DataFrame tamaño antes {df_size_before} después {len(df)}"
+        )
         trader.estado_tendencia[symbol] = estado.tendencia_detectada
         dur_trend = (perf_counter() - t_trend) * 1000.0
         log.debug(f"[{symbol}] detectar_tendencia tomó {dur_trend:.2f} ms")
@@ -47,6 +59,8 @@ async def procesar_vela(trader, vela: dict) -> None:
                 )
             except asyncio.TimeoutError:
                 log.error(f"Timeout verificando salidas de {symbol}")
+                log.error("Tareas:\n%s", dump_tasks_stacktraces(asyncio.all_tasks()))
+                log.error("Stack actual:\n%s", "".join(traceback.format_stack()))
                 if trader.notificador:
                     try:
                         await trader.notificador.enviar_async(
@@ -69,6 +83,8 @@ async def procesar_vela(trader, vela: dict) -> None:
             )
         except asyncio.TimeoutError:
             log.error(f"Timeout evaluando entrada de {symbol}")
+            log.error("Tareas:\n%s", dump_tasks_stacktraces(asyncio.all_tasks()))
+            log.error("Stack actual:\n%s", "".join(traceback.format_stack()))
             if trader.notificador:
                 try:
                     await trader.notificador.enviar_async(
@@ -93,6 +109,7 @@ async def procesar_vela(trader, vela: dict) -> None:
     finally:
         log.debug(f"🔄 Vela procesada {symbol}")
         trader.watchdog.ping("procesar_vela")
+        log.debug(f"[{symbol}] watchdog ping procesar_vela @ {loop.time():.6f}")
         duracion = (perf_counter() - inicio) * 1000.0
         registro_metrico.registrar("proc_vela", {"symbol": symbol, "ms": duracion})
         log.debug(f"Fin procesamiento vela {symbol} ({duracion:.2f} ms)")
