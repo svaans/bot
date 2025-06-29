@@ -90,7 +90,6 @@ async def procesar_vela(trader, vela: dict) -> None:
             log.debug(
                 f"[{symbol}] actualizar_fraccion_kelly tomó {dur_kelly:.2f} ms"
             )
-        log.exception("No se pudo actualizar fracción Kelly", exc_info=e)
     finally:
         log.debug(f"🔄 Vela procesada {symbol}")
         trader.watchdog.ping("procesar_vela")
