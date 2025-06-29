@@ -514,78 +514,24 @@ def ejecutar_orden_market_sell(symbol: str, cantidad: float) -> float:
 
 
 def _persist_operations(operaciones: list[dict]) -> None:
-    """Guarda en disco una lista de operaciones de forma segura y eficiente."""
+    """Persiste una lista de operaciones usando el módulo Rust."""
 
     if not operaciones:
         return
 
     _init_db()
-    errores_sqlite = 0
-    errores_parquet = 0
 
     try:
-        with sqlite3.connect(RUTA_DB) as conn:
-            for op in operaciones:
-                data = op.copy()
-                if isinstance(data.get("estrategias_activas"), dict):
-                    data["estrategias_activas"] = json.dumps(data["estrategias_activas"])
-
-                try:
-                    conn.execute(
-                        """
-                        INSERT INTO operaciones (
-                            symbol, precio_entrada, cantidad, stop_loss, take_profit,
-                            timestamp, estrategias_activas, tendencia, max_price,
-                            direccion, precio_cierre, fecha_cierre, motivo_cierre,
-                            retorno_total
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                        """,
-                        (
-                            data.get("symbol"),
-                            data.get("precio_entrada"),
-                            data.get("cantidad"),
-                            data.get("stop_loss"),
-                            data.get("take_profit"),
-                            data.get("timestamp"),
-                            data.get("estrategias_activas"),
-                            data.get("tendencia"),
-                            data.get("max_price"),
-                            data.get("direccion"),
-                            data.get("precio_cierre"),
-                            data.get("fecha_cierre"),
-                            data.get("motivo_cierre"),
-                            data.get("retorno_total"),
-                        ),
-                    )
-                except sqlite3.Error as e:
-                    log.error(f"❌ Error SQLite al insertar operación para {data.get('symbol')}: {e}")
-                    errores_sqlite += 1
+        import orders_persist_rust
 
     except sqlite3.Error as e:
         log.error(f"❌ Error global al guardar operaciones en SQLite: {e}")
         errores_sqlite += 1
 
-    for op in operaciones:
-        data = op.copy()
-        symbol = data.get("symbol")
-
-        if isinstance(data.get("estrategias_activas"), dict):
-            data["estrategias_activas"] = json.dumps(data["estrategias_activas"])
-
-        if symbol:
-            try:
-                guardar_orden_real(symbol, data)
-            except Exception as e:
-                log.error(f"❌ Error guardando operación en Parquet para {symbol}: {e}")
-                errores_parquet += 1
-
-
-    if errores_sqlite == 0 and errores_parquet == 0:
+        orders_persist_rust.persist_operations(operaciones, RUTA_DB)
         log.info(f"✅ {len(operaciones)} operaciones guardadas correctamente.")
-    else:
-        log.warning(
-            f"⚠️ Guardadas {len(operaciones)} operaciones con errores — SQLite: {errores_sqlite}, Parquet: {errores_parquet}"
-        )
+    except Exception as e:
+        log.error(f"❌ Error al guardar operaciones con módulo Rust: {e}")
 
 
 def flush_operaciones() -> None:

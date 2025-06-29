@@ -8,28 +8,14 @@ import pandas as pd
 import pytest
 
 from core.orders import real_orders
-from core.utils import utils
 from core.workers import order_worker_client
 from core import orders_pb2, orders_pb2_grpc
 
 
-def make_guardar(tmpdir):
-    def _guardar(symbol, orden):
-        path = tmpdir / f"{symbol.replace('/', '_').lower()}.parquet"
-        os.makedirs(str(tmpdir), exist_ok=True)
-        df = pd.DataFrame([orden])
-        if path.exists():
-            prev = pd.read_parquet(path)
-            df = pd.concat([prev, df], ignore_index=True)
-        df.to_parquet(path, index=False)
-    return _guardar
-
 
 def start_fake_worker(tmpdir, db_path, port):
-    patch = make_guardar(tmpdir)
-    utils.guardar_orden_real = patch
-    real_orders.guardar_orden_real = patch
     real_orders.RUTA_DB = str(db_path)
+    os.makedirs(tmpdir, exist_ok=True)
 
     class Servicer(orders_pb2_grpc.OrderWriterServicer):
         def WriteOrders(self, request, context):
@@ -57,7 +43,12 @@ def start_fake_worker(tmpdir, db_path, port):
                         "retorno_total": o.retorno_total,
                     }
                 )
-            real_orders._persist_operations(ops)
+            cwd = os.getcwd()
+            os.chdir(tmpdir)
+            try:
+                real_orders._persist_operations(ops)
+            finally:
+                os.chdir(cwd)
             return orders_pb2.WriteResponse(ok=True)
 
     server = grpc.server(futures.ThreadPoolExecutor(max_workers=1))
@@ -94,14 +85,14 @@ def test_worker_persistence(tmp_path, monkeypatch):
 
     old_db = tmp_path / 'old.db'
     old_dir = tmp_path / 'old'
-    patch_func = make_guardar(old_dir)
-    utils.guardar_orden_real = patch_func
-    real_orders.guardar_orden_real = patch_func
+    os.makedirs(old_dir, exist_ok=True)
     real_orders.RUTA_DB = str(old_db)
-    real_orders._persist_operations([op])
+    with monkeypatch.context() as m:
+        m.chdir(old_dir)
+        real_orders._persist_operations([op])
 
     row_old = sqlite3.connect(old_db).execute('SELECT symbol FROM operaciones').fetchall()
-    df_old = pd.read_parquet(old_dir / 'aaa_usdt.parquet')
+    df_old = pd.read_parquet(old_dir / 'ordenes_reales' / 'aaa_usdt.parquet')
 
     new_db = tmp_path / 'new.db'
     new_dir = tmp_path / 'new'
@@ -116,21 +107,20 @@ def test_worker_persistence(tmp_path, monkeypatch):
     order_worker_client._channel = grpc.insecure_channel(order_worker_client._ADDRESS)
     order_worker_client._stub = orders_pb2_grpc.OrderWriterStub(order_worker_client._channel)
 
-    patch_new = make_guardar(new_dir)
-    utils.guardar_orden_real = patch_new
-    real_orders.guardar_orden_real = patch_new
     real_orders.RUTA_DB = str(new_db)
 
-    real_orders._BUFFER_OPERACIONES.clear()
-    real_orders._BUFFER_OPERACIONES.append(op)
-    real_orders.flush_operaciones()
-    order_worker_client.wait_pending()
+    with monkeypatch.context() as m2:
+        m2.chdir(new_dir)
+        real_orders._BUFFER_OPERACIONES.clear()
+        real_orders._BUFFER_OPERACIONES.append(op)
+        real_orders.flush_operaciones()
+        order_worker_client.wait_pending()
 
     server.stop(None)
     thread.join()
 
     row_new = sqlite3.connect(new_db).execute('SELECT symbol FROM operaciones').fetchall()
-    df_new = pd.read_parquet(new_dir / 'aaa_usdt.parquet')
+    df_new = pd.read_parquet(new_dir / 'ordenes_reales' / 'aaa_usdt.parquet')
 
     assert row_old == row_new
     pd.testing.assert_frame_equal(df_old, df_new)
