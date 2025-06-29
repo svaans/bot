@@ -5,6 +5,14 @@ import pandas as pd
 from scipy.stats import linregress
 from ta.momentum import RSIIndicator
 
+try:  # optional rust extension
+    from umbral_rust import calcular_metricas as _calcular_metricas_rust, limites_adaptativos as _limites_adaptativos_rust
+    HAS_RUST = True
+except Exception:  # pragma: no cover - extension optional
+    _calcular_metricas_rust = None
+    _limites_adaptativos_rust = None
+    HAS_RUST = False
+
 from core.contexto_externo import obtener_puntaje_contexto
 
 UMBRAL_POR_DEFECTO = 10
@@ -14,7 +22,7 @@ PESO_RANGO = 0.4
 PESO_VOLUMEN = 0.2
 
 
-def _limites_adaptativos(contexto_score: float) -> tuple[float, float]:
+def _limites_adaptativos_py(contexto_score: float) -> tuple[float, float]:
     base_max = 10.0
     base_min = 1.0
     umbral_max = max(5.0, min(30.0, base_max + contexto_score))
@@ -24,7 +32,7 @@ def _limites_adaptativos(contexto_score: float) -> tuple[float, float]:
     return umbral_max, umbral_min
 
 
-def _calcular_metricas(df: pd.DataFrame) -> dict:
+def _calcular_metricas_py(df: pd.DataFrame) -> dict:
     ventana_close = df["close"].tail(10)
     ventana_high = df["high"].tail(10)
     ventana_low = df["low"].tail(10)
@@ -62,6 +70,23 @@ def _calcular_metricas(df: pd.DataFrame) -> dict:
         "slope": float(slope),
         "rsi": float(rsi),
     }
+
+
+def _limites_adaptativos(contexto_score: float) -> tuple[float, float]:
+    if HAS_RUST:
+        return _limites_adaptativos_rust(contexto_score)
+    return _limites_adaptativos_py(contexto_score)
+
+
+def _calcular_metricas(df: pd.DataFrame) -> dict:
+    if HAS_RUST:
+        return _calcular_metricas_rust(
+            df["close"].to_numpy(dtype=float),
+            df["high"].to_numpy(dtype=float),
+            df["low"].to_numpy(dtype=float),
+            df["volume"].to_numpy(dtype=float),
+        )
+    return _calcular_metricas_py(df)
 
 
 def calcular_umbral_avanzado(

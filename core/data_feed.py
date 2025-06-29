@@ -17,19 +17,37 @@ log = configurar_logger("datafeed", modo_silencioso=True)
 class DataFeed:
     """Maneja la recepción de velas de Binance en tiempo real."""
 
-    def __init__(self, intervalo: str, host: str = "localhost", puerto: int = 9000) -> None:
+    def __init__(
+        self,
+        intervalo: str,
+        host: str = "localhost",
+        puerto: int = 9000,
+        timeout: float | None = None,
+    ) -> None:
         self.intervalo = intervalo
         self.host = host
         self.puerto = puerto
+        self.timeout = timeout
         self._tasks: Dict[str, asyncio.Task] = {}
+        self._last_candle: Dict[str, float] = {}
+        self._count: Dict[str, int] = {}
 
     @property
     def activos(self) -> list[str]:
         """Lista de símbolos con streams activos."""
         return list(self._tasks.keys())
+    
+    def metricas(self, symbol: str) -> dict[str, float | int | None]:
+        """Devuelve información del último mensaje recibido de ``symbol``."""
+        return {
+            "cuenta": self._count.get(symbol, 0),
+            "ultimo": self._last_candle.get(symbol),
+        }
         
     @log_exceptions_async
-    async def stream(self, symbol: str, handler: Callable[[dict], Awaitable[None]]) -> None:
+    async def stream(
+        self, symbol: str, handler: Callable[[dict], Awaitable[None]]
+    ) -> None:
         """Escucha las velas de ``symbol`` via gRPC y reintenta ante fallos."""
         address = f"{self.host}:{self.puerto}"
         while True:
@@ -37,7 +55,10 @@ class DataFeed:
             stub = candle_pb2_grpc.CandleServiceStub(channel)
             try:
                 req = candle_pb2.CandleRequest(symbol=symbol, interval=self.intervalo)
-                async for candle in stub.Subscribe(req):
+                call = stub.Subscribe(req, timeout=self.timeout)
+                async for candle in call:
+                    self._count[symbol] = self._count.get(symbol, 0) + 1
+                    self._last_candle[symbol] = asyncio.get_event_loop().time()
                     data = {
                         "symbol": candle.symbol,
                         "timestamp": candle.timestamp,
@@ -48,7 +69,11 @@ class DataFeed:
                         "volume": candle.volume,
                     }
                     await handler(data)
-            except (grpc.aio.AioRpcError, OSError, ConnectionError) as e:  # pragma: no cover - conexión externa
+            except (
+                grpc.aio.AioRpcError,
+                OSError,
+                ConnectionError,
+            ) as e:  # pragma: no cover - conexión externa
                 log.warning(f"⚠️ Stream {symbol} falló: {e}. Reintentando en 5s")
                 await asyncio.sleep(5)
             except asyncio.CancelledError:
@@ -60,7 +85,9 @@ class DataFeed:
                 await channel.close()
                 
     @log_exceptions_async
-    async def escuchar(self, symbols: Iterable[str], handler: Callable[[dict], Awaitable[None]]) -> None:
+    async def escuchar(
+        self, symbols: Iterable[str], handler: Callable[[dict], Awaitable[None]]
+    ) -> None:
         """Inicia un stream por cada símbolo y espera a que todos finalicen."""
         for sym in symbols:
             if sym in self._tasks:
