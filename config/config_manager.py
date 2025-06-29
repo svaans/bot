@@ -60,7 +60,7 @@ class Config:
     backtest_grpc_host: str = "localhost"
     backtest_grpc_port: int = 9200
     use_grpc_backtest: bool = False
-    elly_smoothing: float = 0.4
+    kelly_smoothing: float = 0.4
     kelly_fallback: float = 0.2
     riesgo_maximo_simbolo: dict[str, float] | None = None
 
