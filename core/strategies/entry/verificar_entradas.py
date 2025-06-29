@@ -75,19 +75,48 @@ async def _verificar_entrada_impl(
             f"🚫 [{symbol}] Spread {spread:.4f} supera umbral {max_spread:.4f}."
         )
         return None
+    log.debug(
+        f"[{symbol}] 🔒 solicitando state_lock config @ {datetime.now(timezone.utc).isoformat()}"
+    )
     async with trader.state_lock:
+        log.debug(
+            f"[{symbol}] ✅ state_lock config adquirido @ {datetime.now(timezone.utc).isoformat()}"
+        )
         trader.config_por_simbolo[symbol] = config_actual
         if hasattr(trader, "capital_manager"):
             trader.capital_manager.set_riesgo_maximo(
                 symbol, config_actual.get("riesgo_maximo_diario", 1.0)
             )
+    log.debug(
+        f"[{symbol}] 🔓 state_lock config liberado @ {datetime.now(timezone.utc).isoformat()}"
+    )
+
+    log.debug(
+        f"[{symbol}] 🔒 solicitando state_lock tendencia @ {datetime.now(timezone.utc).isoformat()}"
+    )
 
     async with trader.state_lock:
+        log.debug(
+            f"[{symbol}] ✅ state_lock tendencia adquirido @ {datetime.now(timezone.utc).isoformat()}"
+        )
         tendencia_actual = trader.estado_tendencia.get(symbol)
+    log.debug(
+        f"[{symbol}] 🔓 state_lock tendencia liberado @ {datetime.now(timezone.utc).isoformat()}"
+    )
+        
     if not tendencia_actual:
         tendencia_actual, _ = detectar_tendencia(symbol, df)
+        log.debug(
+            f"[{symbol}] 🔒 solicitando state_lock set tendencia @ {datetime.now(timezone.utc).isoformat()}"
+        )
         async with trader.state_lock:
+            log.debug(
+                f"[{symbol}] ✅ state_lock set tendencia adquirido @ {datetime.now(timezone.utc).isoformat()}"
+            )
             trader.estado_tendencia[symbol] = tendencia_actual
+        log.debug(
+            f"[{symbol}] 🔓 state_lock set tendencia liberado @ {datetime.now(timezone.utc).isoformat()}"
+        )
     log.debug(f"[{symbol}] Tendencia detectada: {tendencia_actual}")
 
     volatilidad_actual = df["close"].pct_change().tail(20).std()
@@ -192,8 +221,18 @@ async def _verificar_entrada_impl(
         f"(penalización {penalizacion:.2f}, spread {spread_conf:.2f})"
     )
 
+    log.debug(
+        f"[{symbol}] 🔒 solicitando state_lock cierre @ {datetime.now(timezone.utc).isoformat()}"
+    )
+
     async with trader.state_lock:
+        log.debug(
+            f"[{symbol}] ✅ state_lock cierre adquirido @ {datetime.now(timezone.utc).isoformat()}"
+        )
         cierre = trader.historial_cierres.get(symbol)
+    log.debug(
+        f"[{symbol}] 🔓 state_lock cierre liberado @ {datetime.now(timezone.utc).isoformat()}"
+    )
     if cierre:
         motivo = cierre.get("motivo")
         if motivo == "stop loss":
@@ -205,8 +244,17 @@ async def _verificar_entrada_impl(
                 log.info(f"🕒 [{symbol}] Cooldown activo por stop loss. Quedan {restante} velas.")
                 return None
             else:
+                log.debug(
+                    f"[{symbol}] 🔒 solicitando state_lock borrar cierre @ {datetime.now(timezone.utc).isoformat()}"
+                )
                 async with trader.state_lock:
+                    log.debug(
+                        f"[{symbol}] ✅ state_lock borrar cierre adquirido @ {datetime.now(timezone.utc).isoformat()}"
+                    )
                     trader.historial_cierres.pop(symbol, None)
+                log.debug(
+                    f"[{symbol}] 🔓 state_lock borrar cierre liberado @ {datetime.now(timezone.utc).isoformat()}"
+                )
         elif motivo == "cambio de tendencia":
             precio_actual = float(df["close"].iloc[-1])
             if not trader._validar_reentrada_tendencia(symbol, df, cierre, precio_actual):
@@ -214,8 +262,17 @@ async def _verificar_entrada_impl(
                 log.info(f"🚫 [{symbol}] Reentrada bloqueada por cambio de tendencia.")
                 return None
             else:
+                log.debug(
+                    f"[{symbol}] 🔒 solicitando state_lock borrar cierre @ {datetime.now(timezone.utc).isoformat()}"
+                )
                 async with trader.state_lock:
+                    log.debug(
+                        f"[{symbol}] ✅ state_lock borrar cierre adquirido @ {datetime.now(timezone.utc).isoformat()}"
+                    )
                     trader.historial_cierres.pop(symbol, None)
+                log.debug(
+                    f"[{symbol}] 🔓 state_lock borrar cierre liberado @ {datetime.now(timezone.utc).isoformat()}"
+                )
     registro = cierre or {}
     fecha_hoy = datetime.now(timezone.utc).date().isoformat()
     if (

@@ -194,6 +194,7 @@ class Trader:
         # Semáforos para limitar concurrencia de evaluaciones
         self.sem_entradas = asyncio.Semaphore(config.max_concurrent_entradas)
         self.sem_salidas = asyncio.Semaphore(config.max_concurrent_salidas)
+        self.sem_velas = asyncio.Semaphore(5)
         self.tasks = TaskManager()
         self.context_stream = StreamContexto()
         try:
@@ -1719,7 +1720,14 @@ class Trader:
             return
         self.registrar_actividad()
         self.watchdog.ping("procesar_vela")
-        await procesar_vela(self, vela)
+        async with self.sem_velas:
+            log.debug(
+                f"[{symbol}] 🔒 sem_velas adquirido @ {datetime.now(timezone.utc).isoformat()}"
+            )
+            await procesar_vela(self, vela)
+            log.debug(
+                f"[{symbol}] 🔓 sem_velas liberado @ {datetime.now(timezone.utc).isoformat()}"
+            )
         self.watchdog.ping("procesar_vela")
         self.registrar_actividad()
         log.debug(f"✅ Procesamiento de vela completado {symbol}")

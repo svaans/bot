@@ -39,6 +39,11 @@ async def verificar_salidas(trader, symbol: str, df: pd.DataFrame) -> None:
 
 async def _verificar_salidas_impl(trader, symbol: str, df: pd.DataFrame) -> None:
     """Implementación interna de :func:`verificar_salidas`."""
+
+    if df is None or df.empty:
+        log.warning(f"🚫 [{symbol}] DataFrame vacío. Se aborta verificación de salidas")
+        return
+    
     inicio = perf_counter()
     orden = trader.orders.obtener(symbol)
     if not orden:
@@ -51,7 +56,9 @@ async def _verificar_salidas_impl(trader, symbol: str, df: pd.DataFrame) -> None
         await asyncio.sleep(0)
     orden.duracion_en_velas = getattr(orden, "duracion_en_velas", 0) + 1
 
-    await trader._piramidar(symbol, orden, df)
+    await asyncio.wait_for(
+        asyncio.shield(trader._piramidar(symbol, orden, df)), timeout=5
+    )
 
     precio_min = float(df["low"].iloc[-1])
     precio_max = float(df["high"].iloc[-1])
@@ -91,12 +98,17 @@ async def _verificar_salidas_impl(trader, symbol: str, df: pd.DataFrame) -> None
             if trader.es_salida_parcial_valida(orden, orden.take_profit, config_actual, df):
                 fraccion = trader.calcular_fraccion_parcial(orden, df, config_actual)
                 cantidad_parcial = orden.cantidad_abierta * fraccion
-                if await trader._cerrar_parcial_y_reportar(
-                    orden,
-                    cantidad_parcial,
-                    orden.take_profit,
-                    "Take Profit parcial",
-                    df=df,
+                if await asyncio.wait_for(
+                    asyncio.shield(
+                        trader._cerrar_parcial_y_reportar(
+                            orden,
+                            cantidad_parcial,
+                            orden.take_profit,
+                            "Take Profit parcial",
+                            df=df,
+                        )
+                    ),
+                    timeout=10,
                 ):
                     orden.parcial_cerrado = True
                     log.info(
@@ -113,7 +125,12 @@ async def _verificar_salidas_impl(trader, symbol: str, df: pd.DataFrame) -> None
         if not permitir_cierre_tecnico(symbol, df, precio_cierre, orden.to_dict()):
             log.info(f"🛡️ Cierre evitado por análisis técnico: {symbol}")
         else:
-            await trader._cerrar_y_reportar(orden, precio_cierre, motivo, df=df)
+            await asyncio.wait_for(
+                asyncio.shield(
+                    trader._cerrar_y_reportar(orden, precio_cierre, motivo, df=df)
+                ),
+                timeout=10,
+            )
         dur = (perf_counter() - inicio) * 1000.0
         registro_metrico.registrar("verif_salidas", {"symbol": symbol, "ms": dur})
         log.debug(f"[{symbol}] verificar_salidas cierre simple tomó {dur:.2f} ms")
@@ -132,12 +149,17 @@ async def _verificar_salidas_impl(trader, symbol: str, df: pd.DataFrame) -> None
                 trader.estado_tendencia[symbol] = nueva_tendencia
             if not permitir_cierre_tecnico(symbol, df, precio_cierre, orden.to_dict()):
                 log.info(f"🛡️ Cierre evitado por análisis técnico: {symbol}")
-            elif await trader._cerrar_y_reportar(
-                orden,
-                precio_cierre,
-                "Cambio de tendencia",
-                tendencia=nueva_tendencia,
-                df=df,
+            elif await asyncio.wait_for(
+                asyncio.shield(
+                    trader._cerrar_y_reportar(
+                        orden,
+                        precio_cierre,
+                        "Cambio de tendencia",
+                        tendencia=nueva_tendencia,
+                        df=df,
+                    )
+                ),
+                timeout=10,
             ):
                 log.info(
                     f"🔄 Cambio de tendencia detectado para {symbol}. Cierre recomendado."
@@ -232,6 +254,11 @@ async def _verificar_salidas_impl(trader, symbol: str, df: pd.DataFrame) -> None
             )
             log.debug(f"[{symbol}] verificar_salidas bloqueo técnico tomó {dur:.2f} ms")
             return
-        await trader._cerrar_y_reportar(
-            orden, precio_cierre, f"Estrategia: {razon}", df=df
+        await asyncio.wait_for(
+            asyncio.shield(
+                trader._cerrar_y_reportar(
+                    orden, precio_cierre, f"Estrategia: {razon}", df=df
+                )
+            ),
+            timeout=10,
         )
