@@ -4,6 +4,8 @@ from datetime import datetime, timezone
 import pandas as pd
 
 from core.utils import configurar_logger
+from time import perf_counter
+from core.registro_metrico import registro_metrico
 from core.adaptador_dinamico import (
     calcular_umbral_adaptativo,
     calcular_tp_sl_adaptativos,
@@ -34,6 +36,7 @@ async def verificar_entrada(
     trader, symbol: str, df: pd.DataFrame, estado
 ) -> dict | None:
     """Evalúa las condiciones de entrada y devuelve info de la operación."""
+    inicio = perf_counter()
     try:
         return await asyncio.wait_for(
             _verificar_entrada_impl(trader, symbol, df, estado), timeout=30
@@ -41,7 +44,9 @@ async def verificar_entrada(
     except asyncio.TimeoutError:
         log.warning(f"⏱️ Timeout interno en verificación de entrada para {symbol}")
         return None
-
+    finally:
+        dur = (perf_counter() - inicio) * 1000.0
+        registro_metrico.registrar("verif_entrada", {"symbol": symbol, "ms": dur})
 
 async def _verificar_entrada_impl(
     trader, symbol: str, df: pd.DataFrame, estado

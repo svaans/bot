@@ -5,7 +5,8 @@ from __future__ import annotations
 import asyncio
 import functools
 import logging
-from typing import Set
+import traceback
+from typing import Iterable, Set
 
 
 class TaskManager:
@@ -49,4 +50,20 @@ def log_exceptions_async(func):
     return wrapper
 
 
-__all__ = ["TaskManager", "log_exceptions_async"]
+def dump_tasks_stacktraces(tasks: Iterable[asyncio.Task] | None = None) -> str:
+    """Devuelve un volcado de las pilas de ``tasks``."""
+    if tasks is None:
+        tasks = asyncio.all_tasks()
+    lines: list[str] = []
+    for t in tasks:
+        lines.append(f"Task {t.get_name()} state={t._state}")
+        stack = t.get_stack()
+        if not stack:
+            lines.append("  <no stack>\n")
+            continue
+        for frame in stack:
+            lines.extend(traceback.format_list(traceback.extract_stack(frame)))
+    return "".join(lines)
+
+
+__all__ = ["TaskManager", "log_exceptions_async", "dump_tasks_stacktraces"]

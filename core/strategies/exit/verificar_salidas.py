@@ -2,8 +2,10 @@ from __future__ import annotations
 
 
 import pandas as pd
+from time import perf_counter
 
 from core.utils import configurar_logger
+from core.registro_metrico import registro_metrico
 from indicators.atr import calcular_atr
 from core.strategies.tendencia import detectar_tendencia
 from .supervisor_salidas import SupervisorSalidas
@@ -20,9 +22,12 @@ log = configurar_logger("verificar_salidas")
 
 async def verificar_salidas(trader, symbol: str, df: pd.DataFrame) -> None:
     """Evalúa si la orden abierta debe cerrarse."""
+    inicio = perf_counter()
     orden = trader.orders.obtener(symbol)
     if not orden:
         log.warning(f"⚠️ Se intentó verificar TP/SL sin orden activa en {symbol}")
+        dur = (perf_counter() - inicio) * 1000.0
+        registro_metrico.registrar("verif_salidas", {"symbol": symbol, "ms": dur})
         return
 
     orden.duracion_en_velas = getattr(orden, "duracion_en_velas", 0) + 1
@@ -71,12 +76,20 @@ async def verificar_salidas(trader, symbol: str, df: pd.DataFrame) -> None:
                     df=df,
                 ):
                     orden.parcial_cerrado = True
-                    log.info("💰 TP parcial alcanzado, se mantiene posición con trailing.")
+                    log.info(
+                        "💰 TP parcial alcanzado, se mantiene posición con trailing."
+                    )
+                    dur = (perf_counter() - inicio) * 1000.0
+                    registro_metrico.registrar(
+                        "verif_salidas", {"symbol": symbol, "ms": dur}
+                    )
                     return
         if not permitir_cierre_tecnico(symbol, df, precio_cierre, orden.to_dict()):
             log.info(f"🛡️ Cierre evitado por análisis técnico: {symbol}")
         else:
             await trader._cerrar_y_reportar(orden, precio_cierre, motivo, df=df)
+        dur = (perf_counter() - inicio) * 1000.0
+        registro_metrico.registrar("verif_salidas", {"symbol": symbol, "ms": dur})
         return
 
     # --- Cambio de tendencia ---
@@ -102,6 +115,10 @@ async def verificar_salidas(trader, symbol: str, df: pd.DataFrame) -> None:
                 log.info(
                     f"🔄 Cambio de tendencia detectado para {symbol}. Cierre recomendado."
                 )
+            dur = (perf_counter() - inicio) * 1000.0
+            registro_metrico.registrar(
+                "verif_salidas", {"symbol": symbol, "ms": dur}
+            )
             return
 
     # --- Estrategias de salida personalizadas ---
@@ -165,10 +182,20 @@ async def verificar_salidas(trader, symbol: str, df: pd.DataFrame) -> None:
             log.info(
                 f"❌ Cierre por '{razon}' evitado: condiciones técnicas aún válidas."
             )
+            dur = (perf_counter() - inicio) * 1000.0
+            registro_metrico.registrar(
+                "verif_salidas", {"symbol": symbol, "ms": dur}
+            )
             return
         if not permitir_cierre_tecnico(symbol, df, precio_cierre, orden.to_dict()):
             log.info(f"🛡️ Cierre evitado por análisis técnico: {symbol}")
+            dur = (perf_counter() - inicio) * 1000.0
+            registro_metrico.registrar(
+                "verif_salidas", {"symbol": symbol, "ms": dur}
+            )
             return
         await trader._cerrar_y_reportar(
             orden, precio_cierre, f"Estrategia: {razon}", df=df
         )
+    dur = (perf_counter() - inicio) * 1000.0
+    registro_metrico.registrar("verif_salidas", {"symbol": symbol, "ms": dur})

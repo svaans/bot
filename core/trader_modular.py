@@ -1663,8 +1663,10 @@ class Trader:
             if task.cancelled():
                 log.warning("⚠️ Una tarea fue cancelada.")
             elif task.exception():
-                log.error(f"❌ Error en tarea asincrónica: {task.exception()}")
-
+                log.error(
+                    "❌ Error en tarea asincrónica",
+                    exc_info=task.exception(),
+                )
         task = asyncio.create_task(self.data_feed.escuchar(symbols, handle))
         task.add_done_callback(_log_fallo_task)
         self.tasks.add_task(task)
