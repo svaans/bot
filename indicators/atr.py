@@ -1,7 +1,15 @@
+"""ATR indicator helpers.
+
+To enable the optional Rust acceleration compile the crate with:
+
+```
+maturin develop --release -m technical_indicators_rust/Cargo.toml
+```
+"""
 import pandas as pd
 from fast_indicators import atr as _atr_fast
 try:  # pragma: no cover - optional rust extension
-    from fast_indicators_rust import atr as _atr_rust
+    from technical_indicators_rust import atr as _atr_rust
     HAS_RUST = True
 except Exception:  # pragma: no cover - missing rust module
     _atr_rust = None
@@ -13,6 +21,14 @@ def calcular_atr(df: pd.DataFrame, periodo: int = 14) -> float:
     columnas = {"high", "low", "close"}
     if not columnas.issubset(df.columns) or len(df) < periodo + 1:
         return None
+    
+    if HAS_RUST:
+        high = df["high"].to_numpy(dtype=float)
+        low = df["low"].to_numpy(dtype=float)
+        close = df["close"].to_numpy(dtype=float)
+        valor = _atr_rust(high, low, close, periodo)
+        return float(valor) if valor == valor else None
+    
     df = df.copy()
     cierre_prev = df["close"].shift()
 

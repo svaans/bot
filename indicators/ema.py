@@ -1,3 +1,10 @@
+"""EMA crossover utilities with optional Rust acceleration.
+
+To build the Rust extension run:
+```
+maturin develop --release -m technical_indicators_rust/Cargo.toml
+```
+"""
 import numpy as np
 import pandas as pd
 
@@ -9,6 +16,13 @@ except Exception:  # pragma: no cover - numba es opcional
             return func
 
         return wrapper
+    
+try:  # pragma: no cover - optional rust extension
+    from technical_indicators_rust import ema as _ema_rust
+    HAS_RUST = True
+except Exception:  # pragma: no cover - missing rust module
+    _ema_rust = None
+    HAS_RUST = False
 
 
 @jit(nopython=True)
@@ -23,6 +37,26 @@ def _ema_numba(valores: np.ndarray, periodo: int) -> np.ndarray:
 def calcular_cruce_ema(df: pd.DataFrame, rapida=12, lenta=26) -> bool:
     if len(df) < lenta + 2 or "close" not in df:
         return False
+    
+    close = df["close"].to_numpy(dtype=float)
+
+    if HAS_RUST:
+        fast_prev = _ema_rust(close[:-1], rapida)
+        fast_curr = _ema_rust(close, rapida)
+        slow_prev = _ema_rust(close[:-1], lenta)
+        slow_curr = _ema_rust(close, lenta)
+        cruce_anterior = fast_prev < slow_prev
+        cruce_actual = fast_curr > slow_curr
+        return cruce_anterior and cruce_actual
+
+    if HAS_RUST:
+        fast_prev = _ema_rust(close[:-1], rapida)
+        fast_curr = _ema_rust(close, rapida)
+        slow_prev = _ema_rust(close[:-1], lenta)
+        slow_curr = _ema_rust(close, lenta)
+        cruce_anterior = fast_prev < slow_prev
+        cruce_actual = fast_curr > slow_curr
+        return cruce_anterior and cruce_actual
 
     ema_fast = df["close"].ewm(span=rapida, adjust=False).mean()
     ema_slow = df["close"].ewm(span=lenta, adjust=False).mean()

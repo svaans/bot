@@ -1,9 +1,16 @@
+"""Relative Strength Index utilities.
+
+To compile the optional Rust acceleration run:
+```
+maturin develop --release -m technical_indicators_rust/Cargo.toml
+```
+"""
 import pandas as pd
 import numpy as np
 
 from fast_indicators import rsi as _rsi_fast
 try:  # pragma: no cover - optional rust extension
-    from fast_indicators_rust import rsi as _rsi_rust
+    from technical_indicators_rust import rsi as _rsi_rust
     HAS_RUST = True
 except Exception:  # pragma: no cover - missing rust module
     _rsi_rust = None
@@ -18,6 +25,14 @@ def calcular_rsi(
 
     if "close" not in df or len(df) < periodo + 1:
         return None
+    
+    close = df["close"].to_numpy(dtype=float)
+
+    if HAS_RUST:
+        valores = _rsi_rust(close, periodo)
+        if serie_completa:
+            return pd.Series(valores, index=df.index)
+        return float(valores[-1]) if valores.size > 0 else None
 
     delta = df["close"].diff()
     ganancia = delta.clip(lower=0)
