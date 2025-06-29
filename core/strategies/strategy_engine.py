@@ -17,7 +17,7 @@ from core.strategies.entry.validadores import (
     validar_volumen_real,
     validar_spread,
 )
-from core.strategies.entry.validacion_volumen_atipico import factor_volumen_atipico
+from core.strategies.entry.validador_volumen_atipico import factor_volumen_atipico
 from core.validaciones_comunes import validar_diversidad
 from indicators.slope import calcular_slope
 from indicators.momentum import calcular_momentum
