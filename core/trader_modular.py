@@ -193,6 +193,7 @@ class Trader:
             raise
         self.historial_cierres: Dict[str, dict] = {}
         self.watchdog = Watchdog(timeout=config.watchdog_timeout)
+        self.watchdog.register("heartbeat")
         # Semáforos para limitar concurrencia de evaluaciones
         self.sem_entradas = asyncio.Semaphore(config.max_concurrent_entradas)
         self.sem_salidas = asyncio.Semaphore(config.max_concurrent_salidas)
@@ -202,6 +203,12 @@ class Trader:
         self.intervalo_procesar_vela = float(
             getattr(config, "candle_process_interval", 0.0)
         )
+        self.watchdog.register(
+            "procesar_vela",
+            timeout=max(self.intervalo_procesar_vela * 3, self.watchdog.timeout),
+        )
+        self.watchdog.register("verificar_entrada", timeout=120)
+        self.watchdog.register("verificar_salidas", timeout=120)
         self.tasks = TaskManager()
         self.context_stream = StreamContexto()
         try:

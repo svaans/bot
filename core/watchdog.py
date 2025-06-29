@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from typing import Awaitable, Callable, Dict
+from time import monotonic
 from core.utils.logger import configurar_logger
 from core.async_utils import dump_tasks_stacktraces
 
@@ -16,18 +17,31 @@ class Watchdog:
         self.timeout = timeout
         self._last_ping: Dict[str, float] = {}
         self._callbacks: Dict[str, Callback] = {}
+        self._timeouts: Dict[str, float] = {}
 
-    def register(self, name: str, callback: Callback = None) -> None:
+    def register(self, name: str, callback: Callback = None, *, timeout: float | None = None) -> None:
         """Registra una nueva tarea a vigilar."""
-        loop = asyncio.get_event_loop()
-        self._last_ping[name] = loop.time()
+        try:
+            loop = asyncio.get_running_loop()
+            ts = loop.time()
+        except RuntimeError:
+            ts = monotonic()
+        self._last_ping[name] = ts
         if callback:
             self._callbacks[name] = callback
+        if timeout is not None:
+            self._timeouts[name] = timeout
 
-    def ping(self, name: str) -> None:
+    def ping(self, name: str, *, timeout: float | None = None) -> None:
         """Actualiza la marca de tiempo de ``name``."""
-        loop = asyncio.get_event_loop()
-        self._last_ping[name] = loop.time()
+        try:
+            loop = asyncio.get_running_loop()
+            ts = loop.time()
+        except RuntimeError:
+            ts = monotonic()
+        self._last_ping[name] = ts
+        if timeout is not None:
+            self._timeouts[name] = timeout
 
     async def monitor(self) -> None:
         """Verifica periódicamente si las tareas siguen activas."""
@@ -36,7 +50,8 @@ class Watchdog:
             await asyncio.sleep(self.timeout / 2)
             now = loop.time()
             for name, ts in list(self._last_ping.items()):
-                if now - ts > self.timeout:
+                limit = self._timeouts.get(name, self.timeout)
+                if now - ts > limit:
                     log.warning(
                         f"⚠️ Tarea '{name}' no responde desde {now - ts:.1f}s"
                     )
