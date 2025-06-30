@@ -196,10 +196,11 @@ class Trader:
         self.historial_cierres: Dict[str, dict] = {}
         self.watchdog = Watchdog(timeout=config.watchdog_timeout)
         self.watchdog.register("heartbeat")
-        # Semáforos para limitar concurrencia de evaluaciones
+        # Semáforos para limitar concurrencia de evaluaciones y velas
         self.sem_entradas = asyncio.Semaphore(config.max_concurrent_entradas)
         self.sem_salidas = asyncio.Semaphore(config.max_concurrent_salidas)
-        self.sem_velas = asyncio.Semaphore(5)
+        # Límite global de velas procesándose al mismo tiempo
+        self.semaphore = asyncio.Semaphore(5)
         self.sem_global = asyncio.Semaphore(config.max_concurrent_tasks)
         self._ultimo_procesamiento = defaultdict(float)
         self.intervalo_procesar_vela = float(
@@ -220,6 +221,13 @@ class Trader:
             asyncio.set_event_loop(loop)
         self._ultima_actividad = loop.time()
         self._max_inactividad = 300
+
+        # Contadores operativos
+        self.operaciones_abiertas = len(self.orders.ordenes)
+        self.operaciones_rechazadas = 0
+        self.errores_tecnicos = 0
+        self._ciclos = 0
+        self._prev_queue = 0
 
         try:
             self.orders.ordenes = self.orders.cargar_ordenes(config.symbols)
@@ -295,6 +303,7 @@ class Trader:
         if not await self.orders.cerrar_async(symbol, precio, motivo):
             log.debug(f"🔁 Intento duplicado de cierre ignorado para {symbol}")
             return
+        self.operaciones_abiertas = max(0, self.operaciones_abiertas - 1)
         await self._run_io(actualizar_pesos_estrategias_symbol, symbol)
         try:
             self.pesos_por_simbolo = await self._run_io(cargar_pesos_estrategias)
@@ -349,7 +358,7 @@ class Trader:
                 f"❌ No se pudo confirmar el cierre de {orden.symbol}. Se omitirá el registro."
             )
             return False
-        
+        self.operaciones_abiertas = max(0, self.operaciones_abiertas - 1)
         ganancia = capital_simbolo * retorno_total
         self.capital_manager.liberar_capital(
             orden.symbol, capital_invertido + ganancia
@@ -896,6 +905,8 @@ class Trader:
                 loop = asyncio.get_running_loop()
                 await loop.run_in_executor(None, ciclo_aprendizaje)
                 log.info("🧠 Ciclo de aprendizaje completado")
+            except asyncio.CancelledError:
+                raise
             except Exception as e:  # noqa: BLE001
                 log.exception("⚠️ Error en ciclo de aprendizaje", exc_info=e)
             await asyncio.sleep(intervalo)
@@ -969,10 +980,13 @@ class Trader:
     async def _heartbeat(self, intervalo: int = 30) -> None:
         """Emite logs periódicos para confirmar que el bot sigue activo."""
         while True:
-            active = len(asyncio.all_tasks())
-            log.info("💓 Bot vivo - %d tareas activas", active)
-            self.watchdog.ping("heartbeat")
-            await asyncio.sleep(intervalo)
+            try:
+                active = len(asyncio.all_tasks())
+                log.info("💓 Bot vivo - %d tareas activas", active)
+                self.watchdog.ping("heartbeat")
+                await asyncio.sleep(intervalo)
+            except asyncio.CancelledError:
+                raise
             
     @log_exceptions_async
     async def _run_watchdog(self) -> None:
@@ -998,17 +1012,20 @@ class Trader:
         """Reporta periodos prolongados sin actividad."""
         loop = asyncio.get_running_loop()
         while True:
-            await asyncio.sleep(60)
-            if loop.time() - self._ultima_actividad > self._max_inactividad:
-                log.warning("⏱️ Inactividad detectada >5m")
-                if self.notificador:
-                    try:
-                        await self.notificador.enviar_async(
-                            "⏱️ Bot inactivo desde hace más de 5 minutos"
-                        )
-                    except Exception as e:  # noqa: BLE001
-                        log.error(f"❌ Error enviando notificación de inactividad: {e}")
-                self._ultima_actividad = loop.time()
+            try:
+                await asyncio.sleep(60)
+                if loop.time() - self._ultima_actividad > self._max_inactividad:
+                    log.warning("⏱️ Inactividad detectada >5m")
+                    if self.notificador:
+                        try:
+                            await self.notificador.enviar_async(
+                                "⏱️ Bot inactivo desde hace más de 5 minutos"
+                            )
+                        except Exception as e:  # noqa: BLE001
+                            log.error(f"❌ Error enviando notificación de inactividad: {e}")
+                    self._ultima_actividad = loop.time()
+            except asyncio.CancelledError:
+                raise
     
     def _contar_senales(self, symbol: str, minutos: int = 60) -> int:
         """Cuenta señales válidas recientes para ``symbol``."""
@@ -1092,6 +1109,7 @@ class Trader:
         estrategias: list[str] | dict | None = None,
     ) -> None:
         """Centraliza los mensajes de descartes de entrada."""
+        self.operaciones_rechazadas += 1
         mensaje = f"🔴 RECHAZO: {symbol} | Causa: {motivo}"
         if puntaje is not None:
             mensaje += f" | Puntaje: {puntaje:.2f}"
@@ -1501,6 +1519,9 @@ class Trader:
             config=config_actual,
             pesos_symbol=self.pesos_por_simbolo.get(symbol, {}),
         )
+        decision = resultado.get("decision")
+        if decision is not None:
+            assert decision in ("comprar", "vender", "nada")
         estrategias = resultado.get("estrategias_activas", {})
         estado.buffer[-1]["estrategias_activas"] = estrategias
         self.persistencia.actualizar(symbol, estrategias)
@@ -1609,6 +1630,7 @@ class Trader:
             fracciones=fracciones,
             detalles_tecnicos=detalles_tecnicos or {},
         )
+        self.operaciones_abiertas += 1
         monto_invertido = precio * cantidad
         self.capital_manager.reservar_capital(symbol, monto_invertido)
         estrategias_list = list(estrategias_dict.keys())
@@ -1724,11 +1746,20 @@ class Trader:
             self.tasks.add_task(task)
 
         try:
-            await self.tasks.wait_all()
+            # Workers con timeout global
+            await asyncio.wait_for(self.tasks.wait_all(), timeout=300)
+        except asyncio.TimeoutError:
+            log.warning("⚠️ Ciclo trader_modular bloqueado, reiniciando workers")
+            await self.reiniciar_workers()
+            return
         except Exception as e:
+            self.errores_tecnicos += 1
             log.exception("❌ Error inesperado en ejecución de tareas", exc_info=e)
             
-        await self.tasks.wait_all()
+        try:
+            await asyncio.wait_for(self.tasks.wait_all(), timeout=300)
+        except asyncio.TimeoutError:
+            log.warning("⚠️ Timeout al finalizar tareas tras reinicio")
 
     async def _procesar_vela(self, vela: dict) -> None:
         symbol = vela.get("symbol")
@@ -1740,18 +1771,35 @@ class Trader:
         if diff < self.intervalo_procesar_vela:
             await asyncio.sleep(self.intervalo_procesar_vela - diff)
         self.watchdog.ping("procesar_vela")
-        async with self.sem_velas:
+        async with self.semaphore:
             log.debug(
-                f"[{symbol}] 🔒 sem_velas adquirido @ {datetime.now(timezone.utc).isoformat()}"
+                f"[{symbol}] 🔒 semáforo adquirido @ {datetime.now(timezone.utc).isoformat()}"
             )
             await procesar_vela(self, vela)
             log.debug(
-                f"[{symbol}] 🔓 sem_velas liberado @ {datetime.now(timezone.utc).isoformat()}"
+                f"[{symbol}] 🔓 semáforo liberado @ {datetime.now(timezone.utc).isoformat()}"
             )
         self._ultimo_procesamiento[symbol] = asyncio.get_event_loop().time()
         self.watchdog.ping("procesar_vela")
         self.registrar_actividad()
         log.debug(f"✅ Procesamiento de vela completado {symbol}")
+        self._ciclos += 1
+        if self._ciclos % 10 == 0:
+            log.info(
+                "✅ Estadísticas ciclo: abiertas=%d, rechazadas=%d, errores=%d",
+                self.operaciones_abiertas,
+                self.operaciones_rechazadas,
+                self.errores_tecnicos,
+            )
+            if hasattr(self, "job_queue"):
+                qsize = self.job_queue.qsize()
+                if qsize > 50:
+                    log.warning(
+                        f"⚠️ Cola de velas congestionada: {qsize} pendientes"
+                    )
+                    if qsize > self._prev_queue:
+                        await self.reiniciar_workers()
+                self._prev_queue = qsize
         return
 
     async def cerrar(self) -> None:
@@ -1761,6 +1809,12 @@ class Trader:
 
         guardar_estado(self.historial_cierres, self.capital_por_simbolo)
 
+    async def reiniciar_workers(self) -> None:
+        """Cancela y reinicia las tareas de procesamiento."""
+        await self.tasks.cancel_all()
+        self.tasks = TaskManager()
+        log.info("🔄 Reiniciando workers")
+        await self.ejecutar()
 
     def _validar_config(self, symbol: str) -> bool:
         """Valida que exista configuración para ``symbol``."""
