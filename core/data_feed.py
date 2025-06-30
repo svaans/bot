@@ -31,6 +31,20 @@ class DataFeed:
         self._tasks: Dict[str, asyncio.Task] = {}
         self._last_candle: Dict[str, float] = {}
         self._count: Dict[str, int] = {}
+        self._retries: Dict[str, int] = {}
+
+    async def _monitor_symbol(
+        self, symbol: str, call: grpc.aio.StreamStreamCall
+    ) -> None:
+        """Cancela ``call`` si no se reciben velas durante 60s."""
+        loop = asyncio.get_event_loop()
+        while True:
+            await asyncio.sleep(60)
+            ultimo = self._last_candle.get(symbol, 0)
+            if loop.time() - ultimo > 60:
+                log.warning(f"⚠️  Sin velas para {symbol} en 60s. Reiniciando stream")
+                call.cancel()
+                return
 
     @property
     def activos(self) -> list[str]:
@@ -53,9 +67,12 @@ class DataFeed:
         while True:
             channel = grpc.aio.insecure_channel(address)
             stub = candle_pb2_grpc.CandleServiceStub(channel)
+            monitor: asyncio.Task | None = None
             try:
                 req = candle_pb2.CandleRequest(symbol=symbol, interval=self.intervalo)
                 call = stub.Subscribe(req, timeout=self.timeout)
+                monitor = asyncio.create_task(self._monitor_symbol(symbol, call))
+                self._retries[symbol] = 0
                 async for candle in call:
                     self._count[symbol] = self._count.get(symbol, 0) + 1
                     self._last_candle[symbol] = asyncio.get_event_loop().time()
@@ -69,11 +86,20 @@ class DataFeed:
                         "volume": candle.volume,
                     }
                     await handler(data)
+                monitor.cancel()
+                await asyncio.gather(monitor, return_exceptions=True)
             except (
                 grpc.aio.AioRpcError,
                 OSError,
                 ConnectionError,
             ) as e:  # pragma: no cover - conexión externa
+                self._retries[symbol] = self._retries.get(symbol, 0) + 1
+                if self._retries[symbol] > 3:
+                    log.error(
+                        f"❌ Stream {symbol} falló tras {self._retries[symbol]} reintentos"
+                    )
+                    await channel.close()
+                    raise
                 log.warning(f"⚠️ Stream {symbol} falló: {e}. Reintentando en 5s")
                 await asyncio.sleep(5)
             except asyncio.CancelledError:
@@ -82,6 +108,9 @@ class DataFeed:
                 log.exception(f"❌ Error inesperado en stream {symbol}: {e}")
                 raise
             finally:
+                if monitor is not None:
+                    monitor.cancel()
+                    await asyncio.gather(monitor, return_exceptions=True)
                 await channel.close()
                 
     @log_exceptions_async

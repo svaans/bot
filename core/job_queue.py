@@ -127,11 +127,25 @@ async def queue_watchdog(
     warn_threshold: int,
     interval: float = 5.0,
 ) -> None:
-    """Vigila la cola y reinicia workers terminados."""
+    """Vigila la cola, reinicia workers y encola dummy jobs si hay inactividad."""
     idx = len(workers)
+    last_job = monotonic()
+    prev_size = queue.qsize()
     while True:
         await asyncio.sleep(interval)
         size = queue.qsize()
+        if size != prev_size:
+            last_job = monotonic()
+            prev_size = size
+        elif size == 0 and monotonic() - last_job > 120:
+            log.info("🌀 Encolando dummy job por inactividad")
+            await enqueue_job(
+                queue,
+                Job(priority=10, kind="dummy", symbol="", df=None),
+                drop_policy="drop_oldest",
+            )
+            last_job = monotonic()
+            prev_size = queue.qsize()
         if size > warn_threshold:
             log.warning(f"⏳ Cola en espera ({size})")
         registro_metrico.registrar("job_queue", {"size": size})

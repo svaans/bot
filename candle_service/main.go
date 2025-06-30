@@ -15,6 +15,11 @@ import (
 	"google.golang.org/grpc/status"
 )
 
+const (
+	pongWait   = 30 * time.Second
+	pingPeriod = pongWait / 2
+)
+
 var validIntervals = map[string]struct{}{
 	"1m": {}, "3m": {}, "5m": {}, "15m": {}, "30m": {},
 	"1h": {}, "2h": {}, "4h": {}, "6h": {}, "8h": {},
@@ -37,6 +42,7 @@ func (s *server) Subscribe(req *pb.CandleRequest, stream pb.CandleService_Subscr
 	url := fmt.Sprintf("wss://stream.binance.com:9443/ws/%s@kline_%s", normalizeSymbol(req.Symbol), req.Interval)
 	backoff := time.Second
 
+
 	for {
 		if err := stream.Context().Err(); err != nil {
 			return err
@@ -54,16 +60,45 @@ func (s *server) Subscribe(req *pb.CandleRequest, stream pb.CandleService_Subscr
 		log.Printf("connected %s %s", req.Symbol, req.Interval)
 		backoff = time.Second
 
+		ws.SetReadDeadline(time.Now().Add(pongWait))
+		ws.SetPongHandler(func(string) error {
+			ws.SetReadDeadline(time.Now().Add(pongWait))
+			return nil
+		})
+
+		ticker := time.NewTicker(pingPeriod)
+		done := make(chan struct{})
+		go func() {
+			for {
+				select {
+				case <-ticker.C:
+					ws.SetWriteDeadline(time.Now().Add(5 * time.Second))
+					if err := ws.WriteMessage(websocket.PingMessage, nil); err != nil {
+						log.Printf("ping error: %v", err)
+						ws.Close()
+						return
+					}
+				case <-done:
+					return
+				}
+			}
+		}()
+
 		for {
 			if err := stream.Context().Err(); err != nil {
 				ws.Close()
+				close(done)
+				ticker.Stop()
 				return err
 			}
-
+			
+			ws.SetReadDeadline(time.Now().Add(pongWait))
 			_, msg, err := ws.ReadMessage()
 			if err != nil {
 				log.Printf("read error: %v", err)
 				ws.Close()
+				close(done)
+				ticker.Stop()
 				break
 			}
 
@@ -116,6 +151,8 @@ func (s *server) Subscribe(req *pb.CandleRequest, stream pb.CandleService_Subscr
 
 			if err := stream.Send(candle); err != nil {
 				ws.Close()
+				close(done)
+				ticker.Stop()
 				return err
 			}
 		}
