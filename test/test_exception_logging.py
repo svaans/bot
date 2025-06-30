@@ -106,7 +106,15 @@ def test_verificar_entrada_log_exception(monkeypatch):
         lambda *a, **k: (0.0, 1),
     )
     trader = DummyTrader()
-    estado = type("E", (), {"buffer": [{"close": 1, "open":1, "high":1, "low":1, "volume":1}], "ultimo_umbral":0})()
+    estado = type(
+        "E",
+        (),
+        {
+            "buffer": [{"close": 1, "open": 1, "high": 1, "low": 1, "volume": 1}],
+            "ultimo_umbral": 0,
+            "rechazos_consecutivos": 0,
+        },
+    )()
     df = pd.DataFrame({"close": [1]*30, "open": [1]*30, "high": [1]*30, "low": [1]*30, "volume": [1]*30})
 
     logger = logging.getLogger("verificar_entrada")

@@ -12,9 +12,14 @@ from core.utils import configurar_logger
 from core.registro_metrico import registro_metrico
 from indicators.atr import calcular_atr
 from core.strategies.tendencia import detectar_tendencia
-from .supervisor_salidas import SupervisorSalidas
 from .salida_por_tendencia import verificar_reversion_tendencia
-from .gestor_salidas import evaluar_salidas, verificar_filtro_tecnico
+from .gestor_salidas import (
+    evaluar_salidas,
+    verificar_filtro_tecnico,
+)
+from .salida_trailing_stop import verificar_trailing_stop
+from .salida_break_even import salida_break_even
+from .salida_stoploss import verificar_salida_stoploss
 from .analisis_previo_salida import permitir_cierre_tecnico
 from core.strategies.exit.filtro_salidas import validar_necesidad_de_salida
 from core.adaptador_dinamico import adaptar_configuracion as adaptar_configuracion_base
@@ -88,24 +93,95 @@ async def _verificar_salidas_impl(trader, symbol: str, df: pd.DataFrame) -> None
         "tendencia": tendencia_detectada,
     }
 
-    supervisor = SupervisorSalidas(orden, config_actual)
-    try:
-        resultado_basico = supervisor.evaluar(
-            df,
-            precio_cierre=precio_cierre,
-            precio_min=precio_min,
-            precio_max=precio_max,
-        )
-    except Exception as e:
-        log.exception(f"Error evaluando salida básica {symbol}: {e}")
+    # --- Validación de parámetros ---
+    if any(v < 0 for v in [orden.stop_loss, orden.take_profit, orden.precio_entrada]):
+        log.error(f"[{symbol}] Valores incoherentes en la orden: {orden.to_dict()}")
         return
 
-    if resultado_basico.get("break_even"):
-        orden.break_even_activado = True
+    # === 1. Stop Loss ===
+    try:
+        res_sl = await asyncio.wait_for(
+            asyncio.to_thread(verificar_salida_stoploss, orden.to_dict(), df, config_actual),
+            timeout=config_actual.get("timeout_sl", 3),
+        )
+    except asyncio.TimeoutError:
+        log.error(f"⏱️ Timeout SL {symbol}")
+        res_sl = {"cerrar": False}
+    except Exception as e:  # noqa: BLE001
+        log.error(f"Error evaluando SL {symbol}: {e}")
+        res_sl = {"cerrar": False}
+    if res_sl.get("cerrar"):
+        motivo_sl = res_sl.get("motivo", "Stop Loss")
+        if not permitir_cierre_tecnico(symbol, df, precio_cierre, orden.to_dict()):
+            log.info(f"🛡️ Cierre SL evitado por análisis técnico: {symbol}")
+        else:
+            await run_with_timeout(
+                trader._cerrar_y_reportar(orden, precio_cierre, motivo_sl, df=df),
+                10,
+                logger=log,
+                name=f"cerrar SL {symbol}",
+            )
+        return
 
-    if resultado_basico.get("cerrar"):
-        motivo = resultado_basico.get("razon", "")
-        if motivo == "Take Profit" and not getattr(orden, "parcial_cerrado", False) and orden.cantidad_abierta > 0:
+    await asyncio.sleep(0)
+
+    # === 2. Trailing Stop ===
+    try:
+        cerrar_ts, motivo_ts = await asyncio.wait_for(
+            asyncio.to_thread(
+                verificar_trailing_stop, orden.to_dict(), precio_cierre, df, config_actual
+            ),
+            timeout=config_actual.get("timeout_trailing", 3),
+        )
+    except asyncio.TimeoutError:
+        log.error(f"⏱️ Timeout trailing {symbol}")
+        cerrar_ts, motivo_ts = False, ""
+    except Exception as e:  # noqa: BLE001
+        log.error(f"Error en trailing stop {symbol}: {e}")
+        cerrar_ts, motivo_ts = False, ""
+    if cerrar_ts:
+        await run_with_timeout(
+            trader._cerrar_y_reportar(orden, precio_cierre, motivo_ts, df=df),
+            10,
+            logger=log,
+            name=f"cerrar trailing {symbol}",
+        )
+        return
+
+    await asyncio.sleep(0)
+
+    # === 3. Break Even ===
+    try:
+        res_be = await asyncio.wait_for(
+            asyncio.to_thread(salida_break_even, orden.to_dict(), df, config_actual),
+            timeout=config_actual.get("timeout_break_even", 3),
+        )
+    except asyncio.TimeoutError:
+        log.error(f"⏱️ Timeout break-even {symbol}")
+        res_be = {}
+    except Exception as e:  # noqa: BLE001
+        log.error(f"Error en break-even {symbol}: {e}")
+        res_be = {}
+
+    if res_be.get("break_even"):
+        nuevo_sl = res_be.get("nuevo_sl")
+        if nuevo_sl is not None:
+            if orden.direccion in ("long", "compra"):
+                if nuevo_sl > orden.stop_loss:
+                    orden.stop_loss = nuevo_sl
+            else:
+                if nuevo_sl < orden.stop_loss:
+                    orden.stop_loss = nuevo_sl
+        orden.break_even_activado = True
+        log.info(f"🟡 Break-Even activado para {symbol} → SL movido a entrada: {nuevo_sl}")
+
+    # === 4. Condiciones técnicas (TP, tendencia, estrategias) ===
+    alcanzado_tp = (
+        (orden.direccion in ("long", "compra") and precio_max >= orden.take_profit)
+        or (orden.direccion in ("short", "venta") and precio_min <= orden.take_profit)
+    )
+    if alcanzado_tp:
+        if not getattr(orden, "parcial_cerrado", False) and orden.cantidad_abierta > 0:
             if trader.es_salida_parcial_valida(orden, orden.take_profit, config_actual, df):
                 fraccion = trader.calcular_fraccion_parcial(orden, df, config_actual)
                 cantidad_parcial = orden.cantidad_abierta * fraccion
@@ -138,16 +214,12 @@ async def _verificar_salidas_impl(trader, symbol: str, df: pd.DataFrame) -> None
             log.info(f"🛡️ Cierre evitado por análisis técnico: {symbol}")
         else:
             await run_with_timeout(
-                trader._cerrar_y_reportar(
-                    orden,
-                    precio_cierre,
-                    motivo,
-                    df=df,
-                ),
+                trader._cerrar_y_reportar(orden, precio_cierre, "Take Profit", df=df),
                 10,
                 logger=log,
                 name=f"cerrar orden {symbol}",
             )
+        return
 
     # --- Cambio de tendencia ---
     velas_confirm = config_actual.get("velas_confirmacion_reversion", 2)

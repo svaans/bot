@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import concurrent.futures
+import atexit
 import time
 from datetime import datetime, timezone
 import pandas as pd
@@ -19,6 +20,13 @@ log = configurar_logger("procesar_vela")
 # Executor compartido para tareas CPU-bound. Permite aislar el procesamiento
 # técnico y evitar que bloquee el event loop principal.
 cpu_executor = concurrent.futures.ThreadPoolExecutor(max_workers=4)
+
+
+def _shutdown_executor() -> None:
+    cpu_executor.shutdown(wait=False, cancel_futures=True)
+
+
+atexit.register(_shutdown_executor)
 
 
 def calcular_puntuacion(symbol: str, buffer: list[dict]) -> tuple[pd.DataFrame, str]:
@@ -50,6 +58,9 @@ async def procesar_vela(trader, vela: dict) -> None:
         if len(estado.buffer) > 120:
             estado.buffer = estado.buffer[-120:]
         if vela.get("timestamp") == estado.ultimo_timestamp:
+            log.debug(
+                f"[{symbol}] vela repetida ignorada {estado.ultimo_timestamp}"
+            )
             return
         estado.ultimo_timestamp = vela.get("timestamp")
         dur_load = (time.monotonic() - t_load) * 1000.0
@@ -57,9 +68,21 @@ async def procesar_vela(trader, vela: dict) -> None:
 
         t_trend = time.monotonic()
         df_size_before = len(estado.buffer)
-        df, tendencia = await loop.run_in_executor(
-            cpu_executor, calcular_puntuacion, symbol, list(estado.buffer)
-        )
+        trader.watchdog.ping("procesar_vela")
+        log.debug(f"[{symbol}] watchdog ping procesar_vela @ {loop.time():.6f}")
+        try:
+            df, tendencia = await asyncio.wait_for(
+                loop.run_in_executor(
+                    cpu_executor, calcular_puntuacion, symbol, list(estado.buffer)
+                ),
+                timeout=5.0,
+            )
+        except asyncio.TimeoutError:
+            log.error(f"[{symbol}] Timeout calculando tendencia")
+            return
+        except Exception as exc:
+            log.exception(f"[{symbol}] Error en cpu_executor", exc_info=exc)
+            return
         estado.tendencia_detectada = tendencia
         log.debug(
             f"[{symbol}] DataFrame tamaño antes {df_size_before} después {len(df)}"
@@ -70,21 +93,31 @@ async def procesar_vela(trader, vela: dict) -> None:
         log.info(f"Procesando vela {symbol} | Precio: {vela.get('close')}")
 
         if trader.orders.obtener(symbol):
-            await enqueue_job(
-                trader.job_queue,
-                Job(0, "exit", symbol, df),
-                drop_policy=trader.config.job_drop_policy,
-            )
+            if trader.job_queue.qsize() > 200:
+                log.warning(
+                    f"⚠️ job_queue saturada: {trader.job_queue.qsize()} elementos"
+                )
+            else:
+                await enqueue_job(
+                    trader.job_queue,
+                    Job(0, "exit", symbol, df),
+                    drop_policy=trader.config.job_drop_policy,
+                )
             return
         else:
             # Mantiene vivo el watchdog aunque no haya órdenes abiertas
             trader.watchdog.ping("verificar_salidas")
 
-        await enqueue_job(
-            trader.job_queue,
-            Job(1, "entry", symbol, df),
-            drop_policy=trader.config.job_drop_policy,
-        )
+        if trader.job_queue.qsize() > 200:
+            log.warning(
+                f"⚠️ job_queue saturada: {trader.job_queue.qsize()} elementos"
+            )
+        else:
+            await enqueue_job(
+                trader.job_queue,
+                Job(1, "entry", symbol, df),
+                drop_policy=trader.config.job_drop_policy,
+            )
     finally:
         log.debug(f"🔄 Vela procesada {symbol}")
         trader.watchdog.ping("procesar_vela")

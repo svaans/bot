@@ -70,6 +70,8 @@ from core.config.pesos import PESOS_SCORE_TECNICO
 from core.config import COMISION, SLIPPAGE
 from core.storage.persistencia import cargar_estado, guardar_estado
 
+ESTADO_BOT_PATH = os.path.join("estado", "estado_bot.json")
+
 from collections import defaultdict
    
 
@@ -82,6 +84,7 @@ class EstadoSimbolo:
     ultimo_umbral: float = 0.0
     ultimo_timestamp: int | None = None
     tendencia_detectada: str | None = None
+    rechazos_consecutivos: int = 0
 
 
 class Trader:
@@ -89,28 +92,38 @@ class Trader:
 
     def __init__(self, config: Config, order_service: Optional[OrderService] = None) -> None:
         self.config = config
-        self.data_feed = DataFeed(
-            config.intervalo_velas,
-            host=getattr(config, "candle_host", "localhost"),
-            puerto=getattr(config, "candle_port", 9000),
-        )
-        self.context = MarketContext()
-        self.engine = DecisionEngine(self.context)
-        self.risk = RiskManager(config.umbral_riesgo_diario)
-        self.notificador = Notificador(
-            config.telegram_token, config.telegram_chat_id
-        )
-        self.modo_real = getattr(config, "modo_real", False)
-        if order_service is None:
-            if self.modo_real:
-                order_service = OrderServiceReal(self.risk, self.notificador)
-            else:
-                order_service = OrderServiceSimulado(self.risk, self.notificador)
-        self.orders = order_service
-        self.cliente = crear_cliente(config) if self.modo_real else None
-        if not self.modo_real:
-            log.info("🧪 Modo simulado activado. No se inicializará cliente Binance")
-        self._markets = None
+        self.estado_bot = "inicializando"
+        self._persistir_estado()
+        self.shutdown_event = asyncio.Event()
+        try:
+            self.data_feed = DataFeed(
+                config.intervalo_velas,
+                host=getattr(config, "candle_host", "localhost"),
+                puerto=getattr(config, "candle_port", 9000),
+            )
+            self.context = MarketContext()
+            self.engine = DecisionEngine(self.context)
+            self.risk = RiskManager(config.umbral_riesgo_diario)
+            self.notificador = Notificador(
+                config.telegram_token, config.telegram_chat_id
+            )
+            self.modo_real = getattr(config, "modo_real", False)
+            if order_service is None:
+                if self.modo_real:
+                    order_service = OrderServiceReal(self.risk, self.notificador)
+                else:
+                    order_service = OrderServiceSimulado(self.risk, self.notificador)
+            self.orders = order_service
+            self.cliente = crear_cliente(config) if self.modo_real else None
+            if not self.modo_real:
+                log.info("🧪 Modo simulado activado. No se inicializará cliente Binance")
+            self._markets = None
+        except Exception as e:
+            # Si cualquier componente base falla se registra y aborta
+            log.exception("❌ Error inicializando componentes principales", exc_info=e)
+            self.estado_bot = "error"
+            self._persistir_estado()
+            raise
         self.modo_capital_bajo = config.modo_capital_bajo
         self.persistencia = PersistenciaTecnica(
             config.persistencia_minima,
@@ -168,15 +181,21 @@ class Trader:
                 log.warning(f"⚠️ Error cargando config {sym}: {e}")
                 cfg = {}
             self.riesgo_maximo_diario[sym] = float(cfg.get("riesgo_maximo_diario", 1.0))
-        self.capital_manager = CapitalManager(
-            config,
-            self.cliente,
-            self.risk,
-            self.fraccion_kelly,
-            config.min_order_eur,
-            config.min_order_symbol,
-            self.riesgo_maximo_diario,
-        )
+        try:
+            self.capital_manager = CapitalManager(
+                config,
+                self.cliente,
+                self.risk,
+                self.fraccion_kelly,
+                config.min_order_eur,
+                config.min_order_symbol,
+                self.riesgo_maximo_diario,
+            )
+        except Exception as e:
+            log.exception("❌ Error inicializando CapitalManager", exc_info=e)
+            self.estado_bot = "error"
+            self._persistir_estado()
+            raise
         self.capital_por_simbolo = self.capital_manager.capital_por_simbolo
         self.capital_inicial_diario = self.capital_manager.capital_inicial_diario
         self.reservas_piramide = self.capital_manager.reservas_piramide
@@ -249,6 +268,8 @@ class Trader:
             self.capital_por_simbolo.update(capital)
         else:
             log.debug("🔍 Modo prueba: se omite carga de estado persistente")
+        self.estado_bot = "activo"
+        self._persistir_estado()
 
     def actualizar_fraccion_kelly(self) -> float:
         """Recalcula la fracción de Kelly con los parámetros de configuración."""
@@ -900,7 +921,7 @@ class Trader:
     async def _ciclo_aprendizaje(self, intervalo: int = 86400) -> None:
         """Ejecuta el proceso de aprendizaje continuo periódicamente."""
         await asyncio.sleep(1)
-        while True:
+        while not self.shutdown_event.is_set():
             try:
                 loop = asyncio.get_running_loop()
                 await loop.run_in_executor(None, ciclo_aprendizaje)
@@ -909,7 +930,11 @@ class Trader:
                 raise
             except Exception as e:  # noqa: BLE001
                 log.exception("⚠️ Error en ciclo de aprendizaje", exc_info=e)
-            await asyncio.sleep(intervalo)
+            try:
+                await asyncio.wait_for(self.shutdown_event.wait(), timeout=intervalo)
+            except asyncio.TimeoutError:
+                continue
+        log.info("🛑 Ciclo de aprendizaje detenido")
     
     async def _calcular_cantidad_async(
         self, symbol: str, precio: float, factor_extra: float = 1.0
@@ -997,6 +1022,15 @@ class Trader:
         """Actualiza la marca de actividad global."""
         loop = asyncio.get_running_loop()
         self._ultima_actividad = loop.time()
+
+    def _persistir_estado(self) -> None:
+        """Guarda ``self.estado_bot`` en un archivo JSON persistente."""
+        try:
+            os.makedirs(os.path.dirname(ESTADO_BOT_PATH), exist_ok=True)
+            with open(ESTADO_BOT_PATH, "w") as f:
+                json.dump({"estado": self.estado_bot}, f, indent=2)
+        except Exception as e:  # noqa: BLE001
+            log.warning("⚠️ No se pudo guardar estado del bot", exc_info=e)
 
     async def _run_io(self, func, *args, timeout: float = 15.0):
         """Ejecuta ``func`` en un thread con timeout y maneja excepciones."""
@@ -1745,19 +1779,24 @@ class Trader:
             task.add_done_callback(_log_fallo_task)
             self.tasks.add_task(task)
 
+        self.estado_bot = "ejecutando"
+        self._persistir_estado()
+
         try:
             # Workers con timeout global
-            await asyncio.wait_for(self.tasks.wait_all(), timeout=300)
+            await asyncio.wait_for(self.tasks.wait_all(), timeout=900)
         except asyncio.TimeoutError:
-            log.warning("⚠️ Ciclo trader_modular bloqueado, reiniciando workers")
-            await self.reiniciar_workers()
+            log.warning("⚠️ Timeout global en tareas, cancelando")
+            await self.tasks.cancel_all()
+            self.estado_bot = "error"
+            self._persistir_estado()
             return
         except Exception as e:
             self.errores_tecnicos += 1
             log.exception("❌ Error inesperado en ejecución de tareas", exc_info=e)
             
         try:
-            await asyncio.wait_for(self.tasks.wait_all(), timeout=300)
+            await asyncio.wait_for(self.tasks.wait_all(), timeout=900)
         except asyncio.TimeoutError:
             log.warning("⚠️ Timeout al finalizar tareas tras reinicio")
 
@@ -1803,11 +1842,21 @@ class Trader:
         return
 
     async def cerrar(self) -> None:
+        self.estado_bot = "cerrando"
+        self._persistir_estado()
         await self.data_feed.detener()
         await self.context_stream.detener()
-        await self.tasks.cancel_all()
+        try:
+            await self.tasks.cancel_all()
+        except asyncio.CancelledError:
+            log.warning("⚠️ cancel_all fue cancelado abruptamente")
+        else:
+            log.info("✅ Todas las tareas finalizadas correctamente")
 
         guardar_estado(self.historial_cierres, self.capital_por_simbolo)
+        self.shutdown_event.set()
+        self.estado_bot = "cerrado"
+        self._persistir_estado()
 
     async def reiniciar_workers(self) -> None:
         """Cancela y reinicia las tareas de procesamiento."""

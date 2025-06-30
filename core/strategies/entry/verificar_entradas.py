@@ -29,7 +29,8 @@ from indicators.slope import calcular_slope
 import traceback
 from core.async_utils import dump_tasks_stacktraces
 from core.utils.utils import distancia_minima_valida, validar_ratio_beneficio
-from core.strategies.entry.validadores import validar_spread
+from core.strategies.entry.validadores import validar_spread, validar_volumen
+from core.validaciones_comunes import validar_correlacion
 import asyncio
 
 log = configurar_logger("verificar_entrada")
@@ -58,8 +59,15 @@ async def _verificar_entrada_impl(
 ) -> dict | None:
     log.debug(f"⏳ Empezando verificación {symbol}")
     log.debug(f"[{symbol}] tamaño DataFrame: {len(df)}")
+
+    def registrar_rechazo(motivo: str) -> None:
+        estado.rechazos_consecutivos += 1
+        log.debug(f"[{symbol}] Rechazo #{estado.rechazos_consecutivos}: {motivo}")
+
+    await asyncio.sleep(0)
     if df is None or df.empty:
         log.warning(f"🚫 [{symbol}] DataFrame vacío. Se aborta la evaluación")
+        registrar_rechazo("df_vacio")
         return None
     config_actual = trader.config_por_simbolo.get(symbol, {})
     t_cfg = perf_counter()
@@ -69,6 +77,30 @@ async def _verificar_entrada_impl(
     config_actual = adaptar_configuracion_base(symbol, df, config_actual)
     dur_cfg = (perf_counter() - t_cfg) * 1000.0
     log.debug(f"[{symbol}] adaptar_config tomó {dur_cfg:.2f} ms")
+    umbral_score = float(config_actual.get("umbral_score_tecnico", 1.0))
+    if not 0.0 <= umbral_score <= 100.0:
+        log.warning(f"[{symbol}] umbral_score_tecnico fuera de rango: {umbral_score}")
+        umbral_score = max(0.0, min(100.0, umbral_score))
+        config_actual["umbral_score_tecnico"] = umbral_score
+
+    vol_conf = validar_volumen(df)
+    umbral_vol = float(config_actual.get("umbral_volumen", 0.2))
+    if not 0.0 <= umbral_vol <= 1.0:
+        log.warning(f"[{symbol}] umbral_volumen fuera de rango: {umbral_vol}")
+        umbral_vol = max(0.0, min(1.0, umbral_vol))
+    if vol_conf < umbral_vol:
+        registrar_rechazo("volumen")
+        return None
+
+    symbols_cfg = getattr(getattr(trader, "config", None), "symbols", [symbol])
+    symbol_ref = symbols_cfg[0] if symbols_cfg else symbol
+    if symbol != symbol_ref:
+        df_ref = trader.historicos.get(symbol_ref)
+        if df_ref is not None and not validar_correlacion(
+            symbol, df, df_ref, config_actual.get("umbral_correlacion", 0.9)
+        ):
+            registrar_rechazo("correlacion")
+            return None
     max_spread = config_actual.get("max_spread", 0.002)
     spread_conf = validar_spread(df, max_spread)
     if spread_conf <= 0:
@@ -79,6 +111,7 @@ async def _verificar_entrada_impl(
         log.warning(
             f"🚫 [{symbol}] Spread {spread:.4f} supera umbral {max_spread:.4f}."
         )
+        registrar_rechazo("spread")
         return None
     log.debug(
         f"[{symbol}] 🔒 solicitando state_lock config @ {datetime.now(timezone.utc).isoformat()}"
@@ -110,7 +143,10 @@ async def _verificar_entrada_impl(
     )
         
     if not tendencia_actual:
-        tendencia_actual, _ = detectar_tendencia(symbol, df)
+        tendencia_actual, _ = await asyncio.wait_for(
+            asyncio.to_thread(detectar_tendencia, symbol, df),
+            timeout=5,
+        )
         log.debug(
             f"[{symbol}] 🔒 solicitando state_lock set tendencia @ {datetime.now(timezone.utc).isoformat()}"
         )
@@ -128,13 +164,16 @@ async def _verificar_entrada_impl(
     trader.persistencia.ajustar_minimo(symbol, volatilidad_actual)
 
     t_engine = perf_counter()
-    evaluacion = await asyncio.to_thread(
-        trader.engine.evaluar_entrada,
-        symbol,
-        df,
-        tendencia=tendencia_actual,
-        config=config_actual,
-        pesos_symbol=trader.pesos_por_simbolo.get(symbol, {}),
+    evaluacion = await asyncio.wait_for(
+        asyncio.to_thread(
+            trader.engine.evaluar_entrada,
+            symbol,
+            df,
+            tendencia=tendencia_actual,
+            config=config_actual,
+            pesos_symbol=trader.pesos_por_simbolo.get(symbol, {}),
+        ),
+        timeout=5,
     )
     dur_engine = (perf_counter() - t_engine) * 1000.0
     log.debug(f"[{symbol}] engine tomó {dur_engine:.2f} ms")
@@ -148,6 +187,7 @@ async def _verificar_entrada_impl(
     if not evaluacion.get("permitido", True):
         motivo = evaluacion.get("motivo_rechazo", "desconocido")
         log.info(f"🚫 [{symbol}] Engine rechazó la entrada por: {motivo}")
+        registrar_rechazo("engine")
         return None
     
     estado.buffer[-1]["estrategias_activas"] = estrategias
@@ -167,17 +207,19 @@ async def _verificar_entrada_impl(
             f"[{symbol}] Persistencia parcial (buffer corto): {persistencia:.2f}"
         )
         if persistencia < peso_minimo * peso_max:
+            registrar_rechazo("persistencia_inicial")
             return None
 
     persistencia_score = await asyncio.to_thread(
         coincidencia_parcial, estado.buffer, pesos_symbol, ventanas=5
     )
-    umbral = calcular_umbral_adaptativo(
+    umbral = await asyncio.to_thread(
+        calcular_umbral_adaptativo,
         symbol,
         df,
         estrategias,
         pesos_symbol,
-        persistencia=persistencia_score,
+        persistencia_score,
     )
 
     estrategias_persistentes: dict[str, bool] = {}
@@ -197,10 +239,12 @@ async def _verificar_entrada_impl(
             f"[{symbol}] Persistencia insuficiente: {len(estrategias_persistentes)} < {min_estrategias} "
             f"o peso {peso_persistente:.2f} < {peso_minimo * peso_max:.2f}"
         )
+        registrar_rechazo("persistencia")
         return None
 
     if not estrategias_persistentes:
         log.warning(f"[{symbol}] Ninguna estrategia pasó el filtro de persistencia.")
+        registrar_rechazo("persistencia")
         return None
 
     direccion = "short" if tendencia_actual == "bajista" else "long"
@@ -214,6 +258,7 @@ async def _verificar_entrada_impl(
 
     if not estrategias_persistentes:
         log.warning(f"[{symbol}] Estrategias incoherentes con la dirección {direccion}.")
+        registrar_rechazo("direccion")
         return None
 
     penalizacion = 0.05 * (len(incoherentes) ** 2) if incoherentes else 0.0
@@ -314,6 +359,7 @@ async def _verificar_entrada_impl(
         agresivo = config_actual.get("modo_agresivo", False)
         if not agresivo or len(razones) > 2:
             log.info(f"❌ [{symbol}] Rechazo acumulado por: {razones}")
+            registrar_rechazo("validaciones")
             return None
 
     rsi = await asyncio.to_thread(calcular_rsi, df)
@@ -360,11 +406,13 @@ async def _verificar_entrada_impl(
     )
     if not permitido:
         log.info(f"❌ [{symbol}] Filtro técnico final bloqueó la entrada: {motivo}")
+        registrar_rechazo("checks")
         return None
 
     log.info(f"✅ [{symbol}] Señal de entrada generada con {len(estrategias_activas)} estrategias.")
     precio = precio_actual
-    sl, tp = calcular_tp_sl_adaptativos(
+    sl, tp = await asyncio.to_thread(
+        calcular_tp_sl_adaptativos,
         symbol,
         df,
         config_actual,
@@ -376,6 +424,7 @@ async def _verificar_entrada_impl(
         log.warning(
             f"📏 [{symbol}] Distancia SL/TP insuficiente. SL: {sl:.2f} TP: {tp:.2f}"
         )
+        registrar_rechazo("sl_tp")
         return None
 
     ratio_min = config_actual.get("ratio_minimo_beneficio", 1.5)
@@ -383,9 +432,12 @@ async def _verificar_entrada_impl(
         log.warning(
             f"🚫 [{symbol}] Ratio beneficio/riesgo < {ratio_min:.2f}"
         )
+        registrar_rechazo("ratio")
         return None
 
-    evaluacion = evaluar_puntaje_tecnico(symbol, df, precio, sl, tp)
+    evaluacion = await asyncio.to_thread(
+        evaluar_puntaje_tecnico, symbol, df, precio, sl, tp
+    )
     score_total = evaluacion["score_total"]
     vol = 0.0
     if "volume" in df.columns and len(df) > 20:
@@ -393,7 +445,8 @@ async def _verificar_entrada_impl(
     volatilidad = volatilidad_actual
     pesos_simbolo = cargar_pesos_tecnicos(symbol)
     score_max = sum(pesos_simbolo.values())
-    umbral_tecnico = calc_umbral_tecnico(
+    umbral_tecnico = await asyncio.to_thread(
+        calc_umbral_tecnico,
         score_max,
         tendencia_actual,
         volatilidad,
@@ -405,7 +458,14 @@ async def _verificar_entrada_impl(
     )
     if score_total < umbral_tecnico:
         log.info(f"[{symbol}] Entrada rechazada por score técnico {score_total:.2f} < {umbral_tecnico:.2f}")
-        return None
+        registrar_rechazo("score_tecnico")
+        if estado.rechazos_consecutivos >= 3:
+            log.warning(f"[{symbol}] Failsafe activado tras {estado.rechazos_consecutivos} rechazos")
+        else:
+            return None
+
+    failsafe = estado.rechazos_consecutivos >= 3
+    estado.rechazos_consecutivos = 0
 
     resultado = {
         "symbol": symbol,
@@ -420,6 +480,7 @@ async def _verificar_entrada_impl(
         "score_tecnico": score_tecnico if trader.usar_score_tecnico else None,
         "detalles_tecnicos": evaluacion.get("detalles", {}),
         "volatilidad": volatilidad,
+        "failsafe": failsafe,
     }
     log.debug(f"✅ [{symbol}] Evaluación de entrada completada")
     return resultado
