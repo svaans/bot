@@ -67,6 +67,7 @@ import platform
 import signal
 import traceback
 from pathlib import Path
+from typing import Callable
 import logging
 from logging.handlers import RotatingFileHandler
 
@@ -138,14 +139,101 @@ async def auto_restart(event: asyncio.Event, delay: int = 1800) -> None:
     event.set()
 
 async def heartbeat(event: asyncio.Event, interval: int = 30) -> None:
-    """Escribe periódicamente una señal de vida en los logs."""
+    """Envia una marca de vida cada ``interval`` segundos.
+
+    Si el latido falla por ``TimeoutError`` o cualquier otra razón se
+    registra la incidencia pero el bucle continua. Se emite una advertencia
+    si han pasado más de 60 segundos desde el último latido registrado.
+    """
     log = logging.getLogger(__name__)
+    last = asyncio.get_running_loop().time()
     while not event.is_set():
-        log.info("bot vivo")
         try:
             await asyncio.wait_for(event.wait(), timeout=interval)
         except asyncio.TimeoutError:
+            now = asyncio.get_running_loop().time()
+            if now - last > 60:
+                log.warning("⚠️  Más de 60s sin latido")
+            log.info("bot vivo")
+            last = now
             continue
+        except Exception:
+            log.exception("Error en heartbeat")
+            continue
+
+
+def launch_workers(bot, job_queue, config) -> tuple[list[asyncio.Task], Callable[[int], asyncio.Task]]:
+    """Inicia los workers y devuelve las tareas junto con el callback de reinicio."""
+    from core.job_queue import worker
+
+    workers: list[asyncio.Task] = []
+
+    def start_worker(idx: int) -> asyncio.Task:
+        return asyncio.create_task(
+            worker(
+                f"W{idx}",
+                bot,
+                job_queue,
+                timeout=config.job_timeout,
+                drop_policy=config.job_drop_policy,
+            )
+        )
+
+    for i in range(config.job_workers):
+        workers.append(start_worker(i))
+
+    from core.job_queue import queue_watchdog
+
+    watchdog_task = asyncio.create_task(
+        queue_watchdog(
+            job_queue,
+            workers,
+            start_worker,
+            warn_threshold=config.job_queue_size // 2,
+        )
+    )
+
+    return workers + [watchdog_task], start_worker
+
+
+async def supervise_tasks(
+    factories: dict[str, Callable[[], asyncio.Task]],
+    stop_event: asyncio.Event,
+    initial: dict[str, asyncio.Task] | None = None,
+) -> None:
+    """Mantiene vivas las tareas reiniciándolas en caso de fallo."""
+    log = logging.getLogger(__name__)
+    tasks = {
+        name: initial[name] if initial and name in initial else factory()
+        for name, factory in factories.items()
+    }
+    backoff = {name: 1.0 for name in tasks}
+    try:
+        while not stop_event.is_set():
+            done, _ = await asyncio.wait(
+                list(tasks.values()), return_when=asyncio.FIRST_EXCEPTION
+            )
+            for t in done:
+                name = next(k for k, v in tasks.items() if v is t)
+                if t.cancelled():
+                    continue
+                exc = t.exception()
+                if exc:
+                    log.error("💥 %s terminado por error", name, exc_info=exc)
+                else:
+                    log.warning("⚠️  %s finalizó inesperadamente", name)
+                await asyncio.gather(t, return_exceptions=True)
+                if stop_event.is_set():
+                    break
+                delay = backoff[name]
+                log.info("🔁 Reiniciando %s en %.1fs", name, delay)
+                await asyncio.sleep(delay)
+                backoff[name] = min(delay * 2, 60.0)
+                tasks[name] = factories[name]()
+    finally:
+        for t in tasks.values():
+            t.cancel()
+        await asyncio.gather(*tasks.values(), return_exceptions=True)
 
 
 async def main():
@@ -198,39 +286,40 @@ async def main():
     # -- Cola de trabajos y pool de workers --
     job_queue: asyncio.PriorityQueue = asyncio.PriorityQueue(maxsize=config.job_queue_size)
     bot.job_queue = job_queue
-    workers: list[asyncio.Task] = []
 
-    def start_worker(idx: int) -> asyncio.Task:
-        from core.job_queue import worker
-        task = asyncio.create_task(
-            worker(
-                f"W{idx}",
-                bot,
-                job_queue,
-                timeout=config.job_timeout,
-                drop_policy=config.job_drop_policy,
-            )
-        )
-        return task
+    workers, start_worker = launch_workers(bot, job_queue, config)
+    watchdog_task = workers.pop()  # último elemento es el watchdog
 
-    for i in range(config.job_workers):
-        workers.append(start_worker(i))
-
-    from core.job_queue import queue_watchdog
-    watchdog_task = asyncio.create_task(
-        queue_watchdog(
-            job_queue,
-            workers,
-            start_worker,
-            warn_threshold=config.job_queue_size // 2,
-        )
-    )
-
-    tarea_bot = asyncio.create_task(bot.ejecutar())
     stop_event = asyncio.Event()
+
+    # Fábricas de tareas supervisadas
+    from core.job_queue import queue_watchdog
+    task_factories: dict[str, Callable[[], asyncio.Task]] = {
+        "bot": lambda: asyncio.create_task(bot.ejecutar()),
+        "auto_restart": lambda: asyncio.create_task(auto_restart(stop_event)),
+        "heartbeat": lambda: asyncio.create_task(heartbeat(stop_event)),
+        "watchdog": lambda: asyncio.create_task(
+            queue_watchdog(
+                job_queue,
+                workers,
+                start_worker,
+                warn_threshold=config.job_queue_size // 2,
+            )
+        ),
+    }
+
+    initial_tasks = {
+        "watchdog": watchdog_task,
+    }
+
+    for idx, w in enumerate(workers):
+        task_factories[f"worker_{idx}"] = lambda idx=idx: start_worker(idx)
+        initial_tasks[f"worker_{idx}"] = w
+
+    supervisor_task = asyncio.create_task(
+        supervise_tasks(task_factories, stop_event, initial_tasks)
+    )
     tarea_stop = asyncio.create_task(stop_event.wait())
-    tarea_reinicio = asyncio.create_task(auto_restart(stop_event))
-    tarea_heartbeat = asyncio.create_task(heartbeat(stop_event))
 
     def detener_bot():
         print("\n🛑 Señal de detención recibida.")
@@ -243,8 +332,8 @@ async def main():
 
     try:
         await asyncio.wait(
-            [tarea_bot, tarea_stop, tarea_reinicio, tarea_heartbeat, watchdog_task, *workers],
-            return_when=asyncio.FIRST_COMPLETED,
+            [supervisor_task, tarea_stop],
+            return_when=asyncio.FIRST_EXCEPTION,
         )
     except asyncio.CancelledError:
         print("🛑 Cancelación detectada.")
@@ -252,22 +341,12 @@ async def main():
         print("🛑 Interrupción por teclado detectada.")
     finally:
         stop_event.set()
-        tarea_bot.cancel()
-        tarea_reinicio.cancel()
+        supervisor_task.cancel()
         tarea_stop.cancel()
-        tarea_heartbeat.cancel()
-        watchdog_task.cancel()
+        await asyncio.gather(supervisor_task, tarea_stop, return_exceptions=True)
         for w in workers:
             w.cancel()
-        await asyncio.gather(
-            tarea_bot,
-            tarea_reinicio,
-            tarea_stop,
-            tarea_heartbeat,
-            watchdog_task,
-            *workers,
-            return_exceptions=True,
-        )
+        await asyncio.gather(*workers, return_exceptions=True)
         stop_hot_reload(observer)
         await bot.cerrar()
         print("👋 Bot finalizado correctamente.")
