@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import asyncio
+import concurrent.futures
+import time
 from datetime import datetime, timezone
-from time import perf_counter
 import pandas as pd
-import traceback
+
 
 from core.async_utils import dump_tasks_stacktraces
 from core.job_queue import Job, enqueue_job
@@ -15,9 +16,25 @@ from core.strategies.tendencia import detectar_tendencia
 
 log = configurar_logger("procesar_vela")
 
+# Executor compartido para tareas CPU-bound. Permite aislar el procesamiento
+# técnico y evitar que bloquee el event loop principal.
+cpu_executor = concurrent.futures.ThreadPoolExecutor(max_workers=4)
+
+
+def calcular_puntuacion(symbol: str, buffer: list[dict]) -> tuple[pd.DataFrame, str]:
+    """Calcula indicadores técnicos y tendencia para ``symbol``.
+
+    Este cálculo se realiza en un ``ThreadPoolExecutor`` porque es una operación
+    intensiva en CPU y no queremos bloquear el event loop mientras se procesa.
+    """
+
+    df = pd.DataFrame(buffer)
+    tendencia, _ = detectar_tendencia(symbol, df)
+    return df, tendencia
+
 async def procesar_vela(trader, vela: dict) -> None:
     symbol = vela["symbol"]
-    inicio = perf_counter()
+    inicio = time.monotonic()
     log.debug(f"Inicio procesamiento vela {symbol}")
     log.debug(f"Símbolos gestionados: {len(getattr(trader.config, 'symbols', []))}")
     estado = trader.estado[symbol]
@@ -28,27 +45,27 @@ async def procesar_vela(trader, vela: dict) -> None:
         if datetime.now(timezone.utc).date() != trader.fecha_actual:
             trader.ajustar_capital_diario()
 
-        t_load = perf_counter()
+        t_load = time.monotonic()
         estado.buffer.append(vela)
         if len(estado.buffer) > 120:
             estado.buffer = estado.buffer[-120:]
         if vela.get("timestamp") == estado.ultimo_timestamp:
             return
         estado.ultimo_timestamp = vela.get("timestamp")
-        dur_load = (perf_counter() - t_load) * 1000.0
+        dur_load = (time.monotonic() - t_load) * 1000.0
         log.debug(f"[{symbol}] cargar_vela tomó {dur_load:.2f} ms")
 
-        t_trend = perf_counter()
+        t_trend = time.monotonic()
         df_size_before = len(estado.buffer)
-        df = await asyncio.to_thread(pd.DataFrame, estado.buffer)
-        estado.tendencia_detectada, _ = await asyncio.to_thread(
-            detectar_tendencia, symbol, df
+        df, tendencia = await loop.run_in_executor(
+            cpu_executor, calcular_puntuacion, symbol, list(estado.buffer)
         )
+        estado.tendencia_detectada = tendencia
         log.debug(
             f"[{symbol}] DataFrame tamaño antes {df_size_before} después {len(df)}"
         )
         trader.estado_tendencia[symbol] = estado.tendencia_detectada
-        dur_trend = (perf_counter() - t_trend) * 1000.0
+        dur_trend = (time.monotonic() - t_trend) * 1000.0
         log.debug(f"[{symbol}] detectar_tendencia tomó {dur_trend:.2f} ms")
         log.info(f"Procesando vela {symbol} | Precio: {vela.get('close')}")
 
@@ -72,7 +89,33 @@ async def procesar_vela(trader, vela: dict) -> None:
         log.debug(f"🔄 Vela procesada {symbol}")
         trader.watchdog.ping("procesar_vela")
         log.debug(f"[{symbol}] watchdog ping procesar_vela @ {loop.time():.6f}")
-        duracion = (perf_counter() - inicio) * 1000.0
-        registro_metrico.registrar("proc_vela", {"symbol": symbol, "ms": duracion})
-        log.debug(f"Fin procesamiento vela {symbol} ({duracion:.2f} ms)")
+        duracion = time.monotonic() - inicio
+        registro_metrico.registrar("proc_vela", {"symbol": symbol, "ms": duracion * 1000.0})
+        if duracion > 2.0:
+            log.warning(f"⚠️ procesamiento de vela lento: {duracion:.2f}s")
+        log.debug(f"Fin procesamiento vela {symbol} ({duracion*1000.0:.2f} ms)")
     return
+
+async def consumir_velas(trader, queue: asyncio.Queue) -> None:
+    """Consume velas desde ``queue`` y las procesa secuencialmente."""
+
+    procesadas = 0
+    while True:
+        try:
+            vela = await asyncio.wait_for(queue.get(), timeout=300)
+        except asyncio.TimeoutError:
+            log.warning("No llegaron velas en 5 minutos")
+            continue
+        try:
+            await procesar_vela(trader, vela)
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:  # pragma: no cover - log unexpected errors
+            log.exception("Error procesando vela", exc_info=e)
+        finally:
+            queue.task_done()
+            procesadas += 1
+            if procesadas % 10 == 0 and queue.qsize() > 100:
+                log.warning(
+                    f"⚠️ cola de velas congestionada: {queue.qsize()} elementos"
+                )
