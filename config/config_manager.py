@@ -68,7 +68,7 @@ class Config:
     max_concurrent_tasks: int = 10
     candle_process_interval: float = 0.0
     watchdog_timeout: int = 60
-    job_queue_size: int = 100
+    job_queue_size: int = 200
     job_workers: int = 5
     job_timeout: int = 20
     job_drop_policy: str = "drop_oldest"

@@ -15,7 +15,12 @@ log = configurar_logger("job_queue")
 
 @dataclass
 class Job:
-    """Representa un trabajo de verificación de vela."""
+    """Representa un trabajo de verificación de vela.
+
+    Los jobs de *prioridad 0* corresponden a cierres o salidas críticas y se
+    deben ejecutar antes que las nuevas entradas (*prioridad 1*).  El timestamp
+    ``enqueued_at`` mantiene el orden FIFO dentro de la misma prioridad.
+    """
 
     priority: int
     kind: str  # "entry" o "exit"
@@ -30,7 +35,11 @@ async def enqueue_job(
     *,
     drop_policy: str = "drop_oldest",
 ) -> None:
-    """Intenta encolar ``job`` aplicando la política de descarte."""
+    """Intenta encolar ``job`` aplicando la política de descarte.
+
+    Los jobs de prioridad 0 representan eventos críticos como cierres de
+    posiciones, mientras que los de prioridad 1 son para nuevas entradas.
+    """
     try:
         queue.put_nowait((job.priority, job.enqueued_at, job))
     except asyncio.QueueFull:
@@ -54,13 +63,23 @@ async def worker(
     drop_policy: str,
     max_retries: int = 3,
 ) -> None:
-    """Consume trabajos de ``queue`` procesándolos con ``trader``."""
+    """Consume trabajos de ``queue`` procesándolos con ``trader``.
+
+    Se aplica un timeout al esperar por nuevos jobs para evitar bloqueos
+    indefinidos en caso de que se detenga el flujo de velas.
+    """
     log.info("🟢 Worker iniciado")
     while True:
         try:
-            _prio, _ts, job = await queue.get()
+            try:
+                prio, ts, job = await asyncio.wait_for(queue.get(), timeout=60)
+            except asyncio.TimeoutError:
+                log.warning("⚠️ Worker bloqueado, sin recibir jobs en 60s")
+                continue
         except asyncio.CancelledError:
-            break
+            log.info("⚠️ Worker cancelado de forma segura")
+            raise
+        log.info(f"🚀 Ejecutando job con prioridad={prio} en timestamp={ts}")
         wait_ms = (monotonic() - job.enqueued_at) * 1000.0
         if "PYTEST_CURRENT_TEST" not in os.environ:
             registro_metrico.registrar(
@@ -75,13 +94,16 @@ async def worker(
             await asyncio.wait_for(coro, timeout)
             if job.kind == "entry":
                 trader.actualizar_fraccion_kelly()
-            log.info("✅ Trabajo completado")
+            log.info(f"✅ Job completado: {job}")
         except asyncio.TimeoutError:
             log.warning("⚠️ Timeout en trabajo")
             if job.retries < max_retries:
                 job.retries += 1
                 log.info("🔁 Reintento")
                 await enqueue_job(queue, job, drop_policy=drop_policy)
+        except asyncio.CancelledError:
+            log.info("⚠️ Worker cancelado de forma segura")
+            raise
         except Exception as exc:  # noqa: BLE001
             log.error("💥 Worker finalizado por error", exc_info=exc)
             if job.retries < max_retries:

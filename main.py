@@ -189,7 +189,7 @@ def launch_workers(bot, job_queue, config) -> tuple[list[asyncio.Task], Callable
             job_queue,
             workers,
             start_worker,
-            warn_threshold=config.job_queue_size // 2,
+            warn_threshold=100,
         )
     )
 
@@ -284,7 +284,7 @@ async def main():
         return
     
     # -- Cola de trabajos y pool de workers --
-    job_queue: asyncio.PriorityQueue = asyncio.PriorityQueue(maxsize=config.job_queue_size)
+    job_queue: asyncio.PriorityQueue = asyncio.PriorityQueue(maxsize=200)
     bot.job_queue = job_queue
 
     workers, start_worker = launch_workers(bot, job_queue, config)
@@ -303,7 +303,7 @@ async def main():
                 job_queue,
                 workers,
                 start_worker,
-                warn_threshold=config.job_queue_size // 2,
+                warn_threshold=100,
             )
         ),
     }
