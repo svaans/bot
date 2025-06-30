@@ -79,6 +79,16 @@ async def worker(
         except asyncio.CancelledError:
             log.info("⚠️ Worker cancelado de forma segura")
             raise
+        if job.kind == "dummy":
+            log.info("🔹 Dummy job recibido")
+            queue.task_done()
+            if "PYTEST_CURRENT_TEST" not in os.environ:
+                registro_metrico.registrar(
+                    "job_done",
+                    {"kind": job.kind, "symbol": job.symbol},
+                )
+            continue
+        
         log.info(f"🚀 Ejecutando job con prioridad={prio} en timestamp={ts}")
         wait_ms = (monotonic() - job.enqueued_at) * 1000.0
         if "PYTEST_CURRENT_TEST" not in os.environ:

@@ -23,26 +23,31 @@ class DataFeed:
         host: str = "localhost",
         puerto: int = 9000,
         timeout: float | None = None,
+        monitor_timeout: float = 60.0,
     ) -> None:
         self.intervalo = intervalo
         self.host = host
         self.puerto = puerto
         self.timeout = timeout
+        self.monitor_timeout = monitor_timeout
         self._tasks: Dict[str, asyncio.Task] = {}
         self._last_candle: Dict[str, float] = {}
         self._count: Dict[str, int] = {}
         self._retries: Dict[str, int] = {}
+        self._handlers: Dict[str, Callable[[dict], Awaitable[None]]] = {}
 
     async def _monitor_symbol(
         self, symbol: str, call: grpc.aio.StreamStreamCall
     ) -> None:
-        """Cancela ``call`` si no se reciben velas durante 60s."""
+        """Cancela ``call`` si no se reciben velas durante ``monitor_timeout``."""
         loop = asyncio.get_event_loop()
         while True:
-            await asyncio.sleep(60)
+            await asyncio.sleep(self.monitor_timeout)
             ultimo = self._last_candle.get(symbol, 0)
-            if loop.time() - ultimo > 60:
-                log.warning(f"⚠️  Sin velas para {symbol} en 60s. Reiniciando stream")
+            if loop.time() - ultimo > self.monitor_timeout:
+                log.warning(
+                    f"⚠️  Sin velas para {symbol} en {self.monitor_timeout}s. Reiniciando stream"
+                )
                 call.cancel()
                 return
 
@@ -56,6 +61,7 @@ class DataFeed:
         return {
             "cuenta": self._count.get(symbol, 0),
             "ultimo": self._last_candle.get(symbol),
+            "reintentos": self._retries.get(symbol),
         }
         
     @log_exceptions_async
@@ -123,6 +129,7 @@ class DataFeed:
                 log.warning(f"⚠️ Stream duplicado para {sym}. Ignorando.")
                 continue
             self._tasks[sym] = asyncio.create_task(self.stream(sym, handler))
+            self._handlers[sym] = handler
 
         while self._tasks:
             tareas_actuales = list(self._tasks.items())
@@ -147,10 +154,40 @@ class DataFeed:
             elif not self._tasks:
                 break
 
+    async def restart(self, symbol: str) -> None:
+        """Reinicia el stream de ``symbol`` si está activo."""
+        task = self._tasks.get(symbol)
+        handler = self._handlers.get(symbol)
+        if handler is None:
+            return
+        if task is not None:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+        self._tasks[symbol] = asyncio.create_task(self.stream(symbol, handler))
+
     async def detener(self) -> None:
         """Cancela todos los streams en ejecución."""
         for task in self._tasks.values():
             task.cancel()
         await asyncio.gather(*self._tasks.values(), return_exceptions=True)
         self._tasks.clear()
+
+async def feed_watchdog(
+    feed: DataFeed,
+    *,
+    timeout: float = 90.0,
+    interval: float = 10.0,
+) -> None:
+    """Vigila la actualización de velas y reinicia streams inactivos."""
+    loop = asyncio.get_event_loop()
+    while True:
+        await asyncio.sleep(interval)
+        now = loop.time()
+        for symbol in list(feed.activos):
+            ultimo = feed.metricas(symbol).get("ultimo")
+            if ultimo is None or now - ultimo > timeout:
+                log.warning(
+                    f"⏳ Reiniciando stream {symbol} tras {now - (ultimo or 0):.0f}s sin datos"
+                )
+                await feed.restart(symbol)
 

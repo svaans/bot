@@ -96,3 +96,40 @@ def test_stream_records_metrics_and_timeout(monkeypatch):
     metrics = feed.metricas("AAA")
     assert metrics["cuenta"] == 1
     assert metrics["ultimo"] is not None
+
+def test_monitor_timeout(monkeypatch):
+    called = {}
+
+    async def fake_monitor(self, symbol, call):
+        called['timeout'] = self.monitor_timeout
+        # cancel immediately
+        call.cancel()
+        return
+
+    monkeypatch.setattr(DataFeed, '_monitor_symbol', fake_monitor)
+
+    class FakeCall:
+        def cancel(self):
+            pass
+        def __aiter__(self):
+            return self
+        async def __anext__(self):
+            await asyncio.sleep(0)
+            raise StopAsyncIteration
+
+    class FakeStub:
+        def __init__(self, channel):
+            pass
+        def Subscribe(self, req, timeout=None):
+            return FakeCall()
+
+    monkeypatch.setattr(candle_pb2_grpc, 'CandleServiceStub', lambda ch: FakeStub(ch))
+
+    feed = DataFeed('1m', monitor_timeout=2.5)
+
+    async def handler(c):
+        pass
+
+    asyncio.run(feed.stream('AAA', handler))
+
+    assert called['timeout'] == 2.5
