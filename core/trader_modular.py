@@ -887,21 +887,11 @@ class Trader:
         df.to_csv(self.registro_tecnico_csv, mode=modo, header=not os.path.
             exists(self.registro_tecnico_csv), index=False)
 
-    async def evaluar_condiciones_entrada(
-        self, symbol: str, df: pd.DataFrame
-    ) -> None:
+    async def evaluar_condiciones_entrada(self, symbol: str, df: pd.DataFrame) -> None:
         """
-        Evalúa y ejecuta una entrada si todas las condiciones se cumplen.
-        Incluye:
-        - recorte de df para evitar sobrecarga
-        - timeout en evaluación
-        - medición de rendimiento
+        Evalúa y ejecuta una entrada si todas las condiciones se cumplen,
+        con protección de timeout sobre el motor sincrónico.
         """
-        # recortar historial a máximo 1000 filas
-        df = df.tail(1000)
-
-        t0 = time.perf_counter()
-
         estado = self.estado[symbol]
         config_actual = self.config_por_simbolo.get(symbol, {})
         dinamica = adaptar_configuracion(symbol, df)
@@ -915,74 +905,65 @@ class Trader:
             tendencia_actual, _ = detectar_tendencia(symbol, df)
             self.estado_tendencia[symbol] = tendencia_actual
 
+        loop = asyncio.get_running_loop()
         try:
             resultado = await asyncio.wait_for(
-                self.engine.evaluar_entrada(
-                    symbol,
-                    df,
-                    tendencia=tendencia_actual,
-                    config=config_actual,
-                    pesos_symbol=self.pesos_por_simbolo.get(symbol, {}),
+                loop.run_in_executor(
+                    None,
+                    lambda: self.engine.evaluar_entrada(
+                        symbol,
+                        df,
+                        tendencia=tendencia_actual,
+                        config=config_actual,
+                        pesos_symbol=self.pesos_por_simbolo.get(symbol, {})
+                    )
                 ),
-                timeout=10  # máximo 10s para la evaluación
+                timeout=30
             )
         except asyncio.TimeoutError:
-            self._rechazo(symbol, "timeout_engine", puntaje=9999, estrategias=[])
-            self.log.warning(f"⚠️ Timeout en engine.evaluar_entrada para {symbol}")
+            log.warning(f"⚠️ Timeout en evaluar_entrada para {symbol}")
+            self._rechazo(symbol, "timeout_engine", estrategias=[])
             return
 
-        estrategias = resultado.get("estrategias_activas", {})
-        estado.buffer[-1]["estrategias_activas"] = estrategias
+        estrategias = resultado.get('estrategias_activas', {})
+        estado.buffer[-1]['estrategias_activas'] = estrategias
         self.persistencia.actualizar(symbol, estrategias)
 
-        precio_actual = float(df["close"].iloc[-1])
-        if not resultado.get("permitido"):
+        precio_actual = float(df['close'].iloc[-1])
+        if not resultado.get('permitido'):
             if self.usar_score_tecnico:
-                rsi = resultado.get("rsi")
-                mom = resultado.get("momentum")
+                rsi = resultado.get('rsi')
+                mom = resultado.get('momentum')
                 score, puntos = self._calcular_score_tecnico(
                     df, rsi, mom,
                     tendencia_actual,
-                    "short" if tendencia_actual == "bajista" else "long"
+                    'short' if tendencia_actual == 'bajista' else 'long'
                 )
                 self._registrar_rechazo_tecnico(
-                    symbol, score, puntos, tendencia_actual,
-                    precio_actual,
-                    resultado.get("motivo_rechazo", "desconocido"),
+                    symbol, score, puntos, tendencia_actual, precio_actual,
+                    resultado.get('motivo_rechazo', 'desconocido'),
                     estrategias
                 )
             self._rechazo(
                 symbol,
-                resultado.get("motivo_rechazo", "desconocido"),
-                puntaje=resultado.get("score_total"),
+                resultado.get('motivo_rechazo', 'desconocido'),
+                puntaje=resultado.get('score_total'),
                 estrategias=list(estrategias.keys())
             )
             return
 
-        try:
-            info = await asyncio.wait_for(
-                self.evaluar_condiciones_de_entrada(symbol, df, estado),
-                timeout=10  # máximo 10s también
-            )
-        except asyncio.TimeoutError:
-            self._rechazo(symbol, "timeout_filtros_post_engine", puntaje=9999, estrategias=list(estrategias.keys()))
-            self.log.warning(f"⚠️ Timeout en filtros_post_engine para {symbol}")
-            return
-
+        info = await self.evaluar_condiciones_de_entrada(symbol, df, estado)
         if not info:
             self._rechazo(
-                symbol, "filtros_post_engine",
-                puntaje=resultado.get("score_total"),
+                symbol,
+                'filtros_post_engine',
+                puntaje=resultado.get('score_total'),
                 estrategias=list(estrategias.keys())
             )
             return
 
         await self._abrir_operacion_real(**info)
 
-        t1 = time.perf_counter()
-        self.log.info(
-            f"✅ evaluar_condiciones_entrada completada en {t1 - t0:.3f}s para {symbol}"
-        )
 
     async def _abrir_operacion_real(self, symbol: str, precio: float, sl:
         float, tp: float, estrategias: (Dict | List), tendencia: str,
