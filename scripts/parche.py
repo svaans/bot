@@ -1,47 +1,104 @@
+# super_refactor.py
 import ast
-import astor
 import os
 
+EXCLUDE_DIRS = {"venv", "__pycache__", ".git"}
 
-class TryExceptContextFixer(ast.NodeTransformer):
+def is_while_true_without_break(node: ast.While) -> bool:
+    """
+    Detecta while True sin break ni return
+    """
+    if isinstance(node.test, ast.Constant) and node.test.value is True:
+        for n in ast.walk(node):
+            if isinstance(n, (ast.Break, ast.Return)):
+                return False
+        return True
+    return False
 
-    def visit_FunctionDef(self, node):
-        """
-        Visita cada función para inyectar un except en sus try sin except
-        """
-        func_name = node.name
-        for stmt in node.body:
-            if isinstance(stmt, ast.Try) and not stmt.handlers:
-                print(
-                    f"🔧 AUTO-FIX en función '{func_name}' línea {stmt.lineno}")
-                new_handler = ast.ExceptHandler(type=ast.Name(id=
-                    'Exception', ctx=ast.Load()), name='e', body=[ast.
-                    Import(names=[ast.alias(name='traceback', asname=None)]
-                    ), ast.Expr(value=ast.Call(func=ast.Attribute(value=ast
-                    .Name(id='log', ctx=ast.Load()), attr='warning', ctx=
-                    ast.Load()), args=[ast.JoinedStr(values=[ast.Str(s=
-                    f'⚠️ AUTO-FIX en función {func_name}: '), ast.
-                    FormattedValue(value=ast.Name(id='e', ctx=ast.Load()),
-                    conversion=-1)])], keywords=[ast.keyword(arg='exc_info',
-                    value=ast.NameConstant(value=True))]))])
-                stmt.handlers.append(new_handler)
-        return self.generic_visit(node)
+def is_try_without_except(node: ast.Try) -> bool:
+    """
+    Detecta try sin except
+    """
+    return len(node.handlers) == 0
+
+def is_run_in_executor_without_timeout(node: ast.Call, ancestors) -> bool:
+    """
+    Detecta run_in_executor sin asyncio.wait_for envolvente
+    """
+    if isinstance(node.func, ast.Attribute) and node.func.attr == "run_in_executor":
+        for parent in ancestors:
+            if isinstance(parent, ast.Call):
+                if isinstance(parent.func, ast.Attribute):
+                    if parent.func.attr == "wait_for":
+                        return False
+        return True
+    return False
+
+def analyze_file(filepath):
+    try:
+        with open(filepath, encoding="utf-8") as f:
+            source = f.read()
+        tree = ast.parse(source)
+    except Exception as e:
+        print(f"⚠️ No se pudo analizar {filepath}: {e}")
+        return []
+
+    findings = []
+
+    # recorrer nodos con ancestros
+    ancestors = []
+
+    for node in ast.walk(tree):
+        ancestors.append(node)
+        if isinstance(node, ast.While):
+            if is_while_true_without_break(node):
+                findings.append({
+                    "archivo": filepath,
+                    "linea": node.lineno,
+                    "tipo": "while True",
+                    "prioridad": "alta",
+                    "razon": "bucle infinito sin break/return"
+                })
+        if isinstance(node, ast.Try):
+            if is_try_without_except(node):
+                findings.append({
+                    "archivo": filepath,
+                    "linea": node.lineno,
+                    "tipo": "try",
+                    "prioridad": "media",
+                    "razon": "try sin except"
+                })
+        if isinstance(node, ast.Call):
+            if is_run_in_executor_without_timeout(node, ancestors):
+                findings.append({
+                    "archivo": filepath,
+                    "linea": node.lineno,
+                    "tipo": "run_in_executor",
+                    "prioridad": "media",
+                    "razon": "run_in_executor sin wait_for envolvente"
+                })
+    return findings
+
+def scan_project(root_dir="."):
+    all_findings = []
+    for dirpath, dirnames, filenames in os.walk(root_dir):
+        # excluir carpetas
+        dirnames[:] = [d for d in dirnames if d not in EXCLUDE_DIRS]
+        for file in filenames:
+            if file.endswith(".py"):
+                fullpath = os.path.join(dirpath, file)
+                findings = analyze_file(fullpath)
+                all_findings.extend(findings)
+    return all_findings
+
+if __name__ == "__main__":
+    print("🔎 Escaneando proyecto (análisis semántico AST, no se parchea)...")
+    results = scan_project()
+    if results:
+        print(f"\n=== Reporte de puntos críticos detectados ===")
+        for item in results:
+            print(f"📌 {item['archivo']}:{item['linea']} [{item['prioridad']}] {item['razon']}")
+    else:
+        print("✅ Sin problemas detectados a nivel de sintaxis estructural.")
 
 
-def autoparchear_archivo(path):
-    with open(path, encoding='utf-8') as f:
-        src = f.read()
-    tree = ast.parse(src)
-    fixer = TryExceptContextFixer()
-    tree = fixer.visit(tree)
-    new_src = astor.to_source(tree)
-    with open(path, 'w', encoding='utf-8') as f:
-        f.write(new_src)
-
-
-for root, dirs, files in os.walk('.'):
-    if 'venv' in root:
-        continue
-    for file in files:
-        if file.endswith('.py'):
-            autoparchear_archivo(os.path.join(root, file))
