@@ -23,6 +23,13 @@ from core.utils.utils import guardar_orden_real
 
 import math
 
+# Importar la excepción InsufficientFunds si está disponible en la API de Binance o definirla aquí
+try:
+    from ccxt.base.errors import InsufficientFunds
+except ImportError:
+    class InsufficientFunds(Exception):
+        pass
+
 log = configurar_logger("ordenes")
 
 # Base absoluto del proyecto para almacenar la base de datos siempre en la
@@ -199,7 +206,7 @@ def sincronizar_ordenes_binance(simbolos: list[str] | None = None) -> dict[str, 
                 ordenes_api.extend(cliente.fetch_open_orders(s))
         else:
             ordenes_api = cliente.fetch_open_orders()
-    except BaseError as e:
+    except Exception as e:
         log.error(f"❌ Error consultando órdenes abiertas: {e}")
         return cargar_ordenes()
 
@@ -362,11 +369,30 @@ def ejecutar_orden_market(symbol: str, cantidad: float) -> float:
         markets = cliente.load_markets()
         market_info = markets.get(symbol.replace("/", ""), {})
 
+        precision = market_info.get("precision", {}).get("amount", 8)
+        step_size = 10 ** -precision
+        cantidad = math.floor(cantidad / step_size) * step_size
+
+        if cantidad <= 0:
+            log.error(f"⛔ Cantidad ajustada inválida para {symbol}: {cantidad}")
+            return 0.0
+
         min_amount = float(market_info.get("limits", {}).get("amount", {}).get("min") or 0)
         min_cost = float(market_info.get("limits", {}).get("cost", {}).get("min") or 0)
 
         ticker = cliente.fetch_ticker(symbol.replace("/", ""))
         precio = float(ticker.get("last") or ticker.get("close") or 0)
+
+        quote = symbol.split("/")[1]
+        balance = cliente.fetch_balance()
+        disponible_quote = balance.get("free", {}).get(quote, 0)
+
+        if precio and cantidad * precio > disponible_quote:
+            log.error(
+                f"⛔ Compra cancelada por saldo insuficiente en {symbol}. "
+                f"Requerido: {cantidad * precio:.2f} {quote}, disponible: {disponible_quote:.2f}"
+            )
+            return 0.0
 
         if cantidad < min_amount or (precio and cantidad * precio < min_cost):
             log.error(
@@ -383,11 +409,8 @@ def ejecutar_orden_market(symbol: str, cantidad: float) -> float:
         log.info(f"🟢 Order real ejecutada: {symbol}, cantidad: {ejecutado}")
         return ejecutado
 
-    except BaseError as e:
-        log.error(f"❌ Error en Binance al ejecutar compra en {symbol}: {e}")
-        raise
     except Exception as e:
-        log.error(f"❌ Error estructural al ejecutar orden real en {symbol}: {e}")
+        log.error(f"❌ Error en Binance al ejecutar compra en {symbol}: {e}")
         raise
 
 def ejecutar_orden_market_sell(symbol: str, cantidad: float) -> float:
@@ -459,12 +482,8 @@ def ejecutar_orden_market_sell(symbol: str, cantidad: float) -> float:
         _VENTAS_FALLIDAS.add(symbol)
         return 0.0
 
-    except BaseError as e:
-        log.error(f"❌ Error en intercambio al vender {symbol}: {e}")
-        raise
-
     except Exception as e:
-        log.error(f"❌ Error estructural al ejecutar venta para {symbol}: {e}")
+        log.error(f"❌ Error en intercambio al vender {symbol}: {e}")
         raise
 
 
