@@ -13,6 +13,7 @@ from indicators.rsi import calcular_rsi
 from indicators.momentum import calcular_momentum
 from indicators.slope import calcular_slope
 from core.utils.utils import distancia_minima_valida
+from core.metricas_semanales import metricas_tracker
 log = configurar_logger('verificar_entrada')
 
 
@@ -40,11 +41,12 @@ async def verificar_entrada(trader, symbol: str, df: pd.DataFrame, estado) -> di
         df,
         tendencia=tendencia,
         config=config,
-        pesos_symbol=trader.pesos_por_simbolo.get(symbol, {})
+        pesos_symbol=trader.pesos_por_simbolo.get(symbol, {}),
     )
-    estrategias = engine_eval.get('estrategias_activas', {})
+    estrategias = engine_eval.get("estrategias_activas", {})
     if not estrategias:
         log.warning(f"[{symbol}] Sin estrategias activas tras engine.")
+        metricas_tracker.registrar_filtro("sin_estrategias")
         return None
 
     log.debug(f"[{symbol}] Estrategias activas: {list(estrategias.keys())}")
@@ -53,12 +55,21 @@ async def verificar_entrada(trader, symbol: str, df: pd.DataFrame, estado) -> di
 
     # buffer corto → persistencia
     buffer_len = len(estado.buffer)
-    persistencia_score = coincidencia_parcial(estado.buffer[-100:], trader.pesos_por_simbolo.get(symbol, {}), ventanas=5)
+    persistencia_score = coincidencia_parcial(
+        estado.buffer[-100:], trader.pesos_por_simbolo.get(symbol, {}), ventanas=5
+    )
     if buffer_len < 30 and persistencia_score < 1:
+        metricas_tracker.registrar_filtro("prebuffer")
         return None
 
     # umbral
-    umbral = calcular_umbral_adaptativo(symbol, df, estrategias, trader.pesos_por_simbolo.get(symbol, {}), persistencia_score)
+    umbral = calcular_umbral_adaptativo(
+        symbol,
+        df,
+        estrategias,
+        trader.pesos_por_simbolo.get(symbol, {}),
+        persistencia_score,
+    )
     estrategias_persistentes = {
         e: True
         for e, activo in estrategias.items()
@@ -67,7 +78,9 @@ async def verificar_entrada(trader, symbol: str, df: pd.DataFrame, estado) -> di
 
     # filtrar por dirección
     direccion = "short" if tendencia == "bajista" else "long"
-    estrategias_persistentes, incoherentes = filtrar_por_direccion(estrategias_persistentes, direccion)
+    estrategias_persistentes, incoherentes = filtrar_por_direccion(
+        estrategias_persistentes, direccion
+    )
     penalizacion = 0.05 * len(incoherentes) ** 2 if incoherentes else 0.0
     puntaje = sum(trader.pesos_por_simbolo.get(e, 0) for e in estrategias_persistentes)
     puntaje += trader.persistencia.peso_extra * len(estrategias_persistentes)
@@ -76,52 +89,80 @@ async def verificar_entrada(trader, symbol: str, df: pd.DataFrame, estado) -> di
     # cool down
     cierre = trader.historial_cierres.get(symbol)
     if cierre:
-        motivo = cierre.get('motivo')
-        if motivo == 'stop loss':
-            velas = cierre.get('velas', 0) + 1
-            cierre['velas'] = velas
-            if velas < int(config.get('cooldown_tras_perdida', 5)):
+        motivo = cierre.get("motivo")
+        if motivo == "stop loss":
+            velas = cierre.get("velas", 0) + 1
+            cierre["velas"] = velas
+            if velas < int(config.get("cooldown_tras_perdida", 5)):
                 log.info(f"[{symbol}] Cooldown tras stop loss ({velas}) activo.")
+                metricas_tracker.registrar_filtro("cooldown")
                 return None
             trader.historial_cierres.pop(symbol, None)
-        elif motivo == 'cambio de tendencia':
-            precio_actual = float(df['close'].iloc[-1])
-            if not trader._validar_reentrada_tendencia(symbol, df, cierre, precio_actual):
-                cierre['velas'] = cierre.get('velas', 0) + 1
+        elif motivo == "cambio de tendencia":
+            precio_actual = float(df["close"].iloc[-1])
+            if not trader._validar_reentrada_tendencia(
+                symbol, df, cierre, precio_actual
+            ):
+                cierre["velas"] = cierre.get("velas", 0) + 1
+                metricas_tracker.registrar_filtro("reentrada_tendencia")
                 return None
             trader.historial_cierres.pop(symbol, None)
 
     # bloqueos de pérdidas consecutivas
     hoy = datetime.utcnow().date().isoformat()
-    if cierre and cierre.get('fecha_perdidas') == hoy and cierre.get('perdidas_consecutivas', 0) >= 6:
+    if (
+        cierre
+        and cierre.get("fecha_perdidas") == hoy
+        and cierre.get("perdidas_consecutivas", 0) >= 6
+    ):
         log.info(f"[{symbol}] Bloqueado por pérdidas consecutivas en el día.")
+        metricas_tracker.registrar_filtro("perdidas_consecutivas")
         return None
 
     # validaciones de consistencia
-    peso_total = sum(trader.pesos_por_simbolo.get(e, 0) for e in estrategias_persistentes)
-    peso_min_total = config.get('peso_minimo_total', 0.5)
-    diversidad_min = config.get('diversidad_minima', 2)
+    peso_total = sum(
+        trader.pesos_por_simbolo.get(e, 0) for e in estrategias_persistentes
+    )
+    peso_min_total = config.get("peso_minimo_total", 0.5)
+    diversidad_min = config.get("diversidad_minima", 2)
     ok_pers, valor_pers, minimo_pers = trader._evaluar_persistencia(
-        symbol, estado, df, trader.pesos_por_simbolo.get(symbol, {}), tendencia, puntaje, umbral, estrategias
+        symbol,
+        estado,
+        df,
+        trader.pesos_por_simbolo.get(symbol, {}),
+        tendencia,
+        puntaje,
+        umbral,
+        estrategias,
     )
 
     razones = []
-    if not trader._validar_puntaje(symbol, puntaje, umbral, config.get('modo_agresivo', False)):
-        razones.append('puntaje')
-    if not await trader._validar_diversidad(
-        symbol, peso_total, peso_min_total, estrategias_persistentes, diversidad_min,
-        trader.pesos_por_simbolo.get(symbol, {}), df, config.get('modo_agresivo', False)
+    if not trader._validar_puntaje(
+        symbol, puntaje, umbral, config.get("modo_agresivo", False)
     ):
-        razones.append('diversidad')
+        razones.append("puntaje")
+    if not await trader._validar_diversidad(
+        symbol,
+        peso_total,
+        peso_min_total,
+        estrategias_persistentes,
+        diversidad_min,
+        trader.pesos_por_simbolo.get(symbol, {}),
+        df,
+        config.get("modo_agresivo", False),
+    ):
+        razones.append("diversidad")
     if not trader._validar_estrategia(symbol, df, estrategias):
-        razones.append('estrategia')
+        razones.append("estrategia")
     if not ok_pers:
-        razones.append('persistencia')
+        razones.append("persistencia")
 
     if razones:
-        agresivo = config.get('modo_agresivo', False)
+        agresivo = config.get("modo_agresivo", False)
         if not agresivo or len(razones) > 2:
             log.info(f"[{symbol}] Rechazo por: {razones}")
+            for r in razones:
+                metricas_tracker.registrar_filtro(r)
             return None
 
     # score técnico
@@ -129,35 +170,49 @@ async def verificar_entrada(trader, symbol: str, df: pd.DataFrame, estado) -> di
         rsi = calcular_rsi(df)
         momentum = calcular_momentum(df)
         slope = calcular_slope(df)
-        score_tecnico, puntos = trader._calcular_score_tecnico(df, rsi, momentum, tendencia, direccion)
+        score_tecnico, puntos = trader._calcular_score_tecnico(
+            df, rsi, momentum, tendencia, direccion
+        )
         log.debug(f"[{symbol}] Score técnico {score_tecnico:.2f} componentes: {puntos}")
     else:
         score_tecnico = None
 
     # SL y TP
-    precio = float(df['close'].iloc[-1])
+    precio = float(df["close"].iloc[-1])
     sl, tp = calcular_tp_sl_adaptativos(
         symbol, df, config, trader.capital_por_simbolo.get(symbol, 0), precio
     )
     if not distancia_minima_valida(precio, sl, tp):
         log.warning(f"[{symbol}] SL/TP distancia mínima no válida: SL {sl} TP {tp}")
+        metricas_tracker.registrar_filtro("sl_tp")
         return None
 
     # score técnico final
     eval_tecnica = evaluar_puntaje_tecnico(symbol, df, precio, sl, tp)
-    score_total = eval_tecnica['score_total']
-    vol = df['volume'].iloc[-1] / (df['volume'].rolling(20).mean().iloc[-1] or 1) if 'volume' in df.columns else 0
-    volatilidad = df['close'].pct_change().tail(20).std()
+    score_total = eval_tecnica["score_total"]
+    vol = (
+        df["volume"].iloc[-1] / (df["volume"].rolling(20).mean().iloc[-1] or 1)
+        if "volume" in df.columns
+        else 0
+    )
+    volatilidad = df["close"].pct_change().tail(20).std()
     pesos_simbolo = cargar_pesos_tecnicos(symbol)
     score_max = sum(pesos_simbolo.values())
-    umbral_tecnico = calc_umbral_tecnico(score_max, tendencia, volatilidad, vol, estrategias_persistentes)
+    umbral_tecnico = calc_umbral_tecnico(
+        score_max, tendencia, volatilidad, vol, estrategias_persistentes
+    )
 
     if score_total < umbral_tecnico:
-        log.info(f"[{symbol}] Score técnico {score_total:.2f} menor que umbral {umbral_tecnico:.2f}")
+        log.info(
+            f"[{symbol}] Score técnico {score_total:.2f} menor que umbral {umbral_tecnico:.2f}"
+        )
+        metricas_tracker.registrar_filtro("score_tecnico")
         return None
 
     # resultado
-    log.info(f"✅ [{symbol}] Señal de entrada generada con {len(estrategias_persistentes)} estrategias activas.")
+    log.info(
+        f"✅ [{symbol}] Señal de entrada generada con {len(estrategias_persistentes)} estrategias activas."
+    )
     return {
         "symbol": symbol,
         "precio": precio,
@@ -169,6 +224,6 @@ async def verificar_entrada(trader, symbol: str, df: pd.DataFrame, estado) -> di
         "tendencia": tendencia,
         "direccion": direccion,
         "score_tecnico": score_tecnico,
-        "detalles_tecnicos": eval_tecnica.get("detalles", {})
+        "detalles_tecnicos": eval_tecnica.get("detalles", {}),
     }
 
