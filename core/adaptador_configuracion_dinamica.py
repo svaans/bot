@@ -103,10 +103,10 @@ def adaptar_configuracion(symbol: str, df: pd.DataFrame) -> dict:
         cooldown_tras_perdida = 1
 
     diversidad_minima = 2
-    if modo_agresivo and atr_pct < 0.015:
+    if atr_pct < 0.012 or slope_pct > 0.003:
         diversidad_minima = 1
-    elif not modo_agresivo and atr_pct > 0.02:
-        diversidad_minima = 2
+    elif modo_agresivo and atr_pct < 0.015:
+        diversidad_minima = 1
 
     config = {
         "modo_agresivo": modo_agresivo,

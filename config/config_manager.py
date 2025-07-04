@@ -38,12 +38,12 @@ class Config:
     symbols: List[str]
     umbral_riesgo_diario: float
     min_order_eur: float
-    persistencia_minima: int = 2
+    persistencia_minima: int = 1
     peso_extra_persistencia: float = 0.5
     modo_capital_bajo: bool = False
     telegram_token: str | None = None
     telegram_chat_id: str | None = None
-    umbral_score_tecnico: float = 1.0
+    umbral_score_tecnico: float = 2.0
     usar_score_tecnico: bool = True
     contradicciones_bloquean_entrada: bool = True
     registro_tecnico_csv: str = "logs/rechazos_tecnico.csv"
