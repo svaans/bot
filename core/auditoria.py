@@ -3,8 +3,8 @@ import os
 from datetime import datetime
 from threading import Lock
 import pandas as pd
-
 _lock = Lock()
+
 
 def _serializar(valor):
     if isinstance(valor, (dict, list)):
@@ -14,47 +14,25 @@ def _serializar(valor):
             return str(valor)
     return valor
 
-def registrar_auditoria(
-    symbol: str,
-    evento: str,
-    resultado: str,
-    *,
-    estrategias_activas=None,
-    score=None,
-    rsi=None,
-    volumen_relativo=None,
-    tendencia=None,
-    razon=None,
-    capital_actual=None,
-    config_usada=None,
-    comentario=None,
-    archivo: str = "informes/auditoria_bot.csv",
-    formato: str = "csv",
-) -> None:
+
+def registrar_auditoria(symbol: str, evento: str, resultado: str, *,
+    estrategias_activas=None, score=None, rsi=None, volumen_relativo=None,
+    tendencia=None, razon=None, capital_actual=None, config_usada=None,
+    comentario=None, archivo: str='informes/auditoria_bot.csv', formato:
+    str='csv') ->None:
     """Registra decisiones críticas del bot en un archivo CSV o Parquet."""
-
-    os.makedirs("logs_auditoria", exist_ok=True)
+    os.makedirs('logs_auditoria', exist_ok=True)
     os.makedirs(os.path.dirname(archivo), exist_ok=True)
-
-    registro = {
-        "timestamp": datetime.utcnow().isoformat(),
-        "symbol": symbol,
-        "evento": evento,
-        "resultado": resultado,
-        "estrategias_activas": _serializar(estrategias_activas),
-        "score": score,
-        "rsi": rsi,
-        "volumen_relativo": volumen_relativo,
-        "tendencia": tendencia,
-        "razon": _serializar(razon),
-        "capital_actual": capital_actual,
-        "config_usada": _serializar(config_usada),
-        "comentario": comentario,
-    }
-
+    registro = {'timestamp': datetime.utcnow().isoformat(), 'symbol':
+        symbol, 'evento': evento, 'resultado': resultado,
+        'estrategias_activas': _serializar(estrategias_activas), 'score':
+        score, 'rsi': rsi, 'volumen_relativo': volumen_relativo,
+        'tendencia': tendencia, 'razon': _serializar(razon),
+        'capital_actual': capital_actual, 'config_usada': _serializar(
+        config_usada), 'comentario': comentario}
     df = pd.DataFrame([registro])
     with _lock:
-        if formato == "parquet":
+        if formato == 'parquet':
             if os.path.exists(archivo):
                 try:
                     existente = pd.read_parquet(archivo)
@@ -63,6 +41,6 @@ def registrar_auditoria(
                     pass
             df.to_parquet(archivo, index=False)
         else:
-            modo = "a" if os.path.exists(archivo) else "w"
+            modo = 'a' if os.path.exists(archivo) else 'w'
             cab = not os.path.exists(archivo)
             df.to_csv(archivo, mode=modo, header=cab, index=False)

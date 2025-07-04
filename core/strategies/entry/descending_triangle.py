@@ -1,21 +1,14 @@
 import pandas as pd
 
-def descending_triangle(df: pd.DataFrame) -> dict:
+
+def descending_triangle(df: pd.DataFrame) ->dict:
     if len(df) < 20:
-        return {"activo": False, "mensaje": "Insuficientes datos"}
-
+        return {'activo': False, 'mensaje': 'Insuficientes datos'}
     ultimos = df.tail(10)
-    altos = ultimos["high"]
-    bajos = ultimos["low"]
-
+    altos = ultimos['high']
+    bajos = ultimos['low']
     soporte = min(bajos)
     maximos = altos.rolling(window=3).max()
-
-    # Reglas:
-    # - soporte plano (mínimos constantes o similares)
-    # - máximos decrecientes
     if maximos.is_monotonic_decreasing:
-        return {"activo": True, "mensaje": "Triángulo descendente detectado"}
-
-    return {"activo": False, "mensaje": "Sin triángulo descendente"}
-
+        return {'activo': True, 'mensaje': 'Triángulo descendente detectado'}
+    return {'activo': False, 'mensaje': 'Sin triángulo descendente'}

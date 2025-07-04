@@ -1,20 +1,15 @@
 from __future__ import annotations
 from core.utils.utils import configurar_logger
-
-log = configurar_logger("salida_utils")
-
-PRIORIDAD_EVENTOS = {
-    "Stop Loss": 3,
-    "Take Profit": 2,
-    "Trailing Stop": 1,
-    "Tecnico": 0,
-}
+log = configurar_logger('salida_utils')
+PRIORIDAD_EVENTOS = {'Stop Loss': 3, 'Take Profit': 2, 'Trailing Stop': 1,
+    'Tecnico': 0}
 
 
-def resultado_salida(evento: str, cerrar: bool, razon: str, logger=None, **extras) -> dict:
+def resultado_salida(evento: str, cerrar: bool, razon: str, logger=None, **
+    extras) ->dict:
     """Genera un diccionario estándar para resultados de salida."""
     if logger and cerrar:
-        logger.info(f"{evento} → {razon}")
-    data = {"cerrar": cerrar, "evento": evento, "razon": razon}
+        logger.info(f'{evento} → {razon}')
+    data = {'cerrar': cerrar, 'evento': evento, 'razon': razon}
     data.update(extras)
     return data

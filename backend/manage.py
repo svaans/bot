@@ -1,7 +1,7 @@
-#!/usr/bin/env python
 """Django's command-line utility for administrative tasks."""
 import os
 import sys
+
 
 def main():
     """Run administrative tasks."""
@@ -10,9 +10,10 @@ def main():
         from django.core.management import execute_from_command_line
     except ImportError as exc:
         raise ImportError(
-            "No se pudo importar Django. ¿Está instalado y disponible en tu entorno?"
-        ) from exc
+            'No se pudo importar Django. ¿Está instalado y disponible en tu entorno?'
+            ) from exc
     execute_from_command_line(sys.argv)
+
 
 if __name__ == '__main__':
     main()

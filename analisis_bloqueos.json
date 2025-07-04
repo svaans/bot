@@ -1,0 +1,47 @@
+[
+  {
+    "archivo": ".\\binance_api\\websocket.py",
+    "linea": 48,
+    "tipo": "try sin except",
+    "peligro": "media",
+    "contexto": [
+      "            intentos = 0  # reiniciar intentos al conectar",
+      "            watchdog = asyncio.create_task(_watchdog(ws, symbol))",
+      "",
+      "            try:",
+      "                async for msg in ws:",
+      "                    try:",
+      "                        data = json.loads(msg)"
+    ]
+  },
+  {
+    "archivo": ".\\core\\trader_modular.py",
+    "linea": 687,
+    "tipo": "while True sin break/return",
+    "peligro": "alta",
+    "contexto": [
+      "    async def _ciclo_aprendizaje(self, intervalo: int = 86400) -> None:",
+      "        \"\"\"Ejecuta el proceso de aprendizaje continuo periódicamente.\"\"\"",
+      "        await asyncio.sleep(1)",
+      "        while True:",
+      "            try:",
+      "                loop = asyncio.get_running_loop()",
+      "                await loop.run_in_executor(None, ciclo_aprendizaje)"
+    ]
+  },
+  {
+    "archivo": ".\\core\\orders\\real_orders.py",
+    "linea": 572,
+    "tipo": "while True sin break/return",
+    "peligro": "alta",
+    "contexto": [
+      "",
+      "async def flush_periodico(interval: int = _FLUSH_INTERVAL) -> None:",
+      "    \"\"\"Ejecuta :func:`flush_operaciones` cada ``interval`` segundos.\"\"\"",
+      "    while True:",
+      "        await asyncio.sleep(interval)",
+      "        try:",
+      "            flush_operaciones()"
+    ]
+  }
+]

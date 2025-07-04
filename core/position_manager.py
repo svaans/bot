@@ -1,18 +1,17 @@
 from __future__ import annotations
-
 from core.orders.order_manager import OrderManager
 
 
 class PositionManager:
     """Gestión de posiciones abiertas usando :class:`OrderManager`."""
 
-    def __init__(self, modo_real: bool, risk=None, notificador=None) -> None:
+    def __init__(self, modo_real: bool, risk=None, notificador=None) ->None:
         self._manager = OrderManager(modo_real, risk, notificador)
 
     @property
     def ordenes(self):
         return self._manager.ordenes
-    
+
     @ordenes.setter
     def ordenes(self, value):
         self._manager.ordenes = value
