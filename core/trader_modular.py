@@ -3,7 +3,7 @@
 from __future__ import annotations
 import asyncio
 from dataclasses import dataclass
-from typing import Dict, List
+from typing import Dict, List, Callable, Awaitable
 from datetime import datetime, timedelta, date
 import json
 import os
@@ -23,11 +23,7 @@ from binance_api.cliente import (
     fetch_balance_async,
     fetch_ohlcv_async,
 )
-from core.adaptador_dinamico import (
-    calcular_umbral_adaptativo,
-    calcular_tp_sl_adaptativos,
-)
-from core.utils.utils import distancia_minima_valida, leer_reporte_seguro
+from core.utils.utils import leer_reporte_seguro
 from core.strategies import cargar_pesos_estrategias
 from core.risk import calcular_fraccion_kelly
 from core.data import (
@@ -48,31 +44,19 @@ from core.reporting import reporter_diario
 from core.registro_metrico import registro_metrico
 from learning.aprendizaje_en_linea import registrar_resultado_trade
 from learning.aprendizaje_continuo import ejecutar_ciclo as ciclo_aprendizaje
-from core.strategies.exit.salida_trailing_stop import verificar_trailing_stop
-from core.strategies.exit.salida_por_tendencia import verificar_reversion_tendencia
 from core.strategies.exit.gestor_salidas import (
-    evaluar_salidas,
     verificar_filtro_tecnico,
 )
-from core.strategies.exit.salida_stoploss import verificar_salida_stoploss
-from core.strategies.exit.filtro_salidas import validar_necesidad_de_salida
+
 from core.strategies.tendencia import detectar_tendencia
-from core.strategies.exit.analisis_salidas import patron_tecnico_fuerte
 from core.strategies.entry.validador_entradas import evaluar_validez_estrategica
-from core.estrategias import filtrar_por_direccion
 from indicators.rsi import calcular_rsi
 from indicators.momentum import calcular_momentum
 from indicators.slope import calcular_slope
 from core.strategies.evaluador_tecnico import (
-    evaluar_puntaje_tecnico,
-    calcular_umbral_adaptativo as calc_umbral_tecnico,
-    cargar_pesos_tecnicos,
     actualizar_pesos_tecnicos,
 )
-from core.strategies.exit.analisis_previo_salida import (
-    permitir_cierre_tecnico,
-    evaluar_condiciones_de_cierre_anticipado,
-)
+
 from core.auditoria import registrar_auditoria
 from indicators.atr import calcular_atr
 from core.strategies.exit.verificar_salidas import verificar_salidas
@@ -186,10 +170,10 @@ class Trader:
             log.error(f"❌ {e}")
             raise
         self.historial_cierres: Dict[str, dict] = {}
-        self._task: asyncio.Task | None = None
-        self._task_estado: asyncio.Task | None = None
-        self._task_contexto: asyncio.Task | None = None
-        self._task_aprendizaje: asyncio.Task | None = None
+        self._tareas: dict[str, asyncio.Task] = {}
+        self._factories: dict[str, Callable[[], Awaitable]] = {}
+        self._stop_event = asyncio.Event()
+        self._cerrado = False
         self.context_stream = StreamContexto()
 
         try:
@@ -807,6 +791,35 @@ class Trader:
         df_precios = pd.DataFrame(precios)
         return df_precios.corr()
     
+    # --- Watchdog y tareas -----------------------------------------------
+
+    def _iniciar_tarea(self, nombre: str, factory: Callable[[], Awaitable]) -> None:
+        """Crea una tarea a partir de ``factory`` y la registra."""
+        self._factories[nombre] = factory
+        self._tareas[nombre] = asyncio.create_task(factory())
+
+    async def _vigilancia_tareas(self, intervalo: int = 60) -> None:
+        while not self._cerrado:
+            activos = 0
+            for nombre, task in list(self._tareas.items()):
+                if task.done():
+                    exc = task.exception()
+                    if exc:
+                        log.warning(
+                            f"⚠️ Heartbeat: tarea {nombre} terminó con error: {exc}"
+                        )
+                        self._iniciar_tarea(nombre, self._factories[nombre])
+                    elif task.cancelled():
+                        log.info(
+                            f"🟡 Heartbeat: tarea {nombre} fue cancelada manualmente"
+                        )
+                    else:
+                        activos += 1
+                else:
+                    activos += 1
+            log.info(f"🟢 Heartbeat: tareas activas {activos}/{len(self._tareas)}")
+            await asyncio.sleep(intervalo)
+    
     # Helpers de soporte -------------------------------------------------
 
     def _rechazo(
@@ -1339,45 +1352,20 @@ class Trader:
         symbols = list(self.estado.keys())
         await self._precargar_historico(velas=60)
 
-        def _log_fallo_task(task: asyncio.Task):
-            if task.cancelled():
-                log.warning("⚠️ Una tarea fue cancelada.")
-            elif task.exception():
-                log.error(f"❌ Error en tarea asincrónica: {task.exception()}")
-
-        self._task = asyncio.create_task(self.data_feed.escuchar(symbols, handle))
-        self._task.add_done_callback(_log_fallo_task)
-
-        self._task_estado = asyncio.create_task(monitorear_estado_periodicamente(self))
-        self._task_estado.add_done_callback(_log_fallo_task)
-
-        self._task_contexto = asyncio.create_task(
-            self.context_stream.escuchar(symbols, handle_context)
-        )
-        self._task_contexto.add_done_callback(_log_fallo_task)
-        self._task_flush = asyncio.create_task(real_orders.flush_periodico())
-        self._task_flush.add_done_callback(_log_fallo_task)
+        tareas: dict[str, Callable[[], Awaitable]] = {
+            "data_feed": lambda: self.data_feed.escuchar(symbols, handle),
+            "estado": lambda: monitorear_estado_periodicamente(self),
+            "context_stream": lambda: self.context_stream.escuchar(symbols, handle_context),
+            "flush": lambda: real_orders.flush_periodico(),
+        }
         if "PYTEST_CURRENT_TEST" not in os.environ:
-            self._task_aprendizaje = asyncio.create_task(self._ciclo_aprendizaje())
-            self._task_aprendizaje.add_done_callback(_log_fallo_task)
+            tareas["aprendizaje"] = lambda: self._ciclo_aprendizaje()
 
-        try:
-            tareas = [
-                self._task,
-                self._task_estado,
-                self._task_contexto,
-                self._task_flush,
-            ]
-            if self._task_aprendizaje:
-                tareas.append(self._task_aprendizaje)
-            await asyncio.gather(*tareas)
-        except Exception as e:
-            log.error(f"❌ Error inesperado en ejecución de tareas: {e}")
-            
-        tareas = [self._task, self._task_estado, self._task_contexto, self._task_flush]
-        if self._task_aprendizaje:
-            tareas.append(self._task_aprendizaje)
-        await asyncio.gather(*tareas)
+        for nombre, factory in tareas.items():
+            self._iniciar_tarea(nombre, factory)
+
+        self._iniciar_tarea("heartbeat", lambda: self._vigilancia_tareas())
+        await self._stop_event.wait()
 
     async def _procesar_vela(self, vela: dict) -> None:
         symbol = vela.get("symbol")
@@ -1388,34 +1376,15 @@ class Trader:
         return
 
     async def cerrar(self) -> None:
-        if self._task:
-            await self.data_feed.detener()
-            self._task.cancel()
-            try:
-                await self._task
-            except asyncio.CancelledError:
-                pass
-        if self._task_estado:
-            self._task_estado.cancel()
-            try:
-                await self._task_estado
-            except asyncio.CancelledError:
-                pass
-
-        if self._task_contexto:
-            await self.context_stream.detener()
-            self._task_contexto.cancel()
-            try:
-                await self._task_contexto
-            except asyncio.CancelledError:
-                pass
-            
-        if self._task_aprendizaje:
-            self._task_aprendizaje.cancel()
-            try:
-                await self._task_aprendizaje
-            except asyncio.CancelledError:
-                pass
+        self._cerrado = True
+        self._stop_event.set()
+        for nombre, tarea in list(self._tareas.items()):
+            if nombre == "data_feed":
+                await self.data_feed.detener()
+            if nombre == "context_stream":
+                await self.context_stream.detener()
+            tarea.cancel()
+        await asyncio.gather(*self._tareas.values(), return_exceptions=True)
 
         self._guardar_estado_persistente()
 
