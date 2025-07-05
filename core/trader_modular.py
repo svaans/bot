@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import time
 from dataclasses import dataclass
-from typing import Dict, List, Callable, Awaitable
+from typing import Dict, List, Callable, Awaitable, Any
 from datetime import datetime, timedelta, date
 import json
 import os
@@ -162,6 +162,50 @@ class Trader:
         else:
             log.debug('🔍 Modo prueba: se omite carga de estado persistente')
 
+    def _load_json_file(self, path: str) -> dict[str, Any]:
+        """Return file content as dict or empty dict on error."""
+        if not os.path.exists(path):
+            return {}
+        try:
+            with open(path) as f:
+                contenido = f.read()
+        except OSError as e:
+            log.warning(f'⚠️ Error abriendo {path}: {e}')
+            return {}
+        if not contenido.strip():
+            return {}
+        try:
+            data = json.loads(contenido)
+        except json.JSONDecodeError as e:
+            log.warning(f'⚠️ Error decodificando {path}: {e}')
+            return {}
+        return data if isinstance(data, dict) else {}
+
+    def _save_json_file(self, path: str, data: Any) -> None:
+        """Guardar ``data`` en ``path`` silenciosamente."""
+        try:
+            with open(path, 'w') as f:
+                json.dump(data, f, indent=2)
+        except OSError as e:
+            log.warning(f'⚠️ Error guardando {path}: {e}')
+
+    def _log_impacto_sl(self, orden, precio: float) -> None:
+        """Registra el impacto de evitar el stop loss."""
+        os.makedirs('logs', exist_ok=True)
+        for ev in orden.sl_evitar_info:
+            sl_val = ev.get('sl', 0.0)
+            peor = precio < sl_val if orden.direccion in ('long', 'compra') else precio > sl_val
+            mensaje = (
+                f'❗ Evitar SL en {orden.symbol} resultó en pérdida mayor ({precio:.2f} vs {sl_val:.2f})'
+                if peor else
+                f'👍 Evitar SL en {orden.symbol} fue beneficioso ({precio:.2f} vs {sl_val:.2f})'
+            )
+            with open('logs/impacto_sl.log', 'a') as f:
+                f.write(mensaje + '\n')
+            log.info(mensaje)
+        orden.sl_evitar_info = []
+
+
     async def cerrar_operacion(self, symbol: str, precio: float, motivo: str
         ) ->None:
         """Cierra una orden y actualiza los pesos si corresponden."""
@@ -197,20 +241,7 @@ class Trader:
         self.capital_por_simbolo[orden.symbol] = capital_final
         info['capital_final'] = capital_final
         if getattr(orden, 'sl_evitar_info', None):
-            os.makedirs('logs', exist_ok=True)
-            for ev in orden.sl_evitar_info:
-                sl_val = ev.get('sl', 0.0)
-                peor = precio < sl_val if orden.direccion in ('long', 'compra'
-                    ) else precio > sl_val
-                mensaje = (
-                    f'❗ Evitar SL en {orden.symbol} resultó en pérdida mayor ({precio:.2f} vs {sl_val:.2f})'
-                     if peor else
-                    f'👍 Evitar SL en {orden.symbol} fue beneficioso ({precio:.2f} vs {sl_val:.2f})'
-                    )
-                with open('logs/impacto_sl.log', 'a') as f:
-                    f.write(mensaje + '\n')
-                log.info(mensaje)
-            orden.sl_evitar_info = []
+            self._log_impacto_sl(orden, precio)
         reporter_diario.registrar_operacion(info)
         registrar_resultado_trade(orden.symbol, info, retorno_total)
         try:
@@ -1068,40 +1099,20 @@ class Trader:
         """Guarda historial de cierres y capital en ``estado/``."""
         try:
             os.makedirs('estado', exist_ok=True)
-            with open('estado/historial_cierres.json', 'w') as f:
-                json.dump(self.historial_cierres, f, indent=2)
-            with open('estado/capital.json', 'w') as f:
-                json.dump(self.capital_por_simbolo, f, indent=2)
+            self._save_json_file('estado/historial_cierres.json', self.historial_cierres)
+            self._save_json_file('estado/capital.json', self.capital_por_simbolo)
         except Exception as e:
             log.warning(f'⚠️ Error guardando estado persistente: {e}')
 
     def _cargar_estado_persistente(self) ->None:
         """Carga el estado previo de ``estado/`` si existe."""
         try:
-            if os.path.exists('estado/historial_cierres.json'):
-                with open('estado/historial_cierres.json') as f:
-                    contenido = f.read()
-                if contenido.strip():
-                    try:
-                        data = json.loads(contenido)
-                    except json.JSONDecodeError as e:
-                        log.warning(
-                            f'⚠️ Error leyendo historial_cierres.json: {e}')
-                        data = {}
-                    if isinstance(data, dict):
-                        self.historial_cierres.update(data)
-            if os.path.exists('estado/capital.json'):
-                with open('estado/capital.json') as f:
-                    contenido = f.read()
-                if contenido.strip():
-                    try:
-                        data = json.loads(contenido)
-                    except json.JSONDecodeError as e:
-                        log.warning(f'⚠️ Error leyendo capital.json: {e}')
-                        data = {}
-                    if isinstance(data, dict):
-                        self.capital_por_simbolo.update({k: float(v) for k,
-                            v in data.items()})
+            data = self._load_json_file('estado/historial_cierres.json')
+            if data:
+                self.historial_cierres.update(data)
+            data = self._load_json_file('estado/capital.json')
+            if data:
+                self.capital_por_simbolo.update({k: float(v) for k, v in data.items()})
         except Exception as e:
             log.warning(f'⚠️ Error cargando estado persistente: {e}')
 
