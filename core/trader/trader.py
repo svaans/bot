@@ -15,6 +15,7 @@ from core.contexto_externo import StreamContexto
 from core.orders import real_orders
 from core.capital_manager import CapitalManager
 from core.data import PersistenciaTecnica
+from .estado_symbol import SymbolState
 from .gestion_estado import cargar_estado_persistente
 from .gestion_estado import guardar_estado_persistente
 from .tareas import precargar_historico
@@ -59,7 +60,7 @@ class Trader:
         self.capital_inicial_diario = self.capital_manager.capital_inicial_diario
         self.reservas_piramide = self.capital_manager.reservas_piramide
         self.fecha_actual = self.capital_manager.fecha_actual
-        self.estado = {s: None for s in config.symbols}
+        self.estado = {s: SymbolState() for s in config.symbols}
         self.estado_tendencia = {}
         self.config_por_simbolo = {s: {} for s in config.symbols}
         self.historial_cierres = {}
