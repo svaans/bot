@@ -685,6 +685,19 @@ class Trader:
         ) ->bool:
         """Verifica que la diversidad y el peso total sean suficientes."""
         diversidad = len(estrategias_activas)
+        vol_factor = 1.0
+        volatilidad = 0.0
+        if df is not None and len(df) >= 30:
+            vol_act = float(df['volume'].iloc[-1])
+            vol_med = float(df['volume'].tail(30).mean())
+            if vol_med > 0:
+                vol_factor = vol_act / vol_med
+            ventana = df['close'].tail(30)
+            media = float(ventana.mean())
+            if media:
+                volatilidad = float(ventana.std()) / media
+        peso_min_total *= max(0.5, min(2.0, vol_factor * (1 + volatilidad)))
+        diversidad_min = max(1, int(round(diversidad_min * max(0.5, min(1.5, vol_factor)))))
         if self.modo_capital_bajo:
             euros = 0
             if self.modo_real and self.cliente:

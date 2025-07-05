@@ -23,19 +23,28 @@ def calcular_persistencia_minima(symbol: str, df: pd.DataFrame, tendencia:
         return base_minimo
     volatilidad = np.std(ventana) / media
     slope = calcular_slope(df, periodo=10)
+    if 'volume' in df.columns:
+        vol_act = float(df['volume'].iloc[-1])
+        vol_med = float(df['volume'].tail(10).mean())
+        vol_factor = vol_act / vol_med if vol_med > 0 else 1.0
+    else:
+        vol_factor = 1.0
     try:
         rsi = RSIIndicator(close=df['close'], window=14).rsi().iloc[-1]
     except Exception as e:
         log.debug(f'⚠️ [{symbol}] Error calculando RSI: {e}')
         rsi = 50
-    minimo = base_minimo * (1 + volatilidad * 0.5)
+    minimo = base_minimo * (1 + volatilidad * 0.5) * (1 + (vol_factor - 1) * 0.5)
     if tendencia == 'lateral':
-        minimo += 0.5
-    if (tendencia == 'alcista' and slope > 0.002 or tendencia == 'bajista' and
-        slope < -0.002):
-        minimo = max(minimo - 0.2, 0.5)
-    if rsi > 70 or rsi < 30:
-        minimo += 0.2
+        minimo += 0.5 * vol_factor
+    slope_thr = 0.002 * (1 + volatilidad)
+    if (tendencia == 'alcista' and slope > slope_thr or tendencia == 'bajista' and
+        slope < -slope_thr):
+        minimo = max(minimo - 0.2 * vol_factor, 0.5)
+    rsi_high = 70 - volatilidad * 20
+    rsi_low = 30 + volatilidad * 20
+    if rsi > rsi_high or rsi < rsi_low:
+        minimo += 0.2 * (2 - min(vol_factor, 2))
     minimo = round(max(0.5, min(minimo, 5.0)), 2)
     log.debug(
         f'[{symbol}] Persistencia adaptada: Base {base_minimo:.2f} -> {minimo:.2f} | Vol {volatilidad:.4f} | Slope {slope:.4f} | RSI {rsi:.2f}'
