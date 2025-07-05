@@ -78,7 +78,7 @@ class Trader:
         if self.orders.ordenes:
             log.warning('⚠️ Órdenes abiertas encontradas al iniciar. Serán monitoreadas.')
         if 'PYTEST_CURRENT_TEST' not in os.environ:
-            cargar_estado_persistente()
+            cargar_estado_persistente(self)
         else:
             log.debug('🔍 Modo prueba: se omite carga de estado persistente')
 
@@ -117,7 +117,7 @@ class Trader:
                 await self.context_stream.detener()
             tarea.cancel()
         await asyncio.gather(*self._tareas.values(), return_exceptions=True)
-        guardar_estado_persistente()
+        guardar_estado_persistente(self)
 
     async def _procesar_vela(self, vela: dict) -> None:
         symbol = vela.get('symbol')
