@@ -15,6 +15,9 @@ from core.contexto_externo import StreamContexto
 from core.orders import real_orders
 from core.capital_manager import CapitalManager
 from core.data import PersistenciaTecnica
+from .gestion_estado import cargar_estado_persistente
+from .gestion_estado import guardar_estado_persistente
+from .tareas import precargar_historico
 from core.adaptador_configuracion_dinamica import adaptar_configuracion
 from core.adaptador_dinamico import adaptar_configuracion as adaptar_configuracion_base
 from learning.aprendizaje_continuo import ejecutar_ciclo as ciclo_aprendizaje
@@ -75,7 +78,7 @@ class Trader:
         if self.orders.ordenes:
             log.warning('⚠️ Órdenes abiertas encontradas al iniciar. Serán monitoreadas.')
         if 'PYTEST_CURRENT_TEST' not in os.environ:
-            self._cargar_estado_persistente()
+            cargar_estado_persistente()
         else:
             log.debug('🔍 Modo prueba: se omite carga de estado persistente')
 
@@ -89,7 +92,7 @@ class Trader:
             log.debug(f'🔁 Contexto actualizado {symbol}: {score:.2f}')
 
         symbols = list(self.estado.keys())
-        await self._precargar_historico(velas=60)
+        await precargar_historico(velas=60)
         tareas = {
             'data_feed': lambda: self.data_feed.escuchar(symbols, handle),
             'estado': lambda: monitorear_estado_periodicamente(self),
@@ -97,7 +100,7 @@ class Trader:
             'flush': lambda: real_orders.flush_periodico()
         }
         if 'PYTEST_CURRENT_TEST' not in os.environ:
-            tareas['aprendizaje'] = lambda: self._ciclo_aprendizaje()
+            tareas['aprendizaje'] = lambda: ciclo_aprendizaje()
 
         for nombre, factory in tareas.items():
             self._iniciar_tarea(nombre, factory)
@@ -114,7 +117,7 @@ class Trader:
                 await self.context_stream.detener()
             tarea.cancel()
         await asyncio.gather(*self._tareas.values(), return_exceptions=True)
-        self._guardar_estado_persistente()
+        guardar_estado_persistente()
 
     async def _procesar_vela(self, vela: dict) -> None:
         symbol = vela.get('symbol')
