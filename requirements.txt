@@ -30,7 +30,7 @@ websockets==15.0.1            # Cliente WebSocket
 yarl==1.20.0                  # URLs inmutables
 frozenlist==1.6.0             # Listas inmutables (requerido por aiohttp)
 multidict==6.4.3              # Diccionarios multivalor (requerido por yarl)
-pycares==4.8.0                # Wrapper de c-ares para DNS
+pycares==4.9.0                # Wrapper de c-ares para DNS
 asyncio==3.4.3                # Librería async (en versiones antiguas de Python)
 
 # ───────── CONFIGURACIÓN Y UTILIDADES ─────────
