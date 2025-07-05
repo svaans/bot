@@ -19,7 +19,7 @@ async def main():
     observer = start_hot_reload(path=Path.cwd(), modules=None)
     try:
         from learning.reset_pesos import resetear_pesos_diarios_si_corresponde
-        from core.trader.trader import Trader
+        from core.trader_modular import Trader
     except ValueError as e:
         print(f'❌ {e}')
         return
