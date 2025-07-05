@@ -8,7 +8,10 @@ from datetime import datetime, timedelta
 from core.utils.utils import configurar_logger
 from core.reporting import reporter_diario
 from core.metricas_semanales import metricas_semanales
-from core.trader.trader import Trader  # Asegúrate de que la ruta de importación sea correcta
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from core.trader.trader import Trader
 
 log = configurar_logger("trader")
 

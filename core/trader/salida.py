@@ -6,7 +6,10 @@ import os
 from datetime import datetime
 from typing import Dict
 from core.utils.utils import configurar_logger
-from core.trader.trader import Trader  # Asegúrate de que la ruta de importación sea correcta
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from core.trader.trader import Trader
 from core.reporting import reporter_diario
 from core.registro_metrico import registro_metrico
 from learning.entrenador_estrategias import actualizar_pesos_estrategias_symbol

@@ -10,7 +10,10 @@ from indicators.rsi import calcular_rsi
 from indicators.momentum import calcular_momentum
 from indicators.slope import calcular_slope
 from core.metricas_semanales import metricas_tracker
-from core.trader.trader import Trader  # Asegúrate de que la ruta de importación sea correcta
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from core.trader.trader import Trader
 
 log = configurar_logger("trader")
 

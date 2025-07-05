@@ -5,7 +5,10 @@ import asyncio
 from typing import Dict, List
 import pandas as pd
 from datetime import datetime
-from core.trader.trader import Trader  # Asegúrate de que la ruta sea correcta
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from core.trader.trader import Trader
 from core.strategies.tendencia import detectar_tendencia
 from core.utils.utils import configurar_logger
 from core.strategies.entry.verificar_entradas import verificar_entrada

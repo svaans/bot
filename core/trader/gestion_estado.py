@@ -6,7 +6,10 @@ import json
 from core.utils.utils import configurar_logger
 
 # Importa la clase Trader para las anotaciones de tipo
-from core.trader.trader import Trader
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from core.trader.trader import Trader
 
 log = configurar_logger("trader")
 

@@ -6,7 +6,10 @@ from core.utils.utils import configurar_logger
 from learning.aprendizaje_continuo import ejecutar_ciclo as ciclo_aprendizaje
 from ccxt.base.errors import BaseError
 from binance_api.cliente import fetch_ohlcv_async
-from core.trader.trader import Trader  # Asegúrate de que la ruta sea correcta
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from core.trader.trader import Trader
 
 log = configurar_logger("trader")
 
