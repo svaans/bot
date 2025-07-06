@@ -7,6 +7,8 @@ from matplotlib.backends.backend_pdf import PdfPages
 from core.utils.utils import configurar_logger
 from core.utils.utils import leer_csv_seguro
 
+log = configurar_logger('reporte_diario')
+
 
 class ReporterDiario:
 
