@@ -14,6 +14,7 @@ class CapitalManager:
 
     def __init__(self, config: Config, cliente, risk: RiskManager,
         fraccion_kelly: float) ->None:
+        log.info('➡️ Entrando en __init__()')
         self.config = config
         self.cliente = cliente
         self.risk = risk
@@ -41,6 +42,7 @@ class CapitalManager:
         self.fecha_actual = datetime.utcnow().date()
 
     async def _obtener_minimo_binance(self, symbol: str) ->(float | None):
+        log.info('➡️ Entrando en _obtener_minimo_binance()')
         if not self.modo_real or not self.cliente:
             return None
         try:
@@ -56,6 +58,7 @@ class CapitalManager:
 
     async def calcular_cantidad_async(self, symbol: str, precio: float
         ) ->float:
+        log.info('➡️ Entrando en calcular_cantidad_async()')
         if self.modo_real and self.cliente:
             balance = await fetch_balance_async(self.cliente)
             euros = balance['total'].get('EUR', 0)
@@ -92,9 +95,11 @@ class CapitalManager:
         return round(cantidad, 6)
 
     def calcular_cantidad(self, symbol: str, precio: float) ->float:
+        log.info('➡️ Entrando en calcular_cantidad()')
         return asyncio.run(self.calcular_cantidad_async(symbol, precio))
 
     def actualizar_capital(self, symbol: str, retorno_total: float) ->float:
+        log.info('➡️ Entrando en actualizar_capital()')
         capital_inicial = self.capital_por_simbolo.get(symbol, 0.0)
         ganancia = capital_inicial * retorno_total
         capital_final = capital_inicial + ganancia

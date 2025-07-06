@@ -7,6 +7,7 @@ log = configurar_logger('websocket')
 
 
 def normalizar_symbolo(symbol: str) ->str:
+    log.info('➡️ Entrando en normalizar_symbolo()')
     return symbol.replace('/', '').lower()
 
 
@@ -14,6 +15,7 @@ INTERVALOS_VALIDOS = {'1m', '3m', '5m', '15m', '30m', '1h', '4h', '1d'}
 
 
 async def escuchar_velas(symbol: str, intervalo: str, callback):
+    log.info('➡️ Entrando en escuchar_velas()')
     """
     Conecta al websocket de Binance para recibir velas cerradas y
     llamar al callback con los datos normalizados.
@@ -99,6 +101,7 @@ async def escuchar_velas(symbol: str, intervalo: str, callback):
 
 
 async def _watchdog(ws, symbol, tiempo_maximo=300):
+    log.info('➡️ Entrando en _watchdog()')
     """
     Si no llega ninguna vela en tiempo_maximo (segundos), cierra el websocket para reiniciar.
     """

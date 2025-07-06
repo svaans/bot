@@ -17,6 +17,7 @@ os.makedirs(CARPETA_OPERACIONES, exist_ok=True)
 
 
 def registrar_resultado_trade(symbol: str, orden: dict, ganancia: float):
+    log.info('➡️ Entrando en registrar_resultado_trade()')
     archivo = os.path.join(CARPETA_OPERACIONES, symbol.replace('/', '_').
         upper() + '.parquet')
     historial = []
@@ -54,6 +55,7 @@ def registrar_resultado_trade(symbol: str, orden: dict, ganancia: float):
 
 def actualizar_pesos_dinamicos(symbol: str, historial: list, factor_ajuste=0.05
     ):
+    log.info('➡️ Entrando en actualizar_pesos_dinamicos()')
     datos = defaultdict(list)
     pesos_actuales = gestor_pesos.obtener_pesos_symbol(symbol)
     for orden in historial:

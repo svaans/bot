@@ -6,6 +6,7 @@ log = configurar_logger('salida_takeprofit_atr')
 
 
 def salida_takeprofit_atr(orden: dict, df: pd.DataFrame) ->dict:
+    log.info('➡️ Entrando en salida_takeprofit_atr()')
     try:
         if len(df) < 20 or 'close' not in df.columns:
             return resultado_salida('Take Profit', False, 'Datos insuficientes'

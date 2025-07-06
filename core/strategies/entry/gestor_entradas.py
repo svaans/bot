@@ -16,6 +16,7 @@ _FUNCIONES = cargar_estrategias()
 
 
 def evaluar_estrategias(symbol: str, df: pd.DataFrame, tendencia: str) ->dict:
+    log.info('➡️ Entrando en evaluar_estrategias()')
     """Evalúa las estrategias correspondientes a ``tendencia``
     Retorna un diccionario con puntaje_total, estrategias_activas y diversidad.
     """
@@ -48,6 +49,7 @@ def evaluar_estrategias(symbol: str, df: pd.DataFrame, tendencia: str) ->dict:
 
 def _validar_correlacion(symbol: str, df: pd.DataFrame, df_ref: pd.
     DataFrame, umbral: float) ->bool:
+    log.info('➡️ Entrando en _validar_correlacion()')
     if df is not None and df_ref is not None and umbral < 1.0:
         correlacion = calcular_correlacion(df, df_ref)
         if correlacion is not None and correlacion >= umbral:
@@ -59,6 +61,7 @@ def _validar_correlacion(symbol: str, df: pd.DataFrame, df_ref: pd.
 
 
 def _validar_diversidad(symbol: str, estrategias: dict) ->bool:
+    log.info('➡️ Entrando en _validar_diversidad()')
     activas = sum(1 for v in estrategias.values() if v)
     if activas <= 0:
         log.info(f'🚫 [{symbol}] Rechazo por falta de estrategias activas')
@@ -67,6 +70,7 @@ def _validar_diversidad(symbol: str, estrategias: dict) ->bool:
 
 
 def _validar_score(symbol: str, potencia: float, umbral: float) ->bool:
+    log.info('➡️ Entrando en _validar_score()')
     if potencia < umbral:
         log.info(
             f'🚫 [{symbol}] Rechazo por score {potencia:.2f} < {umbral:.2f}')
@@ -75,6 +79,7 @@ def _validar_score(symbol: str, potencia: float, umbral: float) ->bool:
 
 
 def _validar_volumen(symbol: str, df: pd.DataFrame, cantidad: float) ->bool:
+    log.info('➡️ Entrando en _validar_volumen()')
     if df is not None and cantidad > 0:
         if not verificar_liquidez_orden(df, cantidad):
             log.info(
@@ -90,6 +95,7 @@ def entrada_permitida(symbol: str, potencia: float, umbral: float,
     umbral_correlacion: float=0.9, tendencia: (str | None)=None, score: (
     float | None)=None, persistencia: float=0.0, persistencia_minima: float=0.0
     ) ->bool:
+    log.info('➡️ Entrando en entrada_permitida()')
     """Versión simplificada usada en las pruebas unitarias."""
     score_tecnico = score if score is not None else calcular_score_tecnico(
         df if df is not None else pd.DataFrame(), rsi, momentum, slope, 

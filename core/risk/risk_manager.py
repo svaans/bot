@@ -11,18 +11,22 @@ class RiskManager:
     """Encapsula la lógica de control de riesgo del bot."""
 
     def __init__(self, umbral: float) ->None:
+        log.info('➡️ Entrando en __init__()')
         self.umbral = umbral
 
     def riesgo_superado(self, capital_total: float) ->bool:
+        log.info('➡️ Entrando en riesgo_superado()')
         """Indica si el capital perdido supera el umbral configurado."""
         return _riesgo_superado(self.umbral, capital_total)
 
     def registrar_perdida(self, symbol: str, perdida: float) ->None:
+        log.info('➡️ Entrando en registrar_perdida()')
         """Registra una pérdida para ``symbol``."""
         if perdida < 0:
             actualizar_perdida(symbol, perdida)
 
     def ajustar_umbral(self, segun_metricas: dict) ->None:
+        log.info('➡️ Entrando en ajustar_umbral()')
         """Ajusta ``self.umbral`` usando métricas recientes.
 
         ``segun_metricas`` puede incluir las siguientes claves:
@@ -71,6 +75,7 @@ class RiskManager:
                 )
 
     def multiplicador_kelly(self, n_trades: int=10) ->float:
+        log.info('➡️ Entrando en multiplicador_kelly()')
         """
         Calcula un factor de ajuste para la fracción de Kelly.
 
@@ -100,6 +105,7 @@ class RiskManager:
 
     def factor_volatilidad(self, volatilidad_actual: float,
         volatilidad_media: float, umbral: float=2.0) ->float:
+        log.info('➡️ Entrando en factor_volatilidad()')
         """
         Devuelve un factor reductor si la volatilidad actual es anómala.
 

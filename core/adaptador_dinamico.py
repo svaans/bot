@@ -27,6 +27,7 @@ PESO_VOLUMEN = 0.2
 
 def adaptar_configuracion(symbol: str, df: pd.DataFrame, base_config: dict
     ) ->dict:
+    log.info('➡️ Entrando en adaptar_configuracion()')
     """Ajusta ``base_config`` dinámicamente en función del mercado."""
     if df is None or len(df) < 10 or 'close' not in df.columns:
         log.warning(
@@ -79,6 +80,7 @@ def adaptar_configuracion(symbol: str, df: pd.DataFrame, base_config: dict
 
 
 def _limites_adaptativos(contexto_score: float) ->tuple[float, float]:
+    log.info('➡️ Entrando en _limites_adaptativos()')
     base_max = 10.0
     base_min = 1.0
     umbral_max = max(5.0, min(30.0, base_max + contexto_score))
@@ -91,6 +93,7 @@ def _limites_adaptativos(contexto_score: float) ->tuple[float, float]:
 def calcular_umbral_adaptativo(symbol: str, df: pd.DataFrame,
     estrategias_activadas, pesos_symbol, persistencia: float=0.0, config: (
     dict | None)=None) ->float:
+    log.info('➡️ Entrando en calcular_umbral_adaptativo()')
     """Calcula un umbral técnico adaptativo."""
     if df is None or len(df) < MIN_LONGITUD_DATA or not estrategias_activadas:
         log.warning(
@@ -183,6 +186,7 @@ def calcular_umbral_adaptativo(symbol: str, df: pd.DataFrame,
 def calcular_tp_sl_adaptativos(symbol: str, df: pd.DataFrame, config: (dict |
     None)=None, capital_actual: (float | None)=None, precio_actual: (float |
     None)=None) ->tuple[float, float]:
+    log.info('➡️ Entrando en calcular_tp_sl_adaptativos()')
     if config is None:
         config = {}
     if not isinstance(df, pd.DataFrame):

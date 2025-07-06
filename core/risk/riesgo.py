@@ -9,6 +9,7 @@ _LOCK_PATH = RUTA_ESTADO + '.lock'
 
 
 def cargar_estado_riesgo_seguro() ->dict:
+    log.info('➡️ Entrando en cargar_estado_riesgo_seguro()')
     """Lee ``riesgo.json`` de forma segura usando bloqueo de archivo."""
     lock = FileLock(_LOCK_PATH)
     with lock:
@@ -26,11 +27,13 @@ def cargar_estado_riesgo_seguro() ->dict:
 
 
 def cargar_estado_riesgo() ->dict:
+    log.info('➡️ Entrando en cargar_estado_riesgo()')
     """Compatibilidad retro: delega en :func:`cargar_estado_riesgo_seguro`."""
     return cargar_estado_riesgo_seguro()
 
 
 def guardar_estado_riesgo_seguro(estado: dict) ->None:
+    log.info('➡️ Entrando en guardar_estado_riesgo_seguro()')
     """Guarda ``estado`` en ``riesgo.json`` de forma atómica y segura."""
     lock = FileLock(_LOCK_PATH)
     try:
@@ -43,11 +46,13 @@ def guardar_estado_riesgo_seguro(estado: dict) ->None:
 
 
 def guardar_estado_riesgo(estado: dict) ->None:
+    log.info('➡️ Entrando en guardar_estado_riesgo()')
     """Compatibilidad retro: delega en :func:`guardar_estado_riesgo_seguro`."""
     guardar_estado_riesgo_seguro(estado)
 
 
 def actualizar_perdida(simbolo: str, perdida: float):
+    log.info('➡️ Entrando en actualizar_perdida()')
     """Registra una pérdida para el día actual (valor absoluto)."""
     estado = cargar_estado_riesgo_seguro()
     hoy = datetime.utcnow().date().isoformat()
@@ -61,6 +66,7 @@ def actualizar_perdida(simbolo: str, perdida: float):
 
 
 def riesgo_superado(umbral: float, capital_total: float) ->bool:
+    log.info('➡️ Entrando en riesgo_superado()')
     """Evalúa si el umbral de pérdida diaria ha sido superado."""
     estado = cargar_estado_riesgo_seguro()
     hoy = datetime.utcnow().date().isoformat()

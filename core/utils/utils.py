@@ -11,16 +11,18 @@ from .logger import configurar_logger
 if TYPE_CHECKING:
     from core.order_model import Order
 from decimal import Decimal, InvalidOperation
-log = configurar_logger('trader_simulado', modo_silencioso=True)
+log = configurar_logger('trader_simulado')
 
 
 def respaldar_archivo(ruta):
+    log.info('➡️ Entrando en respaldar_archivo()')
     if os.path.exists(ruta):
         backup = ruta.replace('.json', '_backup.json')
         shutil.copy(ruta, backup)
 
 
 def is_valid_number(value) ->bool:
+    log.info('➡️ Entrando en is_valid_number()')
     """Verifica si un valor es un número finito y válido."""
     try:
         num = float(value)
@@ -31,6 +33,7 @@ def is_valid_number(value) ->bool:
 
 
 def guardar_operacion_en_csv(symbol, info, ruta='ordenes_reales'):
+    log.info('➡️ Entrando en guardar_operacion_en_csv()')
     os.makedirs(ruta, exist_ok=True)
     archivo = os.path.join(ruta,
         f"ordenes_{symbol.replace('/', '_')}_resultado.csv")
@@ -61,12 +64,14 @@ def guardar_operacion_en_csv(symbol, info, ruta='ordenes_reales'):
 
 
 def validar_dataframe(df, columnas):
+    log.info('➡️ Entrando en validar_dataframe()')
     return df is not None and not df.empty and all(col in df.columns for
         col in columnas)
 
 
 def validar_tp(tp: float, precio: float, max_relativo: float=1.05,
     max_absoluto: float=0.03) ->float:
+    log.info('➡️ Entrando en validar_tp()')
     """Limita el Take Profit a valores razonables."""
     limite_rel = precio * max_relativo
     limite_abs = precio * (1 + max_absoluto)
@@ -79,6 +84,7 @@ def validar_tp(tp: float, precio: float, max_relativo: float=1.05,
 
 def distancia_minima_valida(precio: float, sl: float, tp: float, min_pct:
     float=0.0005) ->bool:
+    log.info('➡️ Entrando en distancia_minima_valida()')
     """Comprueba que SL y TP estén a una distancia mínima de ``precio``.
 
     La distancia se evalúa en términos porcentuales de ``precio``. Si
@@ -90,12 +96,14 @@ def distancia_minima_valida(precio: float, sl: float, tp: float, min_pct:
 
 def margen_tp_sl_valido(tp: float, sl: float, precio_actual: float, min_pct:
     float=0.0005) ->bool:
+    log.info('➡️ Entrando en margen_tp_sl_valido()')
     """Valida que la distancia entre TP y SL sea suficiente."""
     return abs(tp - sl) >= precio_actual * min_pct
 
 
 def validar_ratio_beneficio(entrada: float, sl: float, tp: float,
     ratio_minimo: float) ->bool:
+    log.info('➡️ Entrando en validar_ratio_beneficio()')
     """Comprueba que el ratio beneficio/riesgo cumpla el mínimo requerido."""
     riesgo = entrada - sl
     beneficio = tp - entrada
@@ -105,6 +113,7 @@ def validar_ratio_beneficio(entrada: float, sl: float, tp: float,
 
 
 def segundos_transcurridos(timestamp_iso):
+    log.info('➡️ Entrando en segundos_transcurridos()')
     """Devuelve los segundos transcurridos desde un timestamp ISO o epoch."""
     try:
         if isinstance(timestamp_iso, (int, float)):
@@ -126,6 +135,7 @@ def segundos_transcurridos(timestamp_iso):
 
 def leer_csv_seguro(ruta: str, log_lineas=None, expected_cols: (int | None)
     =None) ->pd.DataFrame:
+    log.info('➡️ Entrando en leer_csv_seguro()')
     """Carga ``ruta`` ignorando líneas corruptas y evitando interrupciones."""
     logger = configurar_logger('csv_reader', modo_silencioso=True)
     line_logger = None
@@ -147,6 +157,7 @@ def leer_csv_seguro(ruta: str, log_lineas=None, expected_cols: (int | None)
         if line_logger:
 
             def _bad_line(line: list[str]) ->None:
+                log.info('➡️ Entrando en _bad_line()')
                 line_logger.warning(f'{ruta} => {line}')
                 return None
             try:
@@ -169,6 +180,7 @@ def leer_csv_seguro(ruta: str, log_lineas=None, expected_cols: (int | None)
 
 
 def leer_reporte_seguro(path: str, columnas_esperadas: int=24) ->pd.DataFrame:
+    log.info('➡️ Entrando en leer_reporte_seguro()')
     """Lee un reporte diario garantizando la estructura correcta."""
     try:
         df = pd.read_csv(path)
@@ -183,6 +195,7 @@ def leer_reporte_seguro(path: str, columnas_esperadas: int=24) ->pd.DataFrame:
 
 
 def dividir_dataframe_en_bloques(df, n_bloques=10):
+    log.info('➡️ Entrando en dividir_dataframe_en_bloques()')
     """Divide ``df`` en ``n_bloques`` del mismo tamaño."""
     bloques = []
     total = len(df)
@@ -198,6 +211,7 @@ lock_archivo = threading.Lock()
 
 
 def guardar_orden_simulada(symbol: str, nueva_orden: dict):
+    log.info('➡️ Entrando en guardar_orden_simulada()')
     archivo = f"ordenes_simuladas/{symbol.replace('/', '_').lower()}.parquet"
     for intento in range(3):
         try:
@@ -241,6 +255,7 @@ def guardar_orden_simulada(symbol: str, nueva_orden: dict):
 
 
 def guardar_orden_real(symbol: str, orden: (dict | Order)):
+    log.info('➡️ Entrando en guardar_orden_real()')
     """
     Guarda una orden real en un archivo Parquet por símbolo de forma segura, eficiente y precisa.
     """

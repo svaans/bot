@@ -11,16 +11,19 @@ class DataFeed:
     """Maneja la recepción de velas de Binance en tiempo real."""
 
     def __init__(self, intervalo: str) ->None:
+        log.info('➡️ Entrando en __init__()')
         self.intervalo = intervalo
         self._tasks: Dict[str, asyncio.Task] = {}
 
     @property
     def activos(self) ->list[str]:
+        log.info('➡️ Entrando en activos()')
         """Lista de símbolos con streams activos."""
         return list(self._tasks.keys())
 
     async def stream(self, symbol: str, handler: Callable[[dict], Awaitable
         [None]]) ->None:
+        log.info('➡️ Entrando en stream()')
         """Escucha las velas de ``symbol`` y reintenta ante fallos de conexión."""
         while True:
             try:
@@ -33,6 +36,7 @@ class DataFeed:
 
     async def escuchar(self, symbols: Iterable[str], handler: Callable[[
         dict], Awaitable[None]]) ->None:
+        log.info('➡️ Entrando en escuchar()')
         """Inicia un stream por cada símbolo y espera a que todos finalicen."""
         for sym in symbols:
             if sym in self._tasks:
@@ -62,6 +66,7 @@ class DataFeed:
                 break
 
     async def detener(self) ->None:
+        log.info('➡️ Entrando en detener()')
         """Cancela todos los streams en ejecución."""
         for task in self._tasks.values():
             task.cancel()

@@ -7,6 +7,7 @@ log = configurar_logger('salida_por_tendencia')
 
 
 def salida_por_tendencia(orden, df):
+    log.info('➡️ Entrando en salida_por_tendencia()')
     """
     Cierra si la tendencia cambia respecto a la entrada.
     """
@@ -28,6 +29,7 @@ def salida_por_tendencia(orden, df):
 
 
 def verificar_reversion_tendencia(symbol, df, tendencia_anterior):
+    log.info('➡️ Entrando en verificar_reversion_tendencia()')
     if not validar_dataframe(df, ['high', 'low', 'close']):
         return False
     nueva_tendencia, _ = detectar_tendencia(symbol, df)

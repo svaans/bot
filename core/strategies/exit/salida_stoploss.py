@@ -17,6 +17,7 @@ pesos = gestor_pesos.pesos
 
 
 def validar_sl_tecnico(df: pd.DataFrame, direccion: str='long') ->bool:
+    log.info('➡️ Entrando en validar_sl_tecnico()')
     """Comprueba si existen razones técnicas sólidas para ejecutar el SL."""
     try:
         if not validar_dataframe(df, ['close']):
@@ -43,6 +44,7 @@ def validar_sl_tecnico(df: pd.DataFrame, direccion: str='long') ->bool:
 
 
 def salida_stoploss(orden: dict, df: pd.DataFrame, config: dict=None) ->dict:
+    log.info('➡️ Entrando en salida_stoploss()')
     """
     Evalúa si debe cerrarse una orden cuyo precio ha tocado el SL,
     o si puede mantenerse por razones técnicas justificadas.
@@ -96,6 +98,7 @@ def salida_stoploss(orden: dict, df: pd.DataFrame, config: dict=None) ->dict:
 
 def verificar_salida_stoploss(orden: dict, df: pd.DataFrame, config: (dict |
     None)=None) ->dict:
+    log.info('➡️ Entrando en verificar_salida_stoploss()')
     """Determina si debe ejecutarse el Stop Loss o mantenerse la operación."""
     if df is None or not isinstance(df, pd.DataFrame):
         return resultado_salida('Stop Loss', False,

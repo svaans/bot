@@ -4,6 +4,7 @@ log = configurar_logger('filtro_entradas')
 
 def evaluar_validez_estrategica(symbol, df, estrategias_activas: dict,
     pesos=None, minimo_peso_total=0.5, min_diversidad=2) ->bool:
+    log.info('➡️ Entrando en evaluar_validez_estrategica()')
     activas = [k for k, v in estrategias_activas.items() if v]
     if len(activas) < min_diversidad:
         log.info(
@@ -22,6 +23,7 @@ def evaluar_validez_estrategica(symbol, df, estrategias_activas: dict,
 
 def verificar_liquidez_orden(df, cantidad_orden: float, ventana: int=20,
     factor: float=0.2) ->bool:
+    log.info('➡️ Entrando en verificar_liquidez_orden()')
     """Valida la proporción entre ``cantidad_orden`` y el volumen promedio.
 
     Retorna ``True`` cuando la orden no supera ``factor`` veces el volumen medio

@@ -13,6 +13,7 @@ _pesos_cache: dict | None = None
 
 
 def _cargar_pesos(symbol: str) ->dict:
+    log.info('➡️ Entrando en _cargar_pesos()')
     """Devuelve los pesos técnicos para ``symbol``.
 
     Si ``symbol`` no está presente en el archivo JSON se devuelven los valores
@@ -40,12 +41,14 @@ def _cargar_pesos(symbol: str) ->dict:
 
 
 def cargar_pesos_tecnicos(symbol: str) ->dict:
+    log.info('➡️ Entrando en cargar_pesos_tecnicos()')
     """Interfaz pública para obtener los pesos de un símbolo."""
     return _cargar_pesos(symbol)
 
 
 def evaluar_puntaje_tecnico(symbol: str, df: pd.DataFrame, precio: float,
     sl: float, tp: float) ->dict:
+    log.info('➡️ Entrando en evaluar_puntaje_tecnico()')
     """Evalúa condiciones técnicas y retorna un puntaje acumulado."""
     pesos = _cargar_pesos(symbol)
     if df is None or len(df) < 30:
@@ -68,6 +71,7 @@ def evaluar_puntaje_tecnico(symbol: str, df: pd.DataFrame, precio: float,
     total = 0.0
 
     def _add(clave: str, condicion: (bool | None)) ->None:
+        log.info('➡️ Entrando en _add()')
         """Suma o resta puntaje según ``condicion`` y registra detalles."""
         nonlocal total
         peso = pesos.get(clave, 0.0)
@@ -109,6 +113,7 @@ def evaluar_puntaje_tecnico(symbol: str, df: pd.DataFrame, precio: float,
 
 def calcular_umbral_adaptativo(score_maximo_esperado: float, tendencia: str,
     volatilidad: float, volumen: float, estrategias_activas: dict) ->float:
+    log.info('➡️ Entrando en calcular_umbral_adaptativo()')
     """Calcula un umbral técnico dinámico simple."""
     base = score_maximo_esperado * 0.5
     if volumen > 1:
@@ -124,6 +129,7 @@ def calcular_umbral_adaptativo(score_maximo_esperado: float, tendencia: str,
 
 def actualizar_pesos_tecnicos(symbol: str, detalles: dict, retorno: float,
     factor: float=0.05) ->None:
+    log.info('➡️ Entrando en actualizar_pesos_tecnicos()')
     """Ajusta pesos del JSON según rendimiento de la operación."""
     if not detalles:
         return

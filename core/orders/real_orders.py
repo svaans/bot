@@ -41,6 +41,7 @@ _ULTIMO_FLUSH = time.time()
 
 def esperar_balance(cliente, symbol: str, cantidad_esperada: float,
     max_intentos: int=10, delay: float=0.3) ->float:
+    log.info('➡️ Entrando en esperar_balance()')
     """Espera hasta que el balance disponible alcance la cantidad esperada."""
     try:
         base = symbol.split('/')[0]
@@ -65,6 +66,7 @@ def esperar_balance(cliente, symbol: str, cantidad_esperada: float,
 
 
 def _init_db() ->None:
+    log.info('➡️ Entrando en _init_db()')
     """Crea la tabla de órdenes y operaciones si no existen."""
     os.makedirs(os.path.dirname(RUTA_DB), exist_ok=True)
     schema_base = """
@@ -98,6 +100,7 @@ def _init_db() ->None:
 
 
 def cargar_ordenes() ->dict[str, Order]:
+    log.info('➡️ Entrando en cargar_ordenes()')
     """Carga las órdenes almacenadas desde la base de datos SQLite."""
     global _CACHE_ORDENES
     if _CACHE_ORDENES is not None:
@@ -121,10 +124,12 @@ def cargar_ordenes() ->dict[str, Order]:
 
 
 def guardar_ordenes(ordenes: dict[str, Order]) ->None:
+    log.info('➡️ Entrando en guardar_ordenes()')
     """Guarda las órdenes en la base de datos si han cambiado respecto al caché."""
     global _CACHE_ORDENES
 
     def ordenar_dict(d):
+        log.info('➡️ Entrando en ordenar_dict()')
         return json.dumps({k: o.to_dict() for k, o in d.items()}, sort_keys
             =True)
     if _CACHE_ORDENES and ordenar_dict(_CACHE_ORDENES) == ordenar_dict(ordenes
@@ -165,6 +170,7 @@ def guardar_ordenes(ordenes: dict[str, Order]) ->None:
 
 
 def obtener_orden(symbol: str) ->(Order | None):
+    log.info('➡️ Entrando en obtener_orden()')
     try:
         return cargar_ordenes().get(symbol)
     except Exception as e:
@@ -173,11 +179,13 @@ def obtener_orden(symbol: str) ->(Order | None):
 
 
 def obtener_todas_las_ordenes():
+    log.info('➡️ Entrando en obtener_todas_las_ordenes()')
     return cargar_ordenes()
 
 
 def sincronizar_ordenes_binance(simbolos: (list[str] | None)=None) ->dict[
     str, Order]:
+    log.info('➡️ Entrando en sincronizar_ordenes_binance()')
     """Consulta órdenes abiertas directamente desde Binance y las registra.
 
     Esto permite reconstruir el estado de las posiciones cuando el bot se
@@ -208,6 +216,7 @@ def sincronizar_ordenes_binance(simbolos: (list[str] | None)=None) ->dict[
 
 
 def actualizar_orden(symbol: str, data: (Order | dict)) ->None:
+    log.info('➡️ Entrando en actualizar_orden()')
     ordenes = cargar_ordenes()
     if ordenes.get(symbol) == data:
         return
@@ -243,6 +252,7 @@ def actualizar_orden(symbol: str, data: (Order | dict)) ->None:
 
 
 def eliminar_orden(symbol: str, forzar_log: bool=False) ->None:
+    log.info('➡️ Entrando en eliminar_orden()')
     """Elimina una orden activa del sistema si existe."""
     ordenes = cargar_ordenes()
     if symbol not in ordenes:
@@ -266,6 +276,7 @@ def eliminar_orden(symbol: str, forzar_log: bool=False) ->None:
 
 def registrar_orden(symbol: str, precio: float, cantidad: float, sl: float,
     tp: float, estrategias, tendencia: str, direccion: str='long') ->None:
+    log.info('➡️ Entrando en registrar_orden()')
     """Registra una nueva orden activa y la guarda en base de datos."""
     if not isinstance(symbol, str) or not symbol:
         raise ValueError('❌ El símbolo debe ser una cadena no vacía.')
@@ -289,6 +300,7 @@ def registrar_orden(symbol: str, precio: float, cantidad: float, sl: float,
 
 
 def registrar_operacion(data: (dict | Order)) ->None:
+    log.info('➡️ Entrando en registrar_operacion()')
     """Agrega una operación ejecutada al buffer. Se persistirá automáticamente."""
     global _ULTIMO_FLUSH
     registro = data.to_dict() if isinstance(data, Order) else data
@@ -311,6 +323,7 @@ def registrar_operacion(data: (dict | Order)) ->None:
 
 
 def ejecutar_orden_market(symbol: str, cantidad: float) ->float:
+    log.info('➡️ Entrando en ejecutar_orden_market()')
     """Ejecuta una compra de mercado y devuelve la cantidad realmente comprada."""
     if cantidad <= 0:
         log.warning(f'⚠️ Cantidad inválida para compra en {symbol}: {cantidad}'
@@ -363,6 +376,7 @@ def ejecutar_orden_market(symbol: str, cantidad: float) ->float:
 
 
 def ejecutar_orden_market_sell(symbol: str, cantidad: float) ->float:
+    log.info('➡️ Entrando en ejecutar_orden_market_sell()')
     """Ejecuta una venta de mercado validando saldo, límites y precision exacto."""
     if symbol in _VENTAS_FALLIDAS:
         log.warning(
@@ -422,6 +436,7 @@ def ejecutar_orden_market_sell(symbol: str, cantidad: float) ->float:
 
 
 def flush_operaciones() ->None:
+    log.info('➡️ Entrando en flush_operaciones()')
     """Guarda en disco todas las operaciones acumuladas en el buffer de forma segura y eficiente."""
     with _BUFFER_LOCK:
         operaciones = list(_BUFFER_OPERACIONES)
@@ -488,6 +503,7 @@ def flush_operaciones() ->None:
 
 
 async def flush_periodico(interval: int=_FLUSH_INTERVAL) ->None:
+    log.info('➡️ Entrando en flush_periodico()')
     """
     Ejecuta :func:`flush_operaciones` cada ``interval`` segundos.
     Esta función controla cancelaciones limpias y evita bloqueos.
@@ -509,6 +525,7 @@ async def flush_periodico(interval: int=_FLUSH_INTERVAL) ->None:
 
 
 def _handle_exit(signum, frame) ->None:
+    log.info('➡️ Entrando en _handle_exit()')
     log.info(
         f'📴 Señal de salida recibida ({signal.Signals(signum).name}). Guardando operaciones...'
         )

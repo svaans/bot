@@ -10,6 +10,7 @@ log = configurar_logger('tendencia')
 
 def detectar_tendencia(symbol: str, df: pd.DataFrame) ->tuple[str, dict[str,
     bool]]:
+    log.info('➡️ Entrando en detectar_tendencia()')
     """Detección precisa de tendencia con EMA, pendiente local y RSI."""
     if df is None or df.empty or 'close' not in df.columns or len(df) < 60:
         log.warning(
@@ -52,6 +53,7 @@ def detectar_tendencia(symbol: str, df: pd.DataFrame) ->tuple[str, dict[str,
 
 def obtener_parametros_persistencia(tendencia: str, volatilidad: float
     ) ->tuple[float, int]:
+    log.info('➡️ Entrando en obtener_parametros_persistencia()')
     """Define los requisitos de persistencia según la tendencia y la volatilidad."""
     if tendencia == 'lateral':
         return 0.6, 3
@@ -66,6 +68,7 @@ def obtener_parametros_persistencia(tendencia: str, volatilidad: float
 def señales_repetidas(buffer: list[dict], estrategias_func: dict[str, float
     ], tendencia_actual: str, volatilidad_actual: float, ventanas: int=3
     ) ->int:
+    log.info('➡️ Entrando en señales_repetidas()')
     """
     Evalúa la cantidad de ventanas recientes con activaciones técnicas consistentes.
     """

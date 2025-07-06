@@ -8,6 +8,7 @@ log = configurar_logger('procesar_vela')
 
 
 async def procesar_vela(trader, vela: dict) ->None:
+    log.info('➡️ Entrando en procesar_vela()')
     symbol = vela['symbol']
     estado = trader.estado[symbol]
     if datetime.utcnow().date() != trader.fecha_actual:

@@ -7,6 +7,7 @@ log = configurar_logger('salida_trailing_stop')
 
 def salida_trailing_stop(orden: dict, df: pd.DataFrame, config: dict=None
     ) ->dict:
+    log.info('➡️ Entrando en salida_trailing_stop()')
     """
     Evalúa si debe cerrarse una orden utilizando lógica de trailing stop.
 
@@ -58,6 +59,7 @@ def salida_trailing_stop(orden: dict, df: pd.DataFrame, config: dict=None
 
 def verificar_trailing_stop(info: dict, precio_actual: float, df: (pd.
     DataFrame | None)=None, config: dict=None) ->tuple[bool, str]:
+    log.info('➡️ Entrando en verificar_trailing_stop()')
     """
     Evalúa si debe cerrarse la orden usando lógica de trailing stop.
 

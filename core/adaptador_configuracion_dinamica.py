@@ -10,11 +10,14 @@ log = configurar_logger('adaptador_dinamico')
 
 
 def _validar_dataframe(df: pd.DataFrame) ->bool:
+    log.info('➡️ Entrando en _validar_dataframe()')
     columnas = {'open', 'high', 'low', 'close', 'volume'}
     return df is not None and columnas.issubset(df.columns) and len(df) >= 30
 
 
-def _validar_coherencia_tp_sl(sl: float, tp: float, ratio_min: float = 1.1) -> bool:
+def _validar_coherencia_tp_sl(sl: float, tp: float, ratio_min: float=1.1
+    ) ->bool:
+    log.info('➡️ Entrando en _validar_coherencia_tp_sl()')
     """Comprueba que los ratios TP/SL sean coherentes."""
     if sl <= 0 or tp <= 0:
         return False
@@ -25,15 +28,17 @@ def _validar_coherencia_tp_sl(sl: float, tp: float, ratio_min: float = 1.1) -> b
     return True
 
 
-def _alertar_inconsistencias(symbol: str, sl: float, tp: float) -> None:
+def _alertar_inconsistencias(symbol: str, sl: float, tp: float) ->None:
+    log.info('➡️ Entrando en _alertar_inconsistencias()')
     """Emite alertas cuando la configuración es incoherente."""
     if not _validar_coherencia_tp_sl(sl, tp):
         log.warning(
             f'[{symbol}] Inconsistencia detectada en ratios TP/SL: TP={tp}, SL={sl}'
-        )
+            )
 
 
 def adaptar_configuracion(symbol: str, df: pd.DataFrame) ->dict:
+    log.info('➡️ Entrando en adaptar_configuracion()')
     """Ajusta los parámetros del bot según contexto de mercado."""
     if not _validar_dataframe(df):
         log.warning(f'[{symbol}] Datos insuficientes para adaptación dinámica.'
@@ -82,7 +87,8 @@ def adaptar_configuracion(symbol: str, df: pd.DataFrame) ->dict:
         t = np.clip((volumen_relativo - 1.2) / (1.5 - 1.2), 0.0, 1.0)
         min_volumen_relativo = 1.1 + t * (1.3 - 1.1)
     min_volumen_relativo = round(float(min_volumen_relativo), 3)
-    modo_agresivo = atr_pct > 0.02 or abs(rsi - 50) > 20 or abs(slope_pct) > 0.002
+    modo_agresivo = atr_pct > 0.02 or abs(rsi - 50) > 20 or abs(slope_pct
+        ) > 0.002
     factor_umbral = 1.0
     if atr_pct > 0.02:
         factor_umbral += 0.1
@@ -117,18 +123,13 @@ def adaptar_configuracion(symbol: str, df: pd.DataFrame) ->dict:
         diversidad_minima = 1
     elif modo_agresivo and atr_pct < 0.015:
         diversidad_minima = 1
-    config = {
-        'modo_agresivo': modo_agresivo,
-        'factor_umbral': round(factor_umbral, 2),
-        'tp_ratio': round(tp_ratio, 2),
-        'sl_ratio': round(sl_ratio, 2),
-        'riesgo_maximo_diario': round(riesgo_maximo_diario, 4),
-        'cooldown_tras_perdida': int(cooldown_tras_perdida),
-        'diversidad_minima': int(diversidad_minima),
-        'min_slope': min_slope,
-        'max_rsi': max_rsi,
-        'min_volumen_relativo': min_volumen_relativo,
-    }
+    config = {'modo_agresivo': modo_agresivo, 'factor_umbral': round(
+        factor_umbral, 2), 'tp_ratio': round(tp_ratio, 2), 'sl_ratio':
+        round(sl_ratio, 2), 'riesgo_maximo_diario': round(
+        riesgo_maximo_diario, 4), 'cooldown_tras_perdida': int(
+        cooldown_tras_perdida), 'diversidad_minima': int(diversidad_minima),
+        'min_slope': min_slope, 'max_rsi': max_rsi, 'min_volumen_relativo':
+        min_volumen_relativo}
     log.info(
         f'[{symbol}] Config adaptada | ATR%={atr_pct:.4f} | RSI={rsi:.2f} | Slope%={slope_pct:.4f} | Aggresivo={modo_agresivo} | minSlope={min_slope} | maxRSI={max_rsi} | minVolRel={min_volumen_relativo}'
         )

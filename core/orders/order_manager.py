@@ -14,6 +14,7 @@ class OrderManager:
     """Abstrae la creación y cierre de órdenes."""
 
     def __init__(self, modo_real: bool, risk=None, notificador=None) ->None:
+        log.info('➡️ Entrando en __init__()')
         self.modo_real = modo_real
         self.ordenes: Dict[str, Order] = {}
         self.historial: Dict[str, list] = {}
@@ -25,6 +26,7 @@ class OrderManager:
         cantidad: float=0.0, puntaje: float=0.0, umbral: float=0.0,
         objetivo: (float | None)=None, fracciones: int=1, detalles_tecnicos:
         (dict | None)=None) ->None:
+        log.info('➡️ Entrando en abrir_async()')
         """Registra una nueva orden en memoria y/o en Binance."""
         objetivo = objetivo if objetivo is not None else cantidad
         orden = Order(symbol=symbol, precio_entrada=precio, cantidad=
@@ -70,11 +72,13 @@ Estrategias: {estrategias_txt}"""
                 log.error(f'❌ Error enviando notificación: {e}')
 
     def abrir(self, *args, **kwargs) ->None:
+        log.info('➡️ Entrando en abrir()')
         """Versión síncrona de :meth:`abrir_async`."""
         asyncio.run(self.abrir_async(*args, **kwargs))
 
     async def agregar_parcial_async(self, symbol: str, precio: float,
         cantidad: float) ->bool:
+        log.info('➡️ Entrando en agregar_parcial_async()')
         """Aumenta la posición abierta agregando una compra parcial."""
         orden = self.ordenes.get(symbol)
         if not orden:
@@ -100,10 +104,12 @@ Estrategias: {estrategias_txt}"""
         return True
 
     def agregar_parcial(self, *args, **kwargs) ->bool:
+        log.info('➡️ Entrando en agregar_parcial()')
         return asyncio.run(self.agregar_parcial_async(*args, **kwargs))
 
     async def cerrar_async(self, symbol: str, precio: float, motivo: str
         ) ->bool:
+        log.info('➡️ Entrando en cerrar_async()')
         """Cierra la orden indicada completamente."""
         orden = self.ordenes.get(symbol)
         if not orden:
@@ -158,11 +164,13 @@ Motivo: {motivo}"""
         return True
 
     def cerrar(self, *args, **kwargs) ->bool:
+        log.info('➡️ Entrando en cerrar()')
         """Versión síncrona de :meth:`cerrar_async`."""
         return asyncio.run(self.cerrar_async(*args, **kwargs))
 
     async def cerrar_parcial_async(self, symbol: str, cantidad: float,
         precio: float, motivo: str) ->bool:
+        log.info('➡️ Entrando en cerrar_parcial_async()')
         """Cierra parcialmente la orden activa."""
         orden = self.ordenes.get(symbol)
         if not orden or orden.cantidad_abierta <= 0:
@@ -216,8 +224,10 @@ Motivo: {motivo}"""
         return True
 
     def cerrar_parcial(self, *args, **kwargs) ->bool:
+        log.info('➡️ Entrando en cerrar_parcial()')
         """Versión síncrona de :meth:`cerrar_parcial_async`."""
         return asyncio.run(self.cerrar_parcial_async(*args, **kwargs))
 
     def obtener(self, symbol: str) ->Optional[Order]:
+        log.info('➡️ Entrando en obtener()')
         return self.ordenes.get(symbol)

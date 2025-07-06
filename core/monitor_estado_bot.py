@@ -14,6 +14,7 @@ log = configurar_logger('estado_bot')
 
 
 def obtener_orden_abierta():
+    log.info('➡️ Entrando en obtener_orden_abierta()')
     if os.path.exists(ORDENES_DB_PATH):
         try:
             ordenes = real_orders.cargar_ordenes()
@@ -28,6 +29,7 @@ def obtener_orden_abierta():
 
 
 def estimar_estado_emocional(_ultima_orden=None):
+    log.info('➡️ Entrando en estimar_estado_emocional()')
     """Determina el estado emocional actual del bot basado en el desempeño."""
     operaciones: list[dict] = []
     for ops in reporter_diario.ultimas_operaciones.values():
@@ -54,6 +56,7 @@ def estimar_estado_emocional(_ultima_orden=None):
 
 
 def resumen_emocional() ->str:
+    log.info('➡️ Entrando en resumen_emocional()')
     """Genera una breve justificación del estado emocional."""
     operaciones = []
     for ops in reporter_diario.ultimas_operaciones.values():
@@ -76,6 +79,7 @@ def resumen_emocional() ->str:
 
 
 def monitorear_estado_bot(ordenes_memoria: (dict | None)=None):
+    log.info('➡️ Entrando en monitorear_estado_bot()')
     """Muestra el estado del bot y las órdenes activas.
 
     Si no se encuentran órdenes en la base de datos y ``ordenes_memoria`` está
@@ -125,6 +129,7 @@ def monitorear_estado_bot(ordenes_memoria: (dict | None)=None):
 
 
 async def monitorear_estado_periodicamente(self, intervalo=300):
+    log.info('➡️ Entrando en monitorear_estado_periodicamente()')
     """Ejecuta ``monitorear_estado_bot`` de forma periódica sin bloquear el loop."""
     loop = asyncio.get_running_loop()
     while True:

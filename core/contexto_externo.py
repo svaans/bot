@@ -11,6 +11,7 @@ CONTEXT_WS_URL = 'wss://stream.binance.com:9443/ws/{symbol}@kline_1m'
 
 
 def obtener_puntaje_contexto(symbol: str) ->float:
+    log.info('➡️ Entrando en obtener_puntaje_contexto()')
     """Devuelve el último puntaje conocido para ``symbol``."""
     valor = _PUNTAJES.get(symbol)
     try:
@@ -20,6 +21,7 @@ def obtener_puntaje_contexto(symbol: str) ->float:
 
 
 def obtener_todos_puntajes() ->dict:
+    log.info('➡️ Entrando en obtener_todos_puntajes()')
     """Devuelve todos los puntajes actuales almacenados."""
     return dict(_PUNTAJES)
 
@@ -28,11 +30,13 @@ class StreamContexto:
     """Conecta con Binance y actualiza el contexto en tiempo real."""
 
     def __init__(self, url_template: (str | None)=None) ->None:
+        log.info('➡️ Entrando en __init__()')
         self.url_template = url_template or CONTEXT_WS_URL
         self._tasks: Dict[str, asyncio.Task] = {}
 
     async def _stream(self, symbol: str, handler: Callable[[str, float],
         Awaitable[None]]) ->None:
+        log.info('➡️ Entrando en _stream()')
         symbol_norm = symbol.replace('/', '').lower()
         url = self.url_template.format(symbol=symbol_norm)
         while True:
@@ -80,6 +84,7 @@ class StreamContexto:
 
     async def escuchar(self, symbols: Iterable[str], handler: Callable[[str,
         float], Awaitable[None]]) ->None:
+        log.info('➡️ Entrando en escuchar()')
         """Inicia un stream por cada símbolo."""
         for sym in symbols:
             self._tasks[sym] = asyncio.create_task(self._stream(sym, handler))
@@ -106,6 +111,7 @@ class StreamContexto:
                 break
 
     async def detener(self) ->None:
+        log.info('➡️ Entrando en detener()')
         """Cancela todos los streams en ejecución."""
         for task in self._tasks.values():
             task.cancel()

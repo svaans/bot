@@ -21,6 +21,7 @@ log = configurar_logger('verificar_salidas')
 
 
 async def verificar_salidas(trader, symbol: str, df: pd.DataFrame) ->None:
+    log.info('➡️ Entrando en verificar_salidas()')
     """Evalúa si la orden abierta debe cerrarse."""
     orden = trader.orders.obtener(symbol)
     if not orden:

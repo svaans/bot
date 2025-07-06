@@ -6,6 +6,7 @@ log = configurar_logger('salida_por_macd')
 
 
 def salida_por_macd(orden, df: pd.DataFrame) ->dict:
+    log.info('➡️ Entrando en salida_por_macd()')
     """
     Cierra si MACD cruza a la baja.
     """

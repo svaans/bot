@@ -17,6 +17,7 @@ log = configurar_logger('trader_simulado', modo_silencioso=True)
 
 
 def evaluar_estrategias(ordenes: pd.DataFrame):
+    log.info('➡️ Entrando en evaluar_estrategias()')
     datos = defaultdict(list)
     for _, orden in ordenes.iterrows():
         estrategias = orden.get('estrategias_activas', {})
@@ -34,11 +35,13 @@ def evaluar_estrategias(ordenes: pd.DataFrame):
 
 
 def normalizar_scores(scores):
+    log.info('➡️ Entrando en normalizar_scores()')
     max_score = max(scores.values(), default=1)
     return {k: (v / max_score) for k, v in scores.items()}
 
 
 def dividir_train_test(df: pd.DataFrame, test_ratio: float=0.2):
+    log.info('➡️ Entrando en dividir_train_test()')
     """Divide el DataFrame en particiones de entrenamiento y prueba."""
     if df.empty:
         return df, pd.DataFrame()
@@ -49,6 +52,7 @@ def dividir_train_test(df: pd.DataFrame, test_ratio: float=0.2):
 
 
 def actualizar_pesos_estrategias_symbol(symbol: str):
+    log.info('➡️ Entrando en actualizar_pesos_estrategias_symbol()')
     FACTOR_SUAVIZADO = 0.02
     archivo = f"{symbol.replace('/', '_').upper()}.parquet"
     ruta = os.path.join(CARPETA_HISTORICO, archivo)
