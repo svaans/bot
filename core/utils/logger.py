@@ -12,7 +12,6 @@ class FiltroRelevante(logging.Filter):
         'entrada bloqueada']
 
     def filter(self, record: logging.LogRecord) ->bool:
-        log.info('➡️ Entrando en filter()')
         mensaje = record.getMessage().lower()
         if any(p in mensaje for p in self.PALABRAS_CLAVE_DESCARTAR):
             logger = logging.getLogger(record.name)
@@ -31,7 +30,6 @@ class JsonFormatter(logging.Formatter):
     """Formatter que genera cada entrada en formato JSON."""
 
     def format(self, record: logging.LogRecord) ->str:
-        log.info('➡️ Entrando en format()')
         data = {'timestamp': datetime.fromtimestamp(record.created, tz=
             timezone.utc).isoformat(), 'level': record.levelname, 'logger':
             record.name, 'message': record.getMessage()}
@@ -40,7 +38,6 @@ class JsonFormatter(logging.Formatter):
 
 def configurar_logger(nombre: str, nivel=logging.INFO, carpeta_logs='logs',
     modo_silencioso=False, estructurado=None):
-    log.info('➡️ Entrando en configurar_logger()')
     if nombre in loggers_configurados:
         return loggers_configurados[nombre]
     logger = logging.getLogger(nombre)
