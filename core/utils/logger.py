@@ -8,8 +8,12 @@ from dotenv import load_dotenv
 
 class FiltroRelevante(logging.Filter):
     """Filtra mensajes poco informativos para el archivo de log."""
-    PALABRAS_CLAVE_DESCARTAR = ['entrada no válida', 'entrada rechazada',
-        'entrada bloqueada']
+    PALABRAS_CLAVE_DESCARTAR = [
+        'entrada no válida',
+        'entrada rechazada',
+        'entrada bloqueada',
+        'entrando en',
+    ]
 
     def filter(self, record: logging.LogRecord) ->bool:
         mensaje = record.getMessage().lower()
@@ -41,6 +45,9 @@ def configurar_logger(nombre: str, nivel=logging.INFO, carpeta_logs='logs',
     if nombre in loggers_configurados:
         return loggers_configurados[nombre]
     logger = logging.getLogger(nombre)
+    nivel_env = os.getenv('LOG_LEVEL')
+    if nivel_env:
+        nivel = getattr(logging, nivel_env.upper(), nivel)
     logger.setLevel(nivel)
     logger.propagate = False
     global archivo_global
@@ -55,7 +62,7 @@ def configurar_logger(nombre: str, nivel=logging.INFO, carpeta_logs='logs',
                 '%Y-%m-%d %H:%M:%S')
         if not modo_silencioso:
             consola = logging.StreamHandler()
-            consola.setLevel(logging.INFO)
+            consola.setLevel(nivel)
             consola.setFormatter(formato)
             logger.addHandler(consola)
         if archivo_global is None:
