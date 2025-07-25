@@ -722,25 +722,37 @@ class Trader:
         except Exception as e:
             log.debug(f'No se pudo registrar auditoría de rechazo: {e}')
 
-    def _validar_puntaje(self, symbol: str, puntaje: float, umbral: float
-        ) ->bool:
+    def _validar_puntaje(self, symbol: str, puntaje: float, umbral: float,
+        modo_agresivo: bool=False) -> bool:
         log.info('➡️ Entrando en _validar_puntaje()')
-        """Comprueba si ``puntaje`` supera ``umbral``."""
+        """Comprueba si ``puntaje`` supera ``umbral``.
+
+        Si ``modo_agresivo`` es ``True`` permite continuar incluso cuando el
+        puntaje no alcanza el umbral establecido.
+        """
         diferencia = umbral - puntaje
         metricas_tracker.registrar_diferencia_umbral(diferencia)
         if puntaje < umbral:
+            if not modo_agresivo:
+                log.debug(
+                    f'🚫 {symbol}: puntaje {puntaje:.2f} < umbral {umbral:.2f}')
+                metricas_tracker.registrar_filtro('umbral')
+                return False
             log.debug(
-                f'🚫 {symbol}: puntaje {puntaje:.2f} < umbral {umbral:.2f}')
-            metricas_tracker.registrar_filtro('umbral')
-            return False
+                f'⚠️ {symbol}: Puntaje bajo {puntaje:.2f} < umbral {umbral:.2f} '
+                'en modo agresivo')
         return True
 
     async def _validar_diversidad(self, symbol: str, peso_total: float,
         peso_min_total: float, estrategias_activas: Dict[str, float],
-        diversidad_min: int, estrategias_disponibles: dict, df: pd.DataFrame
-        ) ->bool:
+        diversidad_min: int, estrategias_disponibles: dict, df: pd.DataFrame,
+        modo_agresivo: bool=False) -> bool:
         log.info('➡️ Entrando en _validar_diversidad()')
-        """Verifica que la diversidad y el peso total sean suficientes."""
+        """Verifica que la diversidad y el peso total sean suficientes.
+
+        Cuando ``modo_agresivo`` es ``True`` tolera valores por debajo del
+        mínimo requerido sin marcar la operación como rechazada.
+        """
         diversidad = len(estrategias_activas)
         vol_factor = 1.0
         volatilidad = 0.0
@@ -768,11 +780,15 @@ class Trader:
                 diversidad_min = min(diversidad_min, 2)
                 peso_min_total *= 0.7
         if diversidad < diversidad_min or peso_total < peso_min_total:
-            self._rechazo(symbol,
-                f'Diversidad {diversidad} < {diversidad_min} o peso {peso_total:.2f} < {peso_min_total:.2f}'
-                , peso_total=peso_total)
-            metricas_tracker.registrar_filtro('diversidad')
-            return False
+            if not modo_agresivo:
+                self._rechazo(symbol,
+                    f'Diversidad {diversidad} < {diversidad_min} o peso {peso_total:.2f} < {peso_min_total:.2f}'
+                    , peso_total=peso_total)
+                metricas_tracker.registrar_filtro('diversidad')
+                return False
+            log.debug(
+                f'⚠️ {symbol}: Diversidad {diversidad}/{diversidad_min} o peso {peso_total:.2f}/{peso_min_total:.2f} en modo agresivo'
+                )
         return True
 
     def _validar_estrategia(self, symbol: str, df: pd.DataFrame,
