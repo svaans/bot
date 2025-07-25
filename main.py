@@ -4,6 +4,7 @@ import signal
 import traceback
 from pathlib import Path
 from core.hot_reload import start_hot_reload, stop_hot_reload
+from core.supervisor import start_supervision, supervised_task
 from learning.reset_configuracion import resetear_configuracion_diaria_si_corresponde
 from config.config_manager import ConfigManager
 
@@ -15,6 +16,7 @@ def mostrar_banner():
 
 
 async def main():
+    start_supervision()
     config = ConfigManager.load_from_env()
     observer = start_hot_reload(path=Path.cwd(), modules=None)
     try:
@@ -69,7 +71,7 @@ async def main():
 
 if __name__ == '__main__':
     try:
-        asyncio.run(main())
+        asyncio.run(supervised_task(main)())
     except KeyboardInterrupt:
         print('\n🛑 Bot detenido manualmente.')
     except Exception:

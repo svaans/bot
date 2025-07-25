@@ -32,6 +32,7 @@ from core.adaptador_configuracion_dinamica import adaptar_configuracion
 from ccxt.base.errors import BaseError
 from core.reporting import reporter_diario
 from core.registro_metrico import registro_metrico
+from core.supervisor import supervised_task
 from learning.aprendizaje_en_linea import registrar_resultado_trade
 from learning.aprendizaje_continuo import ejecutar_ciclo as ciclo_aprendizaje
 from core.strategies.exit.gestor_salidas import verificar_filtro_tecnico
@@ -658,7 +659,7 @@ class Trader:
         log.info('➡️ Entrando en _iniciar_tarea()')
         """Crea una tarea a partir de ``factory`` y la registra."""
         self._factories[nombre] = factory
-        self._tareas[nombre] = asyncio.create_task(factory())
+        self._tareas[nombre] = asyncio.create_task(supervised_task(factory)())
 
     async def _vigilancia_tareas(self, intervalo: int=60) ->None:
         log.info('➡️ Entrando en _vigilancia_tareas()')
