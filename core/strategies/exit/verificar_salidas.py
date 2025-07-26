@@ -1,5 +1,6 @@
 from __future__ import annotations
 from datetime import datetime
+import asyncio
 import pandas as pd
 from core.utils import configurar_logger
 from core.contexto_externo import obtener_puntaje_contexto
@@ -152,9 +153,14 @@ async def verificar_salidas(trader, symbol: str, df: pd.DataFrame) ->None:
             if spread and spread > getattr(trader.config, 'max_spread_ratio', 0.003):
                 orden.intentos_cierre += 1
                 if orden.intentos_cierre >= getattr(trader.config, 'max_intentos_cierre', 3):
-                    await trader._cerrar_y_reportar(orden, precio_cierre, 'Cierre forzado por spread', df=df)
+                    await trader._cerrar_y_reportar(
+                        orden, precio_cierre, 'Cierre forzado por spread', df=df)
                 else:
-                    log.info(f'[{symbol}] Spread {spread:.4f} demasiado alto, reintento {orden.intentos_cierre}')
+                    delay = getattr(trader.config, 'delay_reintento_cierre', 1)
+                    log.info(
+                        f'[{symbol}] Spread {spread:.4f} demasiado alto, ' \
+                        f'reintento {orden.intentos_cierre} en {delay}s')
+                    await asyncio.sleep(delay)
                 return
             log.info(
                 f'🔄 Trailing Stop activado para {symbol} a {precio_cierre:.2f}€'

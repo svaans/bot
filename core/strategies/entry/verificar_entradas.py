@@ -12,6 +12,7 @@ from core.strategies.evaluador_tecnico import evaluar_puntaje_tecnico, calcular_
 from indicators.rsi import calcular_rsi
 from indicators.momentum import calcular_momentum
 from indicators.slope import calcular_slope
+from indicators.atr import calcular_atr
 from core.utils.utils import distancia_minima_valida, verificar_integridad_datos
 from core.contexto_externo import obtener_puntaje_contexto
 from core.metricas_semanales import metricas_tracker
@@ -62,7 +63,7 @@ async def verificar_entrada(trader, symbol: str, df: pd.DataFrame, estado) ->(
     direccion = 'short' if tendencia == 'bajista' else 'long'
     estrategias_persistentes, incoherentes = filtrar_por_direccion(
         estrategias_persistentes, direccion)
-    penalizacion = 0.05 * len(incoherentes) ** 2 if incoherentes else 0.0
+    penalizacion = 0.05 * len(incoherentes) if incoherentes else 0.0
     puntaje = sum(trader.pesos_por_simbolo.get(e, 0) for e in
         estrategias_persistentes)
     puntaje += trader.persistencia.peso_extra * len(estrategias_persistentes)
@@ -146,8 +147,8 @@ async def verificar_entrada(trader, symbol: str, df: pd.DataFrame, estado) ->(
     else:
         score_tecnico = None
     precio = float(df['close'].iloc[-1])
-    sl, tp = calcular_tp_sl_adaptativos(symbol, df, config, trader.
-        capital_por_simbolo.get(symbol, 0), precio)
+    sl, tp = calcular_tp_sl_adaptativos(symbol, df, config,
+        trader.capital_por_simbolo.get(symbol, 0), precio)
     try:
         df_htf = df.set_index(pd.to_datetime(df['timestamp'])).resample('5T').last()
         tendencia_htf, _ = detectar_tendencia(symbol, df_htf)
@@ -165,6 +166,16 @@ async def verificar_entrada(trader, symbol: str, df: pd.DataFrame, estado) ->(
             f'[{symbol}] SL/TP distancia mínima no válida: SL {sl} TP {tp}')
         metricas_tracker.registrar_filtro('sl_tp')
         return None
+    
+    atr = calcular_atr(df)
+    if atr:
+        min_sl = atr * getattr(trader.config, 'factor_sl_atr', 0.5)
+        min_tp = atr * getattr(trader.config, 'factor_tp_atr', 0.5)
+        if abs(precio - sl) < min_sl or abs(tp - precio) < min_tp:
+            log.info(
+                f'[{symbol}] SL/TP demasiado ajustados para ATR {atr:.4f}')
+            metricas_tracker.registrar_filtro('sl_tp_atr')
+            return None
     eval_tecnica = evaluar_puntaje_tecnico(symbol, df, precio, sl, tp)
     score_total = eval_tecnica['score_total']
     if 'volume' in df.columns:
@@ -208,6 +219,7 @@ async def verificar_entrada(trader, symbol: str, df: pd.DataFrame, estado) ->(
     if abs(puntaje_macro) > getattr(trader.config, 'umbral_puntaje_macro', 6):
         log.info(f'[{symbol}] Contexto macro desfavorable ({puntaje_macro:.2f})')
         metricas_tracker.registrar_filtro('contexto_macro')
+        return None
     log.info(
         f'✅ [{symbol}] Señal de entrada generada con {len(estrategias_persistentes)} estrategias activas.'
         )

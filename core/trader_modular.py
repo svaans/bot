@@ -1062,6 +1062,11 @@ class Trader:
         cantidad_total = await self.capital_manager.calcular_cantidad_async(
             symbol, precio)
         if cantidad_total <= 0:
+            capital_disp = self.capital_manager.capital_por_simbolo.get(
+                symbol, 0.0)
+            log.warning(
+                f'⛔ No se abre posición en {symbol} por capital insuficiente. '
+                f'Disponible: {capital_disp:.2f}€')
             return
         fracciones = self.piramide_fracciones
         cantidad = cantidad_total / fracciones
