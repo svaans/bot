@@ -905,6 +905,26 @@ class Trader:
                 f'🚫 {symbol}: precio de entrada similar al de salida anterior')
             return False
         return True
+    
+    def _validar_sl_tp(self, symbol: str, precio: float, sl: float,
+        tp: float) ->bool:
+        log.info('➡️ Entrando en _validar_sl_tp()')
+        df = self._obtener_historico(symbol)
+        if df is None or len(df) < 30:
+            return True
+        atr = calcular_atr(df.tail(100))
+        if not atr:
+            return True
+        min_sl = atr * getattr(self.config, 'factor_sl_atr', 0.5)
+        min_tp = atr * getattr(self.config, 'factor_tp_atr', 0.5)
+        if abs(precio - sl) < min_sl or abs(tp - precio) < min_tp:
+            log.warning(
+                f'⛔ {symbol}: SL/TP demasiado cercanos al precio para ATR '
+                f'{atr:.4f}')
+            registro_metrico.registrar('entrada_rechazada_sl_tp',
+                {'symbol': symbol})
+            return False
+        return True
 
     def _calcular_score_tecnico(self, df: pd.DataFrame, rsi: (float | None),
         momentum: (float | None), tendencia: str, direccion: str) ->tuple[
@@ -1088,6 +1108,10 @@ class Trader:
             pesos_symbol = self.pesos_por_simbolo.get(symbol, {})
             estrategias_dict = {e: pesos_symbol.get(e, 0.0) for e in
                 estrategias}
+        if not self._validar_sl_tp(symbol, precio, sl, tp):
+            self._rechazo(symbol, 'sl_tp_invalidos', puntaje=puntaje,
+                estrategias=list(estrategias_dict.keys()))
+            return
         await self.orders.abrir_async(symbol, precio, sl, tp,
             estrategias_dict, tendencia, direccion, cantidad, puntaje,
             umbral, objetivo=cantidad_total, fracciones=fracciones,
