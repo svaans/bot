@@ -2,9 +2,10 @@
 from __future__ import annotations
 import asyncio
 from typing import Awaitable, Callable, Dict, Iterable
+from datetime import datetime
 from binance_api.websocket import escuchar_velas
 from core.utils.logger import configurar_logger
-from core.supervisor import tick
+from core.supervisor import tick, tick_data
 log = configurar_logger('datafeed', modo_silencioso=True)
 
 
@@ -15,6 +16,7 @@ class DataFeed:
         log.info('➡️ Entrando en __init__()')
         self.intervalo = intervalo
         self._tasks: Dict[str, asyncio.Task] = {}
+        self._last: Dict[str, datetime] = {}
 
     @property
     def activos(self) ->list[str]:
@@ -22,18 +24,33 @@ class DataFeed:
         """Lista de símbolos con streams activos."""
         return list(self._tasks.keys())
 
-    async def stream(self, symbol: str, handler: Callable[[dict], Awaitable
-        [None]]) ->None:
+    async def stream(self, symbol: str, handler: Callable[[dict], Awaitable[None]]) -> None:
         log.info('➡️ Entrando en stream()')
         """Escucha las velas de ``symbol`` y reintenta ante fallos de conexión."""
+
+        async def wrapper(candle: dict) -> None:
+            self._last[symbol] = datetime.utcnow()
+            log.info(f'[{symbol}] Recibida vela: timestamp={candle.get("timestamp")}')
+            tick_data(symbol)
+            await handler(candle)
+
+        monitor = asyncio.create_task(self._monitor_activity(symbol))
         while True:
             try:
-                await escuchar_velas(symbol, self.intervalo, handler)
+                await escuchar_velas(symbol, self.intervalo, wrapper)
                 break
             except Exception as e:
-                log.warning(
-                    f'⚠️ Stream {symbol} falló: {e}. Reintentando en 5s')
+                log.warning(f'⚠️ Stream {symbol} falló: {e}. Reintentando en 5s')
                 await asyncio.sleep(5)
+        monitor.cancel()
+
+    async def _monitor_activity(self, symbol: str) -> None:
+        """Verifica periódicamente que se sigan recibiendo velas."""
+        while True:
+            await asyncio.sleep(5)
+            ultimo = self._last.get(symbol)
+            if ultimo and (datetime.utcnow() - ultimo).total_seconds() > 30:
+                log.warning(f'⚠️ Sin velas de {symbol} desde hace más de 30s')
 
     async def escuchar(self, symbols: Iterable[str], handler: Callable[[
         dict], Awaitable[None]]) ->None:
@@ -57,15 +74,12 @@ class DataFeed:
                     log.error(
                         f'⚠️ Stream {sym} finalizó con excepción: {resultado}. Reiniciando en 5s'
                     )
-                else:
-                    log.warning(
-                        f'⚠️ Stream {sym} terminó inesperadamente. Reiniciando en 5s'
-                    )
-                await asyncio.sleep(5)
-                reiniciar[sym] = asyncio.create_task(self.stream(sym, handler))
+                    await asyncio.sleep(5)
+                    reiniciar[sym] = asyncio.create_task(self.stream(sym, handler))
             if reiniciar:
                 self._tasks.update(reiniciar)
-
+            else:
+                break
     async def detener(self) ->None:
         log.info('➡️ Entrando en detener()')
         """Cancela todos los streams en ejecución."""

@@ -16,6 +16,7 @@ last_alive = datetime.utcnow()
 last_function = 'init'
 tasks: Dict[str, asyncio.Task] = {}
 task_heartbeat: Dict[str, datetime] = {}
+data_heartbeat: Dict[str, datetime] = {}
 
 
 def tick(name: str) -> None:
@@ -24,6 +25,10 @@ def tick(name: str) -> None:
     last_function = name
     last_alive = datetime.utcnow()
     task_heartbeat[name] = last_alive
+
+def tick_data(symbol: str) -> None:
+    """Actualiza la marca de tiempo de la última vela recibida para ``symbol``."""
+    data_heartbeat[symbol] = datetime.utcnow()
 
 
 def heartbeat(interval: int = 60) -> None:
@@ -51,6 +56,9 @@ def watchdog(timeout: int = 120, check_interval: int = 10) -> None:
                     log.critical("Stack de %s:\n%s", nombre, stack)
                 except Exception:
                     pass
+        for sym, ts in data_heartbeat.items():
+            if (datetime.utcnow() - ts).total_seconds() > 30:
+                log.critical("⚠️ Sin datos de %s desde hace %.1f segundos", sym, (datetime.utcnow() - ts).total_seconds())
         time.sleep(check_interval)
 
 
@@ -99,4 +107,12 @@ def supervised_task(coro_factory: Callable[..., Awaitable], name: str | None = N
     tasks[task_name] = task
     return task
 
-__all__ = ["start_supervision", "supervised_task", "tick", "tasks", "task_heartbeat"]
+__all__ = [
+    "start_supervision",
+    "supervised_task",
+    "tick",
+    "tick_data",
+    "tasks",
+    "task_heartbeat",
+    "data_heartbeat",
+]

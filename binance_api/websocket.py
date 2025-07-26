@@ -1,10 +1,15 @@
 import asyncio
 import json
-import websockets
 import traceback
+from datetime import datetime
+
+import websockets
 from core.utils.utils import configurar_logger
-from core.supervisor import tick
+from core.supervisor import tick, tick_data
+
 log = configurar_logger('websocket')
+
+last_message: dict[str, datetime] = {}
 
 
 def normalizar_symbolo(symbol: str) ->str:
@@ -16,7 +21,8 @@ INTERVALOS_VALIDOS = {'1m', '3m', '5m', '15m', '30m', '1h', '4h', '1d'}
 
 
 async def escuchar_velas(symbol: str, intervalo: str, callback):
-    log.info('➡️ Entrando en escuchar_velas()')
+    """Escucha velas cerradas de ``symbol`` en ``intervalo``."""
+    log.debug('➡️ Entrando en escuchar_velas()')
     """
     Conecta al websocket de Binance para recibir velas cerradas y
     llamar al callback con los datos normalizados.
@@ -34,14 +40,23 @@ async def escuchar_velas(symbol: str, intervalo: str, callback):
         )
     intentos = 0
     total_reintentos = 0
+    backoff = 5
     while True:
         try:
             ws = await asyncio.wait_for(
-                websockets.connect(url, ping_interval=20, ping_timeout=20, max_size=2 ** 20),
-                timeout=10,
+                websockets.connect(
+                    url,
+                    open_timeout=10,
+                    close_timeout=10,
+                    ping_interval=20,
+                    ping_timeout=20,
+                    max_size=2 ** 20,
+                ),
+                timeout=15,
             )
             log.info(f'🔌 WebSocket conectado para {symbol} ({intervalo})')
             intentos = 0
+            backoff = 5
             watchdog = asyncio.create_task(_watchdog(ws, symbol))
             try:
                 while True:
@@ -51,6 +66,10 @@ async def escuchar_velas(symbol: str, intervalo: str, callback):
                         log.warning(f'⏰ Sin datos de {symbol} en 30s, forzando reconexión')
                         await ws.close()
                         break
+                    except Exception:
+                        log.warning(f'❌ Error recibiendo datos de {symbol}, reconectando')
+                        await ws.close()
+                        raise
                     try:
                         data = json.loads(msg)
                     except json.JSONDecodeError as e:
@@ -73,15 +92,20 @@ async def escuchar_velas(symbol: str, intervalo: str, callback):
                             log.info(
                                 f"✅ Vela cerrada {symbol} — Close: {vela['c']}, Vol: {vela['v']}"
                                 )
-                            await callback({'symbol': symbol, 'timestamp':
-                                vela['t'], 'open': float(vela['o']), 'high':
-                                float(vela['h']), 'low': float(vela['l']),
-                                'close': float(vela['c']), 'volume': float(
-                                vela['v'])})
+                            await callback(
+                                {
+                                    'symbol': symbol,
+                                    'timestamp': vela['t'],
+                                    'open': float(vela['o']),
+                                    'high': float(vela['h']),
+                                    'low': float(vela['l']),
+                                    'close': float(vela['c']),
+                                    'volume': float(vela['v']),
+                                }
+                            )
                             tick('data_feed')
                             watchdog.cancel()
-                            watchdog = asyncio.create_task(_watchdog(ws,
-                                symbol))
+                            watchdog = asyncio.create_task(_watchdog(ws, symbol))
                     except Exception as e:
                         log.warning(f'❌ Error en callback de {symbol}: {e}')
                         traceback.print_exc()
@@ -101,17 +125,18 @@ async def escuchar_velas(symbol: str, intervalo: str, callback):
         except Exception as e:
             intentos += 1
             total_reintentos += 1
-            espera = min(60, 5 * intentos)
             log.warning(f'❌ Error en WebSocket de {symbol}: {e}')
             traceback.print_exc()
             log.info(
-                f'🔁 Reintentando conexión en {espera} segundos... (total reintentos: {total_reintentos})'
-                )
-            await asyncio.sleep(espera)
+                f'🔁 Reintentando conexión en {backoff} segundos... (total reintentos: {total_reintentos})'
+            )
+            await asyncio.sleep(backoff)
+            backoff = min(60, backoff * 2)
 
 
 async def _watchdog(ws, symbol, tiempo_maximo=300):
-    log.info('➡️ Entrando en _watchdog()')
+    """Cierra ``ws`` si no se reciben velas en ``tiempo_maximo`` segundos."""
+    log.debug('➡️ Entrando en _watchdog()')
     """
     Si no llega ninguna vela en tiempo_maximo (segundos), cierra el websocket para reiniciar.
     """
@@ -122,5 +147,6 @@ async def _watchdog(ws, symbol, tiempo_maximo=300):
             )
         await ws.close()
         tick('data_feed')
+        tick_data(symbol)
     except Exception:
         pass
