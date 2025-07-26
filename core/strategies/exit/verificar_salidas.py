@@ -2,6 +2,7 @@ from __future__ import annotations
 from datetime import datetime
 import pandas as pd
 from core.utils import configurar_logger
+from core.contexto_externo import obtener_puntaje_contexto
 from indicators.rsi import calcular_rsi
 from indicators.momentum import calcular_momentum
 from indicators.atr import calcular_atr
@@ -23,6 +24,14 @@ log = configurar_logger('verificar_salidas')
 async def verificar_salidas(trader, symbol: str, df: pd.DataFrame) ->None:
     log.info('➡️ Entrando en verificar_salidas()')
     """Evalúa si la orden abierta debe cerrarse."""
+    # Se valida contexto macroeconómico antes de tomar decisiones de cierre.
+    puntaje_macro = obtener_puntaje_contexto(symbol)
+    if abs(puntaje_macro) > getattr(trader.config, 'umbral_puntaje_macro_cierre', 6):
+        log.info(f'[{symbol}] Contexto macro crítico ({puntaje_macro:.2f}). Se prioriza cierre.')
+        orden = trader.orders.obtener(symbol)
+        if orden:
+            await trader._cerrar_y_reportar(orden, float(df["close"].iloc[-1]), 'Contexto macro', df=df)
+        return
     orden = trader.orders.obtener(symbol)
     if not orden:
         log.warning(
@@ -53,7 +62,9 @@ async def verificar_salidas(trader, symbol: str, df: pd.DataFrame) ->None:
             trader.estado_tendencia[symbol] = tendencia_actual
         score, _ = trader._calcular_score_tecnico(df, rsi, momentum,
             tendencia_actual, orden.direccion)
-        if score >= 2 or patron_tecnico_fuerte(df):
+        max_evitar = config_actual.get('max_evitar_sl', 2)
+        intentos = len(orden.sl_evitar_info or [])
+        if (score >= 2 or patron_tecnico_fuerte(df)) and intentos < max_evitar:
             log.info(
                 f'🛡️ SL evitado por validación técnica — Score: {score:.1f}/4')
             orden.sl_evitar_info = orden.sl_evitar_info or []
@@ -139,7 +150,11 @@ async def verificar_salidas(trader, symbol: str, df: pd.DataFrame) ->None:
             if 'spread' in df.columns:
                 spread = df['spread'].iloc[-1] / precio_cierre
             if spread and spread > getattr(trader.config, 'max_spread_ratio', 0.003):
-                log.info(f'[{symbol}] Spread {spread:.4f} demasiado alto, se pospone cierre')
+                orden.intentos_cierre += 1
+                if orden.intentos_cierre >= getattr(trader.config, 'max_intentos_cierre', 3):
+                    await trader._cerrar_y_reportar(orden, precio_cierre, 'Cierre forzado por spread', df=df)
+                else:
+                    log.info(f'[{symbol}] Spread {spread:.4f} demasiado alto, reintento {orden.intentos_cierre}')
                 return
             log.info(
                 f'🔄 Trailing Stop activado para {symbol} a {precio_cierre:.2f}€'

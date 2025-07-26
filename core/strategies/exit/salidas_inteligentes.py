@@ -46,6 +46,14 @@ def evaluar_salida_inteligente(orden: Dict, df: pd.DataFrame, config: (Dict |
     None)=None) ->Dict:
     """Evalúa varias estrategias de salida y decide un cierre unificado."""
     resultados: List[Dict] = []
+    vol_min = (config or {}).get('volumen_minimo_salida', 0.0)
+    spread_max = (config or {}).get('max_spread_ratio', 0.003)
+    if 'volume' in df.columns and df['volume'].iloc[-1] < vol_min:
+        return {'cerrar': False, 'razones': ['Volumen bajo'], 'estrategias_activas': 0, 'motivo_final': 'Volumen insuficiente'}
+    if 'spread' in df.columns:
+        spread = df['spread'].iloc[-1] / df['close'].iloc[-1]
+        if spread > spread_max:
+            return {'cerrar': False, 'razones': ['Spread alto'], 'estrategias_activas': 0, 'motivo_final': 'Spread excesivo'}
     res_sl = verificar_salida_stoploss(orden, df, config=config)
     if res_sl.get('cerrar'):
         resultados.append({'razon': 'Stop Loss', 'detalle': res_sl.get(

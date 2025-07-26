@@ -17,7 +17,14 @@ def salida_stoploss_atr(orden: dict, df: pd.DataFrame) ->dict:
         if atr is None or entrada is None:
             return resultado_salida('Stop Loss', False,
                 'ATR o entrada no disponibles')
-        margen = 1.5 * atr
+        vol = df['close'].pct_change().tail(100).std()
+        if vol > 0.04:
+            mult = 2.0
+        elif vol < 0.02:
+            mult = 1.2
+        else:
+            mult = 1.5
+        margen = mult * atr
         if direccion in ['long', 'compra']:
             sl_tecnico = entrada - margen
             if precio_actual <= sl_tecnico:

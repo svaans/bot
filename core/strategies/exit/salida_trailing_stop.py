@@ -34,7 +34,8 @@ def salida_trailing_stop(orden: dict, df: pd.DataFrame, config: dict=None
         if atr is None:
             return resultado_salida('Trailing Stop', False, 'ATR no disponible'
                 )
-        trailing_dist = atr * atr_mult
+        pct = config.get('trailing_pct', 0.015) if config else 0.015
+        trailing_dist = max(atr * atr_mult, precio_actual * pct)
         if 'max_precio' not in orden:
             orden['max_precio'] = orden['precio_entrada']
         if direccion in ['compra', 'long']:

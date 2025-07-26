@@ -56,8 +56,8 @@ class CapitalManager:
             log.debug(f'No se pudo obtener mínimo para {symbol}: {e}')
             return None
 
-    async def calcular_cantidad_async(self, symbol: str, precio: float
-        ) ->float:
+    async def calcular_cantidad_async(self, symbol: str, precio: float,
+        exposicion_total: float = 0.0) ->float:
         log.info('➡️ Entrando en calcular_cantidad_async()')
         if self.modo_real and self.cliente:
             balance = await fetch_balance_async(self.cliente)
@@ -74,6 +74,9 @@ class CapitalManager:
             deficit = (500 - euros) / 500
             fraccion = max(fraccion, 0.02 + deficit * 0.1)
         riesgo_teorico = capital_symbol * fraccion * self.risk.umbral
+        if exposicion_total > 0:
+            ajuste = max(0.0, 1 - exposicion_total / (euros * self.riesgo_maximo_diario))
+            riesgo_teorico *= ajuste
         minimo_dinamico = max(10.0, euros * 0.02)
         riesgo = max(riesgo_teorico, minimo_dinamico)
         riesgo = min(riesgo, euros * self.riesgo_maximo_diario)
@@ -94,9 +97,11 @@ class CapitalManager:
             minimo_binance else 'desconocido', symbol)
         return round(cantidad, 6)
 
-    def calcular_cantidad(self, symbol: str, precio: float) ->float:
+    def calcular_cantidad(self, symbol: str, precio: float,
+        exposicion_total: float = 0.0) ->float:
         log.info('➡️ Entrando en calcular_cantidad()')
-        return asyncio.run(self.calcular_cantidad_async(symbol, precio))
+        return asyncio.run(self.calcular_cantidad_async(symbol, precio,
+            exposicion_total))
 
     def actualizar_capital(self, symbol: str, retorno_total: float) ->float:
         log.info('➡️ Entrando en actualizar_capital()')

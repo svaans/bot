@@ -584,13 +584,18 @@ class Trader:
         ) ->float:
         log.info('➡️ Entrando en _calcular_cantidad_async()')
         """Delegado a :class:`CapitalManager`."""
+        exposicion = sum(o.cantidad_abierta * o.precio_entrada for o in
+            self.orders.ordenes.values())
         return await self.capital_manager.calcular_cantidad_async(symbol,
-            precio)
+            precio, exposicion)
 
     def _calcular_cantidad(self, symbol: str, precio: float) ->float:
         log.info('➡️ Entrando en _calcular_cantidad()')
         """Versión síncrona de :meth:`_calcular_cantidad_async`."""
-        return self.capital_manager.calcular_cantidad(symbol, precio)
+        exposicion = sum(o.cantidad_abierta * o.precio_entrada for o in
+            self.orders.ordenes.values())
+        return self.capital_manager.calcular_cantidad(symbol, precio,
+            exposicion)
 
     def _metricas_recientes(self, dias: int=7) ->dict:
         log.info('➡️ Entrando en _metricas_recientes()')

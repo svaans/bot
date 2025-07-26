@@ -13,6 +13,7 @@ class RiskManager:
     def __init__(self, umbral: float) ->None:
         log.info('➡️ Entrando en __init__()')
         self.umbral = umbral
+        self._factor_kelly_prev = None
 
     def riesgo_superado(self, capital_total: float) ->bool:
         log.info('➡️ Entrando en riesgo_superado()')
@@ -77,6 +78,9 @@ class RiskManager:
         exposicion = segun_metricas.get('exposicion_actual')
         if isinstance(exposicion, (int, float)) and exposicion > 0.5:
             self.umbral = round(max(0.01, self.umbral * 0.8), 4)
+        corr_media = segun_metricas.get('correlacion_media')
+        if isinstance(corr_media, (int, float)) and corr_media > 0.8:
+            self.umbral = round(max(0.01, self.umbral * (1 - min(corr_media, 1))), 4)
         if self.umbral != umbral_anterior:
             log.info(
                 f'🔧 Umbral ajustado de {umbral_anterior:.4f} → {self.umbral:.4f}'
@@ -104,7 +108,11 @@ class RiskManager:
             if not retornos:
                 return 1.0
             promedio = sum(retornos) / len(retornos)
-            factor = round(max(0.5, min(1.5, 1 + promedio)), 3)
+            factor = max(0.5, min(1.5, 1 + promedio))
+            if self._factor_kelly_prev is not None:
+                factor = 0.7 * self._factor_kelly_prev + 0.3 * factor
+            self._factor_kelly_prev = factor
+            factor = round(factor, 3)
             log.debug(f'🔧 Multiplicador Kelly calculado: {factor:.3f}')
             return factor
         except Exception as e:

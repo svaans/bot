@@ -69,6 +69,33 @@ def validar_dataframe(df, columnas):
         col in columnas)
 
 
+def verificar_integridad_datos(df: pd.DataFrame, max_gap_pct: float = 0.5) -> bool:
+    log.info('➡️ Entrando en verificar_integridad_datos()')
+    """Comprueba valores nulos y gaps en ``df``.
+
+    Si se detectan NaNs, gaps temporales amplios o variaciones extremas,
+    se considera que el DataFrame no es fiable para operar."""
+    if df is None or df.empty:
+        return False
+    if df.isna().any().any():
+        log.warning('⚠️ DataFrame con NaNs detectado')
+        return False
+    if 'timestamp' in df.columns:
+        ts = pd.to_datetime(df['timestamp'], errors='coerce')
+        if ts.isna().any():
+            return False
+        diffs = ts.diff().dt.total_seconds().dropna()
+        if not diffs.empty and diffs.max() > diffs.median() * 2:
+            log.warning('⚠️ Gaps temporales excesivos detectados')
+            return False
+    if 'close' in df.columns:
+        cambios = df['close'].pct_change().dropna()
+        if not cambios.empty and cambios.abs().max() > max_gap_pct:
+            log.warning('⚠️ Variaciones atípicas detectadas')
+            return False
+    return True
+
+
 def validar_tp(tp: float, precio: float, max_relativo: float=1.05,
     max_absoluto: float=0.03) ->float:
     log.info('➡️ Entrando en validar_tp()')

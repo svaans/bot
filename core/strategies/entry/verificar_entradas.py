@@ -12,7 +12,8 @@ from core.strategies.evaluador_tecnico import evaluar_puntaje_tecnico, calcular_
 from indicators.rsi import calcular_rsi
 from indicators.momentum import calcular_momentum
 from indicators.slope import calcular_slope
-from core.utils.utils import distancia_minima_valida
+from core.utils.utils import distancia_minima_valida, verificar_integridad_datos
+from core.contexto_externo import obtener_puntaje_contexto
 from core.metricas_semanales import metricas_tracker
 log = configurar_logger('verificar_entrada')
 
@@ -24,6 +25,10 @@ async def verificar_entrada(trader, symbol: str, df: pd.DataFrame, estado) ->(
     Evalúa condiciones de entrada y devuelve info de operación
     si cumple todos los filtros, de lo contrario None.
     """
+    if not verificar_integridad_datos(df):
+        log.warning(f'[{symbol}] Datos de mercado incompletos o corruptos')
+        metricas_tracker.registrar_filtro('datos_invalidos')
+        return None
     config = trader.config_por_simbolo.get(symbol, {})
     config.update(adaptar_configuracion(symbol, df) or {})
     config = adaptar_configuracion_base(symbol, df, config)
@@ -84,7 +89,13 @@ async def verificar_entrada(trader, symbol: str, df: pd.DataFrame, estado) ->(
             trader.historial_cierres.pop(symbol, None)
     hoy = datetime.utcnow().date().isoformat()
     limite_base = getattr(trader.config, 'max_perdidas_diarias', 6)
-    volatilidad_dia = df['close'].pct_change().tail(1440).std()
+    try:
+        ultimo = pd.to_datetime(df['timestamp'].iloc[-1])
+        inicio = ultimo - pd.Timedelta(hours=24)
+        df_dia = df[pd.to_datetime(df['timestamp']) >= inicio]
+        volatilidad_dia = df_dia['close'].pct_change().std()
+    except Exception:
+        volatilidad_dia = df['close'].pct_change().tail(1440).std()
     if volatilidad_dia > 0.05:
         limite = max(3, int(limite_base * 0.5))
     elif volatilidad_dia < 0.02:
@@ -137,6 +148,17 @@ async def verificar_entrada(trader, symbol: str, df: pd.DataFrame, estado) ->(
     precio = float(df['close'].iloc[-1])
     sl, tp = calcular_tp_sl_adaptativos(symbol, df, config, trader.
         capital_por_simbolo.get(symbol, 0), precio)
+    try:
+        df_htf = df.set_index(pd.to_datetime(df['timestamp'])).resample('5T').last()
+        tendencia_htf, _ = detectar_tendencia(symbol, df_htf)
+        if tendencia_htf != tendencia:
+            ajuste = 0.8
+            if direccion == 'long':
+                tp *= ajuste
+            else:
+                sl *= ajuste
+    except Exception:
+        pass
     if not distancia_minima_valida(precio, sl, tp):
         log.warning(
             f'[{symbol}] SL/TP distancia mínima no válida: SL {sl} TP {tp}')
@@ -147,6 +169,11 @@ async def verificar_entrada(trader, symbol: str, df: pd.DataFrame, estado) ->(
     vol = df['volume'].iloc[-1] / (df['volume'].rolling(20).mean().iloc[-1] or
         1) if 'volume' in df.columns else 0
     umbral_vol = getattr(trader.config, 'volumen_min_relativo', 1.0)
+    vol_abs_min = getattr(trader.config, 'volumen_min_absoluto', 0.0)
+    if 'volume' in df.columns and df['volume'].iloc[-1] < vol_abs_min:
+        log.info(f'[{symbol}] Volumen absoluto {df["volume"].iloc[-1]:.2f} < {vol_abs_min}')
+        metricas_tracker.registrar_filtro('volumen_abs')
+        return None
     if vol < umbral_vol:
         log.info(f'[{symbol}] Volumen relativo {vol:.2f} < umbral {umbral_vol}')
         metricas_tracker.registrar_filtro('volumen')
@@ -162,6 +189,20 @@ async def verificar_entrada(trader, symbol: str, df: pd.DataFrame, estado) ->(
             )
         metricas_tracker.registrar_filtro('score_tecnico')
         return None
+    correlaciones = trader._calcular_correlaciones()
+    if not correlaciones.empty and symbol in correlaciones.columns:
+        abiertas = [s for s in trader.orders.ordenes if s != symbol]
+        if abiertas:
+            corr = correlaciones.loc[symbol, abiertas].abs().max()
+            umbral_corr = getattr(trader.config, 'umbral_correlacion', 0.9)
+            if corr >= umbral_corr:
+                log.info(f'[{symbol}] Correlación {corr:.2f} supera umbral {umbral_corr}')
+                metricas_tracker.registrar_filtro('correlacion')
+                return None
+    puntaje_macro = obtener_puntaje_contexto(symbol)
+    if abs(puntaje_macro) > getattr(trader.config, 'umbral_puntaje_macro', 6):
+        log.info(f'[{symbol}] Contexto macro desfavorable ({puntaje_macro:.2f})')
+        metricas_tracker.registrar_filtro('contexto_macro')
     log.info(
         f'✅ [{symbol}] Señal de entrada generada con {len(estrategias_persistentes)} estrategias activas.'
         )
