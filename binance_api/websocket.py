@@ -5,12 +5,11 @@ from datetime import datetime
 
 import websockets
 from websockets.exceptions import ConnectionClosed
-from core.utils.utils import configurar_logger
+from core.utils.utils import configurar_logger, intervalo_a_segundos
 from core.supervisor import tick, tick_data
 
 log = configurar_logger('websocket')
 
-last_message: dict[str, datetime] = {}
 
 
 def normalizar_symbolo(symbol: str) ->str:
@@ -21,7 +20,14 @@ def normalizar_symbolo(symbol: str) ->str:
 INTERVALOS_VALIDOS = {'1m', '3m', '5m', '15m', '30m', '1h', '4h', '1d'}
 
 
-async def escuchar_velas(symbol: str, intervalo: str, callback):
+async def escuchar_velas(
+    symbol: str,
+    intervalo: str,
+    callback,
+    last_message: dict[str, datetime] | None = None,
+    tiempo_maximo: int | None = None,
+    ping_interval: int | None = None,
+):
     """Escucha velas cerradas de ``symbol`` en ``intervalo``."""
     log.debug('➡️ Entrando en escuchar_velas()')
     """
@@ -39,6 +45,12 @@ async def escuchar_velas(symbol: str, intervalo: str, callback):
     url = (
         f'wss://stream.binance.com:9443/ws/{normalizar_symbolo(symbol)}@kline_{intervalo}'
         )
+    if last_message is None:
+        last_message = {}
+    if tiempo_maximo is None:
+        tiempo_maximo = max(intervalo_a_segundos(intervalo) * 2, 60)
+    if ping_interval is None:
+        ping_interval = intervalo_a_segundos(intervalo)
     intentos = 0
     total_reintentos = 0
     backoff = 5
@@ -59,8 +71,10 @@ async def escuchar_velas(symbol: str, intervalo: str, callback):
             intentos = 0
             backoff = 5
             last_message[symbol] = datetime.utcnow()
-            watchdog = asyncio.create_task(_watchdog(ws, symbol))
-            keeper = asyncio.create_task(_keepalive(ws, symbol))
+            watchdog = asyncio.create_task(
+                _watchdog(ws, symbol, last_message, tiempo_maximo)
+            )
+            keeper = asyncio.create_task(_keepalive(ws, symbol, ping_interval))
             try:
                 while True:
                     try:
@@ -141,7 +155,12 @@ async def escuchar_velas(symbol: str, intervalo: str, callback):
             backoff = min(60, backoff * 2)
 
 
-async def _watchdog(ws, symbol, tiempo_maximo=120):
+async def _watchdog(
+    ws,
+    symbol: str,
+    last_message: dict[str, datetime],
+    tiempo_maximo: int,
+):
     """Cierra ``ws`` si no se reciben datos por ``tiempo_maximo`` segundos."""
     log.debug('➡️ Entrando en _watchdog()')
     """

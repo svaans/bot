@@ -11,6 +11,26 @@ from .logger import configurar_logger
 if TYPE_CHECKING:
     from core.order_model import Order
 from decimal import Decimal, InvalidOperation
+# Mapeo de intervalos de velas a segundos
+_MAPA_SEGUNDOS_INTERVALO = {
+    '1m': 60,
+    '3m': 180,
+    '5m': 300,
+    '15m': 900,
+    '30m': 1800,
+    '1h': 3600,
+    '4h': 14400,
+    '1d': 86400,
+}
+
+
+def intervalo_a_segundos(intervalo: str) -> int:
+    """Devuelve el equivalente en segundos de ``intervalo``.
+
+    Si el intervalo no está mapeado se devuelve ``60`` por defecto.
+    """
+    log.info('➡️ Entrando en intervalo_a_segundos()')
+    return _MAPA_SEGUNDOS_INTERVALO.get(intervalo, 60)
 log = configurar_logger('trader_simulado')
 
 

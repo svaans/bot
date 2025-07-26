@@ -6,7 +6,7 @@ from core.data_feed import DataFeed
 def test_data_feed_streams_candles(monkeypatch):
     received = []
 
-    async def fake_listen(symbol, interval, handler):
+    async def fake_listen(symbol, interval, handler, *args, **kwargs):
         await handler({'symbol': symbol, 'timestamp': 1})
     monkeypatch.setattr('core.data_feed.escuchar_velas', fake_listen)
     feed = DataFeed('1m')
@@ -21,7 +21,7 @@ def test_data_feed_streams_candles(monkeypatch):
 def test_stream_restarts_on_cancel(monkeypatch):
     calls = []
 
-    async def fake_listen(symbol, interval, handler):
+    async def fake_listen(symbol, interval, handler, *args, **kwargs):
         calls.append(symbol)
         await asyncio.sleep(0.01)
 

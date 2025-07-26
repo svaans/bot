@@ -5,6 +5,7 @@ from typing import Awaitable, Callable, Dict, Iterable
 from datetime import datetime
 from binance_api.websocket import escuchar_velas
 from core.utils.logger import configurar_logger
+from core.utils import intervalo_a_segundos
 from core.supervisor import tick, tick_data
 log = configurar_logger('datafeed', modo_silencioso=True)
 
@@ -12,9 +13,12 @@ log = configurar_logger('datafeed', modo_silencioso=True)
 class DataFeed:
     """Maneja la recepción de velas de Binance en tiempo real."""
 
-    def __init__(self, intervalo: str) ->None:
+    def __init__(self, intervalo: str) -> None:
         log.info('➡️ Entrando en __init__()')
         self.intervalo = intervalo
+        self.intervalo_segundos = intervalo_a_segundos(intervalo)
+        self.tiempo_inactividad = max(self.intervalo_segundos * 2, 60)
+        self.ping_interval = self.intervalo_segundos
         self._tasks: Dict[str, asyncio.Task] = {}
         self._last: Dict[str, datetime] = {}
 
@@ -38,7 +42,14 @@ class DataFeed:
         try:
             while True:
                 try:
-                    await escuchar_velas(symbol, self.intervalo, wrapper)
+                    await escuchar_velas(
+                        symbol,
+                        self.intervalo,
+                        wrapper,
+                        self._last,
+                        self.tiempo_inactividad,
+                        self.ping_interval,
+                    )
                     break
                 except Exception as e:
                     log.warning(
@@ -51,15 +62,18 @@ class DataFeed:
     async def _monitor_activity(self, symbol: str) -> None:
         """Verifica periódicamente que se sigan recibiendo velas.
 
-        Si pasan 60 segundos sin nuevas velas, cancela la tarea del stream para
-        que ``escuchar`` lo reinicie.
+        Si pasan ``self.tiempo_inactividad`` segundos sin nuevas velas, cancela
+        la tarea del stream para que ``escuchar`` lo reinicie.
         """
         while True:
             await asyncio.sleep(5)
             ultimo = self._last.get(symbol)
-            if ultimo and (datetime.utcnow() - ultimo).total_seconds() > 60:
+            if (
+                ultimo
+                and (datetime.utcnow() - ultimo).total_seconds() > self.tiempo_inactividad
+            ):
                 log.warning(
-                    f'⚠️ Sin velas de {symbol} desde hace más de 60s; reiniciando'
+                    f'⚠️ Sin velas de {symbol} desde hace más de {self.tiempo_inactividad}s; reiniciando'
                 )
                 task = self._tasks.get(symbol)
                 if task and not task.done():
