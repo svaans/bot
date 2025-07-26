@@ -48,6 +48,7 @@ from core.strategies.exit.verificar_salidas import verificar_salidas
 from core.strategies.entry.verificar_entradas import verificar_entrada
 from core.procesar_vela import procesar_vela
 from core.scoring import calcular_score_tecnico
+from binance_api.cliente import fetch_ticker_async
 log = configurar_logger('trader')
 PESOS_SCORE_TECNICO = {'RSI': 1.0, 'Momentum': 0.5, 'Slope': 1.0,
     'Tendencia': 1.0}
@@ -1064,6 +1065,18 @@ class Trader:
             return
         fracciones = self.piramide_fracciones
         cantidad = cantidad_total / fracciones
+        if self.capital_manager.cliente:
+            try:
+                ticker = await fetch_ticker_async(self.capital_manager.cliente, symbol)
+                precio_actual = float(ticker.get('last') or ticker.get('close') or precio)
+                spread = abs(precio_actual - precio) / precio if precio else 0.0
+                if spread > self.config.max_spread_ratio:
+                    log.warning(
+                        f'⛔ Spread {spread:.2%} supera límite en {symbol}. Orden cancelada.'
+                    )
+                    return
+            except Exception as e:
+                log.error(f'❌ No se pudo verificar spread para {symbol}: {e}')
         if isinstance(estrategias, dict):
             estrategias_dict = estrategias
         else:

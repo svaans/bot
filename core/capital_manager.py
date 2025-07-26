@@ -88,6 +88,11 @@ class CapitalManager:
                 f'Orden mínima {minimo_dinamico:.2f}€, intento {cantidad * precio:.2f}€'
                 )
             return 0.0
+        if minimo_binance and cantidad * precio < minimo_binance:
+            log.warning(
+                f'⛔ Orden para {symbol} por {cantidad * precio:.2f}€ inferior al mínimo Binance {minimo_binance:.2f}€'
+            )
+            return 0.0
         log.info(
             '⚖️ Kelly ajustada: %.4f | Riesgo teórico: %.2f€ | Mínimo dinámico: %.2f€ | Riesgo final: %.2f€'
             , fraccion, riesgo_teorico, minimo_dinamico, riesgo)

@@ -157,8 +157,9 @@ async def verificar_entrada(trader, symbol: str, df: pd.DataFrame, estado) ->(
                 tp *= ajuste
             else:
                 sl *= ajuste
-    except Exception:
-        pass
+    except Exception as e:
+        log.error(f'❌ Error evaluando tendencia HTF para {symbol}: {e}')
+        metricas_tracker.registrar_filtro('tendencia_htf_error')
     if not distancia_minima_valida(precio, sl, tp):
         log.warning(
             f'[{symbol}] SL/TP distancia mínima no válida: SL {sl} TP {tp}')
@@ -166,8 +167,12 @@ async def verificar_entrada(trader, symbol: str, df: pd.DataFrame, estado) ->(
         return None
     eval_tecnica = evaluar_puntaje_tecnico(symbol, df, precio, sl, tp)
     score_total = eval_tecnica['score_total']
-    vol = df['volume'].iloc[-1] / (df['volume'].rolling(20).mean().iloc[-1] or
-        1) if 'volume' in df.columns else 0
+    if 'volume' in df.columns:
+        ventana_vol = min(50, len(df))
+        vol_media = df['volume'].rolling(ventana_vol).mean().iloc[-1]
+        vol = df['volume'].iloc[-1] / (vol_media or 1)
+    else:
+        vol = 0
     umbral_vol = getattr(trader.config, 'volumen_min_relativo', 1.0)
     vol_abs_min = getattr(trader.config, 'volumen_min_absoluto', 0.0)
     if 'volume' in df.columns and df['volume'].iloc[-1] < vol_abs_min:
