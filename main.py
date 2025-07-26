@@ -71,7 +71,7 @@ async def main():
 
 if __name__ == '__main__':
     try:
-        asyncio.run(supervised_task(main)())
+        asyncio.run(main())
     except KeyboardInterrupt:
         print('\n🛑 Bot detenido manualmente.')
     except Exception:
