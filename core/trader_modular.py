@@ -32,7 +32,7 @@ from core.adaptador_configuracion_dinamica import adaptar_configuracion
 from ccxt.base.errors import BaseError
 from core.reporting import reporter_diario
 from core.registro_metrico import registro_metrico
-from core.supervisor import supervised_task
+from core.supervisor import supervised_task, task_heartbeat, tick, last_alive
 from learning.aprendizaje_en_linea import registrar_resultado_trade
 from learning.aprendizaje_continuo import ejecutar_ciclo as ciclo_aprendizaje
 from core.strategies.exit.gestor_salidas import verificar_filtro_tecnico
@@ -568,6 +568,7 @@ class Trader:
                 loop = asyncio.get_running_loop()
                 await loop.run_in_executor(None, ciclo_aprendizaje)
                 log.info('🧠 Ciclo de aprendizaje completado')
+                tick('aprendizaje')
                 fallos_consecutivos = 0
             except Exception as e:
                 fallos_consecutivos += 1
@@ -579,6 +580,7 @@ class Trader:
                         '🛑 Deteniendo _ciclo_aprendizaje tras demasiados fallos seguidos.'
                         )
                     break
+            tick('aprendizaje')
             await asyncio.sleep(intervalo)
 
     async def _calcular_cantidad_async(self, symbol: str, precio: float
@@ -678,12 +680,13 @@ class Trader:
         log.info('➡️ Entrando en _iniciar_tarea()')
         """Crea una tarea a partir de ``factory`` y la registra."""
         self._factories[nombre] = factory
-        self._tareas[nombre] = asyncio.create_task(supervised_task(factory)())
+        self._tareas[nombre] = supervised_task(factory, nombre)
 
     async def _vigilancia_tareas(self, intervalo: int=60) ->None:
         log.info('➡️ Entrando en _vigilancia_tareas()')
         while not self._cerrado:
             activos = 0
+            ahora = datetime.utcnow()
             for nombre, task in list(self._tareas.items()):
                 if task.done():
                     if task.cancelled():
@@ -702,9 +705,18 @@ class Trader:
                             )
                     self._iniciar_tarea(nombre, self._factories[nombre])
                 else:
-                    activos += 1
+                    hb = task_heartbeat.get(nombre, last_alive)
+                    if (ahora - hb).total_seconds() > 60:
+                        log.warning(
+                            f'⏰ Tarea {nombre} sin actividad. Reiniciando.'
+                        )
+                        task.cancel()
+                        self._iniciar_tarea(nombre, self._factories[nombre])
+                    else:
+                        activos += 1
             log.info(
                 f'🟢 Heartbeat: tareas activas {activos}/{len(self._tareas)}')
+            tick('heartbeat')
             await asyncio.sleep(intervalo)
 
     def _rechazo(self, symbol: str, motivo: str, puntaje: (float | None)=

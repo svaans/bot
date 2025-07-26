@@ -17,6 +17,7 @@ from datetime import datetime
 from binance_api.cliente import obtener_cliente
 from .order_model import Order
 from core.utils.utils import configurar_logger
+from core.supervisor import tick
 from . import real_orders
 from core.utils.utils import guardar_orden_real
 import math
@@ -515,6 +516,7 @@ async def flush_periodico(interval: int=_FLUSH_INTERVAL) ->None:
                 loop = asyncio.get_running_loop()
                 await asyncio.wait_for(loop.run_in_executor(None,
                     flush_operaciones), timeout=30)
+                tick('flush')
             except asyncio.TimeoutError:
                 log.warning('⚠️ flush_operaciones se excedió de tiempo (30s)')
             except Exception as e:

@@ -4,6 +4,7 @@ import asyncio
 from typing import Awaitable, Callable, Dict, Iterable
 from binance_api.websocket import escuchar_velas
 from core.utils.logger import configurar_logger
+from core.supervisor import tick
 log = configurar_logger('datafeed', modo_silencioso=True)
 
 

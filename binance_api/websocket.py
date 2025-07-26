@@ -3,6 +3,7 @@ import json
 import websockets
 import traceback
 from core.utils.utils import configurar_logger
+from core.supervisor import tick
 log = configurar_logger('websocket')
 
 
@@ -35,13 +36,21 @@ async def escuchar_velas(symbol: str, intervalo: str, callback):
     total_reintentos = 0
     while True:
         try:
-            ws = await websockets.connect(url, ping_interval=20,
-                ping_timeout=20, max_size=2 ** 20)
+            ws = await asyncio.wait_for(
+                websockets.connect(url, ping_interval=20, ping_timeout=20, max_size=2 ** 20),
+                timeout=10,
+            )
             log.info(f'🔌 WebSocket conectado para {symbol} ({intervalo})')
             intentos = 0
             watchdog = asyncio.create_task(_watchdog(ws, symbol))
             try:
-                async for msg in ws:
+                while True:
+                    try:
+                        msg = await asyncio.wait_for(ws.recv(), timeout=30)
+                    except asyncio.TimeoutError:
+                        log.warning(f'⏰ Sin datos de {symbol} en 30s, forzando reconexión')
+                        await ws.close()
+                        break
                     try:
                         data = json.loads(msg)
                     except json.JSONDecodeError as e:
@@ -69,6 +78,7 @@ async def escuchar_velas(symbol: str, intervalo: str, callback):
                                 float(vela['h']), 'low': float(vela['l']),
                                 'close': float(vela['c']), 'volume': float(
                                 vela['v'])})
+                            tick('data_feed')
                             watchdog.cancel()
                             watchdog = asyncio.create_task(_watchdog(ws,
                                 symbol))
@@ -111,5 +121,6 @@ async def _watchdog(ws, symbol, tiempo_maximo=300):
             f'⚠️ No se recibieron velas en {tiempo_maximo}s para {symbol}, forzando reconexión.'
             )
         await ws.close()
+        tick('data_feed')
     except Exception:
         pass

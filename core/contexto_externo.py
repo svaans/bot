@@ -5,6 +5,7 @@ import json
 from typing import Awaitable, Callable, Dict, Iterable
 import websockets
 from core.utils.utils import configurar_logger
+from core.supervisor import tick
 log = configurar_logger('contexto_externo')
 _PUNTAJES: Dict[str, float] = {}
 CONTEXT_WS_URL = 'wss://stream.binance.com:9443/ws/{symbol}@kline_1m'
@@ -60,6 +61,7 @@ class StreamContexto:
                             _PUNTAJES[symbol] = puntaje
                             try:
                                 await handler(symbol, puntaje)
+                                tick('context_stream')
                             except Exception as e:
                                 log.warning(
                                     f'⚠️ Handler contexto {symbol} falló: {e}')
