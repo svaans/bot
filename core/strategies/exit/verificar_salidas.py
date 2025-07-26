@@ -135,6 +135,12 @@ async def verificar_salidas(trader, symbol: str, df: pd.DataFrame) ->None:
             log.info(f'🛡️ Cierre evitado por análisis técnico: {symbol}')
         elif await trader._cerrar_y_reportar(orden, precio_cierre, motivo,
             df=df):
+            spread = None
+            if 'spread' in df.columns:
+                spread = df['spread'].iloc[-1] / precio_cierre
+            if spread and spread > getattr(trader.config, 'max_spread_ratio', 0.003):
+                log.info(f'[{symbol}] Spread {spread:.4f} demasiado alto, se pospone cierre')
+                return
             log.info(
                 f'🔄 Trailing Stop activado para {symbol} a {precio_cierre:.2f}€'
                 )

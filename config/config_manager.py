@@ -53,6 +53,9 @@ class Config:
     fracciones_piramide: int = 1
     reserva_piramide: float = 0.0
     umbral_piramide: float = 0.005
+    max_perdidas_diarias: int = 6
+    volumen_min_relativo: float = 1.0
+    max_spread_ratio: float = 0.003
 
 
 class ConfigManager:
@@ -109,4 +112,9 @@ class ConfigManager:
             'FRACCIONES_PIRAMIDE', defaults.fracciones_piramide)),
             reserva_piramide=float(os.getenv('RESERVA_PIRAMIDE', defaults.
             reserva_piramide)), umbral_piramide=float(os.getenv(
-            'UMBRAL_PIRAMIDE', defaults.umbral_piramide)))
+            'UMBRAL_PIRAMIDE', defaults.umbral_piramide)),
+            max_perdidas_diarias=_cargar_int('MAX_PERDIDAS_DIARIAS', defaults.
+            max_perdidas_diarias), volumen_min_relativo=_cargar_float(
+            'VOLUMEN_MIN_RELATIVO', defaults.volumen_min_relativo),
+            max_spread_ratio=_cargar_float('MAX_SPREAD_RATIO', defaults.
+            max_spread_ratio))

@@ -83,9 +83,17 @@ async def verificar_entrada(trader, symbol: str, df: pd.DataFrame, estado) ->(
                 return None
             trader.historial_cierres.pop(symbol, None)
     hoy = datetime.utcnow().date().isoformat()
+    limite_base = getattr(trader.config, 'max_perdidas_diarias', 6)
+    volatilidad_dia = df['close'].pct_change().tail(1440).std()
+    if volatilidad_dia > 0.05:
+        limite = max(3, int(limite_base * 0.5))
+    elif volatilidad_dia < 0.02:
+        limite = int(limite_base * 1.2)
+    else:
+        limite = limite_base
     if cierre and cierre.get('fecha_perdidas') == hoy and cierre.get(
-        'perdidas_consecutivas', 0) >= 6:
-        log.info(f'[{symbol}] Bloqueado por pérdidas consecutivas en el día.')
+        'perdidas_consecutivas', 0) >= limite:
+        log.info(f'[{symbol}] Bloqueado por pérdidas consecutivas: {limite}')
         metricas_tracker.registrar_filtro('perdidas_consecutivas')
         return None
     peso_total = sum(trader.pesos_por_simbolo.get(e, 0) for e in
@@ -138,6 +146,11 @@ async def verificar_entrada(trader, symbol: str, df: pd.DataFrame, estado) ->(
     score_total = eval_tecnica['score_total']
     vol = df['volume'].iloc[-1] / (df['volume'].rolling(20).mean().iloc[-1] or
         1) if 'volume' in df.columns else 0
+    umbral_vol = getattr(trader.config, 'volumen_min_relativo', 1.0)
+    if vol < umbral_vol:
+        log.info(f'[{symbol}] Volumen relativo {vol:.2f} < umbral {umbral_vol}')
+        metricas_tracker.registrar_filtro('volumen')
+        return None
     volatilidad = df['close'].pct_change().tail(20).std()
     pesos_simbolo = cargar_pesos_tecnicos(symbol)
     score_max = sum(pesos_simbolo.values())

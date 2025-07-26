@@ -69,6 +69,14 @@ class RiskManager:
             (int, float)) and isinstance(capital_inicial, (int, float)):
             if winrate > 0.6 and capital_actual > capital_inicial:
                 self.umbral = round(min(0.06, self.umbral * 1.2), 4)
+        vol_market = segun_metricas.get('volatilidad_market')
+        vol_media = segun_metricas.get('volatilidad_media')
+        if isinstance(vol_market, (int, float)) and isinstance(vol_media, (int, float)):
+            if vol_market > vol_media * 1.5:
+                self.umbral = round(max(0.01, self.umbral * 0.9), 4)
+        exposicion = segun_metricas.get('exposicion_actual')
+        if isinstance(exposicion, (int, float)) and exposicion > 0.5:
+            self.umbral = round(max(0.01, self.umbral * 0.8), 4)
         if self.umbral != umbral_anterior:
             log.info(
                 f'🔧 Umbral ajustado de {umbral_anterior:.4f} → {self.umbral:.4f}'

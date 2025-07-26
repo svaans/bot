@@ -5,6 +5,7 @@ from filelock import FileLock
 from core.utils.utils import configurar_logger
 log = configurar_logger('riesgo')
 RUTA_ESTADO = 'config/riesgo.json'
+RUTA_ESTADO_BAK = RUTA_ESTADO + '.bak'
 _LOCK_PATH = RUTA_ESTADO + '.lock'
 
 
@@ -14,6 +15,12 @@ def cargar_estado_riesgo_seguro() ->dict:
     lock = FileLock(_LOCK_PATH)
     with lock:
         if not os.path.exists(RUTA_ESTADO):
+            if os.path.exists(RUTA_ESTADO_BAK):
+                try:
+                    with open(RUTA_ESTADO_BAK, 'r') as f:
+                        return json.load(f)
+                except Exception as e:  # pragma: no cover - error de lectura
+                    log.warning(f'⚠️ Backup corrupto: {e}')
             return {'fecha': '', 'perdida_acumulada': 0.0}
         try:
             with open(RUTA_ESTADO, 'r') as f:
@@ -23,6 +30,12 @@ def cargar_estado_riesgo_seguro() ->dict:
             return estado
         except (OSError, json.JSONDecodeError) as e:
             log.warning(f'⚠️ Error al cargar estado de riesgo: {e}')
+            if os.path.exists(RUTA_ESTADO_BAK):
+                try:
+                    with open(RUTA_ESTADO_BAK, 'r') as f:
+                        return json.load(f)
+                except Exception as e2:
+                    log.warning(f'⚠️ Backup también falló: {e2}')
             return {'fecha': '', 'perdida_acumulada': 0.0}
 
 
@@ -39,6 +52,11 @@ def guardar_estado_riesgo_seguro(estado: dict) ->None:
     try:
         with lock, open(RUTA_ESTADO, 'w') as f:
             json.dump(estado, f, indent=4)
+        try:
+            with open(RUTA_ESTADO_BAK, 'w') as fb:
+                json.dump(estado, fb, indent=4)
+        except OSError as e:
+            log.warning(f'⚠️ No se pudo escribir backup: {e}')
         log.info(f'💾 Estado de riesgo actualizado: {estado}')
     except OSError as e:
         log.error(f'❌ No se pudo guardar estado de riesgo: {e}')

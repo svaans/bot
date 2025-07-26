@@ -111,6 +111,19 @@ class Trader:
                     volatilidad_actual), float(volatilidad_media)))
             if factores:
                 factor_vol = min(factores)
+            intraday_factors = []
+            for sym in config.symbols:
+                if sym not in self.historicos:
+                    continue
+                cambios_dia = self.historicos[sym]['close'].pct_change().dropna()
+                if cambios_dia.empty:
+                    continue
+                vol_dia = cambios_dia.tail(60).std()
+                vol_hist = cambios_dia.std()
+                if vol_hist and vol_dia > vol_hist * 1.5:
+                    intraday_factors.append(0.8)
+            if intraday_factors:
+                factor_vol *= min(intraday_factors)
         except Exception as e:
             log.debug(f'No se pudo calcular factor de volatilidad: {e}')
         self.fraccion_kelly *= factor_vol

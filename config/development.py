@@ -23,3 +23,6 @@ class DevelopmentConfig:
     fracciones_piramide: int = 1
     reserva_piramide: float = 0.0
     umbral_piramide: float = 0.006
+    max_perdidas_diarias: int = 6
+    volumen_min_relativo: float = 1.0
+    max_spread_ratio: float = 0.003
