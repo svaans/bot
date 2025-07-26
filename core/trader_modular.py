@@ -686,18 +686,21 @@ class Trader:
             activos = 0
             for nombre, task in list(self._tareas.items()):
                 if task.done():
-                    exc = task.exception()
-                    if exc:
-                        log.warning(
-                            f'⚠️ Heartbeat: tarea {nombre} terminó con error: {exc}'
-                            )
-                        self._iniciar_tarea(nombre, self._factories[nombre])
-                    elif task.cancelled():
+                    if task.cancelled():
                         log.info(
                             f'🟡 Heartbeat: tarea {nombre} fue cancelada manualmente'
-                            )
+                        )
                     else:
-                        activos += 1
+                        exc = task.exception()
+                        if exc:
+                            log.warning(
+                                f'⚠️ Heartbeat: tarea {nombre} terminó con error: {exc}'
+                            )
+                        else:
+                            log.warning(
+                                f'⚠️ Heartbeat: tarea {nombre} finalizó inesperadamente'
+                            )
+                    self._iniciar_tarea(nombre, self._factories[nombre])
                 else:
                     activos += 1
             log.info(

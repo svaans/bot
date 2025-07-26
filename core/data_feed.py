@@ -45,8 +45,9 @@ class DataFeed:
             self._tasks[sym] = asyncio.create_task(self.stream(sym, handler))
         while self._tasks:
             tareas_actuales = list(self._tasks.items())
-            resultados = await asyncio.gather(*[t for _, t in
-                tareas_actuales], return_exceptions=True)
+            resultados = await asyncio.gather(
+                *[t for _, t in tareas_actuales], return_exceptions=True
+            )
             reiniciar = {}
             for (sym, task), resultado in zip(tareas_actuales, resultados):
                 if isinstance(resultado, asyncio.CancelledError):
@@ -54,16 +55,15 @@ class DataFeed:
                 if isinstance(resultado, Exception):
                     log.error(
                         f'⚠️ Stream {sym} finalizó con excepción: {resultado}. Reiniciando en 5s'
-                        )
-                    await asyncio.sleep(5)
-                    reiniciar[sym] = asyncio.create_task(self.stream(sym,
-                        handler))
+                    )
                 else:
-                    self._tasks[sym] = task
+                    log.warning(
+                        f'⚠️ Stream {sym} terminó inesperadamente. Reiniciando en 5s'
+                    )
+                await asyncio.sleep(5)
+                reiniciar[sym] = asyncio.create_task(self.stream(sym, handler))
             if reiniciar:
                 self._tasks.update(reiniciar)
-            else:
-                break
 
     async def detener(self) ->None:
         log.info('➡️ Entrando en detener()')
