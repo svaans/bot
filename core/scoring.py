@@ -22,4 +22,34 @@ def calcular_score_tecnico(df: pd.DataFrame, rsi: Optional[float], momentum:
             score += 1
         elif tendencia == 'bajista' and slope < 0:
             score += 1
-    return score
+        if slope is not None:
+            if tendencia == "alcista" and slope > 0:
+                score += 1
+            elif tendencia == "bajista" and slope < 0:
+                score += 1
+        return score
+    
+class TechnicalScorer:
+    """Utilidad para calcular el puntaje técnico de forma orientada a objetos."""
+
+    @staticmethod
+    def calcular(
+        df: pd.DataFrame,
+        rsi: Optional[float],
+        momentum: Optional[float],
+        slope: Optional[float],
+        tendencia: str,
+    ) -> float:
+        """Delegado estático al cálculo procedural."""
+        return calcular_score_tecnico(df, rsi, momentum, slope, tendencia)
+
+
+def calcular_score_tecnico(
+    df: pd.DataFrame,
+    rsi: Optional[float],
+    momentum: Optional[float],
+    slope: Optional[float],
+    tendencia: str,
+) -> float:
+    """Compatibilidad con versiones previas."""
+    return TechnicalScorer.calcular(df, rsi, momentum, slope, tendencia)
