@@ -35,22 +35,36 @@ class DataFeed:
             await handler(candle)
 
         monitor = asyncio.create_task(self._monitor_activity(symbol))
-        while True:
-            try:
-                await escuchar_velas(symbol, self.intervalo, wrapper)
-                break
-            except Exception as e:
-                log.warning(f'⚠️ Stream {symbol} falló: {e}. Reintentando en 5s')
-                await asyncio.sleep(5)
-        monitor.cancel()
+        try:
+            while True:
+                try:
+                    await escuchar_velas(symbol, self.intervalo, wrapper)
+                    break
+                except Exception as e:
+                    log.warning(
+                        f'⚠️ Stream {symbol} falló: {e}. Reintentando en 5s'
+                    )
+                    await asyncio.sleep(5)
+        finally:
+            monitor.cancel()
 
     async def _monitor_activity(self, symbol: str) -> None:
-        """Verifica periódicamente que se sigan recibiendo velas."""
+        """Verifica periódicamente que se sigan recibiendo velas.
+
+        Si pasan 60 segundos sin nuevas velas, cancela la tarea del stream para
+        que ``escuchar`` lo reinicie.
+        """
         while True:
             await asyncio.sleep(5)
             ultimo = self._last.get(symbol)
-            if ultimo and (datetime.utcnow() - ultimo).total_seconds() > 30:
-                log.warning(f'⚠️ Sin velas de {symbol} desde hace más de 30s')
+            if ultimo and (datetime.utcnow() - ultimo).total_seconds() > 60:
+                log.warning(
+                    f'⚠️ Sin velas de {symbol} desde hace más de 60s; reiniciando'
+                )
+                task = self._tasks.get(symbol)
+                if task and not task.done():
+                    task.cancel()
+                break
 
     async def escuchar(self, symbols: Iterable[str], handler: Callable[[
         dict], Awaitable[None]]) ->None:
@@ -69,6 +83,11 @@ class DataFeed:
             reiniciar = {}
             for (sym, task), resultado in zip(tareas_actuales, resultados):
                 if isinstance(resultado, asyncio.CancelledError):
+                    log.warning(
+                        f'⚠️ Stream {sym} cancelado. Reiniciando en 5s'
+                    )
+                    await asyncio.sleep(5)
+                    reiniciar[sym] = asyncio.create_task(self.stream(sym, handler))
                     continue
                 if isinstance(resultado, Exception):
                     log.error(
