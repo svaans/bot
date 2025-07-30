@@ -1,4 +1,4 @@
-from indicators.rsi import calcular_rsi
+from indicators.helpers import get_rsi
 from indicators.macd import calcular_macd
 from config.exit_defaults import load_exit_config
 
@@ -6,7 +6,7 @@ from config.exit_defaults import load_exit_config
 def validar_necesidad_de_salida(df, orden, estrategias_activas: dict,
     puntaje=None, umbral=None, config: dict=None) ->bool:
     try:
-        rsi = calcular_rsi(df)
+        rsi = get_rsi(df)
         cfg = load_exit_config(orden.get('symbol', 'SYM'))
         if config:
             cfg.update(config)
