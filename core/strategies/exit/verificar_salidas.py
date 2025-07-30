@@ -19,6 +19,7 @@ from core.adaptador_dinamico import adaptar_configuracion as adaptar_configuraci
 from core.adaptador_configuracion_dinamica import adaptar_configuracion
 from core.adaptador_umbral import calcular_umbral_adaptativo
 from core.metricas_semanales import metricas_tracker
+from config.exit_defaults import load_exit_config
 
 log = configurar_logger('verificar_salidas')
 
@@ -30,7 +31,8 @@ async def _chequear_contexto_macro(trader, orden, df) -> bool:
     symbol = orden.symbol
     # Se valida contexto macroeconómico antes de tomar decisiones de cierre.
     puntaje_macro = obtener_puntaje_contexto(symbol)
-    if abs(puntaje_macro) > getattr(trader.config, 'umbral_puntaje_macro_cierre', 6):
+    cfg = load_exit_config(symbol)
+    if abs(puntaje_macro) > cfg['umbral_puntaje_macro_cierre']:
         log.info(f'[{symbol}] Contexto macro crítico ({puntaje_macro:.2f}). Se prioriza cierre.')
         await trader._cerrar_y_reportar(orden, float(df["close"].iloc[-1]), 'Contexto macro', df=df)
         return True
@@ -46,30 +48,15 @@ async def _manejar_stop_loss(trader, orden, df) -> bool:
     if precio_min > orden.stop_loss:
         return False
     precio_cierre = float(df['close'].iloc[-1])
-    config_actual = trader.config_por_simbolo.get(symbol, {})
-    rsi = calcular_rsi(df)
-    momentum = calcular_momentum(df)
-    tendencia_actual = trader.estado_tendencia.get(symbol)
-    if not tendencia_actual:
-        tendencia_actual, _ = detectar_tendencia(symbol, df)
-        trader.estado_tendencia[symbol] = tendencia_actual
-    score, _ = trader._calcular_score_tecnico(df, rsi, momentum, tendencia_actual, orden.direccion)
-    max_evitar = config_actual.get('max_evitar_sl', 2)
-    intentos = len(orden.sl_evitar_info or [])
-    if (score >= 2 or patron_tecnico_fuerte(df)) and intentos < max_evitar:
-        log.info(f'🛡️ SL evitado por validación técnica — Score: {score:.1f}/4')
-        orden.sl_evitar_info = orden.sl_evitar_info or []
-        orden.sl_evitar_info.append({'timestamp': datetime.utcnow().isoformat(), 'sl': orden.stop_loss, 'precio': precio_cierre})
-            return False
+    config_actual = trader.config_por_simbolo.get(symbol, load_exit_config(symbol))
+    resultado = verificar_salida_stoploss(orden.to_dict(), df, config=config_actual)
+    if resultado.get('cerrar'):
         if not permitir_cierre_tecnico(symbol, df, precio_cierre, orden.to_dict()):
             log.info(f'🛡️ Cierre evitado por análisis técnico: {symbol}')
-            orden.sl_evitar_info = orden.sl_evitar_info or []
-            utcnow().isoformat(), 'sl': orden.stop_loss, 'precio': precio_cierre})
             return False
-        await trader._cerrar_y_reportar(orden, orden.stop_loss, 'Stop Loss', df=df)
+        await trader._cerrar_y_reportar(orden, precio_cierre, 'Stop Loss', df=df)
         return True
-    if resultado.get('evitado', False):
-        log.debug('SL evitado correctamente, no se notificará por Telegram')
+    if resultado.get('evitado'):
         metricas_tracker.registrar_sl_evitado()
         orden.sl_evitar_info = orden.sl_evitar_info or []
         orden.sl_evitar_info.append({'timestamp': datetime.utcnow().isoformat(), 'sl': orden.stop_loss, 'precio': precio_cierre})
@@ -88,7 +75,7 @@ async def _procesar_take_profit(trader, orden, df) -> bool:
     if precio_max < orden.take_profit:
         return False
     precio_cierre = float(df['close'].iloc[-1])
-    config_actual = trader.config_por_simbolo.get(symbol, {})
+    config_actual = trader.config_por_simbolo.get(symbol, load_exit_config(symbol))
     if not getattr(orden, 'parcial_cerrado', False) and orden.cantidad_abierta > 0:
         if trader.es_salida_parcial_valida(orden, orden.take_profit, config_actual, df):
             cantidad_parcial = orden.cantidad_abierta * 0.5
@@ -111,7 +98,7 @@ async def _manejar_trailing_stop(trader, orden, df) -> bool:
 
     symbol = orden.symbol
     precio_cierre = float(df['close'].iloc[-1])
-    config_actual = trader.config_por_simbolo.get(symbol, {})
+    config_actual = trader.config_por_simbolo.get(symbol, load_exit_config(symbol))
     if precio_cierre > orden.max_price:
         orden.max_price = precio_cierre
     dinamica = adaptar_configuracion(symbol, df)
@@ -132,12 +119,13 @@ async def _manejar_trailing_stop(trader, orden, df) -> bool:
             spread = None
             if 'spread' in df.columns:
                 spread = df['spread'].iloc[-1] / precio_cierre
-            if spread and spread > getattr(trader.config, 'max_spread_ratio', 0.003):
+            cfg = trader.config_por_simbolo.get(symbol, load_exit_config(symbol))
+            if spread and spread > cfg['max_spread_ratio']:
                 orden.intentos_cierre += 1
-                if orden.intentos_cierre >= getattr(trader.config, 'max_intentos_cierre', 3):
+                if orden.intentos_cierre >= cfg['max_intentos_cierre']:
                     await trader._cerrar_y_reportar(orden, precio_cierre, 'Cierre forzado por spread', df=df)
                     return True
-                delay = getattr(trader.config, 'delay_reintento_cierre', 1)
+                delay = cfg['delay_reintento_cierre']
                 log.info(f'[{symbol}] Spread {spread:.4f} demasiado alto, reintento {orden.intentos_cierre} en {delay}s')
                 await asyncio.sleep(delay)
                 return False
@@ -151,7 +139,7 @@ async def _manejar_cambio_tendencia(trader, orden, df) -> bool:
     evalúa después del trailing stop."""
 
     symbol = orden.symbol
-    config_actual = trader.config_por_simbolo.get(symbol, {})
+    config_actual = trader.config_por_simbolo.get(symbol, load_exit_config(symbol))
     if not verificar_reversion_tendencia(symbol, df, orden.tendencia):
         return False
     pesos_symbol = trader.pesos_por_simbolo.get(symbol, {})
@@ -176,7 +164,7 @@ async def _aplicar_salidas_adicionales(trader, orden, df) -> bool:
 
     symbol = orden.symbol
     precio_cierre = float(df['close'].iloc[-1])
-    config_actual = trader.config_por_simbolo.get(symbol, {})
+    config_actual = trader.config_por_simbolo.get(symbol, load_exit_config(symbol))
     atr = calcular_atr(df)
     volatilidad_rel = atr / precio_cierre if atr and precio_cierre else 1.0
     tendencia_detectada = trader.estado_tendencia.get(symbol)
@@ -224,7 +212,8 @@ async def _aplicar_salidas_adicionales(trader, orden, df) -> bool:
 async def verificar_salidas(trader, symbol: str, df: pd.DataFrame) -> None:
     log.info('➡️ Entrando en verificar_salidas()')
     """Evalúa si la orden abierta debe cerrarse."""
-
+    
+    trader.config_por_simbolo[symbol] = load_exit_config(symbol)
     orden = trader.orders.obtener(symbol)
     if not orden:
         log.warning(f'⚠️ Se intentó verificar TP/SL sin orden activa en {symbol}')
