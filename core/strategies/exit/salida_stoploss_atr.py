@@ -1,5 +1,5 @@
 import pandas as pd
-from indicators.atr import calcular_atr
+from indicators.helpers import get_atr
 from core.utils import configurar_logger
 from core.strategies.exit.salida_utils import resultado_salida
 log = configurar_logger('salida_stoploss_atr')
@@ -13,7 +13,7 @@ def salida_stoploss_atr(orden: dict, df: pd.DataFrame) ->dict:
         direccion = orden.get('direccion', 'long')
         precio_actual = df['close'].iloc[-1]
         entrada = orden.get('precio_entrada')
-        atr = calcular_atr(df)
+        atr = get_atr(df)
         if atr is None or entrada is None:
             return resultado_salida('Stop Loss', False,
                 'ATR o entrada no disponibles')
