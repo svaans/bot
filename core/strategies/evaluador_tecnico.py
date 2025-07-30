@@ -5,10 +5,22 @@ from indicators.rsi import calcular_rsi
 from core.utils.utils import configurar_logger
 log = configurar_logger('eval_tecnico')
 RUTA_PESOS = 'config/pesos_tecnicos.json'
-PESOS_DEFECTO = {'rsi': 1.0, 'volumen': 1.0, 'tp_sl': 0.7, 'no_doji': 0.5,
-    'no_sobrecompra': 1.0, 'cuerpo_sano': 1.0, 'rsi_creciente': 0.6,
-    'volumen_creciente': 0.5, 'sin_mecha_sup_larga': 0.4,
-    'distancia_extremos': 0.6}
+# PESOS_DEFECTO define la ponderación inicial de cada condición técnica.
+# Cada peso representa cuántos puntos suma o resta la condición en
+# ``evaluar_puntaje_tecnico``. A mayor valor, mayor influencia en el
+# puntaje total.
+PESOS_DEFECTO = {
+    'rsi': 1.0,                # RSI dentro de un rango saludable.
+    'volumen': 1.0,            # Volumen por encima de su media.
+    'tp_sl': 0.7,              # Relación Take Profit / Stop Loss equilibrada.
+    'no_doji': 0.5,            # Evitar velas tipo doji con cuerpo muy pequeño.
+    'no_sobrecompra': 1.0,     # No estar en zona de sobrecompra extrema.
+    'cuerpo_sano': 1.0,        # Cierre por encima de la apertura con buen cuerpo.
+    'rsi_creciente': 0.6,      # RSI en ascenso respecto a la vela previa.
+    'volumen_creciente': 0.5,  # Volumen superior al de la vela anterior.
+    'sin_mecha_sup_larga': 0.4,# Mecha superior contenida.
+    'distancia_extremos': 0.6  # Alejado de los máximos y mínimos del día.
+}
 _pesos_cache: dict | None = None
 
 

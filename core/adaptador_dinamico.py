@@ -1,3 +1,16 @@
+"""Herramientas para ajustar parámetros técnicos de forma dinámica.
+
+El cálculo del umbral técnico tiene en cuenta tres factores principales:
+
+* **Volatilidad**: incrementa el umbral cuando el mercado es más inestable.
+* **Slope** (pendiente del precio): modifica ratios de TP/SL y el riesgo
+  asociado según la dirección de la tendencia.
+* **RSI**: cuando se aproxima a valores neutros (40-60) penaliza el
+  `contexto_score`, suavizando el umbral resultante.
+
+Estos ajustes permiten que las estrategias se adapten automáticamente a la
+condición actual del activo.
+"""
 from __future__ import annotations
 import os
 import json
@@ -94,7 +107,18 @@ def calcular_umbral_adaptativo(symbol: str, df: pd.DataFrame,
     estrategias_activadas, pesos_symbol, persistencia: float=0.0, config: (
     dict | None)=None) ->float:
     log.info('➡️ Entrando en calcular_umbral_adaptativo()')
-    """Calcula un umbral técnico adaptativo."""
+    """Calcula un umbral técnico adaptativo.
+
+    El valor final parte de la ``potencia_tecnica`` obtenida de las
+    estrategias activas y se ajusta en tres etapas:
+
+    1. **Volatilidad** y rango medio inflan ``contexto_score`` y el factor de
+       riesgo. Mercados más volátiles producen umbrales mayores.
+    2. **Slope**: si la pendiente es negativa se incrementa el riesgo y se
+       penaliza la persistencia, reduciendo el umbral.
+    3. **RSI**: valores cercanos a 50 reducen ``contexto_score`` para evitar
+       operar en zonas neutras.
+    """
     if df is None or len(df) < MIN_LONGITUD_DATA or not estrategias_activadas:
         log.warning(
             f'⚠️ [{symbol}] Datos insuficientes o sin estrategias activas. Umbral: {UMBRAL_POR_DEFECTO}'

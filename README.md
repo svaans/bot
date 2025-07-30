@@ -117,3 +117,14 @@ En `config/exit_defaults.py` se definen los valores iniciales para todas las est
 - `umbral_puntaje_macro_cierre`: Valor absoluto de puntaje macroeconómico que fuerza la salida inmediata.
 - `max_intentos_cierre`: Número de reintentos permitidos al cerrar por spread alto.
 - `delay_reintento_cierre`: Espera en segundos entre reintentos de cierre cuando el spread es elevado.
+## Pesos técnicos y umbrales adaptativos
+
+Los puntajes técnicos se calculan a partir de varios criterios cuyo peso se
+define en `core/strategies/evaluador_tecnico.py`. Para personalizarlos puede
+crearse el archivo `config/pesos_tecnicos.json` y ajustar allí cada valor.
+
+Los módulos `core/adaptador_dinamico.py` y `core/adaptador_umbral.py`
+adaptan automáticamente los umbrales tomando en cuenta la volatilidad,
+la pendiente del precio (slope) y el RSI actual. Estos factores y sus
+multiplicadores base pueden modificarse en
+`config/configuraciones_optimas.json`.

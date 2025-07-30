@@ -36,7 +36,18 @@ def calcular_umbral_adaptativo(
     symbol: str, df: pd.DataFrame, contexto: Optional[Dict] = None
 ) -> float:
     log.info("➡️ Entrando en calcular_umbral_adaptativo()")
-    """Devuelve un umbral adaptativo basado en datos técnicos actuales."""
+    """Devuelve un umbral adaptativo basado en datos técnicos actuales.
+
+    El cálculo parte de los pesos configurados y aplica multiplicadores
+    según tres indicadores:
+
+    - **Volatilidad**: cuanto mayor sea, más se incrementa el umbral para
+      filtrar entradas en mercados agitados.
+    - **Slope**: la pendiente del precio actúa como factor de impulso, tanto
+      al alza como a la baja.
+    - **RSI**: alejarse de la zona neutra (50) aumenta la exigencia del
+      umbral.
+    """
     config = _cargar_config().get(symbol, {})
     base = config.get("peso_minimo_total", 2.0)
     factor = config.get("factor_umbral", 1.0)
