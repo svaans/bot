@@ -178,6 +178,7 @@ async def verificar_entrada(trader, symbol: str, df: pd.DataFrame, estado) ->(
             return None
     eval_tecnica = evaluar_puntaje_tecnico(symbol, df, precio, sl, tp)
     score_total = eval_tecnica['score_total']
+    score_normalizado = eval_tecnica.get('score_normalizado')
     if 'volume' in df.columns:
         ventana_vol = min(50, len(df))
         vol_media = df['volume'].rolling(ventana_vol).mean().iloc[-1]
@@ -197,11 +198,14 @@ async def verificar_entrada(trader, symbol: str, df: pd.DataFrame, estado) ->(
     volatilidad = df['close'].pct_change().tail(20).std()
     pesos_simbolo = cargar_pesos_tecnicos(symbol)
     score_max = sum(pesos_simbolo.values())
+    if score_normalizado is None:
+        score_normalizado = score_total / score_max if score_max else score_total
     umbral_tecnico = calc_umbral_tecnico(score_max, tendencia, volatilidad,
         vol, estrategias_persistentes)
-    if score_total < umbral_tecnico:
+    umbral_normalizado = umbral_tecnico / score_max if score_max else umbral_tecnico
+    if score_normalizado < umbral_normalizado:
         log.info(
-            f'[{symbol}] Score técnico {score_total:.2f} menor que umbral {umbral_tecnico:.2f}'
+            f'[{symbol}] Score técnico {score_normalizado:.2f} < umbral {umbral_normalizado:.2f}'
             )
         metricas_tracker.registrar_filtro('score_tecnico')
         return None

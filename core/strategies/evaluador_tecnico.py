@@ -119,8 +119,10 @@ def evaluar_puntaje_tecnico(symbol: str, df: pd.DataFrame, precio: float,
     for k, v in detalles.items():
         signo = '+' if v >= 0 else ''
         log.info(f"- {k}: {'✅' if v > 0 else '❌'} ({signo}{v})")
-    log.info(f'- Total score: {total:.2f} / {sum(pesos.values()):.2f}')
-    return {'score_total': round(total, 2), 'detalles': detalles}
+    score_max = sum(pesos.values())
+    score_normalizado = total / score_max if score_max else 0.0
+    log.info(f'- Total score: {total:.2f} / {score_max:.2f} = {score_normalizado:.2f}')
+    return {'score_total': round(total, 2), 'score_normalizado': round(score_normalizado, 2), 'detalles': detalles}
 
 
 def calcular_umbral_adaptativo(score_maximo_esperado: float, tendencia: str,
