@@ -90,3 +90,30 @@ BOT_ENV=production python main.py
 
 Los valores base de cada modo se definen en `config/development.py` y
 `config/production.py`.
+
+## Parámetros de salida
+
+En `config/exit_defaults.py` se definen los valores iniciales para todas las estrategias de cierre. Estos son aplicados automáticamente con `load_exit_config()` y validados por `validate_exit_config()`.
+
+- `factor_umbral_sl`: Factor aplicado al umbral técnico para permitir evitar un Stop Loss.
+- `min_estrategias_relevantes_sl`: Número mínimo de estrategias alineadas para considerar válido un SL.
+- `sl_ratio`: Relación ATR usada para ajustar dinámicamente el nivel de SL.
+- `max_velas_sin_tp`: Cantidad máxima de velas antes de forzar cierre si no se alcanzó el TP.
+- `max_evitar_sl`: Intentos permitidos para evitar el SL por criterios técnicos.
+- `atr_multiplicador`: Multiplicador de ATR en cálculos de trailing y break-even.
+- `trailing_pct`: Porcentaje mínimo de distancia para el trailing stop.
+- `trailing_buffer`: Margen adicional para actualizar el máximo o mínimo antes de activar el trailing.
+- `trailing_start_ratio`: Relación de precio respecto a la entrada para comenzar el trailing.
+- `trailing_distance_ratio`: Distancia relativa al máximo/mínimo para ejecutar el trailing.
+- `trailing_por_atr`: Si se usa el ATR en lugar de porcentajes para el trailing.
+- `uso_trailing_technico`: Ajusta el trailing stop utilizando soportes y resistencias recientes.
+- `tp_ratio`: Multiplicador aplicado al ATR para calcular un Take Profit técnico.
+- `volumen_minimo_salida`: Volumen mínimo exigido para validar una salida inteligente.
+- `max_spread_ratio`: Spread máximo permitido antes de posponer un cierre.
+- `periodo_atr`: Período para el cálculo de ATR en Break Even.
+- `break_even_atr_mult`: Multiplicador ATR para definir el umbral de Break Even.
+- `umbral_rsi_salida`: Nivel de RSI sobre el cual se evita cerrar una posición long.
+- `factor_umbral_validacion_salida`: Factor aplicado al puntaje técnico para validar un cierre.
+- `umbral_puntaje_macro_cierre`: Valor absoluto de puntaje macroeconómico que fuerza la salida inmediata.
+- `max_intentos_cierre`: Número de reintentos permitidos al cerrar por spread alto.
+- `delay_reintento_cierre`: Espera en segundos entre reintentos de cierre cuando el spread es elevado.
