@@ -1,8 +1,7 @@
 import pandas as pd
 from typing import Dict, Any
-from indicators.rsi import calcular_rsi
+from indicators.helpers import get_rsi, get_momentum
 from indicators.slope import calcular_slope
-from indicators.momentum import calcular_momentum
 from indicators.divergencia_rsi import detectar_divergencia_alcista
 from core.strategies.tendencia import detectar_tendencia
 from core.utils import configurar_logger
@@ -50,8 +49,8 @@ def es_vela_envolvente_alcista(df: pd.DataFrame) ->bool:
 def _score_tecnico_basico(df: pd.DataFrame, direccion: str) ->float:
     log.info('➡️ Entrando en _score_tecnico_basico()')
     """Calcula un score técnico sencillo (0-4)."""
-    rsi = calcular_rsi(df)
-    momentum = calcular_momentum(df)
+    rsi = get_rsi(df)
+    momentum = get_momentum(df)
     slope = calcular_slope(df)
     tendencia, _ = detectar_tendencia('', df)
     puntos = 0
@@ -79,7 +78,7 @@ def evaluar_condiciones_de_cierre_anticipado(symbol: str, df: pd.DataFrame,
     """
     estrategias_activas = estrategias_activas or {}
     direccion = orden.get('direccion', 'long')
-    rsi = calcular_rsi(df)
+    rsi = get_rsi(df)
     volumen_actual = df['volume'].iloc[-1] if 'volume' in df else 0.0
     volumen_promedio = df['volume'].iloc[-20:-1].mean(
         ) if 'volume' in df and len(df) > 20 else 0.0
@@ -136,8 +135,8 @@ def permitir_cierre_tecnico(symbol: str, df: pd.DataFrame, sl: float,
     bajo = float(vela_actual['low'])
     alto = float(vela_actual['high'])
     cuerpo = abs(cierre - apertura)
-    rsi = calcular_rsi(df)
-    rsi_series = calcular_rsi(df, serie_completa=True)
+    rsi = get_rsi(df)
+    rsi_series = get_rsi(df, serie_completa=True)
     pendiente_rsi = calcular_slope(pd.DataFrame({'close': rsi_series.dropna()})
         ) if isinstance(rsi_series, pd.Series) and len(df) >= 30 else None
     direccion = orden.get('direccion', 'long') if orden else 'long'
