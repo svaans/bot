@@ -12,6 +12,7 @@ from indicators.slope import calcular_slope
 from indicators.vwap import calcular_vwap
 from indicators.momentum import calcular_momentum
 from core.scoring import calcular_score_tecnico
+from config.exit_defaults import load_exit_config
 log = configurar_logger('salida_stoploss')
 pesos = gestor_pesos.pesos
 
@@ -71,12 +72,14 @@ def salida_stoploss(orden: dict, df: pd.DataFrame, config: dict=None) ->dict:
         estrategias_activas = evaluacion.get('estrategias_activas', {})
         puntaje = evaluacion.get('puntaje_total', 0)
         activas = [k for k, v in estrategias_activas.items() if v]
-        factor_umbral = config.get('factor_umbral_sl', 0.7) if config else 0.7
-        min_estrategias_relevantes = config.get('min_estrategias_relevantes_sl'
-            , 3) if config else 3
+        cfg = load_exit_config(symbol)
+        if config:
+            cfg.update(config)
+        factor_umbral = cfg['factor_umbral_sl']
+        min_estrategias_relevantes = cfg['min_estrategias_relevantes_sl']
         pesos_symbol = pesos.get(symbol, {})
         umbral = calcular_umbral_adaptativo(symbol, df, estrategias_activas,
-            pesos_symbol, persistencia=0.0, config=config)
+            pesos_symbol, persistencia=0.0, config=cfg)
         esperadas = ESTRATEGIAS_POR_TENDENCIA.get(tendencia, [])
         activas_relevantes = [e for e in activas if e in esperadas]
         condiciones_validas = len(activas_relevantes
@@ -133,7 +136,10 @@ def verificar_salida_stoploss(orden: dict, df: pd.DataFrame, config: (dict |
     atr = None
     if df is not None and len(df) >= 20:
         atr = (df['high'].tail(20) - df['low'].tail(20)).mean()
-    ratio = config.get('sl_ratio', 1.5) if config else 1.5
+    cfg = load_exit_config(symbol)
+    if config:
+        cfg.update(config)
+    ratio = cfg['sl_ratio']
     if atr is not None:
         sl_dinamico = precio_entrada - atr * ratio if direccion in ('long',
             'compra') else precio_entrada + atr * ratio
@@ -158,18 +164,17 @@ def verificar_salida_stoploss(orden: dict, df: pd.DataFrame, config: (dict |
     activas = [k for k, v in estrategias_activas.items() if v]
     pesos_symbol = pesos.get(symbol, {})
     umbral = calcular_umbral_adaptativo(symbol, df, estrategias_activas,
-        pesos_symbol, persistencia=0.0, config=config)
-    factor_umbral = config.get('factor_umbral_sl', 0.7) if config else 0.7
-    min_estrategias_relevantes = config.get('min_estrategias_relevantes_sl', 3
-        ) if config else 3
+        pesos_symbol, persistencia=0.0, config=cfg)
+    factor_umbral = cfg['factor_umbral_sl']
+    min_estrategias_relevantes = cfg['min_estrategias_relevantes_sl']
     esperadas = ESTRATEGIAS_POR_TENDENCIA.get(tendencia, [])
     activas_relevantes = [e for e in activas if e in esperadas]
     condiciones_validas = len(activas_relevantes
         ) >= min_estrategias_relevantes and puntaje >= factor_umbral * umbral
     duracion = orden.get('duracion_en_velas', 0)
-    max_velas = config.get('max_velas_sin_tp', 10) if config else 10
+    max_velas = cfg['max_velas_sin_tp']
     intentos = len(orden.get('sl_evitar_info', []))
-    max_evitar = config.get('max_evitar_sl', 2) if config else 2
+    max_evitar = cfg['max_evitar_sl']
     cerrar_forzado = (validar_sl_tecnico(df, direccion) or puntaje < 0.75 *
         umbral or duracion >= max_velas or intentos >= max_evitar)
     if condiciones_validas and not cerrar_forzado:
