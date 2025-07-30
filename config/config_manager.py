@@ -56,6 +56,8 @@ class Config:
     max_perdidas_diarias: int = 6
     volumen_min_relativo: float = 1.0
     max_spread_ratio: float = 0.003
+    timeout_verificar_salidas: int = 20
+    timeout_evaluar_condiciones: int = 15
 
 
 class ConfigManager:
@@ -113,8 +115,8 @@ class ConfigManager:
             reserva_piramide=float(os.getenv('RESERVA_PIRAMIDE', defaults.
             reserva_piramide)), umbral_piramide=float(os.getenv(
             'UMBRAL_PIRAMIDE', defaults.umbral_piramide)),
-            max_perdidas_diarias=_cargar_int('MAX_PERDIDAS_DIARIAS', defaults.
-            max_perdidas_diarias), volumen_min_relativo=_cargar_float(
-            'VOLUMEN_MIN_RELATIVO', defaults.volumen_min_relativo),
-            max_spread_ratio=_cargar_float('MAX_SPREAD_RATIO', defaults.
-            max_spread_ratio))
+            max_perdidas_diarias=_cargar_int('MAX_PERDIDAS_DIARIAS', defaults.max_perdidas_diarias),
+            volumen_min_relativo=_cargar_float('VOLUMEN_MIN_RELATIVO', defaults.volumen_min_relativo),
+            max_spread_ratio=_cargar_float('MAX_SPREAD_RATIO', defaults.max_spread_ratio),
+            timeout_verificar_salidas=_cargar_int('TIMEOUT_VERIFICAR_SALIDAS', defaults.timeout_verificar_salidas),
+            timeout_evaluar_condiciones=_cargar_int('TIMEOUT_EVALUAR_CONDICIONES', defaults.timeout_evaluar_condiciones))

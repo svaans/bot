@@ -1052,10 +1052,19 @@ class Trader:
             self.estado_tendencia[symbol] = tendencia_actual
         loop = asyncio.get_running_loop()
         try:
-            resultado = await asyncio.wait_for(loop.run_in_executor(None, 
-                lambda : self.engine.evaluar_entrada(symbol, df, tendencia=
-                tendencia_actual, config=config_actual, pesos_symbol=self.
-                pesos_por_simbolo.get(symbol, {}))), timeout=30)
+            resultado = await asyncio.wait_for(
+                loop.run_in_executor(
+                    None,
+                    lambda: self.engine.evaluar_entrada(
+                        symbol,
+                        df,
+                        tendencia=tendencia_actual,
+                        config=config_actual,
+                        pesos_symbol=self.pesos_por_simbolo.get(symbol, {}),
+                    ),
+                ),
+                timeout=self.config.timeout_evaluar_condiciones,
+            )
         except asyncio.TimeoutError:
             log.warning(f'⚠️ Timeout en evaluar_entrada para {symbol}')
             self._rechazo(symbol, 'timeout_engine', estrategias=[])

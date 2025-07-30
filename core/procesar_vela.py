@@ -42,7 +42,10 @@ async def procesar_vela(trader, vela: dict) -> None:
         if trader.orders.obtener(symbol):
             # ⚠️ Validar salidas activas con timeout
             try:
-                await asyncio.wait_for(trader._verificar_salidas(symbol, df), timeout=20)
+                await asyncio.wait_for(
+                    trader._verificar_salidas(symbol, df),
+                    timeout=trader.config.timeout_verificar_salidas,
+                )
             except asyncio.TimeoutError:
                 log.error(f'⏰ Timeout verificando salidas de {symbol}')
                 if trader.notificador:
@@ -58,7 +61,7 @@ async def procesar_vela(trader, vela: dict) -> None:
         try:
             await asyncio.wait_for(
                 trader.evaluar_condiciones_entrada(symbol, df),
-                timeout=15
+                timeout=trader.config.timeout_evaluar_condiciones,
             )
         except asyncio.TimeoutError:
             log.error(f'⏰ Timeout en evaluar_condiciones_entrada para {symbol}')

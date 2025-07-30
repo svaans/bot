@@ -26,3 +26,5 @@ class DevelopmentConfig:
     max_perdidas_diarias: int = 6
     volumen_min_relativo: float = 1.0
     max_spread_ratio: float = 0.003
+    timeout_verificar_salidas: int = 20
+    timeout_evaluar_condiciones: int = 15
