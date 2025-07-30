@@ -5,7 +5,12 @@ from datetime import datetime
 
 import websockets
 from websockets.exceptions import ConnectionClosed
+
 from core.utils.utils import configurar_logger, intervalo_a_segundos
+# Si en el futuro se escuchan streams de profundidad (@depthUpdate),
+# será necesario validar la secuencia de mensajes con el esquema
+# ``U <= lastUpdateId + 1 <= u`` y obtener un snapshot inicial vía
+# ``/api/v3/depth`` antes de procesar las actualizaciones.
 from core.supervisor import tick, tick_data
 
 log = configurar_logger('websocket')
@@ -27,8 +32,13 @@ async def escuchar_velas(
     last_message: dict[str, datetime] | None = None,
     tiempo_maximo: int | None = None,
     ping_interval: int | None = None,
+    cliente=None,
 ):
-    """Escucha velas cerradas de ``symbol`` en ``intervalo``."""
+    """Escucha velas cerradas de ``symbol`` en ``intervalo``.
+
+    Si ``cliente`` se proporciona, al reconectar se intentará recuperar
+    posibles velas perdidas usando :func:`fetch_ohlcv_async`.
+    """
     log.debug('➡️ Entrando en escuchar_velas()')
     """
     Conecta al websocket de Binance para recibir velas cerradas y
@@ -54,6 +64,7 @@ async def escuchar_velas(
     intentos = 0
     total_reintentos = 0
     backoff = 5
+    ultimo_timestamp: int | None = None
     while True:
         try:
             ws = await asyncio.wait_for(
@@ -61,7 +72,7 @@ async def escuchar_velas(
                     url,
                     open_timeout=10,
                     close_timeout=10,
-                    ping_interval=None,
+                    ping_interval=ping_interval,
                     ping_timeout=None,
                     max_size=2 ** 20,
                 ),
@@ -75,6 +86,32 @@ async def escuchar_velas(
                 _watchdog(ws, symbol, last_message, tiempo_maximo)
             )
             keeper = asyncio.create_task(_keepalive(ws, symbol, ping_interval))
+
+            if cliente and ultimo_timestamp is not None:
+                try:
+                    ohlcv = await fetch_ohlcv_async(
+                        cliente,
+                        symbol=symbol,
+                        timeframe=intervalo,
+                        since=ultimo_timestamp + 1,
+                    )
+                    for o in ohlcv:
+                        ts = o[0]
+                        if ts > ultimo_timestamp:
+                            await callback(
+                                {
+                                    'symbol': symbol,
+                                    'timestamp': ts,
+                                    'open': float(o[1]),
+                                    'high': float(o[2]),
+                                    'low': float(o[3]),
+                                    'close': float(o[4]),
+                                    'volume': float(o[5]),
+                                }
+                            )
+                            ultimo_timestamp = ts
+                except Exception as e:
+                    log.warning(f'❌ Error al backfillear {symbol}: {e}')
             try:
                 while True:
                     try:
@@ -84,7 +121,13 @@ async def escuchar_velas(
                         log.warning(f'⏰ Sin datos de {symbol} en 30s, forzando reconexión')
                         await ws.close()
                         break
-                    except (ConnectionClosed, ConnectionError, asyncio.TimeoutError) as e:
+                    except ConnectionClosed as e:
+                        log.warning(
+                            f"🚪 WebSocket cerrado en {symbol} — Código: {e.code}, Motivo: {e.reason}"
+                        )
+                        await ws.close()
+                        break
+                    except (ConnectionError, asyncio.TimeoutError) as e:
                         log.warning(f'❌ Conexión perdida en {symbol}: {e}')
                         await ws.close()
                         break
@@ -113,7 +156,11 @@ async def escuchar_velas(
                         if vela['x']:
                             log.info(
                                 f"✅ Vela cerrada {symbol} — Close: {vela['c']}, Vol: {vela['v']}"
-                                )
+                            )
+                            latencia = datetime.utcnow().timestamp() * 1000 - vela['t']
+                            log.debug(
+                                f"⏱️ Latencia de vela {symbol}: {latencia:.0f} ms"
+                            )
                             await callback(
                                 {
                                     'symbol': symbol,
@@ -125,14 +172,16 @@ async def escuchar_velas(
                                     'volume': float(vela['v']),
                                 }
                             )
+                            ultimo_timestamp = vela['t']
                             tick('data_feed')
                     except Exception as e:
                         log.warning(f'❌ Error en callback de {symbol}: {e}')
                         traceback.print_exc()
             finally:
                 for t in (watchdog, keeper):
+                    t.cancel()
                     try:
-                        t.cancel()
+                        await t
                     except Exception:
                         pass
                 try:
