@@ -1,5 +1,5 @@
 import pandas as pd
-from indicators.atr import calcular_atr
+from indicators.helpers import get_atr
 from core.utils import configurar_logger
 from core.strategies.exit.salida_utils import resultado_salida
 from config.exit_defaults import load_exit_config
@@ -34,7 +34,7 @@ def salida_trailing_stop(orden: dict, df: pd.DataFrame, config: dict=None
         if config:
             cfg.update(config)
         atr_mult = cfg['atr_multiplicador']
-        atr = calcular_atr(df)
+        atr = get_atr(df)
         if atr is None:
             return resultado_salida('Trailing Stop', False, 'ATR no disponible'
                 )
@@ -90,7 +90,7 @@ def verificar_trailing_stop(info: dict, precio_actual: float, df: (pd.DataFrame 
     trailing_start_ratio = cfg['trailing_start_ratio']
     atr_mult = cfg['atr_multiplicador']
     usar_atr = cfg['trailing_por_atr']
-    atr = calcular_atr(df) if df is not None else None
+    atr = get_atr(df) if df is not None else None
     if atr is None:
         return False, 'ATR no disponible'
     trailing_trigger = entrada * trailing_start_ratio
@@ -98,8 +98,7 @@ def verificar_trailing_stop(info: dict, precio_actual: float, df: (pd.DataFrame 
         if usar_atr:
             trailing_stop = max_price - atr * atr_mult
         else:
-            distancia_ratio = cfg['trailing_distance_ratio']
-                ) if config else 0.02
+            distancia_ratio = cfg['trailing_distance_ratio'] if config is None else config.get('trailing_distance_ratio', cfg['trailing_distance_ratio'])
             trailing_stop = max_price * (1 - distancia_ratio)
         if cfg['uso_trailing_technico'] and df is not None and len(df) >= 5:
             soporte = df['low'].rolling(window=5).min().iloc[-1]
