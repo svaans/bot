@@ -11,6 +11,7 @@ from .salida_por_tendencia import salida_por_tendencia
 from .salida_stoploss_atr import salida_stoploss_atr
 from .salida_takeprofit_atr import salida_takeprofit_atr
 from .salida_tiempo_maximo import salida_tiempo_maximo
+from config.exit_defaults import load_exit_config
 PRIORIDAD = {'Stop Loss': 3, 'Trailing Stop': 3, 'Cambio de tendencia': 3,
     'SL-ATR': 2, 'Tiempo máximo': 2, 'RSI bajo': 2, 'Cruce bajista de MACD':
     2, 'Take Profit': 1, 'TP-ATR': 1}
@@ -27,7 +28,10 @@ def verificar_take_profit(orden: Dict, df: pd.DataFrame, config: (Dict |
     if df is not None and len(df) >= 20:
         rango = df['high'].tail(20) - df['low'].tail(20)
         atr = rango.mean()
-    ratio = config.get('tp_ratio', 2.5) if config else 2.5
+    cfg = load_exit_config(orden.get('symbol', 'SYM'))
+    if config:
+        cfg.update(config)
+    ratio = cfg['tp_ratio']
     if atr is not None:
         tp_dinamico = orden.get('precio_entrada', precio_actual
             ) + atr * ratio if direccion in ('long', 'compra') else orden.get(
@@ -46,8 +50,11 @@ def evaluar_salida_inteligente(orden: Dict, df: pd.DataFrame, config: (Dict |
     None)=None) ->Dict:
     """Evalúa varias estrategias de salida y decide un cierre unificado."""
     resultados: List[Dict] = []
-    vol_min = (config or {}).get('volumen_minimo_salida', 0.0)
-    spread_max = (config or {}).get('max_spread_ratio', 0.003)
+    cfg = load_exit_config(orden.get('symbol', 'SYM'))
+    if config:
+        cfg.update(config)
+    vol_min = cfg['volumen_minimo_salida']
+    spread_max = cfg['max_spread_ratio']
     if 'volume' in df.columns and df['volume'].iloc[-1] < vol_min:
         return {'cerrar': False, 'razones': ['Volumen bajo'], 'estrategias_activas': 0, 'motivo_final': 'Volumen insuficiente'}
     if 'spread' in df.columns:
