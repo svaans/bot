@@ -13,8 +13,7 @@ from .gestor_salidas import evaluar_salidas, verificar_filtro_tecnico
 from .analisis_previo_salida import permitir_cierre_tecnico, evaluar_condiciones_de_cierre_anticipado
 from .analisis_salidas import patron_tecnico_fuerte
 from core.strategies.exit.filtro_salidas import validar_necesidad_de_salida
-from core.adaptador_dinamico import adaptar_configuracion as adaptar_configuracion_base
-from core.adaptador_configuracion_dinamica import adaptar_configuracion
+from core.config_manager.dinamica import adaptar_configuracion
 from core.adaptador_umbral import calcular_umbral_adaptativo
 from core.metricas_semanales import metricas_tracker
 from config.exit_defaults import load_exit_config
@@ -99,10 +98,7 @@ async def _manejar_trailing_stop(trader, orden, df) -> bool:
     config_actual = trader.config_por_simbolo.get(symbol, load_exit_config(symbol))
     if precio_cierre > orden.max_price:
         orden.max_price = precio_cierre
-    dinamica = adaptar_configuracion(symbol, df)
-    if dinamica:
-        config_actual.update(dinamica)
-    config_actual = adaptar_configuracion_base(symbol, df, config_actual)
+    config_actual = adaptar_configuracion(symbol, df, config_actual)
     trader.config_por_simbolo[symbol] = config_actual
     try:
         cerrar, motivo = verificar_trailing_stop(

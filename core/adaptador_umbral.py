@@ -11,7 +11,6 @@ from pathlib import Path
 from typing import Dict, Optional
 import pandas as pd
 from indicators import rsi as indicador_rsi, slope as indicador_slope
-from core.score_tecnico import calcular_score_tecnico
 from core.utils.utils import configurar_logger
 log = configurar_logger("adaptador_umbral")
 RUTA_CONFIG = Path("config/configuraciones_optimas.json")

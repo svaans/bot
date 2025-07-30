@@ -37,8 +37,8 @@ def _alertar_inconsistencias(symbol: str, sl: float, tp: float) ->None:
             )
 
 
-def adaptar_configuracion(symbol: str, df: pd.DataFrame) ->dict:
-    log.info('➡️ Entrando en adaptar_configuracion()')
+def _adaptar_configuracion_indicadores(symbol: str, df: pd.DataFrame) ->dict:
+    log.info('➡️ Entrando en _adaptar_configuracion_indicadores()')
     """Ajusta los parámetros del bot según contexto de mercado."""
     if not _validar_dataframe(df):
         log.warning(f'[{symbol}] Datos insuficientes para adaptación dinámica.'

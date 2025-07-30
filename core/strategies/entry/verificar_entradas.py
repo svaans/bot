@@ -3,8 +3,7 @@ from datetime import datetime
 import pandas as pd
 from core.utils import configurar_logger
 from core.adaptador_dinamico import calcular_umbral_adaptativo, calcular_tp_sl_adaptativos
-from core.adaptador_dinamico import adaptar_configuracion as adaptar_configuracion_base
-from core.adaptador_configuracion_dinamica import adaptar_configuracion
+from core.config_manager.dinamica import adaptar_configuracion
 from core.data import coincidencia_parcial
 from core.estrategias import filtrar_por_direccion
 from core.strategies.tendencia import detectar_tendencia
@@ -30,9 +29,7 @@ async def verificar_entrada(trader, symbol: str, df: pd.DataFrame, estado) ->(
         log.warning(f'[{symbol}] Datos de mercado incompletos o corruptos')
         metricas_tracker.registrar_filtro('datos_invalidos')
         return None
-    config = trader.config_por_simbolo.get(symbol, {})
-    config.update(adaptar_configuracion(symbol, df) or {})
-    config = adaptar_configuracion_base(symbol, df, config)
+    config = adaptar_configuracion(symbol, df, trader.config_por_simbolo.get(symbol, {}))
     trader.config_por_simbolo[symbol] = config
     tendencia = trader.estado_tendencia.get(symbol)
     if not tendencia:

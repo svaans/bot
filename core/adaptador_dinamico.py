@@ -38,9 +38,9 @@ PESO_RANGO = 0.4
 PESO_VOLUMEN = 0.2
 
 
-def adaptar_configuracion(symbol: str, df: pd.DataFrame, base_config: dict
+def _adaptar_configuracion_base(symbol: str, df: pd.DataFrame, base_config: dict
     ) ->dict:
-    log.info('➡️ Entrando en adaptar_configuracion()')
+    log.info('➡️ Entrando en _adaptar_configuracion_base()')
     """Ajusta ``base_config`` dinámicamente en función del mercado."""
     if df is None or len(df) < 10 or 'close' not in df.columns:
         log.warning(
@@ -118,6 +118,9 @@ def calcular_umbral_adaptativo(symbol: str, df: pd.DataFrame,
        penaliza la persistencia, reduciendo el umbral.
     3. **RSI**: valores cercanos a 50 reducen ``contexto_score`` para evitar
        operar en zonas neutras.
+    
+    Este cálculo no depende de nombres concretos de estrategias, solo de los
+    pesos numéricos provistos.
     """
     if df is None or len(df) < MIN_LONGITUD_DATA or not estrategias_activadas:
         log.warning(

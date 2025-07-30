@@ -27,8 +27,7 @@ from core.utils.utils import configurar_logger
 from core.monitor_estado_bot import monitorear_estado_periodicamente
 from core.contexto_externo import StreamContexto
 from core.orders import real_orders
-from core.adaptador_dinamico import adaptar_configuracion as adaptar_configuracion_base
-from core.adaptador_configuracion_dinamica import adaptar_configuracion
+from core.config_manager.dinamica import adaptar_configuracion
 from ccxt.base.errors import BaseError
 from core.reporting import reporter_diario
 from core.registro_metrico import registro_metrico
@@ -1045,10 +1044,7 @@ class Trader:
         """
         estado = self.estado[symbol]
         config_actual = self.config_por_simbolo.get(symbol, {})
-        dinamica = adaptar_configuracion(symbol, df)
-        if dinamica:
-            config_actual.update(dinamica)
-        config_actual = adaptar_configuracion_base(symbol, df, config_actual)
+        config_actual = adaptar_configuracion(symbol, df, config_actual)
         self.config_por_simbolo[symbol] = config_actual
         tendencia_actual = self.estado_tendencia.get(symbol)
         if not tendencia_actual:
