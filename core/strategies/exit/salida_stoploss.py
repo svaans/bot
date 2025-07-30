@@ -7,10 +7,9 @@ from core.strategies.entry.gestor_entradas import evaluar_estrategias
 from core.strategies.pesos import gestor_pesos
 from core.utils import configurar_logger
 from core.strategies.exit.salida_utils import resultado_salida
-from indicators.rsi import calcular_rsi
+from indicators.helpers import get_rsi, get_momentum
 from indicators.slope import calcular_slope
 from indicators.vwap import calcular_vwap
-from indicators.momentum import calcular_momentum
 from core.scoring import calcular_score_tecnico
 from config.exit_defaults import load_exit_config
 log = configurar_logger('salida_stoploss')
@@ -23,9 +22,9 @@ def validar_sl_tecnico(df: pd.DataFrame, direccion: str='long') ->bool:
     try:
         if not validar_dataframe(df, ['close']):
             return True
-        rsi = calcular_rsi(df)
+        rsi = get_rsi(df)
         slope = calcular_slope(df.tail(5))
-        momentum = calcular_momentum(df)
+        momentum = get_momentum(df)
         precio = df['close'].iloc[-1]
         ma9 = df['close'].rolling(window=9).mean().iloc[-1]
         ma20 = df['close'].rolling(window=20).mean().iloc[-1]
