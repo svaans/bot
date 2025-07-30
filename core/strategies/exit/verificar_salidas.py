@@ -4,9 +4,7 @@ import asyncio
 import pandas as pd
 from core.utils import configurar_logger
 from core.contexto_externo import obtener_puntaje_contexto
-from indicators.rsi import calcular_rsi
-from indicators.momentum import calcular_momentum
-from indicators.atr import calcular_atr
+from indicators.helpers import get_rsi, get_momentum, get_atr
 from core.strategies.tendencia import detectar_tendencia
 from .salida_stoploss import verificar_salida_stoploss
 from .salida_trailing_stop import verificar_trailing_stop
@@ -165,7 +163,7 @@ async def _aplicar_salidas_adicionales(trader, orden, df) -> bool:
     symbol = orden.symbol
     precio_cierre = float(df['close'].iloc[-1])
     config_actual = trader.config_por_simbolo.get(symbol, load_exit_config(symbol))
-    atr = calcular_atr(df)
+    atr = get_atr(df)
     volatilidad_rel = atr / precio_cierre if atr and precio_cierre else 1.0
     tendencia_detectada = trader.estado_tendencia.get(symbol)
     if not tendencia_detectada:
