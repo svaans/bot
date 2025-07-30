@@ -1,11 +1,12 @@
 import pandas as pd
 from indicators.atr import calcular_atr
 from core.utils import configurar_logger
+from config.exit_defaults import load_exit_config
 log = configurar_logger('salida_break_even')
 
 
 def salida_break_even(orden: dict, df: pd.DataFrame, config: (dict | None)=None
-    ) ->dict:
+    ) -> dict:
     log.info('➡️ Entrando en salida_break_even()')
     """Evalúa si se debe mover el Stop Loss a precio de entrada."""
     try:
@@ -17,12 +18,14 @@ def salida_break_even(orden: dict, df: pd.DataFrame, config: (dict | None)=None
         if entrada is None:
             return {'cerrar': False}
         precio_actual = df['close'].iloc[-1]
-        atr_periodo = config.get('periodo_atr', 14) if config else 14
+        cfg = load_exit_config(orden.get('symbol', 'SYM'))
+        if config:
+            cfg.update(config)
+        atr_periodo = cfg['periodo_atr']
         atr = calcular_atr(df, atr_periodo)
         if atr is None:
             return {'cerrar': False}
-        multiplicador = config.get('break_even_atr_mult', 1.5
-            ) if config else 1.5
+        multiplicador = cfg['break_even_atr_mult']
         umbral = atr * multiplicador
         if direccion in ('long', 'compra'):
             if precio_actual >= entrada + umbral:
