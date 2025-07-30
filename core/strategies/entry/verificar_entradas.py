@@ -167,15 +167,10 @@ async def verificar_entrada(trader, symbol: str, df: pd.DataFrame, estado) ->(
         metricas_tracker.registrar_filtro('sl_tp')
         return None
     
+    # El trader validará SL y TP con ATR al abrir la orden, por lo que
+    # evitamos duplicar esta comprobación aquí. Solo calculamos ATR una vez
+    # para posibles ajustes posteriores.
     atr = calcular_atr(df)
-    if atr:
-        min_sl = atr * getattr(trader.config, 'factor_sl_atr', 0.5)
-        min_tp = atr * getattr(trader.config, 'factor_tp_atr', 0.5)
-        if abs(precio - sl) < min_sl or abs(tp - precio) < min_tp:
-            log.info(
-                f'[{symbol}] SL/TP demasiado ajustados para ATR {atr:.4f}')
-            metricas_tracker.registrar_filtro('sl_tp_atr')
-            return None
     eval_tecnica = evaluar_puntaje_tecnico(symbol, df, precio, sl, tp)
     score_total = eval_tecnica['score_total']
     score_normalizado = eval_tecnica.get('score_normalizado')
@@ -185,16 +180,9 @@ async def verificar_entrada(trader, symbol: str, df: pd.DataFrame, estado) ->(
         vol = df['volume'].iloc[-1] / (vol_media or 1)
     else:
         vol = 0
-    umbral_vol = getattr(trader.config, 'volumen_min_relativo', 1.0)
-    vol_abs_min = getattr(trader.config, 'volumen_min_absoluto', 0.0)
-    if 'volume' in df.columns and df['volume'].iloc[-1] < vol_abs_min:
-        log.info(f'[{symbol}] Volumen absoluto {df["volume"].iloc[-1]:.2f} < {vol_abs_min}')
-        metricas_tracker.registrar_filtro('volumen_abs')
-        return None
-    if vol < umbral_vol:
-        log.info(f'[{symbol}] Volumen relativo {vol:.2f} < umbral {umbral_vol}')
-        metricas_tracker.registrar_filtro('volumen')
-        return None
+    # Las validaciones de volumen ya se realizan en el motor de estrategias y
+    # afectan al score técnico, por lo que aquí solo calculamos la relación para
+    # ajustar el umbral dinámico.
     volatilidad = df['close'].pct_change().tail(20).std()
     pesos_simbolo = cargar_pesos_tecnicos(symbol)
     score_max = sum(pesos_simbolo.values())
