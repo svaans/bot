@@ -38,7 +38,7 @@ def validar_sl_tecnico(df: pd.DataFrame, direccion: str='long') ->bool:
         if direccion in ['long', 'compra']:
             return score >= 2 and (debajo_vwap or debajo_ma) and persistencia
         return True
-    except Exception as e:
+    except (KeyError, ValueError, TypeError) as e:
         log.warning(f'Error validando SL técnico: {e}')
         return True
 
@@ -93,7 +93,8 @@ def salida_stoploss(orden: dict, df: pd.DataFrame, config: dict=None) ->dict:
                 )
         return resultado_salida('Stop Loss', True,
             'Condiciones técnicas débiles para mantener', logger=log)
-    except Exception as e:
+    except (KeyError, ValueError, TypeError) as e:
+        log.error(f"Error interno en SL para {orden.get('symbol', 'SYM')}: {e}")
         return resultado_salida('Stop Loss', True,
             f'Error interno en SL: {e}', logger=log)
 

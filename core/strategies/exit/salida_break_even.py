@@ -40,6 +40,6 @@ def salida_break_even(orden: dict, df: pd.DataFrame, config: (dict | None)=None
                 )
             return {'cerrar': False, 'break_even': True, 'nuevo_sl': entrada}
         return {'cerrar': False}
-    except Exception as e:
-        log.warning(f'Error en salida_break_even: {e}')
+    except (KeyError, ValueError, TypeError) as e:
+        log.warning(f"Error en salida_break_even para {orden.get('symbol', 'SYM')}: {e}")
         return {'cerrar': False}

@@ -21,5 +21,8 @@ def salida_por_macd(orden, df: pd.DataFrame) ->dict:
             return resultado_salida('Tecnico', True,
                 'Cruce bajista de MACD', logger=log)
         return resultado_salida('Tecnico', False, 'Sin cruce bajista de MACD')
-    except Exception as e:
-        return resultado_salida('Tecnico', False, f'Error en MACD: {e}')
+    except (KeyError, ValueError, TypeError) as e:
+        log.error(
+            f"Error en salida_por_macd para {orden.get('symbol', 'SYM')}: {e}"
+        )
+        return resultado_salida('Tecnico', False, f'Error en MACD: {e}', logger=log)

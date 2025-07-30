@@ -36,5 +36,8 @@ def salida_stoploss_atr(orden: dict, df: pd.DataFrame) ->dict:
                 return resultado_salida('Stop Loss', True,
                     f'SL-ATR activado (short) a {sl_tecnico:.4f}', logger=log)
         return resultado_salida('Stop Loss', False, 'SL-ATR no alcanzado')
-    except Exception as e:
-        return resultado_salida('Stop Loss', False, f'Error SL-ATR: {e}')
+    except (KeyError, ValueError, TypeError) as e:
+        log.error(
+            f"Error en SL-ATR para {orden.get('symbol', 'SYM')}: {e}"
+        )
+        return resultado_salida('Stop Loss', False, f'Error SL-ATR: {e}', logger=log)

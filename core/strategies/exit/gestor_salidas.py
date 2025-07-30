@@ -42,8 +42,10 @@ def evaluar_salidas(orden: dict, df, config=None, contexto=None):
             else:
                 resultado = f(df)
         except Exception as e:
-            log.warning(f'❌ Error ejecutando estrategia de salida: {f} → {e}')
-            continue
+            log.error(
+                f'❌ Error ejecutando estrategia de salida {getattr(f, "__name__", f)} en {symbol}: {e}'
+            )
+            raise
         if resultado.get('cerrar', False):
             evento = resultado.get('evento', resultado.get('razon',
                 'Sin motivo'))

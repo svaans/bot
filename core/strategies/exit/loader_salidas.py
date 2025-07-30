@@ -1,6 +1,9 @@
 import os
 import importlib.util
 import inspect
+from core.utils import configurar_logger
+
+log = configurar_logger('loader_salidas')
 CARPETA_SALIDAS = os.path.dirname(__file__)
 
 
@@ -8,7 +11,10 @@ def es_estrategia_salida_valida(funcion):
     try:
         firma = inspect.signature(funcion)
         return len(firma.parameters) <= 3
-    except Exception:
+    except (ValueError, TypeError) as e:
+        log.warning(
+            f'Función de salida inválida {getattr(funcion, "__name__", funcion)}: {e}'
+        )
         return False
 
 
@@ -34,9 +40,12 @@ def cargar_estrategias_salida():
                             funcion):
                             funciones.append(funcion)
                         else:
-                            print(
+                            log.warning(
                                 f'⚠️ {nombre_modulo}.{attr} ignorada: no es función de salida válida.'
-                                )
+                            )
             except Exception as e:
-                print(f'❌ Error importando {nombre_modulo}: {e}')
+                log.error(
+                    f'❌ Error importando {nombre_modulo} desde {ruta}: {e}'
+                )
+                raise
     return funciones

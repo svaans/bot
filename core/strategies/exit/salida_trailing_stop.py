@@ -57,9 +57,12 @@ def salida_trailing_stop(orden: dict, df: pd.DataFrame, config: dict=None
                     f"Trailing Stop activado (short) → Min: {orden['max_precio']:.2f}, Precio actual: {precio_actual:.2f}"
                     , logger=log)
         return resultado_salida('Trailing Stop', False, 'Trailing no activado')
-    except Exception as e:
+    except (KeyError, ValueError, TypeError) as e:
+        log.error(
+            f"Error en trailing stop para {orden.get('symbol', 'SYM')}: {e}"
+        )
         return resultado_salida('Trailing Stop', False,
-            f'Error en trailing stop: {e}')
+            f'Error en trailing stop: {e}', logger=log)
 
 
 def verificar_trailing_stop(info: dict, precio_actual: float, df: (pd.DataFrame | None) = None, config: dict = None) -> tuple[bool, str]:

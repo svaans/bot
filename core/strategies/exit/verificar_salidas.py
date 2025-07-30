@@ -105,8 +105,10 @@ async def _manejar_trailing_stop(trader, orden, df) -> bool:
     config_actual = adaptar_configuracion_base(symbol, df, config_actual)
     trader.config_por_simbolo[symbol] = config_actual
     try:
-        cerrar, motivo = verificar_trailing_stop(orden.to_dict(), precio_cierre, df, config=config_actual)
-    except Exception as e:
+        cerrar, motivo = verificar_trailing_stop(
+            orden.to_dict(), precio_cierre, df, config=config_actual
+        )
+    except (KeyError, ValueError, TypeError) as e:
         log.warning(f'⚠️ Error en trailing stop para {symbol}: {e}')
         cerrar, motivo = False, ''
     if cerrar:
@@ -171,8 +173,10 @@ async def _aplicar_salidas_adicionales(trader, orden, df) -> bool:
         trader.estado_tendencia[symbol] = tendencia_detectada
     contexto = {'volatilidad': volatilidad_rel, 'tendencia': tendencia_detectada}
     try:
-        resultado = evaluar_salidas(orden.to_dict(), df, config=config_actual, contexto=contexto)
-    except Exception as e:
+        resultado = evaluar_salidas(
+            orden.to_dict(), df, config=config_actual, contexto=contexto
+        )
+    except (KeyError, ValueError, TypeError) as e:
         log.warning(f'⚠️ Error evaluando salidas para {symbol}: {e}')
         resultado = {}
     if resultado.get('break_even'):

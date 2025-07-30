@@ -30,5 +30,8 @@ def salida_takeprofit_atr(orden: dict, df: pd.DataFrame) ->dict:
                 return resultado_salida('Take Profit', True,
                     f'TP-ATR alcanzado (short) a {tp_tecnico:.4f}', logger=log)
         return resultado_salida('Take Profit', False, 'TP-ATR no alcanzado')
-    except Exception as e:
-        return resultado_salida('Take Profit', False, f'Error TP-ATR: {e}')
+    except (KeyError, ValueError, TypeError) as e:
+        log.error(
+            f"Error en TP-ATR para {orden.get('symbol', 'SYM')}: {e}"
+        )
+        return resultado_salida('Take Profit', False, f'Error TP-ATR: {e}', logger=log)

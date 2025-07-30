@@ -28,6 +28,8 @@ def salida_tiempo_maximo(orden: dict, df: pd.DataFrame) ->dict:
                 , logger=log)
         return resultado_salida('Tecnico', False,
             f'Tiempo actual {tiempo_abierta}')
-    except Exception as e:
-        return resultado_salida('Tecnico', False,
-            f'Error en salida por tiempo: {e}')
+    except (KeyError, ValueError, TypeError) as e:
+        log.error(
+            f"Error en salida_tiempo_maximo para {orden.get('symbol', 'SYM')}: {e}"
+        )
+        return resultado_salida('Tecnico', False, f'Error en salida por tiempo: {e}', logger=log)
