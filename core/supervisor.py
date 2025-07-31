@@ -103,9 +103,8 @@ async def _restartable_runner(
             result = coro_factory()
             if asyncio.iscoroutine(result):
                 await result
-            log.warning(
-                "\u23F9\ufe0f %s finalizó; reiniciando en %ss", task_name, delay
-            )
+            # Fin normal; salir sin reiniciar
+            break
         except asyncio.CancelledError:
             log.info("Tarea %s cancelada", task_name)
             raise
@@ -114,11 +113,16 @@ async def _restartable_runner(
                 "\u26a0\ufe0f Error en %s: %r. Reiniciando en %ss", task_name, e, delay,
                 exc_info=True,
             )
-        restarts += 1
-        if max_restarts is not None and restarts >= max_restarts:
-            log.error("❌ %s alcanzó el límite de reinicios (%s)", task_name, max_restarts)
-            break
-        await asyncio.sleep(delay)
+            if max_restarts is not None and restarts >= max_restarts:
+                log.error("❌ %s alcanzó el límite de reinicios (%s)", task_name, max_restarts)
+                break
+            log.warning(
+                "\u23F9\ufe0f %s finalizó; reiniciando en %ss", task_name, delay
+            )
+            await asyncio.sleep(delay)
+            restarts += 1
+            continue
+        # Solo se ejecuta si break no fue llamado (reinicio por excepción)
 
 def supervised_task(
     coro_factory: Callable[..., Awaitable],

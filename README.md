@@ -62,9 +62,11 @@ La clase `Trader` orquesta estos módulos y mantiene compatibilidad con
 ## Logging estructurado y reportes
 
 En modo real el bot utiliza un logger en formato JSON cuya salida se guarda en
-`logs/bot.log`. Cada operación cerrada se agrega al directorio
-`reportes_diarios/` y al finalizar el día se genera automáticamente un PDF con
-las métricas principales: ganancia acumulada, winrate y drawdown.
+`logs/bot.log`. A partir de esta versión el archivo rota de manera diaria y se
+conservan varias copias (configurable desde `configurar_logger`). Cada
+operación cerrada se agrega al directorio `reportes_diarios/` y al finalizar el
+día se genera automáticamente un PDF con las métricas principales: ganancia
+acumulada, winrate y drawdown.
 
 
 ## Instalación

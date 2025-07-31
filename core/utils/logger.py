@@ -1,5 +1,6 @@
 import os
 import logging
+from logging.handlers import TimedRotatingFileHandler
 import json
 from datetime import datetime, timezone
 from pathlib import Path
@@ -41,7 +42,8 @@ class JsonFormatter(logging.Formatter):
 
 
 def configurar_logger(nombre: str, nivel=logging.INFO, carpeta_logs='logs',
-    modo_silencioso=False, estructurado=None):
+    modo_silencioso=False, estructurado=None, *, backup_count=7,
+    when='midnight'):
     if nombre in loggers_configurados:
         return loggers_configurados[nombre]
     logger = logging.getLogger(nombre)
@@ -68,7 +70,8 @@ def configurar_logger(nombre: str, nivel=logging.INFO, carpeta_logs='logs',
         if archivo_global is None:
             os.makedirs(carpeta_logs, exist_ok=True)
             ruta_log = os.path.join(carpeta_logs, 'bot.log')
-            archivo_global = logging.FileHandler(ruta_log)
+            archivo_global = TimedRotatingFileHandler(
+                ruta_log, when=when, backupCount=backup_count)
             archivo_global.setLevel(nivel)
             archivo_global.setFormatter(formato)
             archivo_global.addFilter(FiltroRelevante())

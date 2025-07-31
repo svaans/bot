@@ -102,8 +102,8 @@ class DataFeed:
                 f'stream_{sym}',
                 max_restarts=self.max_stream_restarts,
             )
-            if self._tasks:
-                await asyncio.gather(*self._tasks.values())
+        if self._tasks:
+            await asyncio.gather(*self._tasks.values())
     async def detener(self) ->None:
         log.info('➡️ Entrando en detener()')
         """Cancela todos los streams en ejecución."""
