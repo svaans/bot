@@ -23,6 +23,8 @@ class DataFeed:
         self.max_stream_restarts = max_restarts
         self._tasks: Dict[str, asyncio.Task] = {}
         self._last: Dict[str, datetime] = {}
+        self._monitor_global_task: asyncio.Task | None = None
+        self._handler_actual: Callable[[dict], Awaitable[None]] | None = None
 
     @property
     def activos(self) ->list[str]:
@@ -89,10 +91,42 @@ class DataFeed:
                     task.cancel()
                 break
 
+    async def _monitor_global_inactividad(self) -> None:
+        """Reinicia todos los streams si ninguno recibe datos."""
+        try:
+            while True:
+                await asyncio.sleep(self.monitor_interval)
+                if not self._tasks:
+                    continue
+                ahora = datetime.utcnow()
+                if all(
+                    (
+                        ahora - ts
+                    ).total_seconds() > self.tiempo_inactividad
+                    for ts in self._last.values()
+                ):
+                    log.critical(
+                        "\u26a0\ufe0f Todos los streams inactivos; reiniciando"
+                    )
+                    await self.detener()
+                    self._monitor_global_task = None
+                    await self.escuchar(self._last.keys(), self._handler_actual)
+                    break
+        except asyncio.CancelledError:
+            pass
+
     async def escuchar(self, symbols: Iterable[str], handler: Callable[[
         dict], Awaitable[None]]) ->None:
         log.info('➡️ Entrando en escuchar()')
         """Inicia un stream por cada símbolo y espera a que todos finalicen."""
+        self._handler_actual = handler
+        if (
+            self._monitor_global_task is None
+            or self._monitor_global_task.done()
+        ):
+            self._monitor_global_task = asyncio.create_task(
+                self._monitor_global_inactividad()
+            )
         for sym in symbols:
             if sym in self._tasks:
                 log.warning(f'⚠️ Stream duplicado para {sym}. Ignorando.')
@@ -111,3 +145,7 @@ class DataFeed:
             task.cancel()
         await asyncio.gather(*self._tasks.values(), return_exceptions=True)
         self._tasks.clear()
+        if self._monitor_global_task and not self._monitor_global_task.done():
+            self._monitor_global_task.cancel()
+            await asyncio.gather(self._monitor_global_task, return_exceptions=True)
+        self._monitor_global_task = None
