@@ -7,19 +7,51 @@ from core.orders.order_model import Order
 from core.utils.logger import configurar_logger
 from core.orders import real_orders
 from core.utils.utils import is_valid_number
+from core.event_bus import EventBus
 log = configurar_logger('orders', modo_silencioso=True)
 
 
 class OrderManager:
     """Abstrae la creación y cierre de órdenes."""
 
-    def __init__(self, modo_real: bool, risk=None, notificador=None) ->None:
+    def __init__(self, modo_real: bool, bus: EventBus | None = None) -> None:
         log.info('➡️ Entrando en __init__()')
         self.modo_real = modo_real
         self.ordenes: Dict[str, Order] = {}
         self.historial: Dict[str, list] = {}
-        self.risk = risk
-        self.notificador = notificador
+        self.bus = bus
+        if bus:
+            self.subscribe(bus)
+
+    def subscribe(self, bus: EventBus) -> None:
+        bus.subscribe('abrir_orden', self._on_abrir)
+        bus.subscribe('cerrar_orden', self._on_cerrar)
+        bus.subscribe('cerrar_parcial', self._on_cerrar_parcial)
+        bus.subscribe('agregar_parcial', self._on_agregar_parcial)
+
+    async def _on_abrir(self, data: dict) -> None:
+        fut = data.pop('future', None)
+        result = await self.abrir_async(**data)
+        if fut:
+            fut.set_result(result)
+
+    async def _on_cerrar(self, data: dict) -> None:
+        fut = data.pop('future', None)
+        result = await self.cerrar_async(**data)
+        if fut:
+            fut.set_result(result)
+
+    async def _on_cerrar_parcial(self, data: dict) -> None:
+        fut = data.pop('future', None)
+        result = await self.cerrar_parcial_async(**data)
+        if fut:
+            fut.set_result(result)
+
+    async def _on_agregar_parcial(self, data: dict) -> None:
+        fut = data.pop('future', None)
+        result = await self.agregar_parcial_async(**data)
+        if fut:
+            fut.set_result(result)
 
     async def abrir_async(self, symbol: str, precio: float, sl: float, tp:
         float, estrategias: Dict, tendencia: str, direccion: str='long',
@@ -60,16 +92,10 @@ class OrderManager:
             return
         self.ordenes[symbol] = orden
         log.info(f'🟢 Orden abierta para {symbol} @ {precio:.2f}')
-        if self.notificador:
+        if self.bus:
             estrategias_txt = ', '.join(estrategias.keys())
-            mensaje = f"""🟢 Compra {symbol}
-Precio: {precio:.2f} Cantidad: {cantidad}
-SL: {sl:.2f} TP: {tp:.2f}
-Estrategias: {estrategias_txt}"""
-            try:
-                await self.notificador.enviar_async(mensaje)
-            except Exception as e:
-                log.error(f'❌ Error enviando notificación: {e}')
+            mensaje = f"""🟢 Compra {symbol}\nPrecio: {precio:.2f} Cantidad: {cantidad}\nSL: {sl:.2f} TP: {tp:.2f}\nEstrategias: {estrategias_txt}"""
+            await self.bus.publish('notify', {'mensaje': mensaje})
 
     def abrir(self, *args, **kwargs) ->None:
         log.info('➡️ Entrando en abrir()')
@@ -125,12 +151,8 @@ Estrategias: {estrategias_txt}"""
                         ejecutar_orden_market_sell, symbol, cantidad)
         except Exception as e:
             log.error(f'❌ No se pudo cerrar la orden real para {symbol}: {e}')
-            if self.notificador:
-                try:
-                    await self.notificador.enviar_async(
-                        f'❌ Venta fallida en {symbol}: {e}')
-                except Exception as err:
-                    log.error(f'❌ Error enviando notificación: {err}')
+            if self.bus:
+                await self.bus.publish('notify', {'mensaje': f'❌ Venta fallida en {symbol}: {e}'})
         finally:
             try:
                 await asyncio.to_thread(real_orders.eliminar_orden, symbol)
@@ -145,22 +167,12 @@ Estrategias: {estrategias_txt}"""
             ) / orden.precio_entrada if orden.precio_entrada else 0.0
         orden.retorno_total = retorno
         self.historial.setdefault(symbol, []).append(orden.to_dict())
-        if retorno < 0 and self.risk is not None:
-            try:
-                self.risk.registrar_perdida(symbol, retorno)
-            except Exception as e:
-                log.warning(
-                    f'⚠️ No se pudo registrar pérdida para {symbol}: {e}')
+        if retorno < 0 and self.bus:
+            await self.bus.publish('registrar_perdida', {'symbol': symbol, 'perdida': retorno})
         log.info(f'📤 Orden cerrada para {symbol} @ {precio:.2f} | {motivo}')
-        if self.notificador:
-            mensaje = f"""📤 Venta {symbol}
-Entrada: {orden.precio_entrada:.2f} Salida: {precio:.2f}
-Retorno: {retorno * 100:.2f}%
-Motivo: {motivo}"""
-            try:
-                await self.notificador.enviar_async(mensaje)
-            except Exception as e:
-                log.error(f'❌ Error enviando notificación: {e}')
+        if self.bus:
+            mensaje = f"""📤 Venta {symbol}\nEntrada: {orden.precio_entrada:.2f} Salida: {precio:.2f}\nRetorno: {retorno * 100:.2f}%\nMotivo: {motivo}"""
+            await self.bus.publish('notify', {'mensaje': mensaje})
         return True
 
     def cerrar(self, *args, **kwargs) ->bool:
@@ -184,41 +196,25 @@ Motivo: {motivo}"""
             return False
         if self.modo_real:
             try:
-                await asyncio.to_thread(real_orders.
-                    ejecutar_orden_market_sell, symbol, cantidad)
+                await asyncio.to_thread(real_orders.ejecutar_orden_market_sell, symbol, cantidad)
             except Exception as e:
                 log.error(f'❌ Error en venta parcial de {symbol}: {e}')
-                if self.notificador:
-                    try:
-                        await self.notificador.enviar_async(
-                            f'❌ Venta parcial fallida en {symbol}: {e}')
-                    except Exception as err:
-                        log.error(f'❌ Error enviando notificación: {err}')
+                if self.bus:
+                    await self.bus.publish('notify', {'mensaje': f'❌ Venta parcial fallida en {symbol}: {e}'})
                 return False
         orden.cantidad_abierta -= cantidad
         retorno_unitario = (precio - orden.precio_entrada
             ) / orden.precio_entrada if orden.precio_entrada else 0.0
         fraccion = cantidad / orden.cantidad if orden.cantidad else 0.0
         retorno_total = retorno_unitario * fraccion
-        if retorno_total < 0 and self.risk is not None:
-            try:
-                self.risk.registrar_perdida(symbol, retorno_total)
-            except Exception as e:
-                log.warning(
-                    f'⚠️ No se pudo registrar pérdida parcial para {symbol}: {e}'
-                    )
+        if retorno_total < 0 and self.bus:
+            await self.bus.publish('registrar_perdida', {'symbol': symbol, 'perdida': retorno_total})
         log.info(
             f'📤 Cierre parcial de {symbol}: {cantidad} @ {precio:.2f} | {motivo}'
             )
-        if self.notificador:
-            mensaje = f"""📤 Venta parcial {symbol}
-Cantidad: {cantidad}
-Precio: {precio:.2f}
-Motivo: {motivo}"""
-            try:
-                await self.notificador.enviar_async(mensaje)
-            except Exception as e:
-                log.error(f'❌ Error enviando notificación: {e}')
+        if self.bus:
+            mensaje = f"""📤 Venta parcial {symbol}\nCantidad: {cantidad}\nPrecio: {precio:.2f}\nMotivo: {motivo}"""
+            await self.bus.publish('notify', {'mensaje': mensaje})
         if orden.cantidad_abierta <= 0:
             self.ordenes.pop(symbol, None)
         return True

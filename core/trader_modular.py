@@ -16,6 +16,7 @@ from core.risk import RiskManager
 from core.position_manager import PositionManager
 from core.notification_manager import NotificationManager
 from core.capital_manager import CapitalManager
+from core.event_bus import EventBus
 from binance_api.cliente import crear_cliente, fetch_balance_async, fetch_ohlcv_async
 from core.utils.utils import leer_reporte_seguro
 from core.strategies import cargar_pesos_estrategias
@@ -69,12 +70,12 @@ class Trader:
         self.config = config
         self.data_feed = DataFeed(config.intervalo_velas)
         self.engine = StrategyEngine()
-        self.risk = RiskManager(config.umbral_riesgo_diario)
+        self.bus = EventBus()
+        self.risk = RiskManager(config.umbral_riesgo_diario, self.bus)
         self.notificador = NotificationManager(config.telegram_token,
-            config.telegram_chat_id)
+            config.telegram_chat_id, bus=self.bus)
         self.modo_real = getattr(config, 'modo_real', False)
-        self.orders = PositionManager(self.modo_real, self.risk, self.
-            notificador)
+        self.orders = PositionManager(self.modo_real, bus=self.bus)
         self.cliente = crear_cliente(config) if self.modo_real else None
         if not self.modo_real:
             log.info(
@@ -134,8 +135,8 @@ class Trader:
         self.reserva_piramide = max(0.0, min(1.0, config.reserva_piramide))
         self.umbral_piramide = max(0.0, config.umbral_piramide)
         self.riesgo_maximo_diario = 1.0
-        self.capital_manager = CapitalManager(config, self.cliente, self.
-            risk, self.fraccion_kelly)
+        self.capital_manager = CapitalManager(config, self.cliente, self.risk,
+            self.fraccion_kelly, bus=self.bus)
         self.capital_por_simbolo = self.capital_manager.capital_por_simbolo
         self.capital_inicial_diario = (self.capital_manager.
             capital_inicial_diario)
@@ -228,7 +229,9 @@ class Trader:
         ) ->None:
         log.info('➡️ Entrando en cerrar_operacion()')
         """Cierra una orden y actualiza los pesos si corresponden."""
-        if not await self.orders.cerrar_async(symbol, precio, motivo):
+        fut = asyncio.get_running_loop().create_future()
+        await self.bus.publish('cerrar_orden', {'symbol': symbol, 'precio': precio, 'motivo': motivo, 'future': fut})
+        if not await fut:
             log.debug(f'🔁 Intento duplicado de cierre ignorado para {symbol}')
             return
         actualizar_pesos_estrategias_symbol(symbol)
@@ -250,7 +253,9 @@ class Trader:
             utcnow().isoformat(), 'motivo_cierre': motivo, 'retorno_total':
             retorno_total, 'capital_inicial': self.capital_por_simbolo.get(
             orden.symbol, 0.0)})
-        if not await self.orders.cerrar_async(orden.symbol, precio, motivo):
+        fut = asyncio.get_running_loop().create_future()
+        await self.bus.publish('cerrar_orden', {'symbol': orden.symbol, 'precio': precio, 'motivo': motivo, 'future': fut})
+        if not await fut:
             log.warning(
                 f'❌ No se pudo confirmar el cierre de {orden.symbol}. Se omitirá el registro.'
                 )
@@ -313,7 +318,7 @@ class Trader:
             get(orden.symbol, {}), 'tiempo_operacion': duracion,
             'beneficio_relativo': retorno_total})
         metricas = self._metricas_recientes()
-        self.risk.ajustar_umbral(metricas)
+        await self.bus.publish('ajustar_riesgo', metricas)
         try:
             rsi_val = calcular_rsi(df) if df is not None else None
             score, _ = self._calcular_score_tecnico(df, rsi_val,
@@ -353,8 +358,9 @@ class Trader:
         precio: float, motivo: str, df: (pd.DataFrame | None)=None) ->bool:
         log.info('➡️ Entrando en _cerrar_parcial_y_reportar()')
         """Cierre parcial de ``orden`` y registro en el reporte."""
-        if not await self.orders.cerrar_parcial_async(orden.symbol,
-            cantidad, precio, motivo):
+        fut = asyncio.get_running_loop().create_future()
+        await self.bus.publish('cerrar_parcial', {'symbol': orden.symbol, 'cantidad': cantidad, 'precio': precio, 'motivo': motivo, 'future': fut})
+        if not await fut:
             log.warning(
                 f'❌ No se pudo confirmar el cierre parcial de {orden.symbol}. Se omitirá el registro.'
                 )
@@ -432,8 +438,9 @@ class Trader:
         if precio_actual >= orden.precio_ultima_piramide * (1 + self.
             umbral_piramide):
             cantidad = orden.cantidad / orden.fracciones_totales
-            if await self.orders.agregar_parcial_async(symbol,
-                precio_actual, cantidad):
+            fut = asyncio.get_running_loop().create_future()
+            await self.bus.publish('agregar_parcial', {'symbol': symbol, 'precio': precio_actual, 'cantidad': cantidad, 'future': fut})
+            if await fut:
                 orden.fracciones_restantes -= 1
                 orden.precio_ultima_piramide = precio_actual
                 log.info(
@@ -585,19 +592,31 @@ class Trader:
     async def _calcular_cantidad_async(self, symbol: str, precio: float
         ) ->float:
         log.info('➡️ Entrando en _calcular_cantidad_async()')
-        """Delegado a :class:`CapitalManager`."""
+        """Solicita la cantidad al servicio de capital mediante eventos."""
         exposicion = sum(o.cantidad_abierta * o.precio_entrada for o in
             self.orders.ordenes.values())
-        return await self.capital_manager.calcular_cantidad_async(symbol,
-            precio, exposicion)
+        fut = asyncio.get_running_loop().create_future()
+        await self.bus.publish('calcular_cantidad', {
+            'symbol': symbol,
+            'precio': precio,
+            'exposicion_total': exposicion,
+            'future': fut,
+        })
+        return await fut
 
     def _calcular_cantidad(self, symbol: str, precio: float) ->float:
         log.info('➡️ Entrando en _calcular_cantidad()')
         """Versión síncrona de :meth:`_calcular_cantidad_async`."""
         exposicion = sum(o.cantidad_abierta * o.precio_entrada for o in
             self.orders.ordenes.values())
-        return self.capital_manager.calcular_cantidad(symbol, precio,
-            exposicion)
+        fut = asyncio.get_running_loop().create_future()
+        asyncio.run(self.bus.publish('calcular_cantidad', {
+            'symbol': symbol,
+            'precio': precio,
+            'exposicion_total': exposicion,
+            'future': fut,
+        }))
+        return fut.result()
 
     def _metricas_recientes(self, dias: int=7) ->dict:
         log.info('➡️ Entrando en _metricas_recientes()')
@@ -1099,8 +1118,10 @@ class Trader:
         direccion: str, puntaje: float=0.0, umbral: float=0.0,
         detalles_tecnicos: (dict | None)=None, **kwargs) ->None:
         log.info('➡️ Entrando en _abrir_operacion_real()')
-        cantidad_total = await self.capital_manager.calcular_cantidad_async(
-            symbol, precio)
+        fut = asyncio.get_running_loop().create_future()
+        exposicion = sum(o.cantidad_abierta * o.precio_entrada for o in self.orders.ordenes.values())
+        await self.bus.publish('calcular_cantidad', {'symbol': symbol, 'precio': precio, 'exposicion_total': exposicion, 'future': fut})
+        cantidad_total = await fut
         if cantidad_total <= 0:
             capital_disp = self.capital_manager.capital_por_simbolo.get(
                 symbol, 0.0)
@@ -1132,10 +1153,24 @@ class Trader:
             self._rechazo(symbol, 'sl_tp_invalidos', puntaje=puntaje,
                 estrategias=list(estrategias_dict.keys()))
             return
-        await self.orders.abrir_async(symbol, precio, sl, tp,
-            estrategias_dict, tendencia, direccion, cantidad, puntaje,
-            umbral, objetivo=cantidad_total, fracciones=fracciones,
-            detalles_tecnicos=detalles_tecnicos or {})
+        fut_open = asyncio.get_running_loop().create_future()
+        await self.bus.publish('abrir_orden', {
+            'symbol': symbol,
+            'precio': precio,
+            'sl': sl,
+            'tp': tp,
+            'estrategias': estrategias_dict,
+            'tendencia': tendencia,
+            'direccion': direccion,
+            'cantidad': cantidad,
+            'puntaje': puntaje,
+            'umbral': umbral,
+            'objetivo': cantidad_total,
+            'fracciones': fracciones,
+            'detalles_tecnicos': detalles_tecnicos or {},
+            'future': fut_open,
+        })
+        await fut_open
         estrategias_list = list(estrategias_dict.keys())
         log.info(
             f'🟢 ENTRADA: {symbol} | Puntaje: {puntaje:.2f} / Umbral: {umbral:.2f} | Estrategias: {estrategias_list}'
@@ -1207,6 +1242,7 @@ class Trader:
                 await self.context_stream.detener()
             tarea.cancel()
         await asyncio.gather(*self._tareas.values(), return_exceptions=True)
+        await self.bus.close()
         self._guardar_estado_persistente()
 
     def _guardar_estado_persistente(self) ->None:

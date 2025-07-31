@@ -1,12 +1,13 @@
 from __future__ import annotations
 from core.orders.order_manager import OrderManager
+from core.event_bus import EventBus
 
 
 class PositionManager:
     """Gestión de posiciones abiertas usando :class:`OrderManager`."""
 
-    def __init__(self, modo_real: bool, risk=None, notificador=None) ->None:
-        self._manager = OrderManager(modo_real, risk, notificador)
+    def __init__(self, modo_real: bool, bus: EventBus | None = None) -> None:
+        self._manager = OrderManager(modo_real, bus)
 
     @property
     def ordenes(self):

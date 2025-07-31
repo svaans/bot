@@ -4,16 +4,30 @@ import numpy as np
 from core.utils.utils import configurar_logger
 from core.risk.riesgo import riesgo_superado as _riesgo_superado, actualizar_perdida
 from core.reporting import reporter_diario
+from core.event_bus import EventBus
+from typing import Any
 log = configurar_logger('risk', modo_silencioso=True)
 
 
 class RiskManager:
     """Encapsula la lógica de control de riesgo del bot."""
 
-    def __init__(self, umbral: float) ->None:
+    def __init__(self, umbral: float, bus: EventBus | None = None) -> None:
         log.info('➡️ Entrando en __init__()')
         self.umbral = umbral
         self._factor_kelly_prev = None
+        if bus:
+            self.subscribe(bus)
+
+    def subscribe(self, bus: EventBus) -> None:
+        bus.subscribe('registrar_perdida', self._on_registrar_perdida)
+        bus.subscribe('ajustar_riesgo', self._on_ajustar_riesgo)
+
+    async def _on_registrar_perdida(self, data: Any) -> None:
+        self.registrar_perdida(data.get('symbol'), data.get('perdida', 0.0))
+
+    async def _on_ajustar_riesgo(self, data: Any) -> None:
+        self.ajustar_umbral(data)
 
     def riesgo_superado(self, capital_total: float) ->bool:
         log.info('➡️ Entrando en riesgo_superado()')

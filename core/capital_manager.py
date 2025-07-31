@@ -6,6 +6,7 @@ from config.config_manager import Config
 from binance_api.cliente import fetch_balance_async, load_markets_async
 from core.utils.logger import configurar_logger
 from core.risk import RiskManager
+from core.event_bus import EventBus
 log = configurar_logger('capital_manager', modo_silencioso=True)
 
 
@@ -13,7 +14,7 @@ class CapitalManager:
     """Gestiona el capital disponible para trading."""
 
     def __init__(self, config: Config, cliente, risk: RiskManager,
-        fraccion_kelly: float) ->None:
+        fraccion_kelly: float, bus: EventBus | None = None) -> None:
         log.info('➡️ Entrando en __init__()')
         self.config = config
         self.cliente = cliente
@@ -40,6 +41,28 @@ class CapitalManager:
         self.reservas_piramide: Dict[str, float] = {s: (0.0) for s in
             config.symbols}
         self.fecha_actual = datetime.utcnow().date()
+        if bus:
+            self.subscribe(bus)
+
+    def subscribe(self, bus: EventBus) -> None:
+        bus.subscribe('calcular_cantidad', self._on_calcular_cantidad)
+        bus.subscribe('actualizar_capital', self._on_actualizar_capital)
+
+    async def _on_calcular_cantidad(self, data: dict) -> None:
+        fut = data.get('future')
+        symbol = data.get('symbol')
+        precio = data.get('precio')
+        exposicion = data.get('exposicion_total', 0.0)
+        if fut:
+            cantidad = await self.calcular_cantidad_async(symbol, precio, exposicion)
+            fut.set_result(cantidad)
+
+    async def _on_actualizar_capital(self, data: dict) -> None:
+        fut = data.get('future')
+        symbol = data.get('symbol')
+        retorno = data.get('retorno_total', 0.0)
+        if fut:
+            fut.set_result(self.actualizar_capital(symbol, retorno))
 
     async def _obtener_minimo_binance(self, symbol: str) ->(float | None):
         log.info('➡️ Entrando en _obtener_minimo_binance()')
