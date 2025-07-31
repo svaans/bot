@@ -28,3 +28,6 @@ class DevelopmentConfig:
     max_spread_ratio: float = 0.003
     timeout_verificar_salidas: int = 20
     timeout_evaluar_condiciones: int = 15
+    heartbeat_interval: int = 60
+    monitor_interval: int = 5
+    max_stream_restarts: int = 5

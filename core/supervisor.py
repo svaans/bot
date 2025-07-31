@@ -92,9 +92,11 @@ async def _restartable_runner(
     coro_factory: Callable[..., Awaitable],
     task_name: str,
     delay: int = 5,
+    max_restarts: int | None = None,
 ) -> None:
     """Ejecuta ``coro_factory`` reiniciándolo ante fallos o finalización."""
 
+    restarts = 0
     while True:
         tick(task_name)
         try:
@@ -112,16 +114,24 @@ async def _restartable_runner(
                 "\u26a0\ufe0f Error en %s: %r. Reiniciando en %ss", task_name, e, delay,
                 exc_info=True,
             )
+        restarts += 1
+        if max_restarts is not None and restarts >= max_restarts:
+            log.error("❌ %s alcanzó el límite de reinicios (%s)", task_name, max_restarts)
+            break
         await asyncio.sleep(delay)
 
 def supervised_task(
-    coro_factory: Callable[..., Awaitable], name: str | None = None, delay: int = 5
+    coro_factory: Callable[..., Awaitable],
+    name: str | None = None,
+    delay: int = 5,
+    max_restarts: int | None = None,
 ) -> asyncio.Task:
     """Crea una tarea supervisada que se reinicia automáticamente."""
 
     task_name = name or getattr(coro_factory, "__name__", "task")
     task = asyncio.create_task(
-        _restartable_runner(coro_factory, task_name, delay), name=task_name
+        _restartable_runner(coro_factory, task_name, delay, max_restarts),
+        name=task_name,
     )
     tasks[task_name] = task
     return task

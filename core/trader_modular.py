@@ -32,7 +32,7 @@ from core.config_manager.dinamica import adaptar_configuracion
 from ccxt.base.errors import BaseError
 from core.reporting import reporter_diario
 from core.registro_metrico import registro_metrico
-from core.supervisor import supervised_task, task_heartbeat, tick, last_alive
+from core.supervisor import supervised_task, task_heartbeat, tick, last_alive, data_heartbeat
 from learning.aprendizaje_en_linea import registrar_resultado_trade
 from learning.aprendizaje_continuo import ejecutar_ciclo as ciclo_aprendizaje
 from core.strategies.exit.gestor_salidas import verificar_filtro_tecnico
@@ -68,7 +68,12 @@ class Trader:
     def __init__(self, config: Config) ->None:
         log.info('➡️ Entrando en __init__()')
         self.config = config
-        self.data_feed = DataFeed(config.intervalo_velas)
+        self.heartbeat_interval = getattr(config, 'heartbeat_interval', 60)
+        self.data_feed = DataFeed(
+            config.intervalo_velas,
+            getattr(config, 'monitor_interval', 5),
+            getattr(config, 'max_stream_restarts', 5),
+        )
         self.engine = StrategyEngine()
         self.bus = EventBus()
         self.risk = RiskManager(config.umbral_riesgo_diario, self.bus)
@@ -726,7 +731,7 @@ class Trader:
                     log.info(f'🔄 Tarea {nombre} reiniciada tras finalizar')
                 else:
                     hb = task_heartbeat.get(nombre, last_alive)
-                    if (ahora - hb).total_seconds() > 60:
+                    if (ahora - hb).total_seconds() > intervalo:
                         log.warning(
                             f'⏰ Tarea {nombre} sin actividad. Reiniciando.'
                         )
@@ -735,6 +740,9 @@ class Trader:
                         log.info(f'🔄 Tarea {nombre} reiniciada por inactividad')
                     else:
                         activos += 1
+            for sym, ts in data_heartbeat.items():
+                sin_datos = (ahora - ts).total_seconds()
+                registro_metrico.registrar('sin_datos', {'symbol': sym, 'tiempo_s': sin_datos})
             log.info(
                 f'🟢 Heartbeat: tareas activas {activos}/{len(self._tareas)}')
             tick('heartbeat')
@@ -1223,7 +1231,7 @@ class Trader:
             tareas['aprendizaje'] = lambda : self._ciclo_aprendizaje()
         for nombre, factory in tareas.items():
             self._iniciar_tarea(nombre, factory)
-        self._iniciar_tarea('heartbeat', lambda : self._vigilancia_tareas())
+        self._iniciar_tarea('heartbeat', lambda : self._vigilancia_tareas(self.heartbeat_interval))
         await self._stop_event.wait()
 
     async def _procesar_vela(self, vela: dict) ->None:

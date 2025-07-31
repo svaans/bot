@@ -13,12 +13,14 @@ log = configurar_logger('datafeed', modo_silencioso=True)
 class DataFeed:
     """Maneja la recepción de velas de Binance en tiempo real."""
 
-    def __init__(self, intervalo: str) -> None:
+    def __init__(self, intervalo: str, monitor_interval: int = 5, max_restarts: int = 5) -> None:
         log.info('➡️ Entrando en __init__()')
         self.intervalo = intervalo
         self.intervalo_segundos = intervalo_a_segundos(intervalo)
         self.tiempo_inactividad = max(self.intervalo_segundos * 2, 60)
         self.ping_interval = self.intervalo_segundos
+        self.monitor_interval = monitor_interval
+        self.max_stream_restarts = max_restarts
         self._tasks: Dict[str, asyncio.Task] = {}
         self._last: Dict[str, datetime] = {}
 
@@ -39,6 +41,7 @@ class DataFeed:
             await handler(candle)
 
         monitor = asyncio.create_task(self._monitor_activity(symbol))
+        attempts = 0
         try:
             while True:
                 try:
@@ -55,6 +58,12 @@ class DataFeed:
                     log.warning(
                         f'⚠️ Stream {symbol} falló: {e}. Reintentando en 5s'
                     )
+                    attempts += 1
+                    if attempts >= self.max_stream_restarts:
+                        log.error(
+                            f'❌ Stream {symbol} superó el límite de {self.max_stream_restarts} intentos'
+                        )
+                        raise
                     await asyncio.sleep(5)
         finally:
             monitor.cancel()
@@ -66,7 +75,7 @@ class DataFeed:
         la tarea del stream para que ``escuchar`` lo reinicie.
         """
         while True:
-            await asyncio.sleep(5)
+            await asyncio.sleep(self.monitor_interval)
             ultimo = self._last.get(symbol)
             if (
                 ultimo
@@ -89,7 +98,9 @@ class DataFeed:
                 log.warning(f'⚠️ Stream duplicado para {sym}. Ignorando.')
                 continue
             self._tasks[sym] = supervised_task(
-                lambda sym=sym: self.stream(sym, handler), f'stream_{sym}'
+                lambda sym=sym: self.stream(sym, handler),
+                f'stream_{sym}',
+                max_restarts=self.max_stream_restarts,
             )
             if self._tasks:
                 await asyncio.gather(*self._tasks.values())
