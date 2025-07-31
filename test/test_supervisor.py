@@ -18,3 +18,17 @@ async def test_tareas_supervisadas_reinician_automatico():
     task.cancel()
     await asyncio.sleep(0.05)
     assert len(llamadas) >= 2
+
+
+@pytest.mark.asyncio
+async def test_supervised_task_max_restarts():
+    llamadas = []
+
+    async def tarea():
+        llamadas.append('run')
+        raise RuntimeError('fail')
+
+    task = supervised_task(tarea, 'boom', delay=0.01, max_restarts=1)
+    await asyncio.sleep(0.05)
+    assert task.done()
+    assert len(llamadas) == 2
