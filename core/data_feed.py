@@ -6,7 +6,7 @@ from datetime import datetime
 from binance_api.websocket import escuchar_velas
 from core.utils.logger import configurar_logger
 from core.utils import intervalo_a_segundos
-from core.supervisor import tick, tick_data
+from core.supervisor import tick, tick_data, supervised_task
 log = configurar_logger('datafeed', modo_silencioso=True)
 
 
@@ -88,31 +88,11 @@ class DataFeed:
             if sym in self._tasks:
                 log.warning(f'⚠️ Stream duplicado para {sym}. Ignorando.')
                 continue
-            self._tasks[sym] = asyncio.create_task(self.stream(sym, handler))
-        while self._tasks:
-            tareas_actuales = list(self._tasks.items())
-            resultados = await asyncio.gather(
-                *[t for _, t in tareas_actuales], return_exceptions=True
+            self._tasks[sym] = supervised_task(
+                lambda sym=sym: self.stream(sym, handler), f'stream_{sym}'
             )
-            reiniciar = {}
-            for (sym, task), resultado in zip(tareas_actuales, resultados):
-                if isinstance(resultado, asyncio.CancelledError):
-                    log.warning(
-                        f'⚠️ Stream {sym} cancelado. Reiniciando en 5s'
-                    )
-                    await asyncio.sleep(5)
-                    reiniciar[sym] = asyncio.create_task(self.stream(sym, handler))
-                    continue
-                if isinstance(resultado, Exception):
-                    log.error(
-                        f'⚠️ Stream {sym} finalizó con excepción: {resultado}. Reiniciando en 5s'
-                    )
-                    await asyncio.sleep(5)
-                    reiniciar[sym] = asyncio.create_task(self.stream(sym, handler))
-            if reiniciar:
-                self._tasks.update(reiniciar)
-            else:
-                break
+            if self._tasks:
+                await asyncio.gather(*self._tasks.values())
     async def detener(self) ->None:
         log.info('➡️ Entrando en detener()')
         """Cancela todos los streams en ejecución."""

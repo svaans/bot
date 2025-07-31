@@ -699,6 +699,7 @@ class Trader:
         """Crea una tarea a partir de ``factory`` y la registra."""
         self._factories[nombre] = factory
         self._tareas[nombre] = supervised_task(factory, nombre)
+        log.info(f'🚀 Tarea {nombre} iniciada')
 
     async def _vigilancia_tareas(self, intervalo: int=60) ->None:
         log.info('➡️ Entrando en _vigilancia_tareas()')
@@ -722,6 +723,7 @@ class Trader:
                                 f'⚠️ Heartbeat: tarea {nombre} finalizó inesperadamente'
                             )
                     self._iniciar_tarea(nombre, self._factories[nombre])
+                    log.info(f'🔄 Tarea {nombre} reiniciada tras finalizar')
                 else:
                     hb = task_heartbeat.get(nombre, last_alive)
                     if (ahora - hb).total_seconds() > 60:
@@ -730,6 +732,7 @@ class Trader:
                         )
                         task.cancel()
                         self._iniciar_tarea(nombre, self._factories[nombre])
+                        log.info(f'🔄 Tarea {nombre} reiniciada por inactividad')
                     else:
                         activos += 1
             log.info(

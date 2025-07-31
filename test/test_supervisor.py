@@ -1,25 +1,20 @@
 import asyncio
 import pytest
-from core.supervisor import supervised_task, tasks, task_heartbeat, tick
+from core.supervisor import supervised_task, tick
 
 @pytest.mark.asyncio
-async def test_tareas_supervisadas_no_se_quedan_congeladas():
+async def test_tareas_supervisadas_reinician_automatico():
     llamadas = []
 
     async def tarea():
         llamadas.append('run')
         if len(llamadas) == 1:
-            raise ConnectionError('boom')
+            raise RuntimeError('boom')
         await asyncio.sleep(0.05)
         tick('dummy')
 
-    # crear tarea supervisada
-    task = supervised_task(tarea, 'dummy')
-
-    # pequeña vigilancia manual
-    await asyncio.sleep(0.1)
-    assert task.done()
-    # reiniciar manualmente para simular _vigilancia_tareas
-    supervised_task(tarea, 'dummy')
-    await asyncio.sleep(0.1)
+    task = supervised_task(tarea, 'dummy', delay=0.01)
+    await asyncio.sleep(0.2)
+    task.cancel()
+    await asyncio.sleep(0.05)
     assert len(llamadas) >= 2

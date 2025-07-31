@@ -88,22 +88,41 @@ def start_supervision() -> None:
     threading.excepthook = thread_excepthook
 
 
-def supervised_task(coro_factory: Callable[..., Awaitable], name: str | None = None) -> asyncio.Task:
-    """Crea una tarea supervisada que registra excepciones y actividad."""
+async def _restartable_runner(
+    coro_factory: Callable[..., Awaitable],
+    task_name: str,
+    delay: int = 5,
+) -> None:
+    """Ejecuta ``coro_factory`` reiniciándolo ante fallos o finalización."""
 
-    task_name = name or getattr(coro_factory, "__name__", "task")
-
-    async def runner() -> None:
+    while True:
         tick(task_name)
         try:
             result = coro_factory()
             if asyncio.iscoroutine(result):
                 await result
-        except Exception as e:  # pragma: no cover - log crítico
-            log.critical("Error fatal en %s: %r", task_name, e, exc_info=True)
+            log.warning(
+                "\u23F9\ufe0f %s finalizó; reiniciando en %ss", task_name, delay
+            )
+        except asyncio.CancelledError:
+            log.info("Tarea %s cancelada", task_name)
             raise
+        except Exception as e:  # pragma: no cover - log crítico
+            log.error(
+                "\u26a0\ufe0f Error en %s: %r. Reiniciando en %ss", task_name, e, delay,
+                exc_info=True,
+            )
+        await asyncio.sleep(delay)
 
-    task = asyncio.create_task(runner(), name=task_name)
+def supervised_task(
+    coro_factory: Callable[..., Awaitable], name: str | None = None, delay: int = 5
+) -> asyncio.Task:
+    """Crea una tarea supervisada que se reinicia automáticamente."""
+
+    task_name = name or getattr(coro_factory, "__name__", "task")
+    task = asyncio.create_task(
+        _restartable_runner(coro_factory, task_name, delay), name=task_name
+    )
     tasks[task_name] = task
     return task
 
