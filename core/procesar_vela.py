@@ -3,7 +3,7 @@ import asyncio
 import time
 from datetime import datetime
 import pandas as pd
-from core.utils.utils import configurar_logger
+from core.utils.utils import configurar_logger, obtener_uso_recursos
 from core.strategies.tendencia import detectar_tendencia
 
 log = configurar_logger('procesar_vela')
@@ -76,5 +76,7 @@ async def procesar_vela(trader, vela: dict) -> None:
         log.exception(f'❌ Error procesando vela de {symbol}: {e}')
     finally:
         duracion = time.time() - inicio
-        log.info(f'✅ procesar_vela completado en {duracion:.2f}s para {symbol}')
-
+        cpu, mem = obtener_uso_recursos()
+        log.info(
+            f'✅ procesar_vela completado en {duracion:.2f}s para {symbol} | CPU: {cpu:.1f}% | Memoria: {mem:.1f}%'
+        )

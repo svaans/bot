@@ -5,6 +5,7 @@ import shutil
 import threading
 import json
 import pandas as pd
+import psutil
 from datetime import datetime
 from typing import TYPE_CHECKING
 from .logger import configurar_logger
@@ -32,6 +33,14 @@ def intervalo_a_segundos(intervalo: str) -> int:
     log.info('➡️ Entrando en intervalo_a_segundos()')
     return _MAPA_SEGUNDOS_INTERVALO.get(intervalo, 60)
 log = configurar_logger('trader_simulado')
+
+
+def obtener_uso_recursos() -> tuple[float, float]:
+    log.info('➡️ Entrando en obtener_uso_recursos()')
+    """Devuelve el uso actual de CPU y memoria en porcentaje."""
+    cpu = psutil.cpu_percent()
+    memoria = psutil.virtual_memory().percent
+    return cpu, memoria
 
 
 def respaldar_archivo(ruta):

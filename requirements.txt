@@ -45,6 +45,7 @@ idna==3.10                    # Manejo de dominios internacionales
 certifi==2025.4.26            # Certificados SSL
 filelock==3.15.1              # Bloqueo de archivos entre procesos
 watchdog==3.0.0               # Observador de cambios en archivos
+psutil==5.9.8                 # Monitorización de recursos del sistema
 
 # ───────── LOGGING Y FORMATO DE SALIDA ─────────
 colorama==0.4.6               # Colores en terminal (Windows compatible)
