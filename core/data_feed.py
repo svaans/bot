@@ -150,6 +150,7 @@ class DataFeed:
         dict], Awaitable[None]]) ->None:
         log.info('➡️ Entrando en escuchar()')
         """Inicia un stream por cada símbolo y espera a que todos finalicen."""
+        await self.detener()
         self._handler_actual = handler
         self._running = True
         if (
