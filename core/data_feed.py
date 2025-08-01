@@ -76,6 +76,9 @@ class DataFeed:
                     log.error(
                         f'❌ Stream {symbol} superó el límite de {self.max_stream_restarts} intentos'
                     )
+                    log.debug(
+                        f"Stream {symbol} detenido tras {attempts} intentos"
+                    )
                     raise
                 await asyncio.sleep(5)
                 
@@ -167,6 +170,14 @@ class DataFeed:
             )
         if self._tasks:
             await asyncio.gather(*self._tasks.values())
+        for nombre, tarea in self._tasks.items():
+            estado = 'done' if tarea.done() else 'pending'
+            if tarea.done() and tarea.exception():
+                log.debug(
+                    f"Tarea {nombre} finalizó con excepción: {tarea.exception()}"
+                )
+            else:
+                log.debug(f"Tarea {nombre} estado: {estado}")
         self._running = False
     async def detener(self) ->None:
         log.info('➡️ Entrando en detener()')
