@@ -10,15 +10,34 @@ class EventBus:
     def __init__(self) -> None:
         self._listeners: Dict[str, List[Callable[[Any], Awaitable[None]]]] = defaultdict(list)
         self._queue: asyncio.Queue[tuple[str, Any]] = asyncio.Queue()
-        self._task: asyncio.Task | None = asyncio.create_task(self._dispatcher())
+        self._task: asyncio.Task | None = None
         self._closed = False
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = None
+        if loop and loop.is_running():
+            self._task = loop.create_task(self._dispatcher())
+
+    def start(self) -> None:
+        """Ensure the dispatcher task is running under the current loop."""
+        if self._task is not None:
+            return
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        if loop.is_running():
+            self._task = loop.create_task(self._dispatcher())
 
     def subscribe(self, event_type: str, callback: Callable[[Any], Awaitable[None]]) -> None:
         """Register ``callback`` to be invoked for ``event_type`` events."""
         self._listeners[event_type].append(callback)
+        self.start()
 
     async def publish(self, event_type: str, data: Any) -> None:
         """Publish ``data`` for ``event_type``."""
+        self.start()
         await self._queue.put((event_type, data))
 
     async def _dispatcher(self) -> None:
