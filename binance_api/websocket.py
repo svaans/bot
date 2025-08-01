@@ -33,6 +33,7 @@ async def escuchar_velas(
     tiempo_maximo: int | None = None,
     ping_interval: int | None = None,
     cliente=None,
+    mensaje_timeout: int | None = None,
 ):
     """Escucha velas cerradas de ``symbol`` en ``intervalo``.
 
@@ -47,6 +48,8 @@ async def escuchar_velas(
     :param symbol: str, ejemplo "BTC/USDT"
     :param intervalo: str, ejemplo "1m"
     :param callback: función async para procesar la vela
+    :param mensaje_timeout: segundos máximos a esperar cada mensaje
+        antes de forzar reconexión. Si ``None`` se espera indefinidamente.
     """
     if not isinstance(symbol, str) or '/' not in symbol:
         raise ValueError(f'Símbolo inválido: {symbol}')
@@ -61,6 +64,8 @@ async def escuchar_velas(
         tiempo_maximo = max(intervalo_a_segundos(intervalo) * 2, 60)
     if ping_interval is None:
         ping_interval = intervalo_a_segundos(intervalo)
+    if mensaje_timeout is None:
+        mensaje_timeout = tiempo_maximo
     intentos = 0
     total_reintentos = 0
     backoff = 5
@@ -115,10 +120,15 @@ async def escuchar_velas(
             try:
                 while True:
                     try:
-                        msg = await asyncio.wait_for(ws.recv(), timeout=30)
+                        if mensaje_timeout:
+                            msg = await asyncio.wait_for(ws.recv(), timeout=mensaje_timeout)
+                        else:
+                            msg = await ws.recv()
                         last_message[symbol] = datetime.utcnow()
                     except asyncio.TimeoutError:
-                        log.warning(f'⏰ Sin datos de {symbol} en 30s, forzando reconexión')
+                        log.warning(
+                            f'⏰ Sin datos de {symbol} en {mensaje_timeout}s, forzando reconexión'
+                        )
                         await ws.close()
                         break
                     except ConnectionClosed as e:
