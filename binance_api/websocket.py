@@ -12,6 +12,7 @@ from core.utils.utils import configurar_logger, intervalo_a_segundos
 # ``U <= lastUpdateId + 1 <= u`` y obtener un snapshot inicial vía
 # ``/api/v3/depth`` antes de procesar las actualizaciones.
 from core.supervisor import tick, tick_data
+from binance_api.cliente import fetch_ohlcv_async
 
 log = configurar_logger('websocket')
 
