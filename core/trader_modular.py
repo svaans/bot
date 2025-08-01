@@ -729,6 +729,8 @@ class Trader:
                             )
                     self._iniciar_tarea(nombre, self._factories[nombre])
                     log.info(f'🔄 Tarea {nombre} reiniciada tras finalizar')
+                    if nombre == 'data_feed':
+                        log.debug('Data feed terminado y reiniciado por vigilancia')
                 else:
                     hb = task_heartbeat.get(nombre, last_alive)
                     if (ahora - hb).total_seconds() > intervalo:
