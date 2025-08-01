@@ -70,7 +70,7 @@ async def escuchar_velas(
     if tiempo_maximo is None:
         tiempo_maximo = max(intervalo_a_segundos(intervalo) * 2, 60)
     if ping_interval is None:
-        ping_interval = intervalo_a_segundos(intervalo)
+        ping_interval = 60  # ping fijo para detectar antes conexiones muertas
     if mensaje_timeout is None:
         mensaje_timeout = tiempo_maximo
     intentos = 0
@@ -84,7 +84,7 @@ async def escuchar_velas(
                     url,
                     open_timeout=10,
                     close_timeout=10,
-                    ping_interval=ping_interval,
+                    ping_interval=None,
                     ping_timeout=None,
                     max_size=2 ** 20,
                 ),

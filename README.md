@@ -52,6 +52,8 @@ Las funcionalidades principales del bot están divididas en componentes dentro d
 `core/`:
 
 - **DataFeed** se encarga del _stream_ de velas (`core/data/data_feed.py`).
+El WebSocket envía un *ping* de keepalive cada 60 segundos para detectar
+  desconexiones de forma temprana.
 - **StrategyEngine** evalúa las estrategias de entrada y salida.
 - **RiskManager** centraliza las comprobaciones de riesgo diario.
 - **OrderManager** registra y ejecuta las operaciones reales.

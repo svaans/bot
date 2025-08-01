@@ -18,7 +18,7 @@ class DataFeed:
         self.intervalo = intervalo
         self.intervalo_segundos = intervalo_a_segundos(intervalo)
         self.tiempo_inactividad = max(self.intervalo_segundos * 2, 60)
-        self.ping_interval = self.intervalo_segundos
+        self.ping_interval = 60  # frecuencia fija de ping en segundos
         self.monitor_interval = monitor_interval
         self.max_stream_restarts = max_restarts
         self._tasks: Dict[str, asyncio.Task] = {}
