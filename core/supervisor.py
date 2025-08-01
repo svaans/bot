@@ -9,6 +9,8 @@ from datetime import datetime
 from typing import Awaitable, Callable, Dict
 
 from core.utils.logger import configurar_logger
+from core.utils.utils import intervalo_a_segundos
+from config.config import INTERVALO_VELAS
 
 log = configurar_logger('supervisor')
 
@@ -17,6 +19,7 @@ last_function = 'init'
 tasks: Dict[str, asyncio.Task] = {}
 task_heartbeat: Dict[str, datetime] = {}
 data_heartbeat: Dict[str, datetime] = {}
+TIMEOUT_SIN_DATOS = max(intervalo_a_segundos(INTERVALO_VELAS) * 2, 60)
 
 
 def tick(name: str) -> None:
@@ -57,8 +60,13 @@ def watchdog(timeout: int = 120, check_interval: int = 10) -> None:
                 except Exception:
                     pass
         for sym, ts in data_heartbeat.items():
-            if (datetime.utcnow() - ts).total_seconds() > 30:
-                log.critical("⚠️ Sin datos de %s desde hace %.1f segundos", sym, (datetime.utcnow() - ts).total_seconds())
+            sin_datos = (datetime.utcnow() - ts).total_seconds()
+            if sin_datos > TIMEOUT_SIN_DATOS:
+                log.critical(
+                    "⚠️ Sin datos de %s desde hace %.1f segundos",
+                    sym,
+                    sin_datos,
+                )
         time.sleep(check_interval)
 
 
