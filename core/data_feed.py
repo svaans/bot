@@ -25,6 +25,7 @@ class DataFeed:
         self._last: Dict[str, datetime] = {}
         self._monitor_global_task: asyncio.Task | None = None
         self._handler_actual: Callable[[dict], Awaitable[None]] | None = None
+        self._running = False
 
     @property
     def activos(self) ->list[str]:
@@ -43,33 +44,41 @@ class DataFeed:
             await handler(candle)
 
         monitor = asyncio.create_task(self._monitor_activity(symbol))
-        attempts = 0
         try:
-            while True:
-                try:
-                    await escuchar_velas(
-                        symbol,
-                        self.intervalo,
-                        wrapper,
-                        self._last,
-                        self.tiempo_inactividad,
-                        self.ping_interval,
-                    )
-                    break
-                except Exception as e:
-                    log.warning(
-                        f'⚠️ Stream {symbol} falló: {e}. Reintentando en 5s'
-                    )
-                    attempts += 1
-                    if attempts >= self.max_stream_restarts:
-                        log.error(
-                            f'❌ Stream {symbol} superó el límite de {self.max_stream_restarts} intentos'
-                        )
-                        raise
-                    await asyncio.sleep(5)
+            await self._relanzar_stream(symbol, wrapper)
         finally:
             monitor.cancel()
 
+    async def _relanzar_stream(
+        self, symbol: str, handler: Callable[[dict], Awaitable[None]]
+    ) -> None:
+        """Mantiene un loop de conexión para ``symbol`` reiniciando automáticamente."""
+        attempts = 0
+        while True:
+            try:
+                await escuchar_velas(
+                    symbol,
+                    self.intervalo,
+                    handler,
+                    self._last,
+                    self.tiempo_inactividad,
+                    self.ping_interval,
+                )
+                log.warning(f'🔁 Conexión de {symbol} finalizada; reintentando en 1s')
+                attempts = 0
+                await asyncio.sleep(1)
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                log.warning(f'⚠️ Stream {symbol} falló: {e}. Reintentando en 5s')
+                attempts += 1
+                if attempts >= self.max_stream_restarts:
+                    log.error(
+                        f'❌ Stream {symbol} superó el límite de {self.max_stream_restarts} intentos'
+                    )
+                    raise
+                await asyncio.sleep(5)
+                
     async def _monitor_activity(self, symbol: str) -> None:
         """Verifica periódicamente que se sigan recibiendo velas.
 
@@ -96,9 +105,28 @@ class DataFeed:
         try:
             while True:
                 await asyncio.sleep(self.monitor_interval)
+                if not self._running:
+                    break
                 if not self._tasks:
                     continue
                 ahora = datetime.utcnow()
+                for sym, task in list(self._tasks.items()):
+                    ultimo = self._last.get(sym)
+                    if task.done() or (
+                        ultimo
+                        and (ahora - ultimo).total_seconds() > self.tiempo_inactividad
+                    ):
+                        log.warning(
+                            f'🔄 Stream {sym} inactivo o finalizado; relanzando'
+                        )
+                        if task and not task.done():
+                            task.cancel()
+                            await asyncio.gather(task, return_exceptions=True)
+                        self._tasks[sym] = supervised_task(
+                            lambda sym=sym: self.stream(sym, self._handler_actual),
+                            f'stream_{sym}',
+                            max_restarts=self.max_stream_restarts,
+                        )
                 if all(
                     (
                         ahora - ts
@@ -120,6 +148,7 @@ class DataFeed:
         log.info('➡️ Entrando en escuchar()')
         """Inicia un stream por cada símbolo y espera a que todos finalicen."""
         self._handler_actual = handler
+        self._running = True
         if (
             self._monitor_global_task is None
             or self._monitor_global_task.done()
@@ -138,6 +167,7 @@ class DataFeed:
             )
         if self._tasks:
             await asyncio.gather(*self._tasks.values())
+        self._running = False
     async def detener(self) ->None:
         log.info('➡️ Entrando en detener()')
         """Cancela todos los streams en ejecución."""
@@ -149,3 +179,4 @@ class DataFeed:
             self._monitor_global_task.cancel()
             await asyncio.gather(self._monitor_global_task, return_exceptions=True)
         self._monitor_global_task = None
+        self._running = False
