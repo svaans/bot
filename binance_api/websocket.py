@@ -14,6 +14,12 @@ from core.utils.utils import configurar_logger, intervalo_a_segundos
 from core.supervisor import tick, tick_data
 from binance_api.cliente import fetch_ohlcv_async
 
+
+class InactividadTimeoutError(Exception):
+    """Señala que el WebSocket se cerró por falta de datos."""
+
+    pass
+
 log = configurar_logger('websocket')
 
 
@@ -191,8 +197,11 @@ async def escuchar_velas(
             finally:
                 for t in (watchdog, keeper):
                     t.cancel()
+                for t in (watchdog, keeper):
                     try:
                         await t
+                    except InactividadTimeoutError:
+                        raise
                     except Exception:
                         pass
                 try:
@@ -240,7 +249,9 @@ async def _watchdog(
                 await ws.close()
                 tick('data_feed')
                 tick_data(symbol)
-                break
+                raise InactividadTimeoutError(
+                    f'Sin velas en {tiempo_maximo}s para {symbol}'
+                )
     except asyncio.CancelledError:
         raise
     except Exception:
