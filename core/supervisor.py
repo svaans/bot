@@ -11,6 +11,7 @@ from typing import Awaitable, Callable, Dict
 from core.utils.logger import configurar_logger
 from core.utils.utils import intervalo_a_segundos
 from config.config import INTERVALO_VELAS
+from core.notificador import crear_notificador_desde_env
 
 log = configurar_logger('supervisor')
 
@@ -20,6 +21,9 @@ tasks: Dict[str, asyncio.Task] = {}
 task_heartbeat: Dict[str, datetime] = {}
 data_heartbeat: Dict[str, datetime] = {}
 TIMEOUT_SIN_DATOS = max(intervalo_a_segundos(INTERVALO_VELAS) * 2, 60)
+ALERTA_SIN_DATOS_INTERVALO = 300  # segundos entre alertas repetidas
+last_data_alert: Dict[str, datetime] = {}
+notificador = crear_notificador_desde_env()
 
 
 def tick(name: str) -> None:
@@ -62,11 +66,22 @@ def watchdog(timeout: int = 120, check_interval: int = 10) -> None:
         for sym, ts in data_heartbeat.items():
             sin_datos = (datetime.utcnow() - ts).total_seconds()
             if sin_datos > TIMEOUT_SIN_DATOS:
-                log.critical(
-                    "⚠️ Sin datos de %s desde hace %.1f segundos",
-                    sym,
-                    sin_datos,
-                )
+                ahora = datetime.utcnow()
+                ultima = last_data_alert.get(sym)
+                if not ultima or (ahora - ultima).total_seconds() > ALERTA_SIN_DATOS_INTERVALO:
+                    log.critical(
+                        "⚠️ Sin datos de %s desde hace %.1f segundos",
+                        sym,
+                        sin_datos,
+                    )
+                    last_data_alert[sym] = ahora
+                    try:
+                        notificador.enviar(
+                            f"⚠️ Sin datos de {sym} desde hace {sin_datos:.1f} segundos",
+                            "CRITICAL",
+                        )
+                    except Exception:
+                        pass
         time.sleep(check_interval)
 
 

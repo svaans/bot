@@ -7,6 +7,7 @@ from binance_api.websocket import escuchar_velas
 from core.utils.logger import configurar_logger
 from core.utils import intervalo_a_segundos
 from core.supervisor import tick, tick_data, supervised_task
+from core.notificador import crear_notificador_desde_env
 log = configurar_logger('datafeed', modo_silencioso=True)
 
 
@@ -17,7 +18,7 @@ class DataFeed:
         log.info('➡️ Entrando en __init__()')
         self.intervalo = intervalo
         self.intervalo_segundos = intervalo_a_segundos(intervalo)
-        self.tiempo_inactividad = max(self.intervalo_segundos * 2, 60)
+        self.tiempo_inactividad = max(self.intervalo_segundos * 4, 60)
         self.ping_interval = 60  # frecuencia fija de ping en segundos
         self.monitor_interval = monitor_interval
         self.max_stream_restarts = max_restarts
@@ -26,6 +27,7 @@ class DataFeed:
         self._monitor_global_task: asyncio.Task | None = None
         self._handler_actual: Callable[[dict], Awaitable[None]] | None = None
         self._running = False
+        self.notificador = crear_notificador_desde_env()
 
     @property
     def activos(self) ->list[str]:
@@ -72,6 +74,14 @@ class DataFeed:
             except Exception as e:
                 log.warning(f'⚠️ Stream {symbol} falló: {e}. Reintentando en 5s')
                 attempts += 1
+                try:
+                    if attempts == 1 or attempts % 5 == 0:
+                        await self.notificador.enviar_async(
+                            f'⚠️ Stream {symbol} en reconexión (intento {attempts})',
+                            'WARN',
+                        )
+                except Exception:
+                    pass
                 if attempts >= self.max_stream_restarts:
                     log.error(
                         f'❌ Stream {symbol} superó el límite de {self.max_stream_restarts} intentos'
@@ -79,14 +89,21 @@ class DataFeed:
                     log.debug(
                         f"Stream {symbol} detenido tras {attempts} intentos"
                     )
+                    try:
+                        await self.notificador.enviar_async(
+                            f'❌ Stream {symbol} superó el límite de {self.max_stream_restarts} intentos',
+                            'CRITICAL',
+                        )
+                    except Exception:
+                        pass
                     raise
                 await asyncio.sleep(5)
                 
     async def _monitor_activity(self, symbol: str) -> None:
         """Verifica periódicamente que se sigan recibiendo velas.
 
-        Si pasan ``self.tiempo_inactividad`` segundos sin nuevas velas, cancela
-        la tarea del stream para que ``escuchar`` lo reinicie.
+        Si pasan ``self.tiempo_inactividad`` segundos (≈4 intervalos) sin nuevas
+        velas, cancela la tarea del stream para que ``escuchar`` lo reinicie.
         """
         while True:
             await asyncio.sleep(self.monitor_interval)

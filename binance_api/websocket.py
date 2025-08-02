@@ -69,7 +69,8 @@ async def escuchar_velas(
     if last_message is None:
         last_message = {}
     if tiempo_maximo is None:
-        tiempo_maximo = max(intervalo_a_segundos(intervalo) * 2, 60)
+        # Margen amplio: esperamos ~4 intervalos antes de forzar reconexión
+        tiempo_maximo = max(intervalo_a_segundos(intervalo) * 4, 60)
     if ping_interval is None:
         ping_interval = 60  # ping fijo para detectar antes conexiones muertas
     if mensaje_timeout is None:
