@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 from typing import Awaitable, Callable, Dict, Iterable, Any
 from datetime import datetime
-from binance_api.websocket import escuchar_velas
+from binance_api.websocket import escuchar_velas, escuchar_velas_combinado
 from core.utils.logger import configurar_logger
 from core.utils import intervalo_a_segundos
 from core.supervisor import tick, tick_data, supervised_task
@@ -250,9 +250,9 @@ class DataFeed:
         """
         await self.detener()
         self._handler_actual = handler
+        self._symbols = list(symbols)
         if cliente is not None:
             self._cliente = cliente
-            self._symbols = list(symbols)
         self._running = True
         if (
             self._monitor_global_task is None
