@@ -227,6 +227,210 @@ async def escuchar_velas(
             backoff = min(60, backoff * 2)
 
 
+async def escuchar_velas_combinado(
+    symbols: list[str],
+    intervalo: str,
+    handlers: dict[str, callable],
+    last_message: dict[str, datetime] | None = None,
+    tiempo_maximo: int | None = None,
+    ping_interval: int | None = None,
+    cliente=None,
+    mensaje_timeout: int | None = None,
+):
+    """Escucha velas cerradas de múltiples símbolos usando un stream combinado.
+
+    Cada símbolo debe contar con un handler asociado en ``handlers``. El payload
+    recibido se despachará al handler según el campo ``stream`` del mensaje.
+    """
+    log.debug('➡️ Entrando en escuchar_velas_combinado()')
+    if not symbols:
+        raise ValueError('Debe proporcionarse al menos un símbolo')
+    if intervalo not in INTERVALOS_VALIDOS:
+        raise ValueError(f'Intervalo inválido: {intervalo}')
+    normalizados = {normalizar_symbolo(s): s for s in symbols}
+    for s in symbols:
+        if '/' not in s:
+            raise ValueError(f'Símbolo inválido: {s}')
+        if s not in handlers:
+            raise ValueError(f'Falta handler para {s}')
+    streams = '/'.join(f"{n}@kline_{intervalo}" for n in normalizados)
+    url = f'wss://stream.binance.com:9443/stream?streams={streams}'
+    if last_message is None:
+        last_message = {}
+    if tiempo_maximo is None:
+        tiempo_maximo = max(intervalo_a_segundos(intervalo) * 4, 60)
+    if ping_interval is None:
+        ping_interval = 60
+    if mensaje_timeout is None:
+        mensaje_timeout = tiempo_maximo
+    intentos = 0
+    total_reintentos = 0
+    backoff = 5
+    ultimo_timestamp: dict[str, int | None] = {s: None for s in symbols}
+    while True:
+        try:
+            ws = await asyncio.wait_for(
+                websockets.connect(
+                    url,
+                    open_timeout=10,
+                    close_timeout=10,
+                    ping_interval=None,
+                    ping_timeout=None,
+                    max_size=2 ** 20,
+                ),
+                timeout=15,
+            )
+            log.info(f'🔌 WebSocket combinado conectado para {symbols} ({intervalo})')
+            _habilitar_tcp_keepalive(ws)
+            intentos = 0
+            backoff = 5
+            for s in symbols:
+                last_message[s] = datetime.utcnow()
+            watchdogs = [
+                asyncio.create_task(_watchdog(ws, s, last_message, tiempo_maximo))
+                for s in symbols
+            ]
+            keeper = asyncio.create_task(
+                _keepalive(ws, 'combined', ping_interval)
+            )
+
+            if cliente:
+                for s in symbols:
+                    ts = ultimo_timestamp.get(s)
+                    if ts is None:
+                        continue
+                    try:
+                        ohlcv = await fetch_ohlcv_async(
+                            cliente,
+                            symbol=s,
+                            timeframe=intervalo,
+                            since=ts + 1,
+                        )
+                        for o in ohlcv:
+                            tss = o[0]
+                            if tss > ts:
+                                await handlers[s](
+                                    {
+                                        'symbol': s,
+                                        'timestamp': tss,
+                                        'open': float(o[1]),
+                                        'high': float(o[2]),
+                                        'low': float(o[3]),
+                                        'close': float(o[4]),
+                                        'volume': float(o[5]),
+                                    }
+                                )
+                                ultimo_timestamp[s] = tss
+                    except Exception as e:
+                        log.warning(f'❌ Error al backfillear {s}: {e}')
+            try:
+                while True:
+                    try:
+                        if mensaje_timeout:
+                            msg = await asyncio.wait_for(
+                                ws.recv(), timeout=mensaje_timeout
+                            )
+                        else:
+                            msg = await ws.recv()
+                    except asyncio.TimeoutError:
+                        log.warning(
+                            f'⏰ Sin datos en {mensaje_timeout}s, forzando reconexión'
+                        )
+                        await ws.close()
+                        break
+                    except ConnectionClosed as e:
+                        log.warning(
+                            f"🚪 WebSocket cerrado — Código: {e.code}, Motivo: {e.reason}"
+                        )
+                        await ws.close()
+                        break
+                    except (ConnectionError, asyncio.TimeoutError) as e:
+                        log.warning(f'❌ Conexión perdida: {e}')
+                        await ws.close()
+                        break
+                    except Exception as e:
+                        log.warning(f'❌ Error recibiendo datos: {e}')
+                        await ws.close()
+                        raise
+                    try:
+                        data = json.loads(msg)
+                    except json.JSONDecodeError as e:
+                        log.warning(f'❌ Error al decodificar JSON: {e}')
+                        continue
+                    except Exception as e:
+                        log.warning(
+                            f'❌ Error procesando mensaje dentro del bucle combinado: {e}'
+                        )
+                        continue
+                    stream = data.get('stream')
+                    payload = data.get('data', {})
+                    if not stream or payload.get('e') != 'kline':
+                        log.debug(f"⚠️ Evento no esperado: {data}")
+                        continue
+                    sym_norm = stream.split('@')[0]
+                    symbol = normalizados.get(sym_norm)
+                    if not symbol:
+                        log.debug(f'⚠️ Símbolo desconocido en stream {stream}')
+                        continue
+                    last_message[symbol] = datetime.utcnow()
+                    try:
+                        vela = payload['k']
+                        if vela['x']:
+                            log.info(
+                                f"✅ Vela cerrada {symbol} — Close: {vela['c']}, Vol: {vela['v']}"
+                            )
+                            latencia = (
+                                datetime.utcnow().timestamp() * 1000 - vela['t']
+                            )
+                            log.debug(
+                                f"⏱️ Latencia de vela {symbol}: {latencia:.0f} ms"
+                            )
+                            await handlers[symbol](
+                                {
+                                    'symbol': symbol,
+                                    'timestamp': vela['t'],
+                                    'open': float(vela['o']),
+                                    'high': float(vela['h']),
+                                    'low': float(vela['l']),
+                                    'close': float(vela['c']),
+                                    'volume': float(vela['v']),
+                                }
+                            )
+                            ultimo_timestamp[symbol] = vela['t']
+                            tick('data_feed')
+                    except Exception as e:
+                        log.warning(f'❌ Error en callback de {symbol}: {e}')
+                        traceback.print_exc()
+            finally:
+                for t in watchdogs + [keeper]:
+                    t.cancel()
+                for t in watchdogs + [keeper]:
+                    try:
+                        await t
+                    except InactividadTimeoutError:
+                        raise
+                    except Exception:
+                        pass
+                try:
+                    await ws.close()
+                    await ws.wait_closed()
+                except Exception:
+                    pass
+        except asyncio.CancelledError:
+            log.info('🛑 Conexión WebSocket combinada cancelada.')
+            break
+        except Exception as e:
+            intentos += 1
+            total_reintentos += 1
+            log.warning(f'❌ Error en WebSocket combinado: {e}')
+            traceback.print_exc()
+            log.info(
+                f'🔁 Reintentando conexión en {backoff} segundos... (total reintentos: {total_reintentos})'
+            )
+            await asyncio.sleep(backoff)
+            backoff = min(60, backoff * 2)
+
+
 async def _watchdog(
     ws,
     symbol: str,
