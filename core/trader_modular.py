@@ -578,34 +578,43 @@ class Trader:
                 self.estado[symbol].ultimo_timestamp = datos[-1][0]
         log.info('📈 Histórico inicial cargado')
 
-    async def _ciclo_aprendizaje(self, intervalo: int=86400, max_fallos: int=5
-        ) ->None:
+    async def _ciclo_aprendizaje(self, intervalo: int = 86400, max_fallos: int = 5) -> None:
         log.info('➡️ Entrando en _ciclo_aprendizaje()')
-        """
-        Ejecuta el proceso de aprendizaje continuo periódicamente.
+        """Ejecuta el proceso de aprendizaje continuo periódicamente.
         max_fallos: detiene el ciclo tras N errores consecutivos
         """
         await asyncio.sleep(1)
         fallos_consecutivos = 0
+        # intervalo en el que se reporta actividad al supervisor
+        intervalo_tick = max(1, self.heartbeat_interval // 2)
         while True:
             try:
                 loop = asyncio.get_running_loop()
-                await loop.run_in_executor(None, ciclo_aprendizaje)
+                futuro = loop.run_in_executor(None, ciclo_aprendizaje)
+                # mientras el entrenamiento está en curso, marcamos actividad periódica
+                while not futuro.done():
+                    tick('aprendizaje')
+                    await asyncio.sleep(intervalo_tick)
+                await futuro
                 log.info('🧠 Ciclo de aprendizaje completado')
-                tick('aprendizaje')
                 fallos_consecutivos = 0
             except Exception as e:
                 fallos_consecutivos += 1
                 log.warning(
                     f'⚠️ Error en ciclo de aprendizaje (fallos consecutivos: {fallos_consecutivos}): {e}'
-                    )
+                )
                 if fallos_consecutivos >= max_fallos:
                     log.error(
                         '🛑 Deteniendo _ciclo_aprendizaje tras demasiados fallos seguidos.'
-                        )
+                    )
                     break
-            tick('aprendizaje')
-            await asyncio.sleep(intervalo)
+            # esperamos hasta la siguiente iteración, emitiendo ticks para evitar reinicios
+            restante = intervalo
+            while restante > 0:
+                tick('aprendizaje')
+                espera = min(restante, intervalo_tick)
+                await asyncio.sleep(espera)
+                restante -= espera
 
     async def _calcular_cantidad_async(self, symbol: str, precio: float
         ) ->float:
