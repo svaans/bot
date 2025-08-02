@@ -2,6 +2,7 @@ import asyncio
 import json
 import traceback
 from datetime import datetime
+import socket
 
 import websockets
 from websockets.exceptions import ConnectionClosed
@@ -91,6 +92,7 @@ async def escuchar_velas(
                 timeout=15,
             )
             log.info(f'🔌 WebSocket conectado para {symbol} ({intervalo})')
+            _habilitar_tcp_keepalive(ws)
             intentos = 0
             backoff = 5
             last_message[symbol] = datetime.utcnow()
@@ -272,3 +274,19 @@ async def _keepalive(ws, symbol, intervalo=60):
                 break
     except asyncio.CancelledError:
         raise
+
+def _habilitar_tcp_keepalive(ws):
+    """Activa el keep-alive del sistema operativo para ``ws`` si es posible."""
+    try:
+        sock = ws.transport.get_extra_info('socket')
+        if not sock:
+            return
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+        if hasattr(socket, 'TCP_KEEPIDLE'):
+            sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPIDLE, 60)
+        if hasattr(socket, 'TCP_KEEPINTVL'):
+            sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPINTVL, 60)
+        if hasattr(socket, 'TCP_KEEPCNT'):
+            sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPCNT, 4)
+    except Exception as e:
+        log.debug(f'No se pudo configurar TCP keep-alive: {e}')
