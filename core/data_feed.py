@@ -14,7 +14,14 @@ log = configurar_logger('datafeed', modo_silencioso=True)
 class DataFeed:
     """Maneja la recepción de velas de Binance en tiempo real."""
 
-    def __init__(self, intervalo: str, monitor_interval: int = 5, max_restarts: int = 5, inactivity_intervals: int = 4) -> None:
+    def __init__(
+        self,
+        intervalo: str,
+        monitor_interval: int = 5,
+        max_restarts: int = 5,
+        inactivity_intervals: int = 4,
+        usar_stream_combinado: bool = False,
+    ) -> None:
         log.info('➡️ Entrando en __init__()')
         self.intervalo = intervalo
         self.intervalo_segundos = intervalo_a_segundos(intervalo)
@@ -32,12 +39,15 @@ class DataFeed:
         self._running = False
         self._cliente: Any | None = None
         self.notificador = crear_notificador_desde_env()
+        self.usar_stream_combinado = usar_stream_combinado
+        self._symbols: list[str] = []
 
     @property
     def activos(self) ->list[str]:
         log.info('➡️ Entrando en activos()')
         """Lista de símbolos con streams activos."""
-        return list(self._tasks.keys())
+        return list(self._symbols)
+    
 
     async def stream(self, symbol: str, handler: Callable[[dict], Awaitable[None]]) -> None:
         log.info('➡️ Entrando en stream()')
@@ -54,6 +64,34 @@ class DataFeed:
             await self._relanzar_stream(symbol, wrapper)
         finally:
             monitor.cancel()
+
+    async def _stream_combinado(
+        self, symbols: Iterable[str], handler: Callable[[dict], Awaitable[None]]
+    ) -> None:
+        """Escucha múltiples símbolos en un único WebSocket."""
+
+        async def wrapper(symbol: str, candle: dict) -> None:
+            self._last[symbol] = datetime.utcnow()
+            log.info(f'[{symbol}] Recibida vela: timestamp={candle.get("timestamp")}')
+            tick_data(symbol)
+            await handler(candle)
+
+        handlers: Dict[str, Callable[[dict], Awaitable[None]]] = {}
+        for sym in symbols:
+            async def h(candle, s=sym):
+                await wrapper(s, candle)
+
+            handlers[sym] = h
+
+        await escuchar_velas_combinado(
+            list(symbols),
+            self.intervalo,
+            handlers,
+            self._last,
+            self.tiempo_inactividad,
+            self.ping_interval,
+            cliente=self._cliente,
+        )
 
     async def _relanzar_stream(
         self, symbol: str, handler: Callable[[dict], Awaitable[None]]
@@ -135,24 +173,54 @@ class DataFeed:
                 if not self._tasks:
                     continue
                 ahora = datetime.utcnow()
-                for sym, task in list(self._tasks.items()):
-                    ultimo = self._last.get(sym)
-                    if task.done() or (
-                        ultimo
-                        and (ahora - ultimo).total_seconds() > self.tiempo_inactividad
-                    ):
+                if self.usar_stream_combinado:
+                    task = self._tasks.get('combined')
+                    inactivos = any(
+                        (
+                            self._last.get(sym)
+                            and (ahora - self._last.get(sym)).total_seconds()
+                            > self.tiempo_inactividad
+                        )
+                        for sym in self._symbols
+                    )
+                    if not task:
+                        continue
+                    if task.done() or inactivos:
                         log.warning(
-                            f'🔄 Stream {sym} inactivo o finalizado; relanzando'
+                            '🔄 Stream combinado inactivo o finalizado; relanzando'
                         )
                         if task and not task.done():
                             task.cancel()
                             await asyncio.gather(task, return_exceptions=True)
-                        self._tasks[sym] = supervised_task(
-                            lambda sym=sym: self.stream(sym, self._handler_actual),
-                            f'stream_{sym}',
+                        self._tasks['combined'] = supervised_task(
+                            lambda: self._stream_combinado(
+                                self._symbols, self._handler_actual
+                            ),
+                            'stream_combined',
                             max_restarts=self.max_stream_restarts,
                         )
-                if all(
+                else:
+                    for sym, task in list(self._tasks.items()):
+                        ultimo = self._last.get(sym)
+                        if task.done() or (
+                            ultimo
+                            and (ahora - ultimo).total_seconds()
+                            > self.tiempo_inactividad
+                        ):
+                            log.warning(
+                                f'🔄 Stream {sym} inactivo o finalizado; relanzando'
+                            )
+                            if task and not task.done():
+                                task.cancel()
+                                await asyncio.gather(task, return_exceptions=True)
+                            self._tasks[sym] = supervised_task(
+                                lambda sym=sym: self.stream(
+                                    sym, self._handler_actual
+                                ),
+                                f'stream_{sym}',
+                                max_restarts=self.max_stream_restarts,
+                            )
+                if self._last and all(
                     (
                         ahora - ts
                     ).total_seconds() > self.tiempo_inactividad
@@ -175,7 +243,7 @@ class DataFeed:
         cliente: Any | None = None,
     ) -> None:
         log.info('➡️ Entrando en escuchar()')
-        """Inicia un stream por cada símbolo y espera a que todos finalicen.
+        """Inicia un stream por símbolo o uno combinado y espera a que finalicen.
 
         Si ``cliente`` se proporciona, se usará para recuperar velas perdidas tras
         una reconexión.
@@ -184,6 +252,7 @@ class DataFeed:
         self._handler_actual = handler
         if cliente is not None:
             self._cliente = cliente
+            self._symbols = list(symbols)
         self._running = True
         if (
             self._monitor_global_task is None
@@ -192,15 +261,22 @@ class DataFeed:
             self._monitor_global_task = asyncio.create_task(
                 self._monitor_global_inactividad()
             )
-        for sym in symbols:
-            if sym in self._tasks:
-                log.warning(f'⚠️ Stream duplicado para {sym}. Ignorando.')
-                continue
-            self._tasks[sym] = supervised_task(
-                lambda sym=sym: self.stream(sym, handler),
-                f'stream_{sym}',
+        if self.usar_stream_combinado:
+            self._tasks['combined'] = supervised_task(
+                lambda: self._stream_combinado(self._symbols, handler),
+                'stream_combined',
                 max_restarts=self.max_stream_restarts,
             )
+        else:
+            for sym in self._symbols:
+                if sym in self._tasks:
+                    log.warning(f'⚠️ Stream duplicado para {sym}. Ignorando.')
+                    continue
+                self._tasks[sym] = supervised_task(
+                    lambda sym=sym: self.stream(sym, handler),
+                    f'stream_{sym}',
+                    max_restarts=self.max_stream_restarts,
+                )
         if self._tasks:
             await asyncio.gather(*self._tasks.values())
         for nombre, tarea in self._tasks.items():
@@ -219,6 +295,7 @@ class DataFeed:
             task.cancel()
         await asyncio.gather(*self._tasks.values(), return_exceptions=True)
         self._tasks.clear()
+        self._symbols = []
         if self._monitor_global_task and not self._monitor_global_task.done():
             self._monitor_global_task.cancel()
             await asyncio.gather(self._monitor_global_task, return_exceptions=True)

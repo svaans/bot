@@ -18,6 +18,28 @@ def test_data_feed_streams_candles(monkeypatch):
     assert 'BTC/EUR' in feed._tasks
     assert feed._tasks['BTC/EUR'].done()
 
+
+def test_data_feed_streams_candles_combinado(monkeypatch):
+    recibidos = []
+
+    async def fake_listen(symbols, interval, handlers, *args, **kwargs):
+        for s in symbols:
+            await handlers[s]({'symbol': s, 'timestamp': 1})
+
+    monkeypatch.setattr('core.data_feed.escuchar_velas_combinado', fake_listen)
+    feed = DataFeed('1m', usar_stream_combinado=True)
+
+    async def handler(candle):
+        recibidos.append(candle)
+
+    asyncio.run(feed.escuchar(['BTC/EUR', 'ETH/EUR'], handler))
+    assert recibidos == [
+        {'symbol': 'BTC/EUR', 'timestamp': 1},
+        {'symbol': 'ETH/EUR', 'timestamp': 1},
+    ]
+    assert 'combined' in feed._tasks
+    assert feed._tasks['combined'].done()
+
 def test_stream_restarts_on_cancel(monkeypatch):
     calls = []
 
