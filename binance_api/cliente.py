@@ -23,6 +23,29 @@ def crear_cliente(config: (Config | None)=None):
 obtener_cliente = crear_cliente
 
 
+def filtrar_simbolos_activos(symbols: list[str], config: Config | None = None) -> tuple[list[str], list[str]]:
+    """Devuelve dos listas con símbolos activos e inactivos en Binance.
+
+    Si ocurre cualquier error al consultar los mercados, se asume que todos
+    los símbolos son válidos para no interrumpir la ejecución.
+    """
+    try:
+        cliente = crear_cliente(config)
+        mercados = cliente.load_markets()
+    except Exception:
+        return symbols, []
+
+    activos: list[str] = []
+    inactivos: list[str] = []
+    for sym in symbols:
+        info = mercados.get(sym)
+        if not info or not info.get("active", True):
+            inactivos.append(sym)
+        else:
+            activos.append(sym)
+    return activos, inactivos
+
+
 async def fetch_balance_async(cliente, *args, **kwargs):
     """
     Obtiene el balance de forma asíncrona.

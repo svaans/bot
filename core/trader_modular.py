@@ -2,7 +2,7 @@
 from __future__ import annotations
 import asyncio
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Dict, List, Callable, Awaitable, Any
 from datetime import datetime, timedelta, date
 import json
@@ -17,7 +17,12 @@ from core.position_manager import PositionManager
 from core.notification_manager import NotificationManager
 from core.capital_manager import CapitalManager
 from core.event_bus import EventBus
-from binance_api.cliente import crear_cliente, fetch_balance_async, fetch_ohlcv_async
+from binance_api.cliente import (
+    crear_cliente,
+    fetch_balance_async,
+    fetch_ohlcv_async,
+    filtrar_simbolos_activos,
+)
 from core.utils.utils import leer_reporte_seguro
 from core.strategies import cargar_pesos_estrategias
 from core.risk import calcular_fraccion_kelly
@@ -67,6 +72,14 @@ class Trader:
 
     def __init__(self, config: Config) ->None:
         log.info('➡️ Entrando en __init__()')
+        activos, inactivos = filtrar_simbolos_activos(config.symbols, config)
+        for sym in inactivos:
+            log.warning(
+                f'⚠️ Símbolo {sym} no listado o inactivo en Binance. Se desactivará.'
+            )
+        if not activos:
+            raise ValueError('No hay símbolos activos disponibles.')
+        config = replace(config, symbols=activos)
         self.config = config
         self.heartbeat_interval = getattr(config, 'heartbeat_interval', 60)
         self.data_feed = DataFeed(
@@ -612,16 +625,7 @@ class Trader:
     def _calcular_cantidad(self, symbol: str, precio: float) ->float:
         log.info('➡️ Entrando en _calcular_cantidad()')
         """Versión síncrona de :meth:`_calcular_cantidad_async`."""
-        exposicion = sum(o.cantidad_abierta * o.precio_entrada for o in
-            self.orders.ordenes.values())
-        fut = asyncio.get_running_loop().create_future()
-        asyncio.run(self.bus.publish('calcular_cantidad', {
-            'symbol': symbol,
-            'precio': precio,
-            'exposicion_total': exposicion,
-            'future': fut,
-        }))
-        return fut.result()
+        return asyncio.run(self._calcular_cantidad_async(symbol, precio))
 
     def _metricas_recientes(self, dias: int=7) ->dict:
         log.info('➡️ Entrando en _metricas_recientes()')
