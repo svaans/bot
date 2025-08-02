@@ -31,3 +31,4 @@ class DevelopmentConfig:
     heartbeat_interval: int = 60
     monitor_interval: int = 5
     max_stream_restarts: int = 5
+    inactivity_intervals: int = 4

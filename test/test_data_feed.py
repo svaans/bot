@@ -90,3 +90,13 @@ def test_cliente_pasado_a_escuchar_velas(monkeypatch):
     with pytest.raises(asyncio.CancelledError):
         asyncio.run(feed.escuchar(['BTC/EUR'], handler, cliente='dummy'))
     assert recibido == ['dummy']
+
+
+def test_inactivity_intervals_parameter():
+    feed = DataFeed('5m', inactivity_intervals=2)
+    assert feed.tiempo_inactividad == 600
+
+
+def test_monitor_interval_minimum():
+    feed = DataFeed('1m', monitor_interval=0)
+    assert feed.monitor_interval == 1

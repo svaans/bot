@@ -14,13 +14,16 @@ log = configurar_logger('datafeed', modo_silencioso=True)
 class DataFeed:
     """Maneja la recepción de velas de Binance en tiempo real."""
 
-    def __init__(self, intervalo: str, monitor_interval: int = 5, max_restarts: int = 5) -> None:
+    def __init__(self, intervalo: str, monitor_interval: int = 5, max_restarts: int = 5, inactivity_intervals: int = 4) -> None:
         log.info('➡️ Entrando en __init__()')
         self.intervalo = intervalo
         self.intervalo_segundos = intervalo_a_segundos(intervalo)
-        self.tiempo_inactividad = max(self.intervalo_segundos * 4, 60)
+        self.inactivity_intervals = inactivity_intervals
+        self.tiempo_inactividad = max(
+            self.intervalo_segundos * self.inactivity_intervals, 60
+        )
         self.ping_interval = 60  # frecuencia fija de ping en segundos
-        self.monitor_interval = monitor_interval
+        self.monitor_interval = max(1, monitor_interval)
         self.max_stream_restarts = max_restarts
         self._tasks: Dict[str, asyncio.Task] = {}
         self._last: Dict[str, datetime] = {}
@@ -104,8 +107,8 @@ class DataFeed:
     async def _monitor_activity(self, symbol: str) -> None:
         """Verifica periódicamente que se sigan recibiendo velas.
 
-        Si pasan ``self.tiempo_inactividad`` segundos (≈4 intervalos) sin nuevas
-        velas, cancela la tarea del stream para que ``escuchar`` lo reinicie.
+        Si pasan ``self.tiempo_inactividad`` segundos (≈ varios intervalos, configurable)
+        sin nuevas velas, cancela la tarea del stream para que ``escuchar`` lo reinicie.
         """
         while True:
             await asyncio.sleep(self.monitor_interval)

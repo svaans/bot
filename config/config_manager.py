@@ -61,6 +61,7 @@ class Config:
     heartbeat_interval: int = 60
     monitor_interval: int = 5
     max_stream_restarts: int = 5
+    inactivity_intervals: int = 4
 
 
 class ConfigManager:
@@ -125,4 +126,6 @@ class ConfigManager:
             timeout_evaluar_condiciones=_cargar_int('TIMEOUT_EVALUAR_CONDICIONES', defaults.timeout_evaluar_condiciones),
             heartbeat_interval=_cargar_int('HEARTBEAT_INTERVAL', defaults.heartbeat_interval),
             monitor_interval=_cargar_int('MONITOR_INTERVAL', defaults.monitor_interval),
-            max_stream_restarts=_cargar_int('MAX_STREAM_RESTARTS', defaults.max_stream_restarts))
+            inactivity_intervals=_cargar_int('INACTIVITY_INTERVALS', defaults.inactivity_intervals),
+            max_stream_restarts=_cargar_int('MAX_STREAM_RESTARTS', defaults.max_stream_restarts),
+        )
