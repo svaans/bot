@@ -72,3 +72,21 @@ def test_stream_restarts_on_cancel(monkeypatch):
     asyncio.run(run())
 
     assert len(calls) >= 2
+
+
+
+def test_cliente_pasado_a_escuchar_velas(monkeypatch):
+    recibido = []
+
+    async def fake_listen(symbol, interval, handler, *args, **kwargs):
+        recibido.append(kwargs.get('cliente'))
+        raise asyncio.CancelledError
+
+    monkeypatch.setattr('core.data_feed.escuchar_velas', fake_listen)
+    feed = DataFeed('1m')
+
+    async def handler(candle):
+        pass
+    with pytest.raises(asyncio.CancelledError):
+        asyncio.run(feed.escuchar(['BTC/EUR'], handler, cliente='dummy'))
+    assert recibido == ['dummy']

@@ -1237,11 +1237,18 @@ class Trader:
             log.debug(f'🔁 Contexto actualizado {symbol}: {score:.2f}')
         symbols = list(self.estado.keys())
         await self._precargar_historico(velas=60)
-        tareas: dict[str, Callable[[], Awaitable]] = {'data_feed': lambda :
-            self.data_feed.escuchar(symbols, handle), 'estado': lambda :
-            monitorear_estado_periodicamente(self), 'context_stream': lambda :
-            self.context_stream.escuchar(symbols, handle_context), 'flush':
-            lambda : real_orders.flush_periodico()}
+        tareas: dict[str, Callable[[], Awaitable]] = {
+            'data_feed': lambda: self.data_feed.escuchar(
+                symbols,
+                handle,
+                cliente=self.cliente if self.modo_real else None,
+            ),
+            'estado': lambda: monitorear_estado_periodicamente(self),
+            'context_stream': lambda: self.context_stream.escuchar(
+                symbols, handle_context
+            ),
+            'flush': lambda: real_orders.flush_periodico(),
+        }
         if 'PYTEST_CURRENT_TEST' not in os.environ:
             tareas['aprendizaje'] = lambda : self._ciclo_aprendizaje()
         for nombre, factory in tareas.items():

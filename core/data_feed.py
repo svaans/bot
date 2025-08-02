@@ -1,7 +1,7 @@
 """Módulo para gestionar el flujo de datos desde Binance."""
 from __future__ import annotations
 import asyncio
-from typing import Awaitable, Callable, Dict, Iterable
+from typing import Awaitable, Callable, Dict, Iterable, Any
 from datetime import datetime
 from binance_api.websocket import escuchar_velas
 from core.utils.logger import configurar_logger
@@ -27,6 +27,7 @@ class DataFeed:
         self._monitor_global_task: asyncio.Task | None = None
         self._handler_actual: Callable[[dict], Awaitable[None]] | None = None
         self._running = False
+        self._cliente: Any | None = None
         self.notificador = crear_notificador_desde_env()
 
     @property
@@ -65,6 +66,7 @@ class DataFeed:
                     self._last,
                     self.tiempo_inactividad,
                     self.ping_interval,
+                    cliente=self._cliente,
                 )
                 log.warning(f'🔁 Conexión de {symbol} finalizada; reintentando en 1s')
                 attempts = 0
@@ -163,12 +165,22 @@ class DataFeed:
         except asyncio.CancelledError:
             pass
 
-    async def escuchar(self, symbols: Iterable[str], handler: Callable[[
-        dict], Awaitable[None]]) ->None:
+    async def escuchar(
+        self,
+        symbols: Iterable[str],
+        handler: Callable[[dict], Awaitable[None]],
+        cliente: Any | None = None,
+    ) -> None:
         log.info('➡️ Entrando en escuchar()')
-        """Inicia un stream por cada símbolo y espera a que todos finalicen."""
+        """Inicia un stream por cada símbolo y espera a que todos finalicen.
+
+        Si ``cliente`` se proporciona, se usará para recuperar velas perdidas tras
+        una reconexión.
+        """
         await self.detener()
         self._handler_actual = handler
+        if cliente is not None:
+            self._cliente = cliente
         self._running = True
         if (
             self._monitor_global_task is None
