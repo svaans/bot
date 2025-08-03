@@ -1195,16 +1195,7 @@ class Trader:
         direccion: str, puntaje: float=0.0, umbral: float=0.0,
         detalles_tecnicos: (dict | None)=None, **kwargs) ->None:
         log.info('➡️ Entrando en _abrir_operacion_real()')
-        fut = asyncio.get_running_loop().create_future()
-        exposicion = sum(o.cantidad_abierta * o.precio_entrada for o in self.orders.ordenes.values())
-        await self.bus.publish('calcular_cantidad', {'symbol': symbol, 'precio': precio, 'exposicion_total': exposicion, 'future': fut})
-        try:
-            cantidad_total = await asyncio.wait_for(
-                fut, timeout=self.config.timeout_bus_eventos
-            )
-        except asyncio.TimeoutError:
-            log.error(f'⏰ Timeout calculando cantidad para {symbol}')
-            return
+        cantidad_total = await self._calcular_cantidad_async(symbol, precio)
         if cantidad_total <= 0:
             capital_disp = self.capital_manager.capital_por_simbolo.get(
                 symbol, 0.0)
@@ -1232,50 +1223,28 @@ class Trader:
             pesos_symbol = self.pesos_por_simbolo.get(symbol, {})
             estrategias_dict = {e: pesos_symbol.get(e, 0.0) for e in
                 estrategias}
-        if not self._validar_sl_tp(symbol, precio, sl, tp):
-            self._rechazo(symbol, 'sl_tp_invalidos', puntaje=puntaje,
-                estrategias=list(estrategias_dict.keys()))
-            return
-        fut_open = asyncio.get_running_loop().create_future()
-        await self.bus.publish('abrir_orden', {
-            'symbol': symbol,
-            'precio': precio,
-            'sl': sl,
-            'tp': tp,
-            'estrategias': estrategias_dict,
-            'tendencia': tendencia,
-            'direccion': direccion,
-            'cantidad': cantidad,
-            'puntaje': puntaje,
-            'umbral': umbral,
-            'objetivo': cantidad_total,
-            'fracciones': fracciones,
-            'detalles_tecnicos': detalles_tecnicos or {},
-            'future': fut_open,
-        })
         try:
-            resultado = await asyncio.wait_for(
-                fut_open, timeout=self.config.timeout_bus_eventos
-            )
-        except asyncio.TimeoutError:
-            log.error(f'⏰ Timeout confirmando apertura de {symbol}')
-            self._rechazo(
-                symbol,
-                'apertura_timeout',
-                puntaje=puntaje,
-                estrategias=estrategias_dict,
-            )
-            return
-        if not resultado:
-            log.warning(
-                f'❌ No se pudo confirmar la apertura de {symbol}.')
-            self._rechazo(
-                symbol,
-                'apertura_fallida',
-                puntaje=puntaje,
-                estrategias=estrategias_dict,
-            )
-            return
+            if not self._validar_sl_tp(symbol, precio, sl, tp):
+                self._rechazo(symbol, 'sl_tp_invalidos', puntaje=puntaje,
+                    estrategias=list(estrategias_dict.keys()))
+                return
+        except Exception as e:
+            log.error(f'❌ Error validando SL/TP para {symbol}: {e}')
+        await self.orders.abrir_async(
+            symbol=symbol,
+            precio=precio,
+            sl=sl,
+            tp=tp,
+            estrategias=estrategias_dict,
+            tendencia=tendencia,
+            direccion=direccion,
+            cantidad=cantidad,
+            puntaje=puntaje,
+            umbral=umbral,
+            objetivo=cantidad_total,
+            fracciones=fracciones,
+            detalles_tecnicos=detalles_tecnicos or {},
+        )
         estrategias_list = list(estrategias_dict.keys())
         log.info(
             f'🟢 ENTRADA: {symbol} | Puntaje: {puntaje:.2f} / Umbral: {umbral:.2f} | Estrategias: {estrategias_list}'
