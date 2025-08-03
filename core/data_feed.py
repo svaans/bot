@@ -59,11 +59,7 @@ class DataFeed:
             tick_data(symbol)
             await handler(candle)
 
-        monitor = asyncio.create_task(self._monitor_activity(symbol))
-        try:
-            await self._relanzar_stream(symbol, wrapper)
-        finally:
-            monitor.cancel()
+        await self._relanzar_stream(symbol, wrapper)
 
     async def _stream_combinado(
         self, symbols: Iterable[str], handler: Callable[[dict], Awaitable[None]]
@@ -142,29 +138,9 @@ class DataFeed:
                     raise
                 await asyncio.sleep(5)
                 
-    async def _monitor_activity(self, symbol: str) -> None:
-        """Verifica periódicamente que se sigan recibiendo velas.
-
-        Si pasan ``self.tiempo_inactividad`` segundos (≈ varios intervalos, configurable)
-        sin nuevas velas, cancela la tarea del stream para que ``escuchar`` lo reinicie.
-        """
-        while True:
-            await asyncio.sleep(self.monitor_interval)
-            ultimo = self._last.get(symbol)
-            if (
-                ultimo
-                and (datetime.utcnow() - ultimo).total_seconds() > self.tiempo_inactividad
-            ):
-                log.warning(
-                    f'⚠️ Sin velas de {symbol} desde hace más de {self.tiempo_inactividad}s; reiniciando'
-                )
-                task = self._tasks.get(symbol)
-                if task and not task.done():
-                    task.cancel()
-                break
 
     async def _monitor_global_inactividad(self) -> None:
-        """Reinicia todos los streams si ninguno recibe datos."""
+        """Vigila la actividad de los streams y los reinicia cuando es necesario."""
         try:
             while True:
                 await asyncio.sleep(self.monitor_interval)
@@ -174,65 +150,48 @@ class DataFeed:
                     continue
                 ahora = datetime.utcnow()
                 if self.usar_stream_combinado:
-                    task = self._tasks.get('combined')
-                    inactivos = any(
-                        (
-                            self._last.get(sym)
-                            and (ahora - self._last.get(sym)).total_seconds()
-                            > self.tiempo_inactividad
-                        )
-                        for sym in self._symbols
-                    )
+                    task = self._tasks.get("combined")
                     if not task:
                         continue
-                    if task.done() or inactivos:
+                    inactivo = any(
+                        self._last.get(sym)
+                        and (ahora - self._last[sym]).total_seconds() > self.tiempo_inactividad
+                        for sym in self._symbols
+                    )
+                    if task.done() or inactivo:
                         log.warning(
-                            '🔄 Stream combinado inactivo o finalizado; relanzando'
+                            "🔄 Stream combinado inactivo o finalizado; reiniciando"
                         )
-                        if task and not task.done():
+                        if not task.done():
                             task.cancel()
                             await asyncio.gather(task, return_exceptions=True)
-                        self._tasks['combined'] = supervised_task(
+                        self._tasks["combined"] = supervised_task(
                             lambda: self._stream_combinado(
                                 self._symbols, self._handler_actual
                             ),
-                            'stream_combined',
+                            "stream_combined",
                             max_restarts=self.max_stream_restarts,
                         )
-                else:
-                    for sym, task in list(self._tasks.items()):
-                        ultimo = self._last.get(sym)
-                        if task.done() or (
-                            ultimo
-                            and (ahora - ultimo).total_seconds()
-                            > self.tiempo_inactividad
-                        ):
-                            log.warning(
-                                f'🔄 Stream {sym} inactivo o finalizado; relanzando'
-                            )
-                            if task and not task.done():
-                                task.cancel()
-                                await asyncio.gather(task, return_exceptions=True)
-                            self._tasks[sym] = supervised_task(
-                                lambda sym=sym: self.stream(
-                                    sym, self._handler_actual
-                                ),
-                                f'stream_{sym}',
-                                max_restarts=self.max_stream_restarts,
-                            )
-                if self._last and all(
-                    (
-                        ahora - ts
-                    ).total_seconds() > self.tiempo_inactividad
-                    for ts in self._last.values()
-                ):
-                    log.critical(
-                        "\u26a0\ufe0f Todos los streams inactivos; reiniciando"
-                    )
-                    await self.detener()
-                    self._monitor_global_task = None
-                    await self.escuchar(self._last.keys(), self._handler_actual)
-                    break
+                    continue
+
+                for sym, task in list(self._tasks.items()):
+                    ultimo = self._last.get(sym)
+                    if task.done() or (
+                        ultimo
+                        and (ahora - ultimo).total_seconds() > self.tiempo_inactividad
+                    ):
+                        log.warning(
+                            f"🔄 Stream {sym} inactivo o finalizado; relanzando"
+                        )
+                        if not task.done():
+                            task.cancel()
+                            await asyncio.gather(task, return_exceptions=True)
+                        self._tasks[sym] = supervised_task(
+                            lambda sym=sym: self.stream(sym, self._handler_actual),
+                            f"stream_{sym}",
+                            max_restarts=self.max_stream_restarts,
+                        )
+        
         except asyncio.CancelledError:
             pass
 
