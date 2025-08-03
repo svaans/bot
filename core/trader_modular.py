@@ -115,6 +115,9 @@ class Trader:
         self.contradicciones_bloquean_entrada = (config.
             contradicciones_bloquean_entrada)
         self.registro_tecnico_csv = config.registro_tecnico_csv
+        self._rechazos_buffer: list[dict] = []
+        self._rechazos_batch_size = 10
+        self._rechazos_intervalo_flush = 5
         # Cache limitada para históricos de velas
         self.historicos: OrderedDict[str, pd.DataFrame] = OrderedDict()
         self.max_historicos_cache = getattr(config, 'max_historicos_cache', 20)
@@ -814,6 +817,28 @@ class Trader:
             tick('heartbeat')
             await asyncio.sleep(intervalo)
 
+    def _flush_rechazos(self) ->None:
+        log.info('➡️ Entrando en _flush_rechazos()')
+        if not self._rechazos_buffer:
+            return
+        fecha = datetime.utcnow().strftime('%Y%m%d')
+        archivo = os.path.join(LOG_DIR, 'rechazos', f'{fecha}.csv')
+        df = pd.DataFrame(self._rechazos_buffer)
+        modo = 'a' if os.path.exists(archivo) else 'w'
+        df.to_csv(
+            archivo,
+            mode=modo,
+            header=not os.path.exists(archivo),
+            index=False,
+        )
+        self._rechazos_buffer.clear()
+
+    async def _flush_rechazos_periodicamente(self, intervalo: int) ->None:
+        log.info('➡️ Entrando en _flush_rechazos_periodicamente()')
+        while not self._stop_event.is_set():
+            await asyncio.sleep(intervalo)
+            self._flush_rechazos()
+
     def _rechazo(self, symbol: str, motivo: str, puntaje: (float | None)=
         None, peso_total: (float | None)=None, estrategias: (list[str] |
         dict | None)=None) ->None:
@@ -830,17 +855,16 @@ class Trader:
                 estr = list(estr.keys())
             mensaje += f' | Estrategias: {estr}'
         log.info(mensaje)
-        registro = {'symbol': symbol, 'motivo': motivo, 'puntaje': puntaje,
-            'peso_total': peso_total, 'estrategias': ','.join(estrategias.
-            keys() if isinstance(estrategias, dict) else estrategias) if
-            estrategias else ''}
-        fecha = datetime.utcnow().strftime('%Y%m%d')
-        archivo = os.path.join(LOG_DIR, 'rechazos',
-            f"{symbol.replace('/', '_')}_{fecha}.csv")
-        df = pd.DataFrame([registro])
-        modo = 'a' if os.path.exists(archivo) else 'w'
-        df.to_csv(archivo, mode=modo, header=not os.path.exists(archivo),
-            index=False)
+        registro = {
+            'symbol': symbol,
+            'motivo': motivo,
+            'puntaje': puntaje,
+            'peso_total': peso_total,
+            'estrategias': ','.join(estrategias.keys() if isinstance(estrategias, dict) else estrategias) if estrategias else ''
+        }
+        self._rechazos_buffer.append(registro)
+        if len(self._rechazos_buffer) >= self._rechazos_batch_size:
+            self._flush_rechazos()
         registro_metrico.registrar('rechazo', registro)
         try:
             registrar_auditoria(symbol=symbol, evento='Entrada rechazada',
@@ -1296,6 +1320,7 @@ class Trader:
                 symbols, handle_context
             ),
             'flush': lambda: real_orders.flush_periodico(),
+            'rechazos_flush': lambda: self._flush_rechazos_periodicamente(self._rechazos_intervalo_flush),
         }
         if 'PYTEST_CURRENT_TEST' not in os.environ:
             tareas['aprendizaje'] = lambda : self._ciclo_aprendizaje()
@@ -1324,6 +1349,7 @@ class Trader:
             tarea.cancel()
         await asyncio.gather(*self._tareas.values(), return_exceptions=True)
         await self.bus.close()
+        self._flush_rechazos()
         self._guardar_estado_persistente()
 
     def _guardar_estado_persistente(self) ->None:

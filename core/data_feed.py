@@ -143,10 +143,10 @@ class DataFeed:
         """Vigila la actividad de los streams y los reinicia cuando es necesario."""
         try:
             while True:
+                tick('data_feed')
                 await asyncio.sleep(self.monitor_interval)
                 if not self._running:
                     break
-                tick('data_feed')
                 if not self._tasks:
                     continue
                 ahora = datetime.utcnow()

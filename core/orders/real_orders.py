@@ -526,19 +526,26 @@ def flush_operaciones() ->None:
         )
 
 
-async def flush_periodico(interval: int=_FLUSH_INTERVAL) ->None:
+async def flush_periodico(interval: int=_FLUSH_INTERVAL, heartbeat: int=30) ->None:
     log.info('➡️ Entrando en flush_periodico()')
     """
     Ejecuta :func:`flush_operaciones` cada ``interval`` segundos.
-    Esta función controla cancelaciones limpias y evita bloqueos.
+    Emite ``tick('flush')`` periódicamente para evitar que el supervisor la
+    reinicie por inactividad.
     """
     try:
         while True:
-            await asyncio.sleep(interval)
+            restante = interval
+            while restante > 0:
+                sleep_time = min(heartbeat, restante)
+                await asyncio.sleep(sleep_time)
+                tick('flush')
+                restante -= sleep_time
             try:
                 loop = asyncio.get_running_loop()
-                await asyncio.wait_for(loop.run_in_executor(None,
-                    flush_operaciones), timeout=30)
+                await asyncio.wait_for(
+                    loop.run_in_executor(None, flush_operaciones), timeout=30
+                )
                 tick('flush')
             except asyncio.TimeoutError:
                 log.warning('⚠️ flush_operaciones se excedió de tiempo (30s)')
