@@ -20,6 +20,7 @@ from core.utils.utils import configurar_logger
 from core.supervisor import tick
 from . import real_orders
 from core.utils.utils import guardar_orden_real
+from core.notificador import crear_notificador_desde_env
 import math
 try:
     from ccxt.base.errors import InsufficientFunds
@@ -29,6 +30,7 @@ except ImportError:
     class InsufficientFunds(Exception):
         pass
 log = configurar_logger('ordenes')
+notificador = crear_notificador_desde_env()
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 ORDENES_DB_PATH = os.getenv(
     'ORDENES_DB_PATH',
@@ -526,7 +528,11 @@ def flush_operaciones() ->None:
         )
 
 
-async def flush_periodico(interval: int=_FLUSH_INTERVAL, heartbeat: int=30) ->None:
+async def flush_periodico(
+    interval: int = _FLUSH_INTERVAL,
+    heartbeat: int = 30,
+    max_fallos: int = 5,
+) -> None:
     log.info('➡️ Entrando en flush_periodico()')
     """
     Ejecuta :func:`flush_operaciones` cada ``interval`` segundos.
