@@ -5,12 +5,10 @@ Las órdenes se almacenan en una pequeña base SQLite para facilitar la
 persistencia entre reinicios del bot.
 """
 import os
-import sys
 import json
 import sqlite3
 import time
 import atexit
-import signal
 import threading
 import asyncio
 from datetime import datetime
@@ -575,25 +573,4 @@ async def flush_periodico(
         log.info('🛑 flush_periodico cancelado correctamente.')
         raise
 
-
-def _handle_exit(signum, frame) ->None:
-    log.info('➡️ Entrando en _handle_exit()')
-    log.info(
-        f'📴 Señal de salida recibida ({signal.Signals(signum).name}). Guardando operaciones...'
-        )
-    try:
-        flush_operaciones()
-        log.info('✅ Buffer de operaciones guardado correctamente al salir.')
-    except Exception as e:
-        log.error(f'❌ Error al guardar operaciones en la salida: {e}')
-    finally:
-        if 'PYTEST_CURRENT_TEST' not in os.environ:
-            sys.exit(0)
-
-
-for _sig in (signal.SIGTERM, signal.SIGINT):
-    try:
-        signal.signal(_sig, _handle_exit)
-    except (ValueError, RuntimeError) as e:
-        log.warning(f'⚠️ No se pudo registrar la señal {_sig}: {e}')
 atexit.register(flush_operaciones)

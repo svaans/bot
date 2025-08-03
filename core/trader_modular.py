@@ -1368,6 +1368,7 @@ class Trader:
             tarea.cancel()
         await asyncio.gather(*self._tareas.values(), return_exceptions=True)
         await self.bus.close()
+        real_orders.flush_operaciones()
         self._flush_rechazos()
         self._guardar_estado_persistente()
 
