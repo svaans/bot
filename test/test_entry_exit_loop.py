@@ -1,4 +1,5 @@
 import asyncio
+from datetime import datetime
 import pandas as pd
 import pytest
 from types import SimpleNamespace
@@ -7,6 +8,7 @@ from core.strategies.entry.verificar_entradas import verificar_entrada
 from core.strategies.exit.verificar_salidas import verificar_salidas
 from core.orders.order_manager import OrderManager
 from core.orders.order_model import Order
+from core.procesar_vela import procesar_vela
 
 
 @pytest.mark.asyncio
@@ -52,7 +54,9 @@ async def test_verificar_salidas_manejo_errores(monkeypatch):
     monkeypatch.setattr(
         'core.strategies.exit.verificar_salidas.load_exit_config', lambda s: {}
     )
-    trader._piramidar = lambda *a, **k: None
+    async def _no_op(*a, **k):
+        return None
+    trader._piramidar = _no_op
     async def falso(*args, **kwargs):
         return False
 
@@ -138,8 +142,10 @@ async def test_ciclo_completo_sin_bloqueos(monkeypatch):
         "core.strategies.entry.verificar_entradas.obtener_puntaje_contexto",
         lambda *a, **k: 0.0,
     )
+    async def validar_diversidad_async(*a, **k):
+        return True
     trader = SimpleNamespace(
-        config_por_simbolo={},
+        config_por_simbolo={"BTC/EUR": {}},
         estado_tendencia={},
         config=SimpleNamespace(max_perdidas_diarias=6),
         pesos_por_simbolo={'e1': 1.0},
@@ -160,7 +166,7 @@ async def test_ciclo_completo_sin_bloqueos(monkeypatch):
         ),
         _evaluar_persistencia=lambda *a, **k: (True, 0, 0),
         _validar_puntaje=lambda *a, **k: True,
-        _validar_diversidad=lambda *a, **k: True,
+        _validar_diversidad=validar_diversidad_async,
         _validar_estrategia=lambda *a, **k: True,
         _calcular_correlaciones=lambda *a, **k: pd.DataFrame(),
     )
@@ -179,7 +185,9 @@ async def test_ciclo_completo_sin_bloqueos(monkeypatch):
         return True
 
     trader._cerrar_y_reportar = fake_cerrar
-    trader._piramidar = lambda *a, **k: None
+    async def fake_piramidar(*a, **k):
+        return None
+    trader._piramidar = fake_piramidar
 
     # Ejecutar ciclo simple
     for i in range(5):
@@ -203,3 +211,50 @@ async def test_ciclo_completo_sin_bloqueos(monkeypatch):
                     res['tendencia'],
                 )
     assert 'BTC/EUR' in trader.orders.historial or trader.orders.obtener('BTC/EUR')
+
+
+@pytest.mark.asyncio
+async def test_forzar_cierre_tras_timeouts_salidas(monkeypatch):
+    symbol = 'BTC/EUR'
+    vela = {'symbol': symbol, 'close': 100, 'timestamp': 1}
+    estado_symbol = SimpleNamespace(
+        buffer=[], estrategias_buffer=[], ultimo_timestamp=None, timeouts_salidas=0
+    )
+    trader = SimpleNamespace(
+        estado={symbol: estado_symbol},
+        estado_tendencia={},
+        orders=SimpleNamespace(obtener=lambda s: object()),
+        notificador=None,
+        fecha_actual=datetime.utcnow().date(),
+        ajustar_capital_diario=lambda: None,
+        config=SimpleNamespace(
+            timeout_verificar_salidas=0.01,
+            timeout_evaluar_condiciones=0.01,
+            max_timeouts_salidas=2,
+        ),
+        evaluar_condiciones_de_entrada=lambda *a, **k: None,
+    )
+
+    async def lenta(*a, **k):
+        await asyncio.sleep(0.1)
+
+    trader._verificar_salidas = lenta
+
+    cierre = {'count': 0}
+
+    async def cerrar_operacion(*a, **k):
+        cierre['count'] += 1
+
+    trader.cerrar_operacion = cerrar_operacion
+
+    monkeypatch.setattr(
+        'core.procesar_vela.detectar_tendencia', lambda s, df: ('alcista', None)
+    )
+
+    await procesar_vela(trader, vela)
+    assert trader.estado[symbol].timeouts_salidas == 1
+
+    vela2 = {'symbol': symbol, 'close': 100, 'timestamp': 2}
+    await procesar_vela(trader, vela2)
+    assert cierre['count'] == 1
+    assert trader.estado[symbol].timeouts_salidas == 0

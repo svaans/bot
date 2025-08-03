@@ -170,6 +170,9 @@ En `config/exit_defaults.py` se definen los valores iniciales para todas las est
 
 Los parámetros `timeout_verificar_salidas`, `timeout_evaluar_condiciones` y `timeout_bus_eventos` determinan los segundos máximos de espera al validar una salida, evaluar las condiciones de entrada o recibir confirmaciones del bus interno. Se recomienda mantenerlos en **20 s**, **15 s** y **10 s** respectivamente para no demorar reacciones ni sobrecargar el sistema.
 
+
+El parámetro `max_timeouts_salidas` controla cuántos timeouts consecutivos al verificar una salida se toleran antes de forzar un cierre de emergencia (por defecto **3**).
+
 ## Pesos técnicos y umbrales adaptativos
 
 Los puntajes técnicos se calculan a partir de varios criterios cuyo peso se

@@ -68,6 +68,7 @@ class EstadoSimbolo:
     ultimo_umbral: float = 0.0
     ultimo_timestamp: int | None = None
     tendencia_detectada: str | None = None
+    timeouts_salidas: int = 0
 
 
 class Trader:

@@ -59,6 +59,8 @@ class Config:
     timeout_verificar_salidas: int = 20
     timeout_evaluar_condiciones: int = 15
     timeout_bus_eventos: int = 10
+    max_timeouts_salidas: int = 3
+    timeout_bus_eventos: int = 10
     heartbeat_interval: int = 60
     monitor_interval: int = 5
     max_stream_restarts: int = 5
@@ -128,6 +130,7 @@ class ConfigManager:
             timeout_verificar_salidas=_cargar_int('TIMEOUT_VERIFICAR_SALIDAS', defaults.timeout_verificar_salidas),
             timeout_evaluar_condiciones=_cargar_int('TIMEOUT_EVALUAR_CONDICIONES', defaults.timeout_evaluar_condiciones),
             timeout_bus_eventos=_cargar_int('TIMEOUT_BUS_EVENTOS', defaults.timeout_bus_eventos),
+            max_timeouts_salidas=_cargar_int('MAX_TIMEOUTS_SALIDAS', defaults.max_timeouts_salidas),
             heartbeat_interval=_cargar_int('HEARTBEAT_INTERVAL', defaults.heartbeat_interval),
             monitor_interval=_cargar_int('MONITOR_INTERVAL', defaults.monitor_interval),
             inactivity_intervals=_cargar_int('INACTIVITY_INTERVALS', defaults.inactivity_intervals),

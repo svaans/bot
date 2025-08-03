@@ -50,8 +50,10 @@ async def procesar_vela(trader, vela: dict) -> None:
                     trader._verificar_salidas(symbol, df),
                     timeout=trader.config.timeout_verificar_salidas,
                 )
+                estado.timeouts_salidas = 0
             except asyncio.TimeoutError:
                 log.error(f'⏰ Timeout verificando salidas de {symbol}')
+                estado.timeouts_salidas += 1
                 if trader.notificador:
                     try:
                         await trader.notificador.enviar_async(
@@ -59,6 +61,19 @@ async def procesar_vela(trader, vela: dict) -> None:
                         )
                     except Exception as e:
                         log.error(f'❌ Error enviando notificación: {e}')
+                if estado.timeouts_salidas >= trader.config.max_timeouts_salidas:
+                    log.error(
+                        f'🚨 Forzando cierre de {symbol} tras {estado.timeouts_salidas} timeouts'
+                    )
+                    precio_cierre = float(df.iloc[-1].get('close'))
+                    try:
+                        await trader.cerrar_operacion(
+                            symbol, precio_cierre, 'timeout_salidas'
+                        )
+                    except Exception as e:
+                        log.error(f'❌ Error forzando cierre de {symbol}: {e}')
+                    estado.timeouts_salidas = 0
+                return
             return
 
         # ⚠️ Validar condiciones de entrada con timeout
