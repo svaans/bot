@@ -7,6 +7,7 @@ from binance_api.cliente import fetch_balance_async, load_markets_async
 from core.utils.logger import configurar_logger
 from core.risk import RiskManager
 from core.event_bus import EventBus
+from core.contexto_externo import obtener_puntaje_contexto
 log = configurar_logger('capital_manager', modo_silencioso=True)
 
 
@@ -93,6 +94,11 @@ class CapitalManager:
         capital_symbol = self.capital_por_simbolo.get(symbol, euros / max(
             len(self.capital_por_simbolo), 1))
         fraccion = self.fraccion_kelly
+        puntaje_macro = obtener_puntaje_contexto(symbol)
+        umbral_macro = getattr(self.config, 'umbral_puntaje_macro', 6)
+        if abs(puntaje_macro) > umbral_macro:
+            fraccion *= 0.5
+            log.debug(f'📉 Ajuste por contexto macro {puntaje_macro:.2f} para {symbol}')
         if self.modo_capital_bajo and euros < 500:
             deficit = (500 - euros) / 500
             fraccion = max(fraccion, 0.02 + deficit * 0.1)

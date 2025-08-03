@@ -364,11 +364,24 @@ def ejecutar_orden_market(symbol: str, cantidad: float) ->float:
             log.error(
                 f'⛔ Compra cancelada por saldo insuficiente en {symbol}. Requerido: {cantidad * precio:.2f} {quote}, disponible: {disponible_quote:.2f}'
                 )
+            try:
+                notificador.enviar(
+                    f'Compra cancelada por saldo insuficiente en {symbol}',
+                    'CRITICAL',
+                )
+            except Exception:
+                pass
             return 0.0
         if cantidad < min_amount or precio and cantidad * precio < min_cost:
             log.error(
                 f'⛔ Compra inválida para {symbol}. Cantidad: {cantidad}, Precio: {precio}, Mínimos → amount: {min_amount}, notional: {min_cost}'
                 )
+            try:
+                notificador.enviar(
+                    f'Compra inválida para {symbol}', 'WARNING'
+                )
+            except Exception:
+                pass
             return 0.0
         log.debug(
             f'📤 Enviando orden de compra para {symbol} | Cantidad: {cantidad} | Precio estimado: {precio:.4f}'
@@ -423,6 +436,12 @@ def ejecutar_orden_market_sell(symbol: str, cantidad: float) ->float:
                 f'⛔ Venta rechazada por mínimos: {symbol} → cantidad: {cantidad_vender:.8f}, mínimos: amount={min_amount}, notional={min_cost}'
                 )
             _VENTAS_FALLIDAS.add(symbol)
+            try:
+                notificador.enviar(
+                    f'Venta rechazada por mínimos en {symbol}', 'WARNING'
+                )
+            except Exception:
+                pass
             return 0.0
         log.info(
             f'💱 Ejecutando venta real en {symbol}: {cantidad_vender:.8f} unidades (precio estimado: {precio:.2f})'
@@ -440,6 +459,13 @@ def ejecutar_orden_market_sell(symbol: str, cantidad: float) ->float:
     except InsufficientFunds as e:
         log.error(f'❌ Venta rechazada por saldo insuficiente en {symbol}: {e}')
         _VENTAS_FALLIDAS.add(symbol)
+        try:
+            notificador.enviar(
+                f'Venta rechazada por saldo insuficiente en {symbol}',
+                'CRITICAL',
+            )
+        except Exception:
+            pass
         return 0.0
     except Exception as e:
         log.error(f'❌ Error en intercambio al vender {symbol}: {e}')

@@ -255,6 +255,7 @@ class DataFeed:
             task.cancel()
         await asyncio.gather(*self._tasks.values(), return_exceptions=True)
         self._tasks.clear()
+        self._last.clear()
         self._symbols = []
         if self._monitor_global_task and not self._monitor_global_task.done():
             self._monitor_global_task.cancel()

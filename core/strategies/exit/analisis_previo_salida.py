@@ -4,6 +4,7 @@ from indicators.helpers import get_rsi, get_momentum
 from indicators.slope import calcular_slope
 from indicators.divergencia_rsi import detectar_divergencia_alcista
 from core.strategies.tendencia import detectar_tendencia
+from core.scoring import PESOS_SCORE_TECNICO
 from core.utils import configurar_logger
 log = configurar_logger('analisis_salidas')
 
@@ -48,22 +49,28 @@ def es_vela_envolvente_alcista(df: pd.DataFrame) ->bool:
 
 def _score_tecnico_basico(df: pd.DataFrame, direccion: str) ->float:
     log.info('➡️ Entrando en _score_tecnico_basico()')
-    """Calcula un score técnico sencillo (0-4)."""
+    """Calcula un score técnico sencillo aplicando pesos configurables."""
     rsi = get_rsi(df)
     momentum = get_momentum(df)
     slope = calcular_slope(df)
     tendencia, _ = detectar_tendencia('', df)
-    puntos = 0
+    puntos = 0.0
+    peso_rsi = PESOS_SCORE_TECNICO.get('RSI', 1.0)
     if rsi is not None:
-        puntos += 1 if (rsi > 50 if direccion == 'long' else rsi < 50) else 0
+        if (rsi > 50 if direccion == 'long' else rsi < 50):
+            puntos += peso_rsi
+        elif 45 <= rsi <= 55:
+            puntos += peso_rsi * 0.5
     if momentum is not None and abs(momentum) > 0.001:
-        puntos += 1
+        puntos += PESOS_SCORE_TECNICO.get('Momentum', 1.0)
     if slope > 0.01:
-        puntos += 1
+        puntos += PESOS_SCORE_TECNICO.get('Slope', 1.0)
     if direccion == 'long':
-        puntos += 1 if tendencia in {'alcista', 'lateral'} else 0
+        if tendencia in {'alcista', 'lateral'}:
+            puntos += PESOS_SCORE_TECNICO.get('Tendencia', 1.0)
     else:
-        puntos += 1 if tendencia in {'bajista', 'lateral'} else 0
+        if tendencia in {'bajista', 'lateral'}:
+            puntos += PESOS_SCORE_TECNICO.get('Tendencia', 1.0)
     return float(puntos)
 
 

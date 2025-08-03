@@ -73,22 +73,51 @@ class OrderManager:
             duracion_en_velas=0)
         try:
             if self.modo_real and is_valid_number(cantidad) and cantidad > 0:
-                cantidad = await asyncio.to_thread(real_orders.
-                    ejecutar_orden_market, symbol, cantidad)
+                cantidad = await asyncio.to_thread(
+                    real_orders.ejecutar_orden_market, symbol, cantidad
+                )
                 try:
                     cantidad = float(cantidad)
                 except Exception:
-                    cantidad = float(orden.cantidad_abierta
-                        ) if is_valid_number(orden.cantidad_abierta) else 0.0
-            if cantidad > 0:
-                await asyncio.to_thread(real_orders.registrar_orden, symbol,
-                    precio, cantidad, sl, tp, estrategias, tendencia, direccion
+                    cantidad = (
+                        float(orden.cantidad_abierta)
+                        if is_valid_number(orden.cantidad_abierta)
+                        else 0.0
                     )
+                if cantidad <= 0 and self.bus:
+                    await self.bus.publish(
+                        'notify',
+                        {
+                            'mensaje': f'❌ Orden real no ejecutada en {symbol}',
+                            'tipo': 'CRITICAL',
+                        },
+                    )
+                    return
+            if cantidad > 0:
+                await asyncio.to_thread(
+                    real_orders.registrar_orden,
+                    symbol,
+                    precio,
+                    cantidad,
+                    sl,
+                    tp,
+                    estrategias,
+                    tendencia,
+                    direccion,
+                )
             if self.modo_real:
                 orden.cantidad_abierta = cantidad
                 orden.entradas[0]['cantidad'] = cantidad
         except Exception as e:
             log.error(f'❌ No se pudo abrir la orden para {symbol}: {e}')
+            if self.bus:
+                await self.bus.publish(
+                    'notify',
+                    {
+                        'mensaje': f'❌ Error al abrir orden en {symbol}: {e}',
+                        'tipo': 'CRITICAL',
+                    },
+                )
             return
         self.ordenes[symbol] = orden
         log.info(f'🟢 Orden abierta para {symbol} @ {precio:.2f}')
@@ -117,6 +146,14 @@ class OrderManager:
             except Exception as e:
                 log.error(
                     f'❌ No se pudo agregar posición real para {symbol}: {e}')
+                if self.bus:
+                    await self.bus.publish(
+                        'notify',
+                        {
+                            'mensaje': f'❌ Error al agregar posición en {symbol}: {e}',
+                            'tipo': 'CRITICAL',
+                        },
+                    )
                 return False
         total_prev = orden.cantidad_abierta + 0.0
         orden.cantidad_abierta += cantidad

@@ -1,6 +1,7 @@
 import pandas as pd
 import numpy as np
 from core.score_tecnico import calcular_score_tecnico
+from core.scoring import PESOS_SCORE_TECNICO
 from core.strategies.entry.validaciones_tecnicas import hay_contradicciones
 from core.evaluacion_tecnica import evaluar_estrategias
 
@@ -9,7 +10,12 @@ def test_calcular_score_tecnico():
     df = pd.DataFrame({'close': np.linspace(1, 10, 10)})
     score = calcular_score_tecnico(df, rsi=60, momentum=0.01, slope=0.02,
         tendencia='alcista')
-    assert score == 3
+    esperado = (
+        PESOS_SCORE_TECNICO['RSI']
+        + PESOS_SCORE_TECNICO['Momentum']
+        + PESOS_SCORE_TECNICO['Slope']
+    )
+    assert score == esperado
 
 
 def test_hay_contradicciones():

@@ -53,12 +53,10 @@ from indicators.atr import calcular_atr
 from core.strategies.exit.verificar_salidas import verificar_salidas
 from core.strategies.entry.verificar_entradas import verificar_entrada
 from core.procesar_vela import procesar_vela
-from core.scoring import calcular_score_tecnico
+from core.scoring import calcular_score_tecnico, PESOS_SCORE_TECNICO
 from binance_api.cliente import fetch_ticker_async
 log = configurar_logger('trader')
 LOG_DIR = os.getenv('LOG_DIR', 'logs')
-PESOS_SCORE_TECNICO = {'RSI': 1.0, 'Momentum': 0.5, 'Slope': 1.0,
-    'Tendencia': 1.0}
 
 
 @dataclass
@@ -191,6 +189,7 @@ class Trader:
         self._stop_event = asyncio.Event()
         self._cerrado = False
         self.context_stream = StreamContexto()
+        self.puntajes_contexto: Dict[str, float] = {}
         try:
             self.orders.ordenes = real_orders.obtener_todas_las_ordenes()
             if self.modo_real and not self.orders.ordenes:
@@ -1354,8 +1353,8 @@ class Trader:
             log.info('➡️ Entrando en handle()')
             await self._procesar_vela(candle)
 
-        async def handle_context(symbol: str, score: float) ->None:
-            log.info('➡️ Entrando en handle_context()')
+        async def handle_context(symbol: str, score: float) -> None:
+            self.puntajes_contexto[symbol] = score
             log.debug(f'🔁 Contexto actualizado {symbol}: {score:.2f}')
         symbols = list(self.estado.keys())
         await self._precargar_historico(velas=60)
