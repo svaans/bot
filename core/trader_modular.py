@@ -302,7 +302,7 @@ class Trader:
             log.error(f'⏰ Timeout confirmando cierre de {orden.symbol}')
             return False
         if not confirmado:
-            log.warning(
+            log.error(
                 f'❌ No se pudo confirmar el cierre de {orden.symbol}. Se omitirá el registro.'
             )
             return False
@@ -1245,6 +1245,14 @@ class Trader:
             log.warning(
                 f'⛔ No se abre posición en {symbol} por capital insuficiente. '
                 f'Disponible: {capital_disp:.2f}€')
+            if self.notificador:
+                try:
+                    await self.notificador.enviar_async(
+                        f'⚠️ No se abre posición en {symbol}: capital insuficiente ('
+                        f'{capital_disp:.2f}€ disponible)'
+                    )
+                except Exception as e:
+                    log.error(f'❌ Error enviando notificación: {e}')
             return
         fracciones = self.piramide_fracciones
         cantidad = cantidad_total / fracciones

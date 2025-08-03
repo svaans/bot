@@ -14,7 +14,7 @@ from .analisis_previo_salida import permitir_cierre_tecnico, evaluar_condiciones
 from .analisis_salidas import patron_tecnico_fuerte
 from core.strategies.exit.filtro_salidas import validar_necesidad_de_salida
 from core.config_manager.dinamica import adaptar_configuracion
-from core.adaptador_umbral import calcular_umbral_adaptativo
+from core.adaptador_dinamico import calcular_umbral_adaptativo
 from core.metricas_semanales import metricas_tracker
 from config.exit_defaults import load_exit_config
 

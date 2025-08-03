@@ -101,6 +101,13 @@ async def procesar_vela(trader, vela: dict) -> None:
                     log.error(f'❌ Error enviando notificación: {e}')
     except Exception as e:
         log.exception(f'❌ Error procesando vela de {symbol}: {e}')
+        if trader.notificador:
+            try:
+                await trader.notificador.enviar_async(
+                    f'❌ Error procesando vela de {symbol}: {e}'
+                )
+            except Exception as e2:
+                log.error(f'❌ Error enviando notificación: {e2}')
     finally:
         duracion = time.time() - inicio
         if log.isEnabledFor(logging.DEBUG):
