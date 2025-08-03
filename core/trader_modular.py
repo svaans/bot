@@ -2,7 +2,7 @@
 from __future__ import annotations
 import asyncio
 import time
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, replace, field
 from typing import Dict, List, Callable, Awaitable, Any
 from collections import OrderedDict
 from datetime import datetime, timedelta, date
@@ -64,6 +64,7 @@ PESOS_SCORE_TECNICO = {'RSI': 1.0, 'Momentum': 0.5, 'Slope': 1.0,
 @dataclass
 class EstadoSimbolo:
     buffer: List[dict]
+    estrategias_buffer: List[dict] = field(default_factory=list)
     ultimo_umbral: float = 0.0
     ultimo_timestamp: int | None = None
     tendencia_detectada: str | None = None
@@ -906,8 +907,8 @@ class Trader:
             log.debug(
                 f'⚠️ {symbol}: Media de cierre inválida para persistencia')
             return False
-        repetidas = coincidencia_parcial(estado.buffer, pesos_symbol,
-            ventanas=5)
+        repetidas = coincidencia_parcial(estado.estrategias_buffer,
+            pesos_symbol, ventanas=5)
         minimo = calcular_persistencia_minima(symbol, df, tendencia_actual,
             base_minimo=self.persistencia.minimo)
         log.info(
@@ -1130,7 +1131,7 @@ class Trader:
             self._rechazo(symbol, 'timeout_engine', estrategias=[])
             return
         estrategias = resultado.get('estrategias_activas', {})
-        estado.buffer[-1]['estrategias_activas'] = estrategias
+        estado.estrategias_buffer[-1] = estrategias
         self.persistencia.actualizar(symbol, estrategias)
         precio_actual = float(df['close'].iloc[-1])
         if not resultado.get('permitido'):

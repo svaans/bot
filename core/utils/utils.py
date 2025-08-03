@@ -112,9 +112,13 @@ def verificar_integridad_datos(df: pd.DataFrame, max_gap_pct: float = 0.5) -> bo
         log.warning('⚠️ DataFrame con NaNs detectado')
         return False
     if 'timestamp' in df.columns:
-        ts = pd.to_datetime(df['timestamp'], errors='coerce')
+        # ``timestamp`` llega en milisegundos desde epoch; sin especificar la
+        # unidad Pandas asume nanosegundos, lo que puede generar fechas de 1970
+        # o valores NaT y producir falsos positivos al buscar gaps.
+        ts = pd.to_datetime(df['timestamp'], unit='ms', errors='coerce')
         if ts.isna().any():
             return False
+        ts = ts.sort_values()
         diffs = ts.diff().dt.total_seconds().dropna()
         if not diffs.empty and diffs.max() > diffs.median() * 2:
             log.warning('⚠️ Gaps temporales excesivos detectados')

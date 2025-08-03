@@ -45,11 +45,10 @@ async def verificar_entrada(trader, symbol: str, df: pd.DataFrame, estado) ->(
         metricas_tracker.registrar_filtro('sin_estrategias')
         return None
     log.debug(f'[{symbol}] Estrategias activas: {list(estrategias.keys())}')
-    estado.buffer[-1]['estrategias_activas'] = estrategias
+    estado.estrategias_buffer[-1] = estrategias
     trader.persistencia.actualizar(symbol, estrategias)
     buffer_len = len(estado.buffer)
-    persistencia_score = coincidencia_parcial(estado.buffer[-100:], trader.
-        pesos_por_simbolo.get(symbol, {}), ventanas=5)
+    persistencia_score = coincidencia_parcial(estado.estrategias_buffer[-100:], trader.pesos_por_simbolo.get(symbol, {}), ventanas=5)
     if buffer_len < 30 and persistencia_score < 1:
         metricas_tracker.registrar_filtro('prebuffer')
         return None

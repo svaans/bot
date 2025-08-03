@@ -21,19 +21,22 @@ async def procesar_vela(trader, vela: dict) -> None:
     if datetime.utcnow().date() != trader.fecha_actual:
         trader.ajustar_capital_diario()
 
-    # Agregar vela al buffer y mantener tamaño
-    estado.buffer.append(vela)
-    if len(estado.buffer) > 120:
-        estado.buffer = estado.buffer[-120:]
-
-    # Ignorar vela duplicada
+    # Ignorar vela duplicada antes de agregarla al buffer
     if vela.get('timestamp') == estado.ultimo_timestamp:
         return
+
+    # Agregar vela al buffer y mantener tamaño
+    estado.buffer.append(vela)
+    estado.estrategias_buffer.append({})
+    if len(estado.buffer) > 120:
+        estado.buffer = estado.buffer[-120:]
+        estado.estrategias_buffer = estado.estrategias_buffer[-120:]
 
     estado.ultimo_timestamp = vela.get('timestamp')
 
     # Crear DataFrame y detectar tendencia
     df = pd.DataFrame(estado.buffer)
+    df = df.drop(columns=['estrategias_activas'], errors='ignore')
     estado.tendencia_detectada, _ = detectar_tendencia(symbol, df)
     trader.estado_tendencia[symbol] = estado.tendencia_detectada
 

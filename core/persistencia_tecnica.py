@@ -30,14 +30,14 @@ class PersistenciaTecnica:
             .es_persistente(symbol, e)}
 
 
-def coincidencia_parcial(buffer: List[dict], pesos: Dict[str, float],
-    ventanas: int=5) ->float:
+def coincidencia_parcial(historial: List[dict], pesos: Dict[str, float],
+    ventanas: int = 5) -> float:
     """Calcula un puntaje de coincidencia parcial de estrategias en las últimas ``ventanas`` velas."""
-    if len(buffer) < ventanas:
+    if len(historial) < ventanas:
         return 0.0
     conteo: Dict[str, int] = {}
-    for vela in buffer[-ventanas:]:
-        for nombre, activa in vela.get('estrategias_activas', {}).items():
+    for estrategias in historial[-ventanas:]:
+        for nombre, activa in estrategias.items():
             if activa:
                 conteo[nombre] = conteo.get(nombre, 0) + 1
     puntaje = 0.0
