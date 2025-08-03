@@ -925,6 +925,7 @@ class Trader:
         Cuando ``modo_agresivo`` es ``True`` tolera valores por debajo del
         mínimo requerido sin marcar la operación como rechazada.
         """
+        estrategias_activas = estrategias_activas or {}
         diversidad = len(estrategias_activas)
         vol_factor = 1.0
         volatilidad = 0.0
