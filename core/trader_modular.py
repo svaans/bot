@@ -1197,7 +1197,17 @@ class Trader:
             'detalles_tecnicos': detalles_tecnicos or {},
             'future': fut_open,
         })
-        await fut_open
+        resultado = await fut_open
+        if not resultado:
+            log.warning(
+                f'❌ No se pudo confirmar la apertura de {symbol}.')
+            self._rechazo(
+                symbol,
+                'apertura_fallida',
+                puntaje=puntaje,
+                estrategias=estrategias_dict,
+            )
+            return
         estrategias_list = list(estrategias_dict.keys())
         log.info(
             f'🟢 ENTRADA: {symbol} | Puntaje: {puntaje:.2f} / Umbral: {umbral:.2f} | Estrategias: {estrategias_list}'

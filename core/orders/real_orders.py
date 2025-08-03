@@ -447,13 +447,13 @@ def flush_operaciones() ->None:
     _init_db()
     errores_sqlite = 0
     errores_parquet = 0
+    pendientes: list[dict[str, Any]] = []
     try:
         with sqlite3.connect(RUTA_DB) as conn:
             for op in operaciones:
                 data = op.copy()
                 if isinstance(data.get('estrategias_activas'), dict):
-                    data['estrategias_activas'] = json.dumps(data[
-                        'estrategias_activas'])
+                    data['estrategias_activas'] = json.dumps(data['estrategias_activas'])
                 try:
                     conn.execute(
                         """
@@ -463,44 +463,63 @@ def flush_operaciones() ->None:
                             direccion, precio_cierre, fecha_cierre, motivo_cierre,
                             retorno_total
                         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                        """
-                        , (data.get('symbol'), data.get('precio_entrada'),
-                        data.get('cantidad'), data.get('stop_loss'), data.
-                        get('take_profit'), data.get('timestamp'), data.get
-                        ('estrategias_activas'), data.get('tendencia'),
-                        data.get('max_price'), data.get('direccion'), data.
-                        get('precio_cierre'), data.get('fecha_cierre'),
-                        data.get('motivo_cierre'), data.get('retorno_total')))
+                        """,
+                        (
+                            data.get('symbol'),
+                            data.get('precio_entrada'),
+                            data.get('cantidad'),
+                            data.get('stop_loss'),
+                            data.get('take_profit'),
+                            data.get('timestamp'),
+                            data.get('estrategias_activas'),
+                            data.get('tendencia'),
+                            data.get('max_price'),
+                            data.get('direccion'),
+                            data.get('precio_cierre'),
+                            data.get('fecha_cierre'),
+                            data.get('motivo_cierre'),
+                            data.get('retorno_total'),
+                        ),
+                    )
                 except sqlite3.Error as e:
                     log.error(
                         f"❌ Error SQLite al insertar operación para {data.get('symbol')}: {e}"
-                        )
+                    )
                     errores_sqlite += 1
+                    pendientes.append(op)
     except sqlite3.Error as e:
         log.error(f'❌ Error global al guardar operaciones en SQLite: {e}')
         errores_sqlite += 1
+        pendientes.extend(operaciones)
     for op in operaciones:
         data = op.copy()
         symbol = data.get('symbol')
         if isinstance(data.get('estrategias_activas'), dict):
-            data['estrategias_activas'] = json.dumps(data[
-                'estrategias_activas'])
+            data['estrategias_activas'] = json.dumps(data['estrategias_activas'])
         if symbol:
             try:
                 guardar_orden_real(symbol, data)
             except Exception as e:
                 log.error(
                     f'❌ Error guardando operación en Parquet para {symbol}: {e}'
-                    )
+                )
                 errores_parquet += 1
+                if op not in pendientes:
+                    pendientes.append(op)
+
+    if pendientes:
+        with _BUFFER_LOCK:
+            _BUFFER_OPERACIONES[:0] = pendientes
+
     global _ULTIMO_FLUSH
     _ULTIMO_FLUSH = time.time()
+    
     if errores_sqlite == 0 and errores_parquet == 0:
         log.info(f'✅ {len(operaciones)} operaciones guardadas correctamente.')
     else:
         log.warning(
             f'⚠️ Guardadas {len(operaciones)} operaciones con errores — SQLite: {errores_sqlite}, Parquet: {errores_parquet}'
-            )
+        )
 
 
 async def flush_periodico(interval: int=_FLUSH_INTERVAL) ->None:

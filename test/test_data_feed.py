@@ -1,4 +1,5 @@
 import asyncio
+import contextlib
 import pytest
 from core.data_feed import DataFeed
 
@@ -9,36 +10,70 @@ def test_data_feed_streams_candles(monkeypatch):
     async def fake_listen(symbol, interval, handler, *args, **kwargs):
         await handler({'symbol': symbol, 'timestamp': 1})
     monkeypatch.setattr('core.data_feed.escuchar_velas', fake_listen)
+
+    combined_called = False
+
+    async def fake_listen_combinado(*args, **kwargs):
+        nonlocal combined_called
+        combined_called = True
+
+    monkeypatch.setattr('core.data_feed.escuchar_velas_combinado', fake_listen_combinado)
+
     feed = DataFeed('1m')
 
     async def handler(candle):
         received.append(candle)
-    asyncio.run(feed.escuchar(['BTC/EUR'], handler))
+
+    async def run():
+        task = asyncio.create_task(feed.escuchar(['BTC/EUR'], handler))
+        await asyncio.sleep(0.01)
+        await feed.detener()
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+
+    asyncio.run(run())
     assert received == [{'symbol': 'BTC/EUR', 'timestamp': 1}]
-    assert 'BTC/EUR' in feed._tasks
-    assert feed._tasks['BTC/EUR'].done()
+    assert not combined_called
 
 
 def test_data_feed_streams_candles_combinado(monkeypatch):
     recibidos = []
+    handlers_capturados = {}
 
     async def fake_listen(symbols, interval, handlers, *args, **kwargs):
+        handlers_capturados.update(handlers)
         for s in symbols:
             await handlers[s]({'symbol': s, 'timestamp': 1})
 
     monkeypatch.setattr('core.data_feed.escuchar_velas_combinado', fake_listen)
+
+    async def fake_individual(*args, **kwargs):
+        raise AssertionError('escuchar_velas no debe ser llamado en modo combinado')
+
+    monkeypatch.setattr('core.data_feed.escuchar_velas', fake_individual)
     feed = DataFeed('1m', usar_stream_combinado=True)
 
     async def handler(candle):
         recibidos.append(candle)
 
-    asyncio.run(feed.escuchar(['BTC/EUR', 'ETH/EUR'], handler))
+    async def run():
+        task = asyncio.create_task(
+            feed.escuchar(['BTC/EUR', 'ETH/EUR'], handler)
+        )
+        await asyncio.sleep(0.01)
+        await feed.detener()
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+
+    asyncio.run(run())
     assert recibidos == [
         {'symbol': 'BTC/EUR', 'timestamp': 1},
         {'symbol': 'ETH/EUR', 'timestamp': 1},
     ]
-    assert 'combined' in feed._tasks
-    assert feed._tasks['combined'].done()
+    assert sorted(handlers_capturados.keys()) == ['BTC/EUR', 'ETH/EUR']
+    assert handlers_capturados['BTC/EUR'] is not handlers_capturados['ETH/EUR']
 
 def test_stream_restarts_on_cancel(monkeypatch):
     calls = []
@@ -49,51 +84,42 @@ def test_stream_restarts_on_cancel(monkeypatch):
 
     monkeypatch.setattr('core.data_feed.escuchar_velas', fake_listen)
 
-    async def fake_monitor(self, symbol):
+    combined_called = False
+
+    async def fake_listen_combinado(*args, **kwargs):
+        nonlocal combined_called
+        combined_called = True
+
+    monkeypatch.setattr('core.data_feed.escuchar_velas_combinado', fake_listen_combinado)
+
+    async def fake_monitor(self):
         await asyncio.sleep(0.005)
-        task = self._tasks.get(symbol)
+        task = self._tasks.get('BTC/EUR')
         if task and not task.done():
             task.cancel()
 
-    monkeypatch.setattr(DataFeed, '_monitor_activity', fake_monitor)
-
-    async def fast_escuchar(self, symbols, handler):
-        for sym in symbols:
-            if sym in self._tasks:
-                continue
-            self._tasks[sym] = asyncio.create_task(self.stream(sym, handler))
-        while self._tasks:
-            tareas_actuales = list(self._tasks.items())
-            resultados = await asyncio.gather(
-                *[t for _, t in tareas_actuales], return_exceptions=True
+            await asyncio.gather(task, return_exceptions=True)
+            self._tasks['BTC/EUR'] = asyncio.create_task(
+                self.stream('BTC/EUR', self._handler_actual)
             )
-            reiniciar = {}
-            for (sym, task), resultado in zip(tareas_actuales, resultados):
-                if isinstance(resultado, asyncio.CancelledError):
-                    reiniciar[sym] = asyncio.create_task(self.stream(sym, handler))
-                    continue
-                if isinstance(resultado, Exception):
-                    reiniciar[sym] = asyncio.create_task(self.stream(sym, handler))
-            if reiniciar:
-                self._tasks.update(reiniciar)
-            else:
-                break
+        await asyncio.sleep(0.01)
 
-    monkeypatch.setattr(DataFeed, 'escuchar', fast_escuchar)
+    monkeypatch.setattr(DataFeed, '_monitor_global_inactividad', fake_monitor)
 
     feed = DataFeed('1m')
 
     async def run():
-        try:
-            await asyncio.wait_for(
-                feed.escuchar(['BTC/EUR'], lambda c: None), timeout=0.05
-            )
-        except asyncio.TimeoutError:
-            pass
+        task = asyncio.create_task(feed.escuchar(['BTC/EUR'], lambda c: None))
+        await asyncio.sleep(0.05)
+        await feed.detener()
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
 
     asyncio.run(run())
 
     assert len(calls) >= 2
+    assert not combined_called
 
 
 
@@ -105,6 +131,14 @@ def test_cliente_pasado_a_escuchar_velas(monkeypatch):
         raise asyncio.CancelledError
 
     monkeypatch.setattr('core.data_feed.escuchar_velas', fake_listen)
+
+    combined_called = False
+
+    async def fake_listen_combinado(*args, **kwargs):
+        nonlocal combined_called
+        combined_called = True
+
+    monkeypatch.setattr('core.data_feed.escuchar_velas_combinado', fake_listen_combinado)
     feed = DataFeed('1m')
 
     async def handler(candle):
@@ -112,6 +146,51 @@ def test_cliente_pasado_a_escuchar_velas(monkeypatch):
     with pytest.raises(asyncio.CancelledError):
         asyncio.run(feed.escuchar(['BTC/EUR'], handler, cliente='dummy'))
     assert recibido == ['dummy']
+    assert not combined_called
+
+
+def test_global_reconnect_on_combined_cancel(monkeypatch):
+    calls = []
+
+    async def fake_stream_combinado(self, symbols, handler):
+        calls.append('run')
+        await asyncio.sleep(0.01)
+        while True:
+            await asyncio.sleep(1)
+
+    monkeypatch.setattr(DataFeed, '_stream_combinado', fake_stream_combinado)
+
+    async def fake_monitor(self):
+        task = self._tasks.get('combined')
+        if task and not task.done():
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+            self._tasks['combined'] = asyncio.create_task(
+                self._stream_combinado(self._symbols, self._handler_actual)
+            )
+
+    monkeypatch.setattr(DataFeed, '_monitor_global_inactividad', fake_monitor)
+
+    feed = DataFeed('1m', usar_stream_combinado=True)
+
+    async def handler(candle):
+        pass
+
+    async def run():
+        task = asyncio.create_task(
+            feed.escuchar(['BTC/EUR', 'ETH/EUR'], handler)
+        )
+        await asyncio.sleep(0.05)
+        await feed._monitor_global_inactividad()
+        await asyncio.sleep(0.05)
+        await feed.detener()
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+
+    asyncio.run(run())
+
+    assert calls.count('run') >= 2
 
 
 def test_inactivity_intervals_parameter():

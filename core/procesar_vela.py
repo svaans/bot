@@ -60,11 +60,13 @@ async def procesar_vela(trader, vela: dict) -> None:
         # ⚠️ Validar condiciones de entrada con timeout
         try:
             await asyncio.wait_for(
-                trader.evaluar_condiciones_entrada(symbol, df),
+                trader.evaluar_condiciones_de_entrada(symbol, df, estado),
                 timeout=trader.config.timeout_evaluar_condiciones,
             )
         except asyncio.TimeoutError:
-            log.error(f'⏰ Timeout en evaluar_condiciones_entrada para {symbol}')
+            log.error(
+                f'⏰ Timeout en evaluar_condiciones_de_entrada para {symbol}'
+            )
             if trader.notificador:
                 try:
                     await trader.notificador.enviar_async(

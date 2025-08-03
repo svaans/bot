@@ -42,6 +42,10 @@ async def main():
     except ValueError as e:
         print(f'❌ {e}')
         return
+    except Exception as e:
+        print(f'❌ Error al inicializar el Trader: {e}')
+        traceback.print_exc()
+        return
     tarea_bot = asyncio.create_task(bot.ejecutar())
     stop_event = asyncio.Event()
     tarea_stop = asyncio.create_task(stop_event.wait())
