@@ -3,6 +3,12 @@
 El archivo Parquet se protege de escrituras concurrentes entre procesos
 Las órdenes se almacenan en una pequeña base SQLite para facilitar la
 persistencia entre reinicios del bot.
+
+⚠️ **Estado global**: este módulo utiliza cachés y buffers globales como
+``_CACHE_ORDENES`` o ``_BUFFER_OPERACIONES``. Está pensado para una sola
+instancia del bot por proceso. Si se desean ejecutar múltiples bots o tests
+concurrentes en el mismo proceso, se recomienda encapsular este estado en una
+clase o crear instancias independientes.
 """
 import os
 import json

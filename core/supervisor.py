@@ -1,3 +1,12 @@
+"""Módulo de supervisión del bot.
+
+Este módulo mantiene estado global (``tasks``, ``task_heartbeat``,
+``data_heartbeat``) y está diseñado para manejar **una única** instancia del
+bot por proceso. Para ejecutar varios loops o bots dentro del mismo proceso se
+recomienda encapsular esta funcionalidad en una clase o crear supervisores
+independientes.
+"""
+
 from __future__ import annotations
 import threading
 import logging

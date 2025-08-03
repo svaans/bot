@@ -146,14 +146,18 @@ async def verificar_entrada(trader, symbol: str, df: pd.DataFrame, estado) ->(
     sl, tp = calcular_tp_sl_adaptativos(symbol, df, config,
         trader.capital_por_simbolo.get(symbol, 0), precio)
     try:
-        df_htf = df.set_index(pd.to_datetime(df['timestamp'])).resample('5T').last()
-        tendencia_htf, _ = detectar_tendencia(symbol, df_htf)
-        if tendencia_htf != tendencia:
-            ajuste = 0.8
-            if direccion == 'long':
-                tp *= ajuste
-            else:
-                sl *= ajuste
+        df_htf = df.set_index(pd.to_datetime(df['timestamp'])).resample('5min').last()
+        if len(df_htf) >= 60:
+            tendencia_htf, _ = detectar_tendencia(symbol, df_htf)
+            if tendencia_htf != tendencia:
+                ajuste = 0.8
+                if direccion == 'long':
+                    tp *= ajuste
+                else:
+                    sl *= ajuste
+        else:
+            log.warning(f'[{symbol}] ⚠️ Datos insuficientes para tendencia HTF')
+            metricas_tracker.registrar_filtro('tendencia_htf_insuficiente')
     except Exception as e:
         log.error(f'❌ Error evaluando tendencia HTF para {symbol}: {e}')
         metricas_tracker.registrar_filtro('tendencia_htf_error')
