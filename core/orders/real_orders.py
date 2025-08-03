@@ -536,9 +536,10 @@ async def flush_periodico(
     log.info('➡️ Entrando en flush_periodico()')
     """
     Ejecuta :func:`flush_operaciones` cada ``interval`` segundos.
-    Emite ``tick('flush')`` periódicamente para evitar que el supervisor la
-    reinicie por inactividad.
+    Emite ``tick('flush')`` periódicamente para evitar reinicios por inactividad.
+    Tras ``max_fallos`` errores consecutivos, detiene el ciclo y notifica.
     """
+    fallos_consecutivos = 0
     try:
         while True:
             restante = interval
@@ -553,10 +554,23 @@ async def flush_periodico(
                     loop.run_in_executor(None, flush_operaciones), timeout=30
                 )
                 tick('flush')
+                fallos_consecutivos = 0
             except asyncio.TimeoutError:
+                fallos_consecutivos += 1
                 log.warning('⚠️ flush_operaciones se excedió de tiempo (30s)')
             except Exception as e:
+                fallos_consecutivos += 1
                 log.error(f'❌ Error en flush periódico: {e}')
+            if fallos_consecutivos >= max_fallos:
+                mensaje = (
+                    f'flush_periodico falló {fallos_consecutivos} veces consecutivas; deteniendo.'
+                )
+                log.error(f'🛑 {mensaje}')
+                try:
+                    notificador.enviar(mensaje, 'CRITICAL')
+                except Exception:
+                    pass
+                break
     except asyncio.CancelledError:
         log.info('🛑 flush_periodico cancelado correctamente.')
         raise
