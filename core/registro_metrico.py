@@ -4,10 +4,14 @@ import pandas as pd
 import threading
 
 
+LOG_DIR = os.getenv('LOG_DIR', 'logs')
+
 class RegistroMetrico:
     """Gestiona el almacenamiento de métricas de trading con seguridad y eficiencia."""
 
-    def __init__(self, carpeta='logs/metricas', buffer_max=100) ->None:
+    def __init__(self, carpeta: str | None = None, buffer_max=100) ->None:
+        if carpeta is None:
+            carpeta = os.path.join(LOG_DIR, 'metricas')
         self.carpeta = carpeta
         os.makedirs(self.carpeta, exist_ok=True)
         self.buffer = []

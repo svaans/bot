@@ -41,9 +41,16 @@ class JsonFormatter(logging.Formatter):
         return json.dumps(data, ensure_ascii=False)
 
 
-def configurar_logger(nombre: str, nivel=logging.INFO, carpeta_logs='logs',
-    modo_silencioso=False, estructurado=None, *, backup_count=7,
-    when='midnight'):
+def configurar_logger(
+    nombre: str,
+    nivel=logging.INFO,
+    carpeta_logs: str | None = None,
+    modo_silencioso: bool = False,
+    estructurado=None,
+    *,
+    backup_count: int = 7,
+    when: str = 'midnight',
+):
     if nombre in loggers_configurados:
         return loggers_configurados[nombre]
     logger = logging.getLogger(nombre)
@@ -53,6 +60,8 @@ def configurar_logger(nombre: str, nivel=logging.INFO, carpeta_logs='logs',
     logger.setLevel(nivel)
     logger.propagate = False
     global archivo_global
+    if carpeta_logs is None:
+        carpeta_logs = os.getenv('LOG_DIR', 'logs')
     if estructurado is None:
         estructurado = os.getenv('MODO_REAL', 'False').lower() == 'true'
     if not logger.handlers:

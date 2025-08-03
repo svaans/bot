@@ -142,23 +142,47 @@ class OrderManager:
             log.warning(
                 f'⚠️ Se intentó verificar TP/SL sin orden activa en {symbol}')
             return False
+        venta_exitosa = True
+        if self.modo_real:
+            venta_exitosa = False
+            cantidad = orden.cantidad if is_valid_number(orden.cantidad) else 0.0
+            if cantidad > 1e-08:
+                try:
+                    ejecutado = await asyncio.to_thread(
+                        real_orders.ejecutar_orden_market_sell, symbol, cantidad
+                    )
+                    if ejecutado and ejecutado > 0:
+                        venta_exitosa = True
+                    else:
+                        log.error(
+                            f'❌ Venta no ejecutada o cantidad 0 para {symbol}'
+                        )
+                        real_orders._VENTAS_FALLIDAS.add(symbol)
+                except Exception as e:
+                    log.error(
+                        f'❌ No se pudo cerrar la orden real para {symbol}: {e}'
+                    )
+                    real_orders._VENTAS_FALLIDAS.add(symbol)
+                    if self.bus:
+                        await self.bus.publish(
+                            'notify',
+                            {'mensaje': f'❌ Venta fallida en {symbol}: {e}'},
+                        )
+            else:
+                venta_exitosa = True
+        if not venta_exitosa:
+            if self.bus and self.modo_real:
+                await self.bus.publish(
+                    'notify',
+                    {'mensaje': f'⚠️ Venta no realizada, se reintentará en {symbol}'},
+                )
+            return False
         try:
-            if self.modo_real:
-                cantidad = orden.cantidad if is_valid_number(orden.cantidad
-                    ) else 0.0
-                if cantidad > 1e-08:
-                    await asyncio.to_thread(real_orders.
-                        ejecutar_orden_market_sell, symbol, cantidad)
+            await asyncio.to_thread(real_orders.eliminar_orden, symbol)
         except Exception as e:
-            log.error(f'❌ No se pudo cerrar la orden real para {symbol}: {e}')
-            if self.bus:
-                await self.bus.publish('notify', {'mensaje': f'❌ Venta fallida en {symbol}: {e}'})
-        finally:
-            try:
-                await asyncio.to_thread(real_orders.eliminar_orden, symbol)
-            except Exception as e:
-                log.error(
-                    f'❌ Error consultando o eliminando orden abierta: {e}')
+            log.error(
+                f'❌ Error consultando o eliminando orden abierta: {e}'
+            )
         self.ordenes.pop(symbol, None)
         orden.precio_cierre = precio
         orden.fecha_cierre = datetime.utcnow().isoformat()

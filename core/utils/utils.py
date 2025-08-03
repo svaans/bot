@@ -12,6 +12,8 @@ from .logger import configurar_logger
 if TYPE_CHECKING:
     from core.order_model import Order
 from decimal import Decimal, InvalidOperation
+
+ORDENES_DIR = os.getenv('ORDENES_DIR', 'ordenes_reales')
 # Mapeo de intervalos de velas a segundos
 _MAPA_SEGUNDOS_INTERVALO = {
     '1m': 60,
@@ -36,7 +38,7 @@ log = configurar_logger('trader_simulado')
 
 
 def obtener_uso_recursos() -> tuple[float, float]:
-    log.info('➡️ Entrando en obtener_uso_recursos()')
+    log.debug('➡️ Entrando en obtener_uso_recursos()')
     """Devuelve el uso actual de CPU y memoria en porcentaje."""
     cpu = psutil.cpu_percent()
     memoria = psutil.virtual_memory().percent
@@ -61,7 +63,7 @@ def is_valid_number(value) ->bool:
         return False
 
 
-def guardar_operacion_en_csv(symbol, info, ruta='ordenes_reales'):
+def guardar_operacion_en_csv(symbol, info, ruta=ORDENES_DIR):
     log.info('➡️ Entrando en guardar_operacion_en_csv()')
     os.makedirs(ruta, exist_ok=True)
     archivo = os.path.join(ruta,

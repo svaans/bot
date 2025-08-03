@@ -17,7 +17,7 @@ Este proyecto implementa un bot de trading para Binance.
 
 ## Persistencia de órdenes
 
-Las órdenes abiertas ahora se guardan en una base SQLite ubicada en `ordenes_reales/ordenes.db`. Si el proceso se reinicia, las órdenes se cargan automáticamente desde esa base de datos para continuar su seguimiento.
+Las órdenes abiertas se guardan en una base SQLite cuya ruta puede ajustarse mediante la variable de entorno `ORDENES_DB_PATH` (por defecto `ordenes_reales/ordenes.db`). Si el proceso se reinicia, las órdenes se cargan automáticamente desde esa base de datos para continuar su seguimiento. Los CSV de resultados se escriben en el directorio definido por `ORDENES_DIR` (`ordenes_reales` si no se especifica).
 
 Para migrar un archivo `.parquet` existente ejecuta:
 
@@ -100,16 +100,17 @@ varios pares en un único stream utilizando la URL oficial de Binance:
 
 - No soluciona cuellos de botella de CPU; cada vela sigue procesándose
   secuencialmente.
-- Un fallo en la conexión afecta a todos los pares escuchados.
+- Un fallo en la conexión o la inactividad de un solo símbolo provoca la
+  reconexión del stream completo, afectando brevemente a los demás pares.
 
 ## Logging estructurado y reportes
 
 En modo real el bot utiliza un logger en formato JSON cuya salida se guarda en
-`logs/bot.log`. A partir de esta versión el archivo rota de manera diaria y se
-conservan varias copias (configurable desde `configurar_logger`). Cada
-operación cerrada se agrega al directorio `reportes_diarios/` y al finalizar el
-día se genera automáticamente un PDF con las métricas principales: ganancia
-acumulada, winrate y drawdown.
+`$LOG_DIR/bot.log` (por defecto `logs/bot.log`). A partir de esta versión el
+archivo rota de manera diaria y se conservan varias copias (configurable desde
+`configurar_logger`). Cada operación cerrada se agrega al directorio
+`reportes_diarios/` y al finalizar el día se genera automáticamente un PDF con
+las métricas principales: ganancia acumulada, winrate y drawdown.
 Además, cada ciclo de `procesar_vela` registra el uso de CPU y memoria para
 facilitar la detección de cuellos de botella.
 

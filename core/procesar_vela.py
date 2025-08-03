@@ -1,5 +1,6 @@
 from __future__ import annotations
 import asyncio
+import logging
 import time
 from datetime import datetime
 import pandas as pd
@@ -10,7 +11,7 @@ log = configurar_logger('procesar_vela')
 
 
 async def procesar_vela(trader, vela: dict) -> None:
-    log.info('➡️ Entrando en procesar_vela()')
+    log.debug('➡️ Entrando en procesar_vela()')
     symbol = vela['symbol']
     estado = trader.estado[symbol]
 
@@ -36,7 +37,7 @@ async def procesar_vela(trader, vela: dict) -> None:
     estado.tendencia_detectada, _ = detectar_tendencia(symbol, df)
     trader.estado_tendencia[symbol] = estado.tendencia_detectada
 
-    log.info(f"Procesando vela {symbol} | Precio: {vela.get('close')}")
+    log.debug(f"Procesando vela {symbol} | Precio: {vela.get('close')}")
 
     try:
         if trader.orders.obtener(symbol):
@@ -78,7 +79,8 @@ async def procesar_vela(trader, vela: dict) -> None:
         log.exception(f'❌ Error procesando vela de {symbol}: {e}')
     finally:
         duracion = time.time() - inicio
-        cpu, mem = obtener_uso_recursos()
-        log.info(
-            f'✅ procesar_vela completado en {duracion:.2f}s para {symbol} | CPU: {cpu:.1f}% | Memoria: {mem:.1f}%'
-        )
+        if log.isEnabledFor(logging.DEBUG):
+            cpu, mem = obtener_uso_recursos()
+            log.debug(
+                f'✅ procesar_vela completado en {duracion:.2f}s para {symbol} | CPU: {cpu:.1f}% | Memoria: {mem:.1f}%'
+            )

@@ -286,6 +286,11 @@ async def escuchar_velas_combinado(
             backoff = 5
             for s in symbols:
                 last_message[s] = datetime.utcnow()
+            # Cada símbolo posee su propio watchdog. Si uno de ellos detecta
+            # inactividad forzará el cierre del WebSocket compartido para
+            # reconectar el stream completo. Esta lógica simplifica la
+            # reconexión, pero implica que la pérdida de datos de un par
+            # provoca un reinicio global afectando temporalmente a los demás.
             watchdogs = [
                 asyncio.create_task(_watchdog(ws, s, last_message, tiempo_maximo))
                 for s in symbols

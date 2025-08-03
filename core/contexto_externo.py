@@ -5,7 +5,7 @@ import json
 from typing import Awaitable, Callable, Dict, Iterable
 import websockets
 from core.utils.utils import configurar_logger
-from core.supervisor import tick
+from core.supervisor import supervised_task, tick
 log = configurar_logger('contexto_externo')
 _PUNTAJES: Dict[str, float] = {}
 CONTEXT_WS_URL = 'wss://stream.binance.com:9443/ws/{symbol}@kline_1m'
@@ -35,82 +35,64 @@ class StreamContexto:
         self.url_template = url_template or CONTEXT_WS_URL
         self._tasks: Dict[str, asyncio.Task] = {}
 
-    async def _stream(self, symbol: str, handler: Callable[[str, float],
-        Awaitable[None]]) ->None:
+    async def _stream(
+        self, symbol: str, handler: Callable[[str, float], Awaitable[None]]
+    ) -> None:
         log.info('➡️ Entrando en _stream()')
         symbol_norm = symbol.replace('/', '').lower()
         url = self.url_template.format(symbol=symbol_norm)
-        while True:
-            try:
-                async with websockets.connect(url, ping_interval=20,
-                    ping_timeout=20) as ws:
-                    log.info(f'🔌 Contexto conectado para {symbol}')
-                    async for msg in ws:
+        try:
+            async with websockets.connect(url, ping_interval=20, ping_timeout=20) as ws:
+                log.info(f'🔌 Contexto conectado para {symbol}')
+                async for msg in ws:
+                    try:
+                        data = json.loads(msg)
+                        vela = data.get('k')
+                        if vela is None:
+                            continue
+                        close = float(vela.get('c', 0.0))
+                        open_ = float(vela.get('o', 0.0))
+                        vol = float(vela.get('v', 0.0))
+                        if open_ == 0 or vol < 1e-08:
+                            continue
+                        variacion_pct = (close - open_) / open_
+                        puntaje = variacion_pct * vol
+                        _PUNTAJES[symbol] = puntaje
                         try:
-                            data = json.loads(msg)
-                            vela = data.get('k')
-                            if vela is None:
-                                continue
-                            close = float(vela.get('c', 0.0))
-                            open_ = float(vela.get('o', 0.0))
-                            vol = float(vela.get('v', 0.0))
-                            if open_ == 0 or vol < 1e-08:
-                                continue
-                            variacion_pct = (close - open_) / open_
-                            puntaje = variacion_pct * vol
-                            _PUNTAJES[symbol] = puntaje
-                            try:
-                                await handler(symbol, puntaje)
-                                tick('context_stream')
-                            except Exception as e:
-                                log.warning(
-                                    f'⚠️ Handler contexto {symbol} falló: {e}')
-                        except asyncio.CancelledError:
-                            log.info(
-                                f'🛑 Stream contexto {symbol} cancelado (mensaje).'
-                                )
-                            raise
+                            await handler(symbol, puntaje)
+                            tick('context_stream')
                         except Exception as e:
                             log.warning(
-                                f'⚠️ Error procesando contexto de {symbol}: {e}'
-                                )
-                    break
-            except asyncio.CancelledError:
-                log.info(f'🛑 Conexión de contexto {symbol} cancelada')
-                break
-            except Exception as e:
-                log.warning(
-                    f'⚠️ Stream de contexto {symbol} falló: {e}. Reintentando en 5s'
-                    )
-                await asyncio.sleep(5)
+                                f'⚠️ Handler contexto {symbol} falló: {e}'
+                            )
+                    except asyncio.CancelledError:
+                        log.info(
+                            f'🛑 Stream contexto {symbol} cancelado (mensaje).'
+                        )
+                        raise
+                    except Exception as e:
+                        log.warning(
+                            f'⚠️ Error procesando contexto de {symbol}: {e}'
+                        )
+        except asyncio.CancelledError:
+            log.info(f'🛑 Stream contexto {symbol} cancelado')
+            raise
+        except Exception as e:
+            log.warning(
+                f'⚠️ Stream de contexto {symbol} finalizó con error: {e}'
+            )
+            raise
 
     async def escuchar(self, symbols: Iterable[str], handler: Callable[[str,
         float], Awaitable[None]]) ->None:
         log.info('➡️ Entrando en escuchar()')
-        """Inicia un stream por cada símbolo."""
+        """Inicia un stream supervisado por cada símbolo."""
         for sym in symbols:
-            self._tasks[sym] = asyncio.create_task(self._stream(sym, handler))
-        while self._tasks:
-            tareas = list(self._tasks.items())
-            resultados = await asyncio.gather(*[t for _, t in tareas],
-                return_exceptions=True)
-            reiniciar = {}
-            for (sym, task), resultado in zip(tareas, resultados):
-                if isinstance(resultado, asyncio.CancelledError):
-                    continue
-                if isinstance(resultado, Exception):
-                    log.warning(
-                        f'⚠️ Stream de contexto {sym} terminó con error: {resultado}'
-                        )
-                    await asyncio.sleep(5)
-                    reiniciar[sym] = asyncio.create_task(self._stream(sym,
-                        handler))
-                else:
-                    self._tasks[sym] = task
-            if reiniciar:
-                self._tasks.update(reiniciar)
-            else:
-                break
+            self._tasks[sym] = supervised_task(
+                lambda sym=sym: self._stream(sym, handler),
+                name=f"context_stream_{sym}",
+            )
+        await asyncio.gather(*self._tasks.values())
 
     async def detener(self) ->None:
         log.info('➡️ Entrando en detener()')

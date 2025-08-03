@@ -74,6 +74,7 @@ class ConfigManager:
             ).parent.parent / 'config' / 'claves.env'
         load_dotenv(env_path)
         env_name = os.getenv('BOT_ENV', 'development').lower()
+        log_dir = os.getenv('LOG_DIR', 'logs')
         defaults = DevelopmentConfig()
         if env_name == 'production':
             defaults = ProductionConfig()
@@ -113,8 +114,9 @@ class ConfigManager:
             'true', contradicciones_bloquean_entrada=os.getenv(
             'CONTRADICCIONES_BLOQUEAN_ENTRADA', str(defaults.
             contradicciones_bloquean_entrada)).lower() == 'true',
-            registro_tecnico_csv=os.getenv('REGISTRO_TECNICO_CSV', defaults
-            .registro_tecnico_csv), fracciones_piramide=int(os.getenv(
+            registro_tecnico_csv=os.getenv(
+            'REGISTRO_TECNICO_CSV', os.path.join(log_dir,
+            'rechazos_tecnico.csv')), fracciones_piramide=int(os.getenv(
             'FRACCIONES_PIRAMIDE', defaults.fracciones_piramide)),
             reserva_piramide=float(os.getenv('RESERVA_PIRAMIDE', defaults.
             reserva_piramide)), umbral_piramide=float(os.getenv(

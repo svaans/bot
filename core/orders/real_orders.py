@@ -30,7 +30,11 @@ except ImportError:
         pass
 log = configurar_logger('ordenes')
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-RUTA_DB = os.path.join(BASE_DIR, 'ordenes_reales', 'ordenes.db')
+ORDENES_DB_PATH = os.getenv(
+    'ORDENES_DB_PATH',
+    os.path.join(BASE_DIR, 'ordenes_reales', 'ordenes.db'),
+)
+RUTA_DB = ORDENES_DB_PATH
 _CACHE_ORDENES: dict[str, Order] | None = None
 _VENTAS_FALLIDAS: set[str] = set()
 _BUFFER_OPERACIONES: list[dict] = []
@@ -513,7 +517,7 @@ def flush_operaciones() ->None:
 
     global _ULTIMO_FLUSH
     _ULTIMO_FLUSH = time.time()
-    
+
     if errores_sqlite == 0 and errores_parquet == 0:
         log.info(f'✅ {len(operaciones)} operaciones guardadas correctamente.')
     else:

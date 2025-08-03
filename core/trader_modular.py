@@ -4,6 +4,7 @@ import asyncio
 import time
 from dataclasses import dataclass, replace
 from typing import Dict, List, Callable, Awaitable, Any
+from collections import OrderedDict
 from datetime import datetime, timedelta, date
 import json
 import os
@@ -55,6 +56,7 @@ from core.procesar_vela import procesar_vela
 from core.scoring import calcular_score_tecnico
 from binance_api.cliente import fetch_ticker_async
 log = configurar_logger('trader')
+LOG_DIR = os.getenv('LOG_DIR', 'logs')
 PESOS_SCORE_TECNICO = {'RSI': 1.0, 'Momentum': 0.5, 'Slope': 1.0,
     'Tendencia': 1.0}
 
@@ -103,7 +105,7 @@ class Trader:
         self.modo_capital_bajo = config.modo_capital_bajo
         self.persistencia = PersistenciaTecnica(config.persistencia_minima,
             config.peso_extra_persistencia)
-        os.makedirs('logs/rechazos', exist_ok=True)
+        os.makedirs(os.path.join(LOG_DIR, 'rechazos'), exist_ok=True)
         os.makedirs(os.path.dirname(config.registro_tecnico_csv), exist_ok=True
             )
         self.umbral_score_tecnico = config.umbral_score_tecnico
@@ -111,7 +113,10 @@ class Trader:
         self.contradicciones_bloquean_entrada = (config.
             contradicciones_bloquean_entrada)
         self.registro_tecnico_csv = config.registro_tecnico_csv
-        self.historicos: Dict[str, pd.DataFrame] = {}
+        # Cache limitada para históricos de velas
+        self.historicos: OrderedDict[str, pd.DataFrame] = OrderedDict()
+        self.max_historicos_cache = getattr(config, 'max_historicos_cache', 20)
+        self.max_filas_historico = getattr(config, 'max_filas_historico', 1440)
         self.fraccion_kelly = calcular_fraccion_kelly()
         factor_kelly = self.risk.multiplicador_kelly()
         self.fraccion_kelly *= factor_kelly
@@ -239,7 +244,7 @@ class Trader:
                  if peor else
                 f'👍 Evitar SL en {orden.symbol} fue beneficioso ({precio:.2f} vs {sl_val:.2f})'
                 )
-            with open('logs/impacto_sl.log', 'a') as f:
+            with open(os.path.join(LOG_DIR, 'impacto_sl.log'), 'a') as f:
                 f.write(mensaje + '\n')
             log.info(mensaje)
         orden.sl_evitar_info = []
@@ -683,15 +688,24 @@ class Trader:
             'timestamp')).timestamp() * 1000 >= limite and v.get(
             'estrategias_activas'))
 
-    def _obtener_historico(self, symbol: str) ->(pd.DataFrame | None):
+    def _obtener_historico(self, symbol: str,
+        max_rows: int | None=None) ->(pd.DataFrame | None):
         log.info('➡️ Entrando en _obtener_historico()')
-        """Devuelve el DataFrame de histórico para ``symbol`` usando caché."""
+        """Devuelve el DataFrame de histórico para ``symbol`` usando caché.
+
+        ``max_rows`` limita el número de filas conservadas en memoria.
+        """
         df = self.historicos.get(symbol)
         if df is None:
             archivo = f"datos/{symbol.replace('/', '_').lower()}_1m.parquet"
             try:
                 df = pd.read_parquet(archivo)
+                limite = max_rows or self.max_filas_historico
+                if limite:
+                    df = df.tail(limite).copy()
                 self.historicos[symbol] = df
+                if len(self.historicos) > self.max_historicos_cache:
+                    self.historicos.popitem(last=False)
             except Exception as e:
                 log.debug(f'No se pudo cargar histórico para {symbol}: {e}')
                 self.historicos[symbol] = None
@@ -703,7 +717,7 @@ class Trader:
         """Calcula correlación histórica de cierres entre símbolos."""
         precios = {}
         for symbol in self.capital_por_simbolo:
-            df = self._obtener_historico(symbol)
+            df = self._obtener_historico(symbol, max_rows=periodos)
             if df is not None and 'close' in df:
                 precios[symbol] = df['close'].astype(float).tail(periodos
                     ).reset_index(drop=True)
@@ -785,7 +799,7 @@ class Trader:
             keys() if isinstance(estrategias, dict) else estrategias) if
             estrategias else ''}
         fecha = datetime.utcnow().strftime('%Y%m%d')
-        archivo = os.path.join('logs/rechazos',
+        archivo = os.path.join(LOG_DIR, 'rechazos',
             f"{symbol.replace('/', '_')}_{fecha}.csv")
         df = pd.DataFrame([registro])
         modo = 'a' if os.path.exists(archivo) else 'w'

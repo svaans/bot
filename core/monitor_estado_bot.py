@@ -9,7 +9,10 @@ from core.orders import real_orders
 from core.reporting import reporter_diario
 from core.risk.riesgo import cargar_estado_riesgo
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-ORDENES_DB_PATH = os.path.join(BASE_DIR, 'ordenes_reales', 'ordenes.db')
+ORDENES_DB_PATH = os.getenv(
+    'ORDENES_DB_PATH',
+    os.path.join(BASE_DIR, 'ordenes_reales', 'ordenes.db'),
+)
 log = configurar_logger('estado_bot')
 
 
