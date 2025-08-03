@@ -813,6 +813,18 @@ class Trader:
                             log.warning(
                                 f'⚠️ Heartbeat: tarea {nombre} finalizó inesperadamente'
                             )
+                    if nombre == 'flush':
+                        mensaje = (
+                            '⚠️ Heartbeat: tarea flush finalizada; no se reiniciará automáticamente'
+                        )
+                        log.error(mensaje)
+                        if self.notificador:
+                            try:
+                                await self.notificador.enviar_async(mensaje, 'CRITICAL')
+                            except Exception:
+                                pass
+                        del self._tareas[nombre]
+                        continue
                     self._iniciar_tarea(nombre, self._factories[nombre])
                     log.info(f'🔄 Tarea {nombre} reiniciada tras finalizar')
                     if nombre == 'data_feed':
@@ -1282,6 +1294,16 @@ class Trader:
                 return
         except Exception as e:
             log.error(f'❌ Error validando SL/TP para {symbol}: {e}')
+            self._rechazo(symbol, 'error_validacion_sl_tp', puntaje=puntaje,
+                estrategias=list(estrategias_dict.keys()))
+            if self.notificador:
+                try:
+                    await self.notificador.enviar_async(
+                        f'⚠️ Error validando SL/TP para {symbol}: {e}'
+                    )
+                except Exception as e_notif:
+                    log.error(f'❌ Error enviando notificación: {e_notif}')
+            return
         await self.orders.abrir_async(
             symbol=symbol,
             precio=precio,
