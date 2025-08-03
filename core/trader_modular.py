@@ -256,7 +256,14 @@ class Trader:
         """Cierra una orden y actualiza los pesos si corresponden."""
         fut = asyncio.get_running_loop().create_future()
         await self.bus.publish('cerrar_orden', {'symbol': symbol, 'precio': precio, 'motivo': motivo, 'future': fut})
-        if not await fut:
+        try:
+            confirmado = await asyncio.wait_for(
+                fut, timeout=self.config.timeout_bus_eventos
+            )
+        except asyncio.TimeoutError:
+            log.error(f'⏰ Timeout cerrando {symbol}')
+            return
+        if not confirmado:
             log.debug(f'🔁 Intento duplicado de cierre ignorado para {symbol}')
             return
         actualizar_pesos_estrategias_symbol(symbol)
@@ -280,10 +287,17 @@ class Trader:
             orden.symbol, 0.0)})
         fut = asyncio.get_running_loop().create_future()
         await self.bus.publish('cerrar_orden', {'symbol': orden.symbol, 'precio': precio, 'motivo': motivo, 'future': fut})
-        if not await fut:
+        try:
+            confirmado = await asyncio.wait_for(
+                fut, timeout=self.config.timeout_bus_eventos
+            )
+        except asyncio.TimeoutError:
+            log.error(f'⏰ Timeout confirmando cierre de {orden.symbol}')
+            return False
+        if not confirmado:
             log.warning(
                 f'❌ No se pudo confirmar el cierre de {orden.symbol}. Se omitirá el registro.'
-                )
+            )
             return False
         capital_inicial = self.capital_por_simbolo.get(orden.symbol, 0.0)
         ganancia = capital_inicial * retorno_total
@@ -385,10 +399,17 @@ class Trader:
         """Cierre parcial de ``orden`` y registro en el reporte."""
         fut = asyncio.get_running_loop().create_future()
         await self.bus.publish('cerrar_parcial', {'symbol': orden.symbol, 'cantidad': cantidad, 'precio': precio, 'motivo': motivo, 'future': fut})
-        if not await fut:
+        try:
+            confirmado = await asyncio.wait_for(
+                fut, timeout=self.config.timeout_bus_eventos
+            )
+        except asyncio.TimeoutError:
+            log.error(f'⏰ Timeout confirmando cierre parcial de {orden.symbol}')
+            return False
+        if not confirmado:
             log.warning(
                 f'❌ No se pudo confirmar el cierre parcial de {orden.symbol}. Se omitirá el registro.'
-                )
+            )
             return False
         retorno_unitario = (precio - orden.precio_entrada
             ) / orden.precio_entrada if orden.precio_entrada else 0.0
@@ -465,7 +486,14 @@ class Trader:
             cantidad = orden.cantidad / orden.fracciones_totales
             fut = asyncio.get_running_loop().create_future()
             await self.bus.publish('agregar_parcial', {'symbol': symbol, 'precio': precio_actual, 'cantidad': cantidad, 'future': fut})
-            if await fut:
+            try:
+                confirmado = await asyncio.wait_for(
+                    fut, timeout=self.config.timeout_bus_eventos
+                )
+            except asyncio.TimeoutError:
+                log.error(f'⏰ Timeout agregando parcial en {symbol}')
+                return
+            if confirmado:
                 orden.fracciones_restantes -= 1
                 orden.precio_ultima_piramide = precio_actual
                 log.info(
@@ -636,7 +664,13 @@ class Trader:
             'exposicion_total': exposicion,
             'future': fut,
         })
-        return await fut
+        try:
+            return await asyncio.wait_for(
+                fut, timeout=self.config.timeout_bus_eventos
+            )
+        except asyncio.TimeoutError:
+            log.error(f'⏰ Timeout calculando cantidad para {symbol}')
+            return 0.0
 
     def _calcular_cantidad(self, symbol: str, precio: float) ->float:
         log.info('➡️ Entrando en _calcular_cantidad()')
@@ -1163,7 +1197,13 @@ class Trader:
         fut = asyncio.get_running_loop().create_future()
         exposicion = sum(o.cantidad_abierta * o.precio_entrada for o in self.orders.ordenes.values())
         await self.bus.publish('calcular_cantidad', {'symbol': symbol, 'precio': precio, 'exposicion_total': exposicion, 'future': fut})
-        cantidad_total = await fut
+        try:
+            cantidad_total = await asyncio.wait_for(
+                fut, timeout=self.config.timeout_bus_eventos
+            )
+        except asyncio.TimeoutError:
+            log.error(f'⏰ Timeout calculando cantidad para {symbol}')
+            return
         if cantidad_total <= 0:
             capital_disp = self.capital_manager.capital_por_simbolo.get(
                 symbol, 0.0)
@@ -1212,7 +1252,19 @@ class Trader:
             'detalles_tecnicos': detalles_tecnicos or {},
             'future': fut_open,
         })
-        resultado = await fut_open
+        try:
+            resultado = await asyncio.wait_for(
+                fut_open, timeout=self.config.timeout_bus_eventos
+            )
+        except asyncio.TimeoutError:
+            log.error(f'⏰ Timeout confirmando apertura de {symbol}')
+            self._rechazo(
+                symbol,
+                'apertura_timeout',
+                puntaje=puntaje,
+                estrategias=estrategias_dict,
+            )
+            return
         if not resultado:
             log.warning(
                 f'❌ No se pudo confirmar la apertura de {symbol}.')
