@@ -9,6 +9,9 @@ from core.strategies.tendencia import detectar_tendencia
 
 log = configurar_logger('procesar_vela')
 
+MAX_BUFFER_VELAS = 120
+MAX_ESTRATEGIAS_BUFFER = 100
+
 
 async def procesar_vela(trader, vela: dict) -> None:
     log.debug('➡️ Entrando en procesar_vela()')
@@ -28,9 +31,10 @@ async def procesar_vela(trader, vela: dict) -> None:
     # Agregar vela al buffer y mantener tamaño
     estado.buffer.append(vela)
     estado.estrategias_buffer.append({})
-    if len(estado.buffer) > 120:
-        estado.buffer = estado.buffer[-120:]
-        estado.estrategias_buffer = estado.estrategias_buffer[-120:]
+    if len(estado.buffer) > MAX_BUFFER_VELAS:
+        estado.buffer = estado.buffer[-MAX_BUFFER_VELAS:]
+    if len(estado.estrategias_buffer) > MAX_ESTRATEGIAS_BUFFER:
+        estado.estrategias_buffer = estado.estrategias_buffer[-MAX_ESTRATEGIAS_BUFFER:]
 
     estado.ultimo_timestamp = vela.get('timestamp')
 

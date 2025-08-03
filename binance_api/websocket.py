@@ -79,6 +79,8 @@ async def escuchar_velas(
     total_reintentos = 0
     backoff = 5
     ultimo_timestamp: int | None = None
+    ultimo_cierre: float | None = None
+    intervalo_ms = intervalo_a_segundos(intervalo) * 1000
     while True:
         try:
             ws = await asyncio.wait_for(
@@ -113,6 +115,22 @@ async def escuchar_velas(
                     for o in ohlcv:
                         ts = o[0]
                         if ts > ultimo_timestamp:
+                            if ultimo_cierre is not None:
+                                gap = ultimo_timestamp + intervalo_ms
+                                while gap < ts:
+                                    await callback(
+                                        {
+                                            'symbol': symbol,
+                                            'timestamp': gap,
+                                            'open': ultimo_cierre,
+                                            'high': ultimo_cierre,
+                                            'low': ultimo_cierre,
+                                            'close': ultimo_cierre,
+                                            'volume': 0.0,
+                                        }
+                                    )
+                                    ultimo_timestamp = gap
+                                    gap += intervalo_ms
                             await callback(
                                 {
                                     'symbol': symbol,
@@ -125,6 +143,7 @@ async def escuchar_velas(
                                 }
                             )
                             ultimo_timestamp = ts
+                            ultimo_cierre = float(o[4])
                 except Exception as e:
                     log.warning(f'❌ Error al backfillear {symbol}: {e}')
             try:
@@ -181,6 +200,22 @@ async def escuchar_velas(
                             log.debug(
                                 f"⏱️ Latencia de vela {symbol}: {latencia:.0f} ms"
                             )
+                            if ultimo_timestamp is not None and ultimo_cierre is not None:
+                                gap = ultimo_timestamp + intervalo_ms
+                                while gap < vela['t']:
+                                    await callback(
+                                        {
+                                            'symbol': symbol,
+                                            'timestamp': gap,
+                                            'open': ultimo_cierre,
+                                            'high': ultimo_cierre,
+                                            'low': ultimo_cierre,
+                                            'close': ultimo_cierre,
+                                            'volume': 0.0,
+                                        }
+                                    )
+                                    ultimo_timestamp = gap
+                                    gap += intervalo_ms
                             await callback(
                                 {
                                     'symbol': symbol,
@@ -193,6 +228,7 @@ async def escuchar_velas(
                                 }
                             )
                             ultimo_timestamp = vela['t']
+                            ultimo_cierre = float(vela['c'])
                             tick('data_feed')
                     except Exception as e:
                         log.warning(f'❌ Error en callback de {symbol}: {e}')
@@ -267,6 +303,8 @@ async def escuchar_velas_combinado(
     total_reintentos = 0
     backoff = 5
     ultimo_timestamp: dict[str, int | None] = {s: None for s in symbols}
+    ultimo_cierre: dict[str, float | None] = {s: None for s in symbols}
+    intervalo_ms = intervalo_a_segundos(intervalo) * 1000
     while True:
         try:
             ws = await asyncio.wait_for(
@@ -314,6 +352,23 @@ async def escuchar_velas_combinado(
                         for o in ohlcv:
                             tss = o[0]
                             if tss > ts:
+                                uc = ultimo_cierre.get(s)
+                                if uc is not None:
+                                    gap = ts + intervalo_ms
+                                    while gap < tss:
+                                        await handlers[s](
+                                            {
+                                                'symbol': s,
+                                                'timestamp': gap,
+                                                'open': uc,
+                                                'high': uc,
+                                                'low': uc,
+                                                'close': uc,
+                                                'volume': 0.0,
+                                            }
+                                        )
+                                        ts = gap
+                                        gap += intervalo_ms
                                 await handlers[s](
                                     {
                                         'symbol': s,
@@ -326,6 +381,7 @@ async def escuchar_velas_combinado(
                                     }
                                 )
                                 ultimo_timestamp[s] = tss
+                                ultimo_cierre[s] = float(o[4])
                     except Exception as e:
                         log.warning(f'❌ Error al backfillear {s}: {e}')
             try:
@@ -390,6 +446,25 @@ async def escuchar_velas_combinado(
                             log.debug(
                                 f"⏱️ Latencia de vela {symbol}: {latencia:.0f} ms"
                             )
+                            ts_prev = ultimo_timestamp.get(symbol)
+                            uc = ultimo_cierre.get(symbol)
+                            if ts_prev is not None and uc is not None:
+                                gap = ts_prev + intervalo_ms
+                                while gap < vela['t']:
+                                    await handlers[symbol](
+                                        {
+                                            'symbol': symbol,
+                                            'timestamp': gap,
+                                            'open': uc,
+                                            'high': uc,
+                                            'low': uc,
+                                            'close': uc,
+                                            'volume': 0.0,
+                                        }
+                                    )
+                                    ultimo_timestamp[symbol] = gap
+                                    ts_prev = gap
+                                    gap += intervalo_ms
                             await handlers[symbol](
                                 {
                                     'symbol': symbol,
@@ -402,6 +477,7 @@ async def escuchar_velas_combinado(
                                 }
                             )
                             ultimo_timestamp[symbol] = vela['t']
+                            ultimo_cierre[symbol] = float(vela['c'])
                             tick('data_feed')
                     except Exception as e:
                         log.warning(f'❌ Error en callback de {symbol}: {e}')

@@ -122,6 +122,9 @@ class Trader:
         self.historicos: OrderedDict[str, pd.DataFrame] = OrderedDict()
         self.max_historicos_cache = getattr(config, 'max_historicos_cache', 20)
         self.max_filas_historico = getattr(config, 'max_filas_historico', 1440)
+        self._correlaciones_cache: pd.DataFrame | None = None
+        self._correlaciones_ts: float = 0.0
+        self.frecuencia_correlaciones = getattr(config, 'frecuencia_correlaciones', 300)
         self.fraccion_kelly = calcular_fraccion_kelly()
         factor_kelly = self.risk.multiplicador_kelly()
         self.fraccion_kelly *= factor_kelly
@@ -751,19 +754,35 @@ class Trader:
                 return None
         return df
 
-    def _calcular_correlaciones(self, periodos: int=1440) ->pd.DataFrame:
+    def _calcular_correlaciones(self, periodos: int = 1440, symbols: list[str] | None = None) -> pd.DataFrame:
         log.info('➡️ Entrando en _calcular_correlaciones()')
-        """Calcula correlación histórica de cierres entre símbolos."""
-        precios = {}
-        for symbol in self.capital_por_simbolo:
+        """Calcula correlación histórica de cierres entre símbolos.
+
+        Usa una caché para evitar recalcular en cada señal y permite
+        limitar los símbolos evaluados.
+        """
+        intervalo = getattr(self, 'frecuencia_correlaciones', 300)
+        ahora = time.time()
+        if symbols is None and self._correlaciones_cache is not None and ahora - self._correlaciones_ts < intervalo:
+            return self._correlaciones_cache
+        if symbols is not None and self._correlaciones_cache is not None and ahora - self._correlaciones_ts < intervalo:
+            cols = self._correlaciones_cache.columns
+            if set(symbols).issubset(cols):
+                return self._correlaciones_cache.loc[symbols, symbols]
+        precios: dict[str, pd.Series] = {}
+        base_symbols = symbols or self.capital_por_simbolo.keys()
+        for symbol in base_symbols:
             df = self._obtener_historico(symbol, max_rows=periodos)
             if df is not None and 'close' in df:
-                precios[symbol] = df['close'].astype(float).tail(periodos
-                    ).reset_index(drop=True)
+                precios[symbol] = df['close'].astype(float).tail(periodos).reset_index(drop=True)
         if len(precios) < 2:
             return pd.DataFrame()
         df_precios = pd.DataFrame(precios)
-        return df_precios.corr()
+        correlaciones = df_precios.corr()
+        if symbols is None:
+            self._correlaciones_cache = correlaciones
+            self._correlaciones_ts = ahora
+        return correlaciones
 
     def _iniciar_tarea(self, nombre: str, factory: Callable[[], Awaitable]
         ) ->None:

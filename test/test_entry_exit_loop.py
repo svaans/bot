@@ -8,7 +8,7 @@ from core.strategies.entry.verificar_entradas import verificar_entrada
 from core.strategies.exit.verificar_salidas import verificar_salidas
 from core.orders.order_manager import OrderManager
 from core.orders.order_model import Order
-from core.procesar_vela import procesar_vela
+from core.procesar_vela import procesar_vela, MAX_ESTRATEGIAS_BUFFER
 
 
 @pytest.mark.asyncio
@@ -26,7 +26,7 @@ async def test_verificar_entrada_datos_invalidos(monkeypatch):
         config=SimpleNamespace(max_perdidas_diarias=6),
         engine=SimpleNamespace(),
     )
-    estado = SimpleNamespace(buffer=[{}] * 120, estrategias_buffer=[{} for _ in range(120)])
+    estado = SimpleNamespace(buffer=[{}] * 120, estrategias_buffer=[{} for _ in range(MAX_ESTRATEGIAS_BUFFER)])
     df = pd.DataFrame({'close': [1], 'timestamp': [1]})
     res = await verificar_entrada(trader, 'BTC/EUR', df, estado)
     assert res is None
@@ -170,7 +170,7 @@ async def test_ciclo_completo_sin_bloqueos(monkeypatch):
         _validar_estrategia=lambda *a, **k: True,
         _calcular_correlaciones=lambda *a, **k: pd.DataFrame(),
     )
-    estado = SimpleNamespace(buffer=[{'t': i} for i in range(120)], estrategias_buffer=[{} for _ in range(120)])
+    estado = SimpleNamespace(buffer=[{'t': i} for i in range(120)], estrategias_buffer=[{} for _ in range(MAX_ESTRATEGIAS_BUFFER)])
     df = pd.DataFrame(
         {
             'close': [100, 101, 102, 103, 104],

@@ -65,6 +65,7 @@ class Config:
     monitor_interval: int = 5
     max_stream_restarts: int = 5
     inactivity_intervals: int = 4
+    frecuencia_correlaciones: int = 300
 
 
 class ConfigManager:
@@ -135,4 +136,5 @@ class ConfigManager:
             monitor_interval=_cargar_int('MONITOR_INTERVAL', defaults.monitor_interval),
             inactivity_intervals=_cargar_int('INACTIVITY_INTERVALS', defaults.inactivity_intervals),
             max_stream_restarts=_cargar_int('MAX_STREAM_RESTARTS', defaults.max_stream_restarts),
+            frecuencia_correlaciones=_cargar_int('FRECUENCIA_CORRELACIONES', defaults.frecuencia_correlaciones),
         )

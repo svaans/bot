@@ -193,10 +193,10 @@ async def verificar_entrada(trader, symbol: str, df: pd.DataFrame, estado) ->(
             )
         metricas_tracker.registrar_filtro('score_tecnico')
         return None
-    correlaciones = trader._calcular_correlaciones()
-    if not correlaciones.empty and symbol in correlaciones.columns:
-        abiertas = [s for s in trader.orders.ordenes if s != symbol]
-        if abiertas:
+    abiertas = [s for s, o in trader.orders.ordenes.items() if o.cantidad_abierta > 0 and s != symbol]
+    if abiertas:
+        correlaciones = trader._calcular_correlaciones(symbols=[symbol, *abiertas])
+        if not correlaciones.empty and symbol in correlaciones.columns:
             corr = correlaciones.loc[symbol, abiertas].abs().max()
             umbral_corr = getattr(trader.config, 'umbral_correlacion', 0.9)
             if corr >= umbral_corr:
