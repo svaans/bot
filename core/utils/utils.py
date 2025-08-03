@@ -9,6 +9,7 @@ import psutil
 from datetime import datetime
 from typing import TYPE_CHECKING
 from .logger import configurar_logger
+from core.modo import MODO_REAL
 if TYPE_CHECKING:
     from core.order_model import Order
 from decimal import Decimal, InvalidOperation
@@ -34,7 +35,9 @@ def intervalo_a_segundos(intervalo: str) -> int:
     """
     log.info('➡️ Entrando en intervalo_a_segundos()')
     return _MAPA_SEGUNDOS_INTERVALO.get(intervalo, 60)
-log = configurar_logger('trader_simulado')
+
+
+log = configurar_logger('trader' if MODO_REAL else 'trader_simulado')
 
 
 def obtener_uso_recursos() -> tuple[float, float]:

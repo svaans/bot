@@ -2,6 +2,7 @@ import os
 import json
 import pandas as pd
 from collections import defaultdict
+from dotenv import dotenv_values
 from core.strategies.pesos import gestor_pesos
 from core.adaptador_dinamico import calcular_umbral_adaptativo, calcular_tp_sl_adaptativos
 from config.configuracion import cargar_configuracion_simbolo, guardar_configuracion_simbolo
@@ -12,7 +13,9 @@ RUTA_PESOS = 'config/estrategias_pesos.json'
 MAX_OPERACIONES = 30
 MIN_OPERACIONES = 5
 VENTANA_ACTUALIZACION = 10
-log = configurar_logger('trader_simulado', modo_silencioso=True)
+CONFIG = dotenv_values('config/claves.env')
+MODO_REAL = CONFIG.get('MODO_REAL', 'False') == 'True'
+log = configurar_logger('aprendizaje_en_linea')
 os.makedirs(CARPETA_OPERACIONES, exist_ok=True)
 
 
@@ -46,6 +49,8 @@ def registrar_resultado_trade(symbol: str, orden: dict, ganancia: float):
         df_guardar.to_parquet(archivo, index=False)
     except Exception as e:
         print(f'❌ Error al guardar historial para {symbol}: {e}')
+        return
+    if MODO_REAL:
         return
     if len(historial) >= VENTANA_ACTUALIZACION and len(historial
         ) % VENTANA_ACTUALIZACION == 0:

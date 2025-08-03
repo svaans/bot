@@ -13,7 +13,7 @@ BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CARPETA_HISTORICO = os.path.join(BASE_DIR, 'ultimas_operaciones')
 RUTA_PESOS = 'config/estrategias_pesos.json'
 MIN_OPERACIONES = 5
-log = configurar_logger('trader_simulado', modo_silencioso=True)
+log = configurar_logger('entrenador_estrategias')
 
 
 def evaluar_estrategias(ordenes: pd.DataFrame):
