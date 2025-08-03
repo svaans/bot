@@ -33,6 +33,41 @@ def normalizar_symbolo(symbol: str) ->str:
 INTERVALOS_VALIDOS = {'1m', '3m', '5m', '15m', '30m', '1h', '4h', '1d'}
 
 
+async def _rellenar_gaps(
+    emisor,
+    symbol: str,
+    ultimo_ts: int | None,
+    ultimo_cierre: float | None,
+    nuevo_ts: int,
+    intervalo_ms: int,
+):
+    """Genera velas sintéticas para cubrir huecos entre ``ultimo_ts`` y ``nuevo_ts``.
+
+    Las velas generadas tendrán volumen 0 y precios planos igualados a ``ultimo_cierre``.
+    Devuelve el último timestamp emitido (o el original si no había hueco).
+    """
+    if ultimo_ts is None or ultimo_cierre is None:
+        return ultimo_ts
+
+    gap = ultimo_ts + intervalo_ms
+    while gap < nuevo_ts:
+        await emisor(
+            {
+                'symbol': symbol,
+                'timestamp': gap,
+                'open': ultimo_cierre,
+                'high': ultimo_cierre,
+                'low': ultimo_cierre,
+                'close': ultimo_cierre,
+                'volume': 0.0,
+            }
+        )
+        ultimo_ts = gap
+        gap += intervalo_ms
+
+    return ultimo_ts
+
+
 async def escuchar_velas(
     symbol: str,
     intervalo: str,
@@ -115,22 +150,14 @@ async def escuchar_velas(
                     for o in ohlcv:
                         ts = o[0]
                         if ts > ultimo_timestamp:
-                            if ultimo_cierre is not None:
-                                gap = ultimo_timestamp + intervalo_ms
-                                while gap < ts:
-                                    await callback(
-                                        {
-                                            'symbol': symbol,
-                                            'timestamp': gap,
-                                            'open': ultimo_cierre,
-                                            'high': ultimo_cierre,
-                                            'low': ultimo_cierre,
-                                            'close': ultimo_cierre,
-                                            'volume': 0.0,
-                                        }
-                                    )
-                                    ultimo_timestamp = gap
-                                    gap += intervalo_ms
+                            ultimo_timestamp = await _rellenar_gaps(
+                                callback,
+                                symbol,
+                                ultimo_timestamp,
+                                ultimo_cierre,
+                                ts,
+                                intervalo_ms,
+                            )
                             await callback(
                                 {
                                     'symbol': symbol,
@@ -200,22 +227,14 @@ async def escuchar_velas(
                             log.debug(
                                 f"⏱️ Latencia de vela {symbol}: {latencia:.0f} ms"
                             )
-                            if ultimo_timestamp is not None and ultimo_cierre is not None:
-                                gap = ultimo_timestamp + intervalo_ms
-                                while gap < vela['t']:
-                                    await callback(
-                                        {
-                                            'symbol': symbol,
-                                            'timestamp': gap,
-                                            'open': ultimo_cierre,
-                                            'high': ultimo_cierre,
-                                            'low': ultimo_cierre,
-                                            'close': ultimo_cierre,
-                                            'volume': 0.0,
-                                        }
-                                    )
-                                    ultimo_timestamp = gap
-                                    gap += intervalo_ms
+                            ultimo_timestamp = await _rellenar_gaps(
+                                callback,
+                                symbol,
+                                ultimo_timestamp,
+                                ultimo_cierre,
+                                vela['t'],
+                                intervalo_ms,
+                            )
                             await callback(
                                 {
                                     'symbol': symbol,
@@ -353,22 +372,14 @@ async def escuchar_velas_combinado(
                             tss = o[0]
                             if tss > ts:
                                 uc = ultimo_cierre.get(s)
-                                if uc is not None:
-                                    gap = ts + intervalo_ms
-                                    while gap < tss:
-                                        await handlers[s](
-                                            {
-                                                'symbol': s,
-                                                'timestamp': gap,
-                                                'open': uc,
-                                                'high': uc,
-                                                'low': uc,
-                                                'close': uc,
-                                                'volume': 0.0,
-                                            }
-                                        )
-                                        ts = gap
-                                        gap += intervalo_ms
+                                ts = await _rellenar_gaps(
+                                    handlers[s],
+                                    s,
+                                    ts,
+                                    uc,
+                                    tss,
+                                    intervalo_ms,
+                                )
                                 await handlers[s](
                                     {
                                         'symbol': s,
@@ -448,23 +459,16 @@ async def escuchar_velas_combinado(
                             )
                             ts_prev = ultimo_timestamp.get(symbol)
                             uc = ultimo_cierre.get(symbol)
-                            if ts_prev is not None and uc is not None:
-                                gap = ts_prev + intervalo_ms
-                                while gap < vela['t']:
-                                    await handlers[symbol](
-                                        {
-                                            'symbol': symbol,
-                                            'timestamp': gap,
-                                            'open': uc,
-                                            'high': uc,
-                                            'low': uc,
-                                            'close': uc,
-                                            'volume': 0.0,
-                                        }
-                                    )
-                                    ultimo_timestamp[symbol] = gap
-                                    ts_prev = gap
-                                    gap += intervalo_ms
+                            ts_prev = await _rellenar_gaps(
+                                handlers[symbol],
+                                symbol,
+                                ts_prev,
+                                uc,
+                                vela['t'],
+                                intervalo_ms,
+                            )
+                            if ts_prev is not None:
+                                ultimo_timestamp[symbol] = ts_prev
                             await handlers[symbol](
                                 {
                                     'symbol': symbol,

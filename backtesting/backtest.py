@@ -8,6 +8,7 @@ import pandas as pd
 from tqdm import tqdm
 from config.config_manager import Config
 from core.trader_modular import Trader
+DATOS_DIR = os.getenv('DATOS_DIR', 'datos')
 BUFFER_INICIAL = 120
 CAPITAL_INICIAL = 300.0
 
@@ -60,7 +61,9 @@ class BacktestTrader(Trader):
         return True
 
 
-async def backtest_modular(symbols: Iterable[str], ruta_datos: str='datos',
+async def backtest_modular(
+    symbols: Iterable[str],
+    ruta_datos: str = DATOS_DIR,
     fecha_inicio: (datetime | None)=None, fecha_fin: (datetime | None)=None
     ) ->BacktestTrader:
     symbols = list(symbols)

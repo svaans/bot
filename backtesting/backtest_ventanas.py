@@ -1,12 +1,15 @@
 """Backtesting con validación por ventanas cronológicas."""
 import asyncio
+import os
 from typing import Dict, Iterable, List, Tuple
 import pandas as pd
 import optuna
 from core.trader_simulado import TraderSimulado
 
+DATOS_DIR = os.getenv('DATOS_DIR', 'datos')
 
-def cargar_historicos(symbols: Iterable[str], ruta_datos: str='datos') ->Dict[
+
+def cargar_historicos(symbols: Iterable[str], ruta_datos: str = DATOS_DIR) ->Dict[
     str, pd.DataFrame]:
     datos = {}
     for s in symbols:

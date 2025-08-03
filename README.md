@@ -19,6 +19,8 @@ Este proyecto implementa un bot de trading para Binance.
 
 Las órdenes abiertas se guardan en una base SQLite cuya ruta puede ajustarse mediante la variable de entorno `ORDENES_DB_PATH` (por defecto `ordenes_reales/ordenes.db`). Si el proceso se reinicia, las órdenes se cargan automáticamente desde esa base de datos para continuar su seguimiento. Los CSV de resultados se escriben en el directorio definido por `ORDENES_DIR` (`ordenes_reales` si no se especifica).
 
+El histórico de velas se busca en el directorio indicado por `DATOS_DIR` (predeterminado `datos`) y el estado persistente del bot se guarda en `ESTADO_DIR` (predeterminado `estado`).
+
 Para migrar un archivo `.parquet` existente ejecuta:
 
 ```bash

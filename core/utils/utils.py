@@ -14,6 +14,8 @@ if TYPE_CHECKING:
     from core.order_model import Order
 from decimal import Decimal, InvalidOperation
 
+DATOS_DIR = os.getenv('DATOS_DIR', 'datos')
+ESTADO_DIR = os.getenv('ESTADO_DIR', 'estado')
 ORDENES_DIR = os.getenv('ORDENES_DIR', 'ordenes_reales')
 # Mapeo de intervalos de velas a segundos
 _MAPA_SEGUNDOS_INTERVALO = {

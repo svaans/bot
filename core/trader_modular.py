@@ -24,7 +24,7 @@ from binance_api.cliente import (
     fetch_ohlcv_async,
     filtrar_simbolos_activos,
 )
-from core.utils.utils import leer_reporte_seguro
+from core.utils.utils import leer_reporte_seguro, DATOS_DIR, ESTADO_DIR
 from core.strategies import cargar_pesos_estrategias
 from core.risk import calcular_fraccion_kelly
 from core.data import PersistenciaTecnica, coincidencia_parcial, calcular_persistencia_minima
@@ -270,7 +270,9 @@ class Trader:
             log.error(f'⏰ Timeout cerrando {symbol}')
             return
         if not confirmado:
-            log.debug(f'🔁 Intento duplicado de cierre ignorado para {symbol}')
+            log.warning(
+                f'🔁 Cierre no confirmado para {symbol}; pesos no actualizados'
+            )
             return
         actualizar_pesos_estrategias_symbol(symbol)
         try:
@@ -738,7 +740,9 @@ class Trader:
         """
         df = self.historicos.get(symbol)
         if df is None:
-            archivo = f"datos/{symbol.replace('/', '_').lower()}_1m.parquet"
+            archivo = os.path.join(
+                DATOS_DIR, f"{symbol.replace('/', '_').lower()}_1m.parquet"
+            )
             try:
                 df = pd.read_parquet(archivo)
                 limite = max_rows or self.max_filas_historico
@@ -1404,27 +1408,34 @@ class Trader:
 
     def _guardar_estado_persistente(self) ->None:
         log.info('➡️ Entrando en _guardar_estado_persistente()')
-        """Guarda historial de cierres y capital en ``estado/``."""
+        """Guarda historial de cierres y capital en ``ESTADO_DIR``."""
         try:
-            os.makedirs('estado', exist_ok=True)
-            self._save_json_file('estado/historial_cierres.json', self.
-                historial_cierres)
-            self._save_json_file('estado/capital.json', self.
-                capital_por_simbolo)
+            os.makedirs(ESTADO_DIR, exist_ok=True)
+            self._save_json_file(
+                os.path.join(ESTADO_DIR, 'historial_cierres.json'),
+                self.historial_cierres,
+            )
+            self._save_json_file(
+                os.path.join(ESTADO_DIR, 'capital.json'),
+                self.capital_por_simbolo,
+            )
         except Exception as e:
             log.warning(f'⚠️ Error guardando estado persistente: {e}')
 
     def _cargar_estado_persistente(self) ->None:
         log.info('➡️ Entrando en _cargar_estado_persistente()')
-        """Carga el estado previo de ``estado/`` si existe."""
+        """Carga el estado previo de ``ESTADO_DIR`` si existe."""
         try:
-            data = self._load_json_file('estado/historial_cierres.json')
+            data = self._load_json_file(
+                os.path.join(ESTADO_DIR, 'historial_cierres.json')
+            )
             if data:
                 self.historial_cierres.update(data)
-            data = self._load_json_file('estado/capital.json')
+            data = self._load_json_file(os.path.join(ESTADO_DIR, 'capital.json'))
             if data:
-                self.capital_por_simbolo.update({k: float(v) for k, v in
-                    data.items()})
+                self.capital_por_simbolo.update(
+                    {k: float(v) for k, v in data.items()}
+                )
         except Exception as e:
             log.warning(f'⚠️ Error cargando estado persistente: {e}')
 

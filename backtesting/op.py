@@ -7,7 +7,7 @@ import optuna
 import pandas as pd
 from core.trader_simulado import TraderSimulado
 SYMBOLS = ['BTC/EUR', 'ETH/EUR', 'ADA/EUR', 'SOL/EUR', 'BNB/EUR']
-RUTA_DATOS = 'datos'
+RUTA_DATOS = os.getenv('DATOS_DIR', 'datos')
 N_TRIALS = 60
 N_JOBS = 4
 BLOQUES = 3

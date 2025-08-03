@@ -10,7 +10,7 @@ import os
 
 
 def cargar_datos_ejemplo():
-    archivo = Path('datos/btc_eur_1m.parquet')
+    archivo = Path(os.getenv('DATOS_DIR', 'datos')) / 'btc_eur_1m.parquet'
     if not archivo.exists():
         raise FileNotFoundError(f'No se encontró el archivo: {archivo}')
     df = pd.read_parquet(archivo)

@@ -8,11 +8,13 @@ from tqdm import tqdm
 from config.config_manager import Config
 from core.trader_simulado import TraderSimulado
 
+DATOS_DIR = os.getenv('DATOS_DIR', 'datos')
+
 
 @dataclass
 class BacktestConfig:
     symbols: list[str]
-    data_dir: str = 'datos'
+    data_dir: str = DATOS_DIR
     start: Optional[datetime] = None
     end: Optional[datetime] = None
     initial_capital: float = 1000.0
