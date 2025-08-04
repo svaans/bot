@@ -613,13 +613,31 @@ class Trader:
                     f'⚠️ Error inesperado cargando histórico para {symbol}: {e}'
                     )
                 continue
-            for ts, open_, high_, low_, close_, vol in datos:
-                self.estado[symbol].buffer.append({'symbol': symbol,
-                    'timestamp': ts, 'open': float(open_), 'high': float(
-                    high_), 'low': float(low_), 'close': float(close_),
-                    'volume': float(vol)})
+            for vela in datos:
+                try:
+                    ts, open_, high_, low_, close_, vol = vela
+                except (TypeError, ValueError):
+                    log.warning(
+                        f'⚠️ Formato de vela inesperado para {symbol}: {vela}'
+                    )
+                    continue
+                self.estado[symbol].buffer.append(
+                    {
+                        'symbol': symbol,
+                        'timestamp': ts,
+                        'open': float(open_),
+                        'high': float(high_),
+                        'low': float(low_),
+                        'close': float(close_),
+                        'volume': float(vol),
+                    }
+                )
             if datos:
-                self.estado[symbol].ultimo_timestamp = datos[-1][0]
+                ultimo = datos[-1]
+                try:
+                    self.estado[symbol].ultimo_timestamp = ultimo[0]
+                except (IndexError, TypeError):
+                    self.estado[symbol].ultimo_timestamp = ultimo
         log.info('📈 Histórico inicial cargado')
 
     async def _ciclo_aprendizaje(self, intervalo: int = 86400, max_fallos: int = 5) -> None:
