@@ -44,7 +44,10 @@ def tick(name: str) -> None:
 
 def tick_data(symbol: str) -> None:
     """Actualiza la marca de tiempo de la última vela recibida para ``symbol``."""
-    data_heartbeat[symbol] = datetime.utcnow()
+    ahora = datetime.utcnow()
+    data_heartbeat[symbol] = ahora
+    # Registro detallado para depuración de problemas de "sin datos"
+    log.debug("tick_data registrado para %s a las %s", symbol, ahora.isoformat())
 
 
 def heartbeat(interval: int = 60) -> None:
@@ -74,6 +77,11 @@ def watchdog(timeout: int = 120, check_interval: int = 10) -> None:
                     pass
         for sym, ts in data_heartbeat.items():
             sin_datos = (datetime.utcnow() - ts).total_seconds()
+            log.debug(
+                "Verificando datos de %s: %.1f segundos desde la última vela",
+                sym,
+                sin_datos,
+            )
             if sin_datos > TIMEOUT_SIN_DATOS:
                 ahora = datetime.utcnow()
                 ultima = last_data_alert.get(sym)
