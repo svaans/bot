@@ -17,6 +17,8 @@ import time
 import atexit
 import threading
 import asyncio
+from typing import Any
+from concurrent.futures import ProcessPoolExecutor
 from datetime import datetime
 from binance_api.cliente import obtener_cliente
 from .order_model import Order
@@ -48,6 +50,10 @@ _BUFFER_LOCK = threading.Lock()
 _MAX_BUFFER = 10
 _FLUSH_INTERVAL = 300
 _ULTIMO_FLUSH = time.time()
+_SLOW_FLUSHES = 0
+_SLOW_FLUSH_THRESHOLD = 30
+_SLOW_FLUSH_LIMIT = 3
+_USE_PROCESS_POOL = False
 
 
 def esperar_balance(cliente, symbol: str, cantidad_esperada: float,
@@ -472,14 +478,8 @@ def ejecutar_orden_market_sell(symbol: str, cantidad: float) ->float:
         raise
 
 
-def flush_operaciones() ->None:
-    log.info('➡️ Entrando en flush_operaciones()')
-    """Guarda en disco todas las operaciones acumuladas en el buffer de forma segura y eficiente."""
-    with _BUFFER_LOCK:
-        operaciones = list(_BUFFER_OPERACIONES)
-        _BUFFER_OPERACIONES.clear()
-    if not operaciones:
-        return
+def _persistir_operaciones(operaciones: list[dict]) -> tuple[int, int, list[dict]]:
+    """Persiste operaciones en SQLite y Parquet devolviendo conteos de errores y pendientes."""
     _init_db()
     errores_sqlite = 0
     errores_parquet = 0
@@ -542,6 +542,48 @@ def flush_operaciones() ->None:
                 errores_parquet += 1
                 if op not in pendientes:
                     pendientes.append(op)
+    return errores_sqlite, errores_parquet, pendientes
+
+
+def flush_operaciones() ->None:
+    global _SLOW_FLUSHES, _USE_PROCESS_POOL, _ULTIMO_FLUSH
+    log.info('➡️ Entrando en flush_operaciones()')
+    """Guarda en disco todas las operaciones acumuladas en el buffer de forma segura y eficiente."""
+    with _BUFFER_LOCK:
+        operaciones = list(_BUFFER_OPERACIONES)
+        _BUFFER_OPERACIONES.clear()
+    total_ops = len(operaciones)
+    if not total_ops:
+        return
+    log.info(f'📝 Iniciando flush_operaciones con {total_ops} operaciones.')
+    inicio = time.time()
+    if _USE_PROCESS_POOL:
+        with ProcessPoolExecutor() as executor:
+            future = executor.submit(_persistir_operaciones, operaciones)
+            errores_sqlite, errores_parquet, pendientes = future.result()
+    else:
+        errores_sqlite, errores_parquet, pendientes = _persistir_operaciones(operaciones)
+    duracion = time.time() - inicio
+    mensaje_timeout = int(os.getenv('MENSAJE_TIMEOUT', '0') or 0)
+    inactivity_intervals = int(os.getenv('INACTIVITY_INTERVALS', '0') or 0)
+    log.info(f'🏁 flush_operaciones finalizado en {duracion:.2f}s para {total_ops} operaciones.')
+    if mensaje_timeout and duracion > mensaje_timeout:
+        log.warning(
+            f'⏱️ Duración {duracion:.2f}s supera mensaje_timeout {mensaje_timeout}s'
+        )
+    if inactivity_intervals and duracion > inactivity_intervals:
+        log.warning(
+            f'⏱️ Duración {duracion:.2f}s supera inactivity_intervals {inactivity_intervals}s'
+        )
+    if duracion > _SLOW_FLUSH_THRESHOLD:
+        _SLOW_FLUSHES += 1
+    else:
+        _SLOW_FLUSHES = 0
+    if _SLOW_FLUSHES >= _SLOW_FLUSH_LIMIT and not _USE_PROCESS_POOL:
+        log.warning(
+            '⚠️ flush_operaciones excede 30s de forma recurrente; activando ProcessPoolExecutor'
+        )
+        _USE_PROCESS_POOL = True
 
     if pendientes:
         with _BUFFER_LOCK:
@@ -551,10 +593,10 @@ def flush_operaciones() ->None:
     _ULTIMO_FLUSH = time.time()
 
     if errores_sqlite == 0 and errores_parquet == 0:
-        log.info(f'✅ {len(operaciones)} operaciones guardadas correctamente.')
+        log.info(f'✅ {total_ops} operaciones guardadas correctamente.')
     else:
         log.warning(
-            f'⚠️ Guardadas {len(operaciones)} operaciones con errores — SQLite: {errores_sqlite}, Parquet: {errores_parquet}'
+            f'⚠️ Guardadas {total_ops} operaciones con errores — SQLite: {errores_sqlite}, Parquet: {errores_parquet}'
         )
 
 
