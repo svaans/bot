@@ -828,20 +828,31 @@ class Trader:
                                 pass
                         del self._tareas[nombre]
                         continue
+                    otra_activa = any(
+                        t.get_name() == nombre for t in asyncio.all_tasks()
+                    )
                     self._iniciar_tarea(nombre, self._factories[nombre])
-                    log.info(f'🔄 Tarea {nombre} reiniciada tras finalizar')
+                    log.info(
+                        f'🔄 Tarea {nombre} reiniciada tras finalizar (otra instancia activa: {otra_activa})'
+                    )
                     if nombre == 'data_feed':
                         log.debug('Data feed terminado y reiniciado por vigilancia')
                 else:
                     hb = task_heartbeat.get(nombre, last_alive)
-                    if (ahora - hb).total_seconds() > intervalo:
+                    elapsed = (ahora - hb).total_seconds()
+                    if elapsed > intervalo:
                         log.warning(
-                            f'⏰ Tarea {nombre} sin actividad. Reiniciando.'
+                            f'⏰ Tarea {nombre} sin actividad desde {hb.isoformat()} ({elapsed:.1f}s). Reiniciando.'
                         )
                         task.cancel()
                         await asyncio.gather(task, return_exceptions=True)
+                        otra_activa = any(
+                            t.get_name() == nombre for t in asyncio.all_tasks()
+                        )
                         self._iniciar_tarea(nombre, self._factories[nombre])
-                        log.info(f'🔄 Tarea {nombre} reiniciada por inactividad')
+                        log.info(
+                            f'🔄 Tarea {nombre} reiniciada por inactividad (otra instancia activa: {otra_activa})'
+                        )
                     else:
                         activos += 1
             for sym, ts in data_heartbeat.items():
