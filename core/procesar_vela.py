@@ -22,11 +22,22 @@ async def procesar_vela(trader, vela: dict) -> None:
     if symbol is None:
         log.error(f"❌ Vela sin símbolo: {vela}")
         return
-    campos_requeridos = {'timestamp', 'open', 'high', 'low', 'close', 'volume'}
+    campos_requeridos = {'timestamp', 'close'}
     if not campos_requeridos.issubset(vela):
         log.error(f"❌ Vela incompleta para {symbol}: {vela}")
         return
+    # Rellenar campos opcionales ausentes con valores por defecto para evitar errores
+    vela.setdefault('open', vela['close'])
+    vela.setdefault('high', vela['close'])
+    vela.setdefault('low', vela['close'])
+    vela.setdefault('volume', 0)
     estado = trader.estado[symbol]
+
+    # Asegurar que los buffers existen para evitar errores al usar len()
+    if not isinstance(estado.buffer, list):
+        estado.buffer = []
+    if not isinstance(estado.estrategias_buffer, list):
+        estado.estrategias_buffer = []
 
     inicio = time.time()  # ⏱️ para medir cuánto tarda
 
@@ -50,6 +61,9 @@ async def procesar_vela(trader, vela: dict) -> None:
     # Crear DataFrame y detectar tendencia
     df = pd.DataFrame(estado.buffer)
     df = df.drop(columns=['estrategias_activas'], errors='ignore')
+    if df.empty or 'close' not in df.columns:
+        log.error(f"❌ DataFrame inválido para {symbol}: {df}")
+        return
     estado.tendencia_detectada, _ = detectar_tendencia(symbol, df)
     trader.estado_tendencia[symbol] = estado.tendencia_detectada
 
@@ -78,7 +92,7 @@ async def procesar_vela(trader, vela: dict) -> None:
                     log.error(
                         f'🚨 Forzando cierre de {symbol} tras {estado.timeouts_salidas} timeouts'
                     )
-                    precio_cierre = float(df.iloc[-1].get('close'))
+                    precio_cierre = float(df['close'].iloc[-1])
                     try:
                         await trader.cerrar_operacion(
                             symbol, precio_cierre, 'timeout_salidas'
