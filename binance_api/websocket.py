@@ -175,6 +175,7 @@ async def escuchar_velas(
                             ultimo_cierre = float(o[4])
                 except Exception as e:
                     log.warning(f'❌ Error al backfillear {symbol}: {e}')
+                    tick('data_feed')
             try:
                 while True:
                     try:
@@ -202,6 +203,7 @@ async def escuchar_velas(
                     except Exception as e:
                         log.warning(f'❌ Error recibiendo datos de {symbol}: {e}')
                         await ws.close()
+                        tick('data_feed')
                         raise
                     try:
                         data = json.loads(msg)
@@ -213,6 +215,7 @@ async def escuchar_velas(
                         log.warning(
                             f'❌ Error procesando mensaje dentro del bucle {symbol}: {e}'
                             )
+                        tick('data_feed')
                         continue
                     if data.get('e') != 'kline':
                         log.debug(
@@ -253,6 +256,7 @@ async def escuchar_velas(
                             tick('data_feed')
                     except Exception as e:
                         log.warning(f'❌ Error en callback de {symbol}: {e}')
+                        tick('data_feed')
                         traceback.print_exc()
             finally:
                 log.info(
@@ -266,12 +270,12 @@ async def escuchar_velas(
                     except InactividadTimeoutError:
                         raise
                     except Exception:
-                        pass
+                        tick('data_feed')
                 try:
                     await ws.close()
                     await ws.wait_closed()
                 except Exception:
-                    pass
+                    tick('data_feed')
         except asyncio.CancelledError:
             log.info(f'🛑 Conexión WebSocket de {symbol} cancelada.')
             break
@@ -283,6 +287,7 @@ async def escuchar_velas(
             log.info(
                 f'🔁 Reintentando conexión en {backoff} segundos... (total reintentos: {total_reintentos})'
             )
+            tick('data_feed')
             await asyncio.sleep(backoff)
             backoff = min(60, backoff * 2)
 
@@ -430,6 +435,7 @@ async def escuchar_velas_combinado(
                     except Exception as e:
                         log.warning(f'❌ Error recibiendo datos: {e}')
                         await ws.close()
+                        tick('data_feed')
                         raise
                     try:
                         data = json.loads(msg)
@@ -440,6 +446,7 @@ async def escuchar_velas_combinado(
                         log.warning(
                             f'❌ Error procesando mensaje dentro del bucle combinado: {e}'
                         )
+                        tick('data_feed')
                         continue
                     stream = data.get('stream')
                     payload = data.get('data', {})
@@ -492,6 +499,7 @@ async def escuchar_velas_combinado(
                             tick('data_feed')
                     except Exception as e:
                         log.warning(f'❌ Error en callback de {symbol}: {e}')
+                        tick('data_feed')
                         traceback.print_exc()
             finally:
                 log.info(
@@ -505,12 +513,12 @@ async def escuchar_velas_combinado(
                     except InactividadTimeoutError:
                         raise
                     except Exception:
-                        pass
+                        tick('data_feed')
                 try:
                     await ws.close()
                     await ws.wait_closed()
                 except Exception:
-                    pass
+                    tick('data_feed')
         except asyncio.CancelledError:
             log.info('🛑 Conexión WebSocket combinada cancelada.')
             break
@@ -522,6 +530,7 @@ async def escuchar_velas_combinado(
             log.info(
                 f'🔁 Reintentando conexión en {backoff} segundos... (total reintentos: {total_reintentos})'
             )
+            tick('data_feed')
             await asyncio.sleep(backoff)
             backoff = min(60, backoff * 2)
 
@@ -557,7 +566,8 @@ async def _watchdog(
     except asyncio.CancelledError:
         raise
     except Exception:
-        pass
+        tick('data_feed')
+        tick_data(symbol)
 
 async def _keepalive(ws, symbol, intervalo=60):
     """Envía ping periódicamente para mantener viva la conexión."""
@@ -571,6 +581,7 @@ async def _keepalive(ws, symbol, intervalo=60):
             except Exception as e:
                 log.warning(f'❌ Ping falló para {symbol}: {e}')
                 await ws.close()
+                tick('data_feed')
                 break
     except asyncio.CancelledError:
         raise
@@ -590,3 +601,4 @@ def _habilitar_tcp_keepalive(ws):
             sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPCNT, 4)
     except Exception as e:
         log.debug(f'No se pudo configurar TCP keep-alive: {e}')
+        tick('data_feed')
