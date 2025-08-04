@@ -41,6 +41,7 @@ class Config:
     symbols: List[str]
     umbral_riesgo_diario: float
     min_order_eur: float
+    capital_currency: str | None = None
     persistencia_minima: int = 1
     peso_extra_persistencia: float = 0.5
     modo_capital_bajo: bool = False
@@ -98,33 +99,28 @@ class ConfigManager:
             datos = ', '.join(missing)
             log.error(f'❌ Faltan variables de entorno requeridas: {datos}')
             raise ValueError(f'Faltan datos de configuración: {datos}')
-        return Config(api_key=api_key, api_secret=api_secret, modo_real=os.
-            getenv('MODO_REAL', str(defaults.modo_real)).lower() == 'true',
-            intervalo_velas=os.getenv('INTERVALO_VELAS', defaults.
-            intervalo_velas), symbols=symbols, umbral_riesgo_diario=
-            _cargar_float('UMBRAL_RIESGO_DIARIO', defaults.
-            umbral_riesgo_diario), min_order_eur=_cargar_float(
-            'MIN_ORDER_EUR', defaults.min_order_eur), persistencia_minima=
-            _cargar_int('PERSISTENCIA_MINIMA', defaults.persistencia_minima
-            ), peso_extra_persistencia=_cargar_float(
-            'PESO_EXTRA_PERSISTENCIA', defaults.peso_extra_persistencia),
-            modo_capital_bajo=os.getenv('MODO_CAPITAL_BAJO', str(defaults.
-            modo_capital_bajo)).lower() == 'true', telegram_token=os.getenv
-            ('TELEGRAM_TOKEN', defaults.telegram_token), telegram_chat_id=
-            os.getenv('TELEGRAM_CHAT_ID', defaults.telegram_chat_id),
-            umbral_score_tecnico=_cargar_float('UMBRAL_SCORE_TECNICO',
-            defaults.umbral_score_tecnico), usar_score_tecnico=os.getenv(
-            'USAR_SCORE_TECNICO', str(defaults.usar_score_tecnico)).lower() ==
-            'true', contradicciones_bloquean_entrada=os.getenv(
-            'CONTRADICCIONES_BLOQUEAN_ENTRADA', str(defaults.
-            contradicciones_bloquean_entrada)).lower() == 'true',
-            registro_tecnico_csv=os.getenv(
-            'REGISTRO_TECNICO_CSV', os.path.join(log_dir,
-            'rechazos_tecnico.csv')), fracciones_piramide=int(os.getenv(
-            'FRACCIONES_PIRAMIDE', defaults.fracciones_piramide)),
-            reserva_piramide=float(os.getenv('RESERVA_PIRAMIDE', defaults.
-            reserva_piramide)), umbral_piramide=float(os.getenv(
-            'UMBRAL_PIRAMIDE', defaults.umbral_piramide)),
+        capital_currency = os.getenv('CAPITAL_CURRENCY')
+        return Config(
+            api_key=api_key,
+            api_secret=api_secret,
+            modo_real=os.getenv('MODO_REAL', str(defaults.modo_real)).lower() == 'true',
+            intervalo_velas=os.getenv('INTERVALO_VELAS', defaults.intervalo_velas),
+            symbols=symbols,
+            umbral_riesgo_diario=_cargar_float('UMBRAL_RIESGO_DIARIO', defaults.umbral_riesgo_diario),
+            min_order_eur=_cargar_float('MIN_ORDER_EUR', defaults.min_order_eur),
+            capital_currency=capital_currency,
+            persistencia_minima=_cargar_int('PERSISTENCIA_MINIMA', defaults.persistencia_minima),
+            peso_extra_persistencia=_cargar_float('PESO_EXTRA_PERSISTENCIA', defaults.peso_extra_persistencia),
+            modo_capital_bajo=os.getenv('MODO_CAPITAL_BAJO', str(defaults.modo_capital_bajo)).lower() == 'true',
+            telegram_token=os.getenv('TELEGRAM_TOKEN', defaults.telegram_token),
+            telegram_chat_id=os.getenv('TELEGRAM_CHAT_ID', defaults.telegram_chat_id),
+            umbral_score_tecnico=_cargar_float('UMBRAL_SCORE_TECNICO', defaults.umbral_score_tecnico),
+            usar_score_tecnico=os.getenv('USAR_SCORE_TECNICO', str(defaults.usar_score_tecnico)).lower() == 'true',
+            contradicciones_bloquean_entrada=os.getenv('CONTRADICCIONES_BLOQUEAN_ENTRADA', str(defaults.contradicciones_bloquean_entrada)).lower() == 'true',
+            registro_tecnico_csv=os.getenv('REGISTRO_TECNICO_CSV', os.path.join(log_dir, 'rechazos_tecnico.csv')),
+            fracciones_piramide=int(os.getenv('FRACCIONES_PIRAMIDE', defaults.fracciones_piramide)),
+            reserva_piramide=float(os.getenv('RESERVA_PIRAMIDE', defaults.reserva_piramide)),
+            umbral_piramide=float(os.getenv('UMBRAL_PIRAMIDE', defaults.umbral_piramide)),
             max_perdidas_diarias=_cargar_int('MAX_PERDIDAS_DIARIAS', defaults.max_perdidas_diarias),
             volumen_min_relativo=_cargar_float('VOLUMEN_MIN_RELATIVO', defaults.volumen_min_relativo),
             max_spread_ratio=_cargar_float('MAX_SPREAD_RATIO', defaults.max_spread_ratio),

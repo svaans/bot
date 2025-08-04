@@ -187,6 +187,7 @@ class Trader:
         self._tareas: dict[str, asyncio.Task] = {}
         self._factories: dict[str, Callable[[], Awaitable]] = {}
         self._stop_event = asyncio.Event()
+        self._limite_riesgo_notificado = False
         self._cerrado = False
         self.context_stream = StreamContexto()
         self.puntajes_contexto: Dict[str, float] = {}
@@ -1262,6 +1263,22 @@ class Trader:
         direccion: str, puntaje: float=0.0, umbral: float=0.0,
         detalles_tecnicos: (dict | None)=None, **kwargs) ->None:
         log.info('➡️ Entrando en _abrir_operacion_real()')
+        capital_total = sum(self.capital_inicial_diario.values())
+        if self.risk.riesgo_superado(capital_total):
+            log.warning(
+                f'⛔ No se abre posición en {symbol}: límite de riesgo diario superado.'
+            )
+            if not self._limite_riesgo_notificado and self.notificador:
+                try:
+                    await self.notificador.enviar_async(
+                        '🚨 Límite de riesgo diario superado. Bot pausado.',
+                        'CRITICAL',
+                    )
+                except Exception as e:
+                    log.error(f'❌ Error enviando notificación: {e}')
+                self._limite_riesgo_notificado = True
+            self._stop_event.set()
+            return
         cantidad_total = await self._calcular_cantidad_async(symbol, precio)
         if cantidad_total <= 0:
             capital_disp = self.capital_manager.capital_por_simbolo.get(
@@ -1353,6 +1370,20 @@ class Trader:
     async def evaluar_condiciones_de_entrada(self, symbol: str, df: pd.
         DataFrame, estado: EstadoSimbolo) ->(dict | None):
         log.info('➡️ Entrando en evaluar_condiciones_de_entrada()')
+        capital_total = sum(self.capital_inicial_diario.values())
+        if self.risk.riesgo_superado(capital_total):
+            log.warning('⛔ Límite de riesgo diario superado. Bloqueando nuevas entradas.')
+            if not self._limite_riesgo_notificado and self.notificador:
+                try:
+                    await self.notificador.enviar_async(
+                        '🚨 Límite de riesgo diario superado. Bot pausado.',
+                        'CRITICAL',
+                    )
+                except Exception as e:
+                    log.error(f'❌ Error enviando notificación: {e}')
+                self._limite_riesgo_notificado = True
+            self._stop_event.set()
+            return None
         if not self._validar_config(symbol):
             return None
         return await verificar_entrada(self, symbol, df, estado)

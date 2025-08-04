@@ -64,8 +64,6 @@ def test_abre_operacion(monkeypatch):
     opened = {}
 
     async def fake_eval(symbol, df, estado):
-        if trader.risk.riesgo_superado(1000):
-            return None
         return {'symbol': symbol, 'precio': df['close'].iloc[-1], 'sl': 90,
             'tp': 110, 'estrategias': {'s1': True}, 'tendencia': 'alcista',
             'direccion': 'long', 'puntaje': 5.0, 'umbral': 3.0}
@@ -88,8 +86,6 @@ def test_riesgo_bloquea(monkeypatch):
     called = {}
 
     async def fake_eval(symbol, df, estado):
-        if trader.risk.riesgo_superado(1000):
-            return None
         return {'symbol': symbol, 'precio': df['close'].iloc[-1], 'sl': 90,
             'tp': 110, 'estrategias': {'s1': True}, 'tendencia': 'alcista',
             'direccion': 'long', 'puntaje': 5.0, 'umbral': 3.0}

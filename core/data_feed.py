@@ -99,7 +99,7 @@ class DataFeed:
         self, symbol: str, handler: Callable[[dict], Awaitable[None]]
     ) -> None:
         """Mantiene un loop de conexión para ``symbol`` reiniciando automáticamente."""
-        attempts = 0
+        fallos_consecutivos = 0
         while True:
             try:
                 await escuchar_velas(
@@ -113,40 +113,40 @@ class DataFeed:
                     mensaje_timeout=self.tiempo_inactividad,
                 )
                 log.warning(f'🔁 Conexión de {symbol} finalizada; reintentando en 1s')
-                attempts = 0
+                fallos_consecutivos = 0
                 await asyncio.sleep(1)
             except asyncio.CancelledError:
                 raise
             except Exception as e:
                 log.warning(f'⚠️ Stream {symbol} falló: {e}. Reintentando en 5s')
-                attempts += 1
+                fallos_consecutivos += 1
                 try:
-                    if attempts == 1 or attempts % 5 == 0:
+                    if fallos_consecutivos == 1 or fallos_consecutivos % 5 == 0:
                         await self.notificador.enviar_async(
-                            f'⚠️ Stream {symbol} en reconexión (intento {attempts})',
+                            f'⚠️ Stream {symbol} en reconexión (intento {fallos_consecutivos})',
                             'WARN',
                         )
                 except Exception:
                     tick('data_feed')
                     pass
                 tick('data_feed')
-                if attempts >= self.max_stream_restarts:
+                if fallos_consecutivos >= self.max_stream_restarts:
                     log.error(
                         f'❌ Stream {symbol} superó el límite de {self.max_stream_restarts} intentos'
                     )
                     log.debug(
-                        f"Stream {symbol} detenido tras {attempts} intentos"
+                        f"Stream {symbol} detenido tras {fallos_consecutivos} intentos"
                     )
-                try:
-                    await self.notificador.enviar_async(
-                        f'❌ Stream {symbol} superó el límite de {self.max_stream_restarts} intentos',
-                        'CRITICAL',
-                    )
-                except Exception:
-                    tick('data_feed')
-                    pass
-                raise
-            await asyncio.sleep(5)
+                    try:
+                        await self.notificador.enviar_async(
+                            f'❌ Stream {symbol} superó el límite de {self.max_stream_restarts} intentos',
+                            'CRITICAL',
+                        )
+                    except Exception:
+                        tick('data_feed')
+                        pass
+                    raise
+                await asyncio.sleep(5)
                 
 
     async def _monitor_global_inactividad(self) -> None:
@@ -187,7 +187,7 @@ class DataFeed:
                                 self._symbols, self._handler_actual
                             ),
                             "stream_combined",
-                            max_restarts=self.max_stream_restarts,
+                            max_restarts=0,
                         )
                         log.info(
                             "📡 _stream_combinado reiniciado para %s", self._symbols
@@ -218,7 +218,7 @@ class DataFeed:
                         self._tasks[sym] = supervised_task(
                             lambda sym=sym: self.stream(sym, self._handler_actual),
                             f"stream_{sym}",
-                            max_restarts=self.max_stream_restarts,
+                            max_restarts=0,
                         )
                         log.info("📡 stream reiniciado para %s", sym)
                         log.debug(
@@ -262,7 +262,7 @@ class DataFeed:
             self._tasks['combined'] = supervised_task(
                 lambda: self._stream_combinado(self._symbols, handler),
                 'stream_combined',
-                max_restarts=self.max_stream_restarts,
+                max_restarts=0,
             )
         else:
             for sym in self._symbols:
@@ -272,7 +272,7 @@ class DataFeed:
                 self._tasks[sym] = supervised_task(
                     lambda sym=sym: self.stream(sym, handler),
                     f'stream_{sym}',
-                    max_restarts=self.max_stream_restarts,
+                    max_restarts=0,
                 )
         if self._tasks:
             while self._running and any(

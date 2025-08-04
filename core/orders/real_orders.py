@@ -628,12 +628,14 @@ async def flush_periodico(
     interval: int = _FLUSH_INTERVAL,
     heartbeat: int = 30,
     max_fallos: int = 5,
+    reintento: int = 300,
 ) -> None:
     log.info('➡️ Entrando en flush_periodico()')
     """
     Ejecuta :func:`flush_operaciones` cada ``interval`` segundos.
     Emite ``tick('flush')`` periódicamente para evitar reinicios por inactividad.
-    Tras ``max_fallos`` errores consecutivos, detiene el ciclo y notifica.
+    Tras ``max_fallos`` errores consecutivos, espera ``reintento`` segundos,
+    notifica el fallo y reintenta el ciclo.
     """
     fallos_consecutivos = 0
     try:
@@ -666,7 +668,9 @@ async def flush_periodico(
                     notificador.enviar(mensaje, 'CRITICAL')
                 except Exception:
                     pass
-                break
+                log.info(f'Reintentando flush en {reintento}s...')
+                await asyncio.sleep(reintento)
+                fallos_consecutivos = 0
     except asyncio.CancelledError:
         log.info('🛑 flush_periodico cancelado correctamente.')
         raise

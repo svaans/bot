@@ -1,5 +1,6 @@
 from __future__ import annotations
 import asyncio
+from collections import Counter
 from datetime import datetime
 from typing import Dict
 from config.config_manager import Config
@@ -25,25 +26,33 @@ class CapitalManager:
         self.modo_capital_bajo = config.modo_capital_bajo
         self.riesgo_maximo_diario = 1.0
         self._markets = None
-        euros = 0.0
+        self.capital_currency = getattr(config, 'capital_currency', None)
+        if not self.capital_currency:
+            self.capital_currency = self._detectar_divisa_principal(config.symbols)
+        capital_total = 0.0
         if self.modo_real and self.cliente:
             try:
                 balance = self.cliente.fetch_balance()
-                euros = balance['total'].get('EUR', 0)
+                capital_total = balance['total'].get(self.capital_currency, 0)
             except Exception as e:
                 log.error(f'❌ Error al obtener balance: {e}')
         else:
-            euros = 1000.0
-        inicial = euros / max(len(config.symbols), 1)
+            capital_total = 1000.0
+        inicial = capital_total / max(len(config.symbols), 1)
         inicial = max(inicial, 20.0)
-        self.capital_por_simbolo: Dict[str, float] = {s: inicial for s in
-            config.symbols}
+        self.capital_por_simbolo: Dict[str, float] = {s: inicial for s in config.symbols}
         self.capital_inicial_diario = self.capital_por_simbolo.copy()
-        self.reservas_piramide: Dict[str, float] = {s: (0.0) for s in
-            config.symbols}
+        self.reservas_piramide: Dict[str, float] = {s: 0.0 for s in config.symbols}
         self.fecha_actual = datetime.utcnow().date()
         if bus:
             self.subscribe(bus)
+
+    @staticmethod
+    def _detectar_divisa_principal(symbols: list[str]) -> str:
+        monedas = [s.split('/')[-1] for s in symbols if '/' in s]
+        if not monedas:
+            return 'EUR'
+        return Counter(monedas).most_common(1)[0][0]
 
     def subscribe(self, bus: EventBus) -> None:
         bus.subscribe('calcular_cantidad', self._on_calcular_cantidad)
@@ -85,13 +94,13 @@ class CapitalManager:
         log.info('➡️ Entrando en calcular_cantidad_async()')
         if self.modo_real and self.cliente:
             balance = await fetch_balance_async(self.cliente)
-            euros = balance['total'].get('EUR', 0)
+            capital_total = balance['total'].get(self.capital_currency, 0)
         else:
-            euros = self.capital_por_simbolo.get(symbol, 0)
-        if euros <= 0:
-            log.debug('Saldo en EUR insuficiente')
+            capital_total = self.capital_por_simbolo.get(symbol, 0)
+        if capital_total <= 0:
+            log.debug(f'Saldo insuficiente en {self.capital_currency}')
             return 0.0
-        capital_symbol = self.capital_por_simbolo.get(symbol, euros / max(
+        capital_symbol = self.capital_por_simbolo.get(symbol, capital_total / max(
             len(self.capital_por_simbolo), 1))
         fraccion = self.fraccion_kelly
         puntaje_macro = obtener_puntaje_contexto(symbol)
@@ -99,36 +108,36 @@ class CapitalManager:
         if abs(puntaje_macro) > umbral_macro:
             fraccion *= 0.5
             log.debug(f'📉 Ajuste por contexto macro {puntaje_macro:.2f} para {symbol}')
-        if self.modo_capital_bajo and euros < 500:
-            deficit = (500 - euros) / 500
+        if self.modo_capital_bajo and capital_total < 500:
+            deficit = (500 - capital_total) / 500
             fraccion = max(fraccion, 0.02 + deficit * 0.1)
         riesgo_teorico = capital_symbol * fraccion * self.risk.umbral
         if exposicion_total > 0:
-            ajuste = max(0.0, 1 - exposicion_total / (euros * self.riesgo_maximo_diario))
+            ajuste = max(0.0, 1 - exposicion_total / (capital_total * self.riesgo_maximo_diario))
             riesgo_teorico *= ajuste
-        minimo_dinamico = max(10.0, euros * 0.02)
+        minimo_dinamico = max(10.0, capital_total * 0.02)
         riesgo = max(riesgo_teorico, minimo_dinamico)
-        riesgo = min(riesgo, euros * self.riesgo_maximo_diario)
-        riesgo = min(riesgo, euros)
+        riesgo = min(riesgo, capital_total * self.riesgo_maximo_diario)
+        riesgo = min(riesgo, capital_total)
         minimo_binance = await self._obtener_minimo_binance(symbol)
         cantidad = riesgo / precio
         if cantidad * precio < minimo_dinamico:
             log.debug(
-                f'Orden mínima {minimo_dinamico:.2f}€, intento {cantidad * precio:.2f}€'
+                f'Orden mínima {minimo_dinamico:.2f}{self.capital_currency}, intento {cantidad * precio:.2f}{self.capital_currency}'
                 )
             return 0.0
         if minimo_binance and cantidad * precio < minimo_binance:
             log.warning(
-                f'⛔ Orden para {symbol} por {cantidad * precio:.2f}€ inferior al mínimo Binance {minimo_binance:.2f}€'
+                f'⛔ Orden para {symbol} por {cantidad * precio:.2f}{self.capital_currency} inferior al mínimo Binance {minimo_binance:.2f}{self.capital_currency}'
             )
             return 0.0
         log.info(
-            '⚖️ Kelly ajustada: %.4f | Riesgo teórico: %.2f€ | Mínimo dinámico: %.2f€ | Riesgo final: %.2f€'
-            , fraccion, riesgo_teorico, minimo_dinamico, riesgo)
+            '⚖️ Kelly ajustada: %.4f | Riesgo teórico: %.2f%s | Mínimo dinámico: %.2f%s | Riesgo final: %.2f%s',
+            fraccion, riesgo_teorico, self.capital_currency, minimo_dinamico, self.capital_currency, riesgo, self.capital_currency)
         log.info(
-            '📊 Capital disponible: %.2f€ | Orden: %.2f€ | Mínimo Binance: %s | %s'
-            , euros, cantidad * precio, f'{minimo_binance:.2f}€' if
-            minimo_binance else 'desconocido', symbol)
+            '📊 Capital disponible: %.2f%s | Orden: %.2f%s | Mínimo Binance: %s | %s',
+            capital_total, self.capital_currency, cantidad * precio, self.capital_currency,
+            f'{minimo_binance:.2f}{self.capital_currency}' if minimo_binance else 'desconocido', symbol)
         return round(cantidad, 6)
 
     def actualizar_capital(self, symbol: str, retorno_total: float) ->float:
