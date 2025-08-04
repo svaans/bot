@@ -163,6 +163,9 @@ class DataFeed:
                         log.warning(
                             "🔄 Stream combinado inactivo o finalizado; reiniciando"
                         )
+                        log.debug(
+                            f"Tareas antes de reinicio: {list(self._tasks.keys())}"
+                        )
                         if not task.done():
                             task.cancel()
                             await asyncio.gather(task, return_exceptions=True)
@@ -172,6 +175,9 @@ class DataFeed:
                             ),
                             "stream_combined",
                             max_restarts=self.max_stream_restarts,
+                        )
+                        log.debug(
+                            f"Tareas después de reinicio: {list(self._tasks.keys())}"
                         )
                     continue
 
@@ -184,6 +190,9 @@ class DataFeed:
                         log.warning(
                             f"🔄 Stream {sym} inactivo o finalizado; relanzando"
                         )
+                        log.debug(
+                            f"Tareas antes de reinicio: {list(self._tasks.keys())}"
+                        )
                         if not task.done():
                             task.cancel()
                             await asyncio.gather(task, return_exceptions=True)
@@ -191,6 +200,9 @@ class DataFeed:
                             lambda sym=sym: self.stream(sym, self._handler_actual),
                             f"stream_{sym}",
                             max_restarts=self.max_stream_restarts,
+                        )
+                        log.debug(
+                            f"Tareas después de reinicio: {list(self._tasks.keys())}"
                         )
         
         except asyncio.CancelledError:
@@ -238,7 +250,10 @@ class DataFeed:
                     max_restarts=self.max_stream_restarts,
                 )
         if self._tasks:
-            await asyncio.gather(*self._tasks.values())
+            while self._running and any(
+                not t.done() for t in self._tasks.values()
+            ):
+                await asyncio.sleep(0.1)
         for nombre, tarea in self._tasks.items():
             estado = 'done' if tarea.done() else 'pending'
             if tarea.done() and tarea.exception():
