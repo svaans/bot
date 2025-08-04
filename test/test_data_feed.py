@@ -201,3 +201,44 @@ def test_inactivity_intervals_parameter():
 def test_monitor_interval_minimum():
     feed = DataFeed('1m', monitor_interval=0)
     assert feed.monitor_interval == 1
+
+
+def test_activos_after_relaunch(monkeypatch):
+    runs = []
+
+    async def fake_listen(symbol, interval, handler, *args, **kwargs):
+        runs.append(symbol)
+        await asyncio.sleep(0.01)
+
+    monkeypatch.setattr('core.data_feed.escuchar_velas', fake_listen)
+
+    async def fake_monitor(self):
+        await asyncio.sleep(0.005)
+        task = self._tasks.get('BTC/EUR')
+        if task and not task.done():
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+            self._tasks['BTC/EUR'] = asyncio.create_task(
+                self.stream('BTC/EUR', self._handler_actual)
+            )
+        await asyncio.sleep(0.01)
+
+    monkeypatch.setattr(DataFeed, '_monitor_global_inactividad', fake_monitor)
+
+    feed = DataFeed('1m')
+
+    async def run():
+        task = asyncio.create_task(
+            feed.escuchar(['BTC/EUR', 'ETH/EUR'], lambda c: None)
+        )
+        await asyncio.sleep(0.05)
+        activos = feed.activos
+        await feed.detener()
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+        return activos
+
+    activos = asyncio.run(run())
+    assert sorted(activos) == ['BTC/EUR', 'ETH/EUR']
+    assert runs.count('BTC/EUR') >= 2
