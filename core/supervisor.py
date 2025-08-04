@@ -46,6 +46,9 @@ def tick_data(symbol: str) -> None:
     """Actualiza la marca de tiempo de la última vela recibida para ``symbol``."""
     ahora = datetime.utcnow()
     data_heartbeat[symbol] = ahora
+    if symbol in last_data_alert:
+        log.info("✅ %s retomó latidos de datos", symbol)
+        last_data_alert.pop(symbol, None)
     # Registro detallado para depuración de problemas de "sin datos"
     log.debug("tick_data registrado para %s a las %s", symbol, ahora.isoformat())
 
