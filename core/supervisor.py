@@ -32,6 +32,7 @@ data_heartbeat: Dict[str, datetime] = {}
 TIMEOUT_SIN_DATOS = max(intervalo_a_segundos(INTERVALO_VELAS) * 2, 60)
 ALERTA_SIN_DATOS_INTERVALO = 300  # segundos entre alertas repetidas
 last_data_alert: Dict[str, datetime] = {}
+reinicios_inactividad: Dict[str, int] = {}
 notificador = crear_notificador_desde_env()
 
 
@@ -51,6 +52,16 @@ def tick_data(symbol: str) -> None:
         last_data_alert.pop(symbol, None)
     # Registro detallado para depuración de problemas de "sin datos"
     log.debug("tick_data registrado para %s a las %s", symbol, ahora.isoformat())
+
+
+def registrar_reinicio_inactividad(symbol: str) -> None:
+    """Incrementa el contador de reinicios por inactividad para ``symbol``."""
+    reinicios_inactividad[symbol] = reinicios_inactividad.get(symbol, 0) + 1
+    log.debug(
+        "Reinicio por inactividad registrado para %s (total=%s)",
+        symbol,
+        reinicios_inactividad[symbol],
+    )
 
 
 def heartbeat(interval: int = 60) -> None:
@@ -188,6 +199,8 @@ __all__ = [
     "supervised_task",
     "tick",
     "tick_data",
+    "registrar_reinicio_inactividad",
+    "reinicios_inactividad",
     "tasks",
     "task_heartbeat",
     "data_heartbeat",
