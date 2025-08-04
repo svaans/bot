@@ -6,7 +6,12 @@ from datetime import datetime
 from binance_api.websocket import escuchar_velas, escuchar_velas_combinado
 from core.utils.logger import configurar_logger
 from core.utils import intervalo_a_segundos
-from core.supervisor import tick, tick_data, supervised_task
+from core.supervisor import (
+    tick,
+    tick_data,
+    supervised_task,
+    registrar_reinicio_inactividad,
+)
 from core.notificador import crear_notificador_desde_env
 log = configurar_logger('datafeed', modo_silencioso=True)
 
@@ -122,7 +127,9 @@ class DataFeed:
                             'WARN',
                         )
                 except Exception:
+                    tick('data_feed')
                     pass
+                tick('data_feed')
                 if attempts >= self.max_stream_restarts:
                     log.error(
                         f'❌ Stream {symbol} superó el límite de {self.max_stream_restarts} intentos'
@@ -131,13 +138,14 @@ class DataFeed:
                         f"Stream {symbol} detenido tras {attempts} intentos"
                     )
                     try:
-                        await self.notificador.enviar_async(
-                            f'❌ Stream {symbol} superó el límite de {self.max_stream_restarts} intentos',
-                            'CRITICAL',
-                        )
-                    except Exception:
-                        pass
-                    raise
+                    await self.notificador.enviar_async(
+                        f'❌ Stream {symbol} superó el límite de {self.max_stream_restarts} intentos',
+                        'CRITICAL',
+                    )
+                except Exception:
+                    tick('data_feed')
+                    pass
+                raise
                 await asyncio.sleep(5)
                 
 
@@ -156,12 +164,15 @@ class DataFeed:
                     task = self._tasks.get("combined")
                     if not task:
                         continue
-                    inactivo = any(
-                        self._last.get(sym)
-                        and (ahora - self._last[sym]).total_seconds() > self.tiempo_inactividad
+                    inactivos = [
+                        sym
                         for sym in self._symbols
-                    )
-                    if task.done() or inactivo:
+                    if (
+                            self._last.get(sym)
+                            and (ahora - self._last[sym]).total_seconds() > self.tiempo_inactividad
+                        )
+                    ]
+                    if task.done() or inactivos:
                         log.warning(
                             "🔄 Stream combinado inactivo o finalizado; reiniciando"
                         )
@@ -184,14 +195,17 @@ class DataFeed:
                         log.debug(
                             f"Tareas después de reinicio: {list(self._tasks.keys())}"
                         )
+                        for sym in inactivos:
+                            registrar_reinicio_inactividad(sym)
                     continue
 
                 for sym, task in list(self._tasks.items()):
                     ultimo = self._last.get(sym)
-                    if task.done() or (
+                    inactivo = (
                         ultimo
                         and (ahora - ultimo).total_seconds() > self.tiempo_inactividad
-                    ):
+                    )
+                    if task.done() or inactivo:
                         log.warning(
                             f"🔄 Stream {sym} inactivo o finalizado; relanzando"
                         )
@@ -210,8 +224,11 @@ class DataFeed:
                         log.debug(
                             f"Tareas después de reinicio: {list(self._tasks.keys())}"
                         )
+                        if inactivo:
+                            registrar_reinicio_inactividad(sym)
         
         except asyncio.CancelledError:
+            tick('data_feed')
             pass
 
     async def escuchar(
