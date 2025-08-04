@@ -18,7 +18,7 @@ import atexit
 import threading
 import asyncio
 from typing import Any
-from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from datetime import datetime
 from binance_api.cliente import obtener_cliente
 from .order_model import Order
@@ -54,6 +54,8 @@ _SLOW_FLUSHES = 0
 _SLOW_FLUSH_THRESHOLD = 30
 _SLOW_FLUSH_LIMIT = 3
 _USE_PROCESS_POOL = False
+_FLUSH_BATCH_SIZE = int(os.getenv('FLUSH_BATCH_SIZE', '100') or 100)
+"""Número máximo de operaciones a persistir por lote."""
 
 
 def esperar_balance(cliente, symbol: str, cantidad_esperada: float,
@@ -545,10 +547,21 @@ def _persistir_operaciones(operaciones: list[dict]) -> tuple[int, int, list[dict
     return errores_sqlite, errores_parquet, pendientes
 
 
+def _chunked(seq: list, size: int):
+    """Divide ``seq`` en lotes del ``size`` indicado."""
+    for i in range(0, len(seq), size):
+        yield seq[i : i + size]
+
+
 def flush_operaciones() ->None:
     global _SLOW_FLUSHES, _USE_PROCESS_POOL, _ULTIMO_FLUSH
     log.info('➡️ Entrando en flush_operaciones()')
-    """Guarda en disco todas las operaciones acumuladas en el buffer de forma segura y eficiente."""
+    """Guarda en disco todas las operaciones acumuladas.
+
+    Las operaciones se procesan en lotes para minimizar el impacto de las
+    iteraciones largas sobre SQLite y las escrituras en Parquet manejadas por
+    :mod:`pandas`.
+    """
     with _BUFFER_LOCK:
         operaciones = list(_BUFFER_OPERACIONES)
         _BUFFER_OPERACIONES.clear()
@@ -557,12 +570,23 @@ def flush_operaciones() ->None:
         return
     log.info(f'📝 Iniciando flush_operaciones con {total_ops} operaciones.')
     inicio = time.time()
+    errores_sqlite = errores_parquet = 0
+    pendientes: list[dict] = []
+    batches = list(_chunked(operaciones, _FLUSH_BATCH_SIZE))
     if _USE_PROCESS_POOL:
         with ProcessPoolExecutor() as executor:
-            future = executor.submit(_persistir_operaciones, operaciones)
-            errores_sqlite, errores_parquet, pendientes = future.result()
+            futures = [executor.submit(_persistir_operaciones, b) for b in batches]
+            for f in as_completed(futures):
+                e_sql, e_parq, pend = f.result()
+                errores_sqlite += e_sql
+                errores_parquet += e_parq
+                pendientes.extend(pend)
     else:
-        errores_sqlite, errores_parquet, pendientes = _persistir_operaciones(operaciones)
+        for b in batches:
+            e_sql, e_parq, pend = _persistir_operaciones(b)
+            errores_sqlite += e_sql
+            errores_parquet += e_parq
+            pendientes.extend(pend)
     duracion = time.time() - inicio
     mensaje_timeout = int(os.getenv('MENSAJE_TIMEOUT', '0') or 0)
     inactivity_intervals = int(os.getenv('INACTIVITY_INTERVALS', '0') or 0)
