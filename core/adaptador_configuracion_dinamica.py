@@ -119,9 +119,7 @@ def _adaptar_configuracion_indicadores(symbol: str, df: pd.DataFrame) ->dict:
     elif atr_pct < 0.01 and abs(slope_pct) > 0.001:
         cooldown_tras_perdida = 1
     diversidad_minima = 2
-    if atr_pct < 0.012 or slope_pct > 0.003:
-        diversidad_minima = 1
-    elif modo_agresivo and atr_pct < 0.015:
+    if modo_agresivo or atr_pct < 0.012 or slope_pct > 0.003:
         diversidad_minima = 1
     config = {'modo_agresivo': modo_agresivo, 'factor_umbral': round(
         factor_umbral, 2), 'tp_ratio': round(tp_ratio, 2), 'sl_ratio':

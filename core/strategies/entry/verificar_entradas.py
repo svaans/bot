@@ -108,6 +108,15 @@ async def verificar_entrada(trader, symbol: str, df: pd.DataFrame, estado) ->(
         estrategias_persistentes)
     peso_min_total = config.get('peso_minimo_total', 0.5)
     diversidad_min = config.get('diversidad_minima', 2)
+    rsi = calcular_rsi(df)
+    momentum = calcular_momentum(df)
+    slope = calcular_slope(df)
+    if trader.usar_score_tecnico:
+        score_tecnico, puntos_tecnicos = trader._calcular_score_tecnico(df, rsi,
+            momentum, tendencia, direccion)
+    else:
+        score_tecnico = None
+        puntos_tecnicos = None
     ok_pers, valor_pers, minimo_pers = trader._evaluar_persistencia(symbol,
         estado, df, trader.pesos_por_simbolo.get(symbol, {}), tendencia,
         puntaje, umbral, estrategias)
@@ -115,11 +124,19 @@ async def verificar_entrada(trader, symbol: str, df: pd.DataFrame, estado) ->(
     if not trader._validar_puntaje(symbol, puntaje, umbral, config.get(
         'modo_agresivo', False)):
         razones.append('puntaje')
-    if not await trader._validar_diversidad(symbol, peso_total,
+    diversidad_ok = await trader._validar_diversidad(symbol, peso_total,
         peso_min_total, estrategias_persistentes, diversidad_min, trader.
-        pesos_por_simbolo.get(symbol, {}), df, config.get('modo_agresivo', 
-        False)):
-        razones.append('diversidad')
+        pesos_por_simbolo.get(symbol, {}), df, config.get('modo_agresivo',
+        False))
+    if not diversidad_ok:
+        umbral_peso_unico = config.get('umbral_peso_estrategia_unica',
+            peso_min_total * 1.5)
+        umbral_score_unico = config.get('umbral_score_estrategia_unica',
+            trader.umbral_score_tecnico * 1.5)
+        high_weight = peso_total >= umbral_peso_unico
+        high_score = (score_tecnico or 0) >= umbral_score_unico
+        if not (high_weight or high_score or config.get('modo_agresivo', False)):
+            razones.append('diversidad')
     if not trader._validar_estrategia(symbol, df, estrategias, config):
         razones.append('estrategia')
     if not ok_pers:
@@ -132,13 +149,8 @@ async def verificar_entrada(trader, symbol: str, df: pd.DataFrame, estado) ->(
                 metricas_tracker.registrar_filtro(r)
             return None
     if trader.usar_score_tecnico:
-        rsi = calcular_rsi(df)
-        momentum = calcular_momentum(df)
-        slope = calcular_slope(df)
-        score_tecnico, puntos = trader._calcular_score_tecnico(df, rsi,
-            momentum, tendencia, direccion)
         log.debug(
-            f'[{symbol}] Score técnico {score_tecnico:.2f} componentes: {puntos}'
+            f'[{symbol}] Score técnico {score_tecnico:.2f} componentes: {puntos_tecnicos}'
             )
     else:
         score_tecnico = None

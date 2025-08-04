@@ -17,7 +17,9 @@
         "trailing_por_atr": true,
         "usar_cierre_parcial": true,
         "umbral_operacion_grande": 30.0,
-        "beneficio_minimo_parcial": 5.0
+        "beneficio_minimo_parcial": 5.0,
+        "umbral_peso_estrategia_unica": 3.5,
+        "umbral_score_estrategia_unica": 5.0
     },
     "ETH/EUR": {
         "factor_umbral": 1.5,
@@ -37,7 +39,9 @@
         "trailing_por_atr": true,
         "usar_cierre_parcial": true,
         "umbral_operacion_grande": 30.0,
-        "beneficio_minimo_parcial": 5.0
+        "beneficio_minimo_parcial": 5.0,
+        "umbral_peso_estrategia_unica": 3.5,
+        "umbral_score_estrategia_unica": 5.0
     },
     "ADA/EUR": {
         "factor_umbral": 1.5,
@@ -57,7 +61,9 @@
         "trailing_por_atr": true,
         "usar_cierre_parcial": true,
         "umbral_operacion_grande": 30.0,
-        "beneficio_minimo_parcial": 5.0
+        "beneficio_minimo_parcial": 5.0,
+        "umbral_peso_estrategia_unica": 3.5,
+        "umbral_score_estrategia_unica": 5.0
     },
     "SOL/EUR": {
         "factor_umbral": 1.5,
@@ -77,7 +83,9 @@
         "trailing_por_atr": true,
         "usar_cierre_parcial": true,
         "umbral_operacion_grande": 30.0,
-        "beneficio_minimo_parcial": 5.0
+        "beneficio_minimo_parcial": 5.0,
+        "umbral_peso_estrategia_unica": 3.5,
+        "umbral_score_estrategia_unica": 5.0
     },
     "BNB/EUR": {
         "factor_umbral": 1.5,
@@ -97,6 +105,8 @@
         "trailing_por_atr": true,
         "usar_cierre_parcial": true,
         "umbral_operacion_grande": 30.0,
-        "beneficio_minimo_parcial": 5.0
+        "beneficio_minimo_parcial": 5.0,
+        "umbral_peso_estrategia_unica": 3.5,
+        "umbral_score_estrategia_unica": 5.0
     }
 }

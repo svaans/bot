@@ -79,6 +79,8 @@ def _adaptar_configuracion_base(symbol: str, df: pd.DataFrame, base_config: dict
     cooldown = min(24, max(0, int(volatilidad * 100)))
     config['cooldown_tras_perdida'] = cooldown
     config['modo_agresivo'] = volatilidad > 0.01 or slope > 0.003
+    if config['modo_agresivo']:
+        config['diversidad_minima'] = 1
     config['ponderar_por_diversidad'] = config['diversidad_minima'] <= 2
     base_mult = base_config.get('multiplicador_estrategias_recurrentes', 1.5)
     config['multiplicador_estrategias_recurrentes'] = round(min(3.0, 

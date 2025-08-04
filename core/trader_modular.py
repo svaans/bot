@@ -402,6 +402,26 @@ class Trader:
         except Exception as e:
             log.warning(f'⚠️ Error registrando salida en {archivo}: {e}')
 
+    async def _cerrar_posiciones_por_riesgo(self) ->None:
+        log.info('➡️ Entrando en _cerrar_posiciones_por_riesgo()')
+        """Cierra todas las posiciones abiertas cuando se supera el riesgo."""
+        ordenes = list(self.orders.ordenes.items())
+        for symbol, orden in ordenes:
+            try:
+                df = self._obtener_historico(symbol)
+                precio = orden.precio_entrada
+                if self.modo_real:
+                    try:
+                        ticker = await fetch_ticker_async(self.cliente, symbol)
+                        precio = float(ticker.get('last', precio))
+                    except Exception as e:
+                        log.error(f'❌ Error obteniendo precio actual para {symbol}: {e}')
+                elif df is not None and 'close' in df:
+                    precio = float(df['close'].iloc[-1])
+                await self._cerrar_y_reportar(orden, precio, 'Límite riesgo diario', df=df)
+            except Exception as e:
+                log.error(f'❌ Error cerrando {symbol} por riesgo: {e}')
+
     async def _cerrar_parcial_y_reportar(self, orden, cantidad: float,
         precio: float, motivo: str, df: (pd.DataFrame | None)=None) ->bool:
         log.info('➡️ Entrando en _cerrar_parcial_y_reportar()')
@@ -1311,6 +1331,7 @@ class Trader:
                 except Exception as e:
                     log.error(f'❌ Error enviando notificación: {e}')
                 self._limite_riesgo_notificado = True
+                await self._cerrar_posiciones_por_riesgo()
             self._stop_event.set()
             return
         cantidad_total = await self._calcular_cantidad_async(symbol, precio, sl)
@@ -1416,6 +1437,7 @@ class Trader:
                 except Exception as e:
                     log.error(f'❌ Error enviando notificación: {e}')
                 self._limite_riesgo_notificado = True
+                await self._cerrar_posiciones_por_riesgo()
             self._stop_event.set()
             return None
         if not self._validar_config(symbol):
