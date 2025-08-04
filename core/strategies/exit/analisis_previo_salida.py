@@ -9,11 +9,15 @@ from core.utils import configurar_logger
 log = configurar_logger('analisis_salidas')
 
 
-def precio_cerca_de_soporte(df: pd.DataFrame, precio: float, ventana: int=
-    30, margen: float=0.003) ->bool:
+def precio_cerca_de_soporte(
+    df: pd.DataFrame, precio: float, ventana: int = 30, margen: float = 0.003
+) -> bool:
     log.info('➡️ Entrando en precio_cerca_de_soporte()')
     """Comprueba si ``precio`` está cerca de un soporte reciente y validado."""
-    if 'low' not in df or len(df) < ventana:
+    if not isinstance(df, pd.DataFrame):
+        return False
+    columnas_requeridas = {'low', 'open', 'close'}
+    if not columnas_requeridas.issubset(df.columns) or len(df) < ventana:
         return False
     recientes = df.tail(ventana)
     soporte = recientes['low'].min()
@@ -121,8 +125,9 @@ def evaluar_condiciones_de_cierre_anticipado(symbol: str, df: pd.DataFrame,
     return True
 
 
-def permitir_cierre_tecnico(symbol: str, df: pd.DataFrame, sl: float,
-    precio: float) ->bool:
+def permitir_cierre_tecnico(
+    symbol: str, df: pd.DataFrame, sl: float, precio: float
+) -> bool:
     log.info('➡️ Entrando en permitir_cierre_tecnico()')
     """Decide si se permite cerrar la operación ignorando posibles rebotes."""
     orden = None
@@ -130,9 +135,14 @@ def permitir_cierre_tecnico(symbol: str, df: pd.DataFrame, sl: float,
         orden = precio
         precio = sl
         sl = orden.get('stop_loss', precio)
-    if df is None or len(df) < 40:
+    if not isinstance(df, pd.DataFrame) or len(df) < 40:
         log.warning(
             f'[{symbol}] Datos insuficientes para análisis técnico de salida.')
+        return True
+    columnas_requeridas = {'open', 'close', 'low', 'high', 'volume'}
+    if not columnas_requeridas.issubset(df.columns):
+        log.warning(
+            f'[{symbol}] DataFrame inválido para análisis técnico de salida.')
         return True
     df = df.tail(60).copy()
     ultimas = df.tail(3)
