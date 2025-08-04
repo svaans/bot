@@ -178,6 +178,9 @@ class DataFeed:
                             "stream_combined",
                             max_restarts=self.max_stream_restarts,
                         )
+                        log.info(
+                            "📡 _stream_combinado reiniciado para %s", self._symbols
+                        )
                         log.debug(
                             f"Tareas después de reinicio: {list(self._tasks.keys())}"
                         )
@@ -203,6 +206,7 @@ class DataFeed:
                             f"stream_{sym}",
                             max_restarts=self.max_stream_restarts,
                         )
+                        log.info("📡 stream reiniciado para %s", sym)
                         log.debug(
                             f"Tareas después de reinicio: {list(self._tasks.keys())}"
                         )
@@ -222,9 +226,11 @@ class DataFeed:
         Si ``cliente`` se proporciona, se usará para recuperar velas perdidas tras
         una reconexión.
         """
+        symbols_list = list(symbols)
+        log.info("🎯 Símbolos recibidos: %s", symbols_list)
         await self.detener()
         self._handler_actual = handler
-        self._symbols = list(symbols)
+        self._symbols = symbols_list
         if cliente is not None:
             self._cliente = cliente
         self._running = True
