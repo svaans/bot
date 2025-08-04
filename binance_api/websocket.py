@@ -129,7 +129,9 @@ async def escuchar_velas(
                 ),
                 timeout=15,
             )
-            log.info(f'🔌 WebSocket conectado para {symbol} ({intervalo})')
+            log.info(
+                f"🔌 WebSocket conectado para {symbol} ({intervalo}) a las {datetime.utcnow().isoformat()}"
+            )
             _habilitar_tcp_keepalive(ws)
             intentos = 0
             backoff = 5
@@ -253,6 +255,9 @@ async def escuchar_velas(
                         log.warning(f'❌ Error en callback de {symbol}: {e}')
                         traceback.print_exc()
             finally:
+                log.info(
+                    f"🔻 WebSocket desconectado para {symbol} a las {datetime.utcnow().isoformat()}"
+                )
                 for t in (watchdog, keeper):
                     t.cancel()
                 for t in (watchdog, keeper):
@@ -337,7 +342,9 @@ async def escuchar_velas_combinado(
                 ),
                 timeout=15,
             )
-            log.info(f'🔌 WebSocket combinado conectado para {symbols} ({intervalo})')
+            log.info(
+                f"🔌 WebSocket combinado conectado para {symbols} ({intervalo}) a las {datetime.utcnow().isoformat()}"
+            )
             _habilitar_tcp_keepalive(ws)
             intentos = 0
             backoff = 5
@@ -487,6 +494,9 @@ async def escuchar_velas_combinado(
                         log.warning(f'❌ Error en callback de {symbol}: {e}')
                         traceback.print_exc()
             finally:
+                log.info(
+                    f"🔻 WebSocket combinado desconectado para {symbols} a las {datetime.utcnow().isoformat()}"
+                )
                 for t in watchdogs + [keeper]:
                     t.cancel()
                 for t in watchdogs + [keeper]:
