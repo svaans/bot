@@ -15,7 +15,17 @@ MAX_ESTRATEGIAS_BUFFER = MAX_BUFFER_VELAS
 
 async def procesar_vela(trader, vela: dict) -> None:
     log.debug('➡️ Entrando en procesar_vela()')
-    symbol = vela['symbol']
+    if not isinstance(vela, dict):
+        log.error(f"❌ Formato de vela inválido: {vela}")
+        return
+    symbol = vela.get('symbol')
+    if symbol is None:
+        log.error(f"❌ Vela sin símbolo: {vela}")
+        return
+    campos_requeridos = {'timestamp', 'open', 'high', 'low', 'close', 'volume'}
+    if not campos_requeridos.issubset(vela):
+        log.error(f"❌ Vela incompleta para {symbol}: {vela}")
+        return
     estado = trader.estado[symbol]
 
     inicio = time.time()  # ⏱️ para medir cuánto tarda
