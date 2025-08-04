@@ -862,11 +862,13 @@ class Trader:
 
     def _flush_rechazos(self) ->None:
         log.info('➡️ Entrando en _flush_rechazos()')
-        if not self._rechazos_buffer:
+        # Filtrar registros nulos para evitar errores al convertir a DataFrame
+        buffer = [r for r in self._rechazos_buffer if r]
+        if not buffer:
             return
         fecha = datetime.utcnow().strftime('%Y%m%d')
         archivo = os.path.join(LOG_DIR, 'rechazos', f'{fecha}.csv')
-        df = pd.DataFrame(self._rechazos_buffer)
+        df = pd.DataFrame(buffer)
         modo = 'a' if os.path.exists(archivo) else 'w'
         df.to_csv(
             archivo,

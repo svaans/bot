@@ -124,7 +124,11 @@ def start_supervision() -> None:
     def exception_handler(loop: asyncio.AbstractEventLoop, context: dict) -> None:
         exc = context.get("exception")
         if exc:
-            log.critical("Excepcion no controlada en loop: %s", exc, exc_info=exc)
+            # Evitar recursión al registrar errores de recursión profunda
+            if isinstance(exc, RecursionError):
+                log.critical("Excepcion no controlada en loop: %s", exc)
+            else:
+                log.critical("Excepcion no controlada en loop: %s", exc, exc_info=exc)
         else:
             log.critical("Error en loop: %s", context.get("message"))
 
