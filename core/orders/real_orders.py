@@ -369,18 +369,26 @@ def ejecutar_orden_market(symbol: str, cantidad: float) ->float:
         quote = symbol.split('/')[1]
         balance = cliente.fetch_balance()
         disponible_quote = balance.get('free', {}).get(quote, 0)
-        if precio and cantidad * precio > disponible_quote:
-            log.error(
-                f'⛔ Compra cancelada por saldo insuficiente en {symbol}. Requerido: {cantidad * precio:.2f} {quote}, disponible: {disponible_quote:.2f}'
+        if precio:
+            costo = cantidad * precio
+            if costo > disponible_quote:
+                cantidad_ajustada = math.floor((disponible_quote / precio) / step_size) * step_size
+                if cantidad_ajustada <= 0:
+                    log.error(
+                        f'⛔ Compra cancelada por saldo insuficiente en {symbol}. Requerido: {costo:.2f} {quote}, disponible: {disponible_quote:.2f}'
+                    )
+                    try:
+                        notificador.enviar(
+                            f'Compra cancelada por saldo insuficiente en {symbol}',
+                            'CRITICAL',
+                        )
+                    except Exception:
+                        pass
+                    return 0.0
+                log.warning(
+                    f'⚠️ Cantidad ajustada por saldo insuficiente en {symbol}. Requerido: {costo:.2f} {quote}, disponible: {disponible_quote:.2f}, nueva cantidad: {cantidad_ajustada}'
                 )
-            try:
-                notificador.enviar(
-                    f'Compra cancelada por saldo insuficiente en {symbol}',
-                    'CRITICAL',
-                )
-            except Exception:
-                pass
-            return 0.0
+                cantidad = cantidad_ajustada
         if cantidad < min_amount or precio and cantidad * precio < min_cost:
             log.error(
                 f'⛔ Compra inválida para {symbol}. Cantidad: {cantidad}, Precio: {precio}, Mínimos → amount: {min_amount}, notional: {min_cost}'
