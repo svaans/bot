@@ -110,7 +110,7 @@ async def escuchar_velas(
         ping_interval = 60  # ping fijo para detectar antes conexiones muertas
     if mensaje_timeout is None:
         mensaje_timeout = tiempo_maximo
-    intentos = 0
+    fallos_consecutivos = 0
     total_reintentos = 0
     backoff = 5
     ultimo_timestamp: int | None = None
@@ -133,7 +133,7 @@ async def escuchar_velas(
                 f"🔌 WebSocket conectado para {symbol} ({intervalo}) a las {datetime.utcnow().isoformat()}"
             )
             _habilitar_tcp_keepalive(ws)
-            intentos = 0
+            fallos_consecutivos = 0
             backoff = 5
             last_message[symbol] = datetime.utcnow()
             watchdog = asyncio.create_task(
@@ -269,18 +269,22 @@ async def escuchar_velas(
                         await t
                     except InactividadTimeoutError:
                         raise
-                    except Exception:
+                    except Exception as e:
+                        log.debug(
+                            f'Error al esperar tarea cancelada de {symbol}: {e}'
+                        )
                         tick('data_feed')
                 try:
                     await ws.close()
                     await ws.wait_closed()
-                except Exception:
+                except Exception as e:
+                    log.debug(f'Error al cerrar WebSocket de {symbol}: {e}')
                     tick('data_feed')
         except asyncio.CancelledError:
             log.info(f'🛑 Conexión WebSocket de {symbol} cancelada.')
             break
         except Exception as e:
-            intentos += 1
+            fallos_consecutivos += 1
             total_reintentos += 1
             log.warning(f'❌ Error en WebSocket de {symbol}: {e}')
             traceback.print_exc()
@@ -328,7 +332,7 @@ async def escuchar_velas_combinado(
         ping_interval = 60
     if mensaje_timeout is None:
         mensaje_timeout = tiempo_maximo
-    intentos = 0
+    fallos_consecutivos = 0
     total_reintentos = 0
     backoff = 5
     ultimo_timestamp: dict[str, int | None] = {s: None for s in symbols}
@@ -351,7 +355,7 @@ async def escuchar_velas_combinado(
                 f"🔌 WebSocket combinado conectado para {symbols} ({intervalo}) a las {datetime.utcnow().isoformat()}"
             )
             _habilitar_tcp_keepalive(ws)
-            intentos = 0
+            fallos_consecutivos = 0
             backoff = 5
             for s in symbols:
                 last_message[s] = datetime.utcnow()
@@ -512,18 +516,24 @@ async def escuchar_velas_combinado(
                         await t
                     except InactividadTimeoutError:
                         raise
-                    except Exception:
+                    except Exception as e:
+                        log.debug(
+                            f'Error al esperar tarea cancelada del stream combinado: {e}'
+                        )
                         tick('data_feed')
                 try:
                     await ws.close()
                     await ws.wait_closed()
-                except Exception:
+                except Exception as e:
+                    log.debug(
+                        f'Error al cerrar WebSocket del stream combinado: {e}'
+                    )
                     tick('data_feed')
         except asyncio.CancelledError:
             log.info('🛑 Conexión WebSocket combinada cancelada.')
             break
         except Exception as e:
-            intentos += 1
+            fallos_consecutivos += 1
             total_reintentos += 1
             log.warning(f'❌ Error en WebSocket combinado: {e}')
             traceback.print_exc()
@@ -565,7 +575,8 @@ async def _watchdog(
                 )
     except asyncio.CancelledError:
         raise
-    except Exception:
+    except Exception as e:
+        log.debug(f'Excepción inesperada en watchdog de {symbol}: {e}')
         tick('data_feed')
         tick_data(symbol)
 

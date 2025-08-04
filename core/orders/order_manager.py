@@ -10,16 +10,24 @@ from core.utils.utils import is_valid_number
 from core.event_bus import EventBus
 log = configurar_logger('orders', modo_silencioso=True)
 
+MAX_HISTORIAL_ORDENES = 1000
+
 
 class OrderManager:
     """Abstrae la creación y cierre de órdenes."""
 
-    def __init__(self, modo_real: bool, bus: EventBus | None = None) -> None:
+    def __init__(
+        self,
+        modo_real: bool,
+        bus: EventBus | None = None,
+        max_historial: int = MAX_HISTORIAL_ORDENES,
+    ) -> None:
         log.info('➡️ Entrando en __init__()')
         self.modo_real = modo_real
         self.ordenes: Dict[str, Order] = {}
         self.historial: Dict[str, list] = {}
         self.bus = bus
+        self.max_historial = max_historial
         if bus:
             self.subscribe(bus)
 
@@ -219,6 +227,8 @@ class OrderManager:
             ) / orden.precio_entrada if orden.precio_entrada else 0.0
         orden.retorno_total = retorno
         self.historial.setdefault(symbol, []).append(orden.to_dict())
+        if len(self.historial[symbol]) > self.max_historial:
+            self.historial[symbol] = self.historial[symbol][-self.max_historial:]
         if retorno < 0 and self.bus:
             await self.bus.publish('registrar_perdida', {'symbol': symbol, 'perdida': retorno})
         log.info(f'📤 Orden cerrada para {symbol} @ {precio:.2f} | {motivo}')

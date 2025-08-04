@@ -54,6 +54,7 @@ _SLOW_FLUSHES = 0
 _SLOW_FLUSH_THRESHOLD = 30
 _SLOW_FLUSH_LIMIT = 3
 _USE_PROCESS_POOL = False
+_FLUSH_FUTURE: asyncio.Future | None = None
 _FLUSH_BATCH_SIZE = int(os.getenv('FLUSH_BATCH_SIZE', '100') or 100)
 """Número máximo de operaciones a persistir por lote."""
 
@@ -637,9 +638,16 @@ async def flush_periodico(
     Tras ``max_fallos`` errores consecutivos, espera ``reintento`` segundos,
     notifica el fallo y reintenta el ciclo.
     """
+    global _FLUSH_FUTURE
     fallos_consecutivos = 0
     try:
         while True:
+            if _FLUSH_FUTURE and _FLUSH_FUTURE.done():
+                try:
+                    _FLUSH_FUTURE.result()
+                except Exception as e:
+                    log.error(f'❌ Error en flush previo: {e}')
+                _FLUSH_FUTURE = None
             restante = interval
             while restante > 0:
                 sleep_time = min(heartbeat, restante)
@@ -647,18 +655,22 @@ async def flush_periodico(
                 tick('flush')
                 restante -= sleep_time
             try:
-                loop = asyncio.get_running_loop()
-                await asyncio.wait_for(
-                    loop.run_in_executor(None, flush_operaciones), timeout=30
-                )
-                tick('flush')
-                fallos_consecutivos = 0
+                if _FLUSH_FUTURE and not _FLUSH_FUTURE.done():
+                    log.warning('⚠️ flush_operaciones en curso; omitiendo nueva ejecución.')
+                else:
+                    loop = asyncio.get_running_loop()
+                    _FLUSH_FUTURE = loop.run_in_executor(None, flush_operaciones)
+                    await asyncio.wait_for(_FLUSH_FUTURE, timeout=30)
+                    _FLUSH_FUTURE = None
+                    tick('flush')
+                    fallos_consecutivos = 0
             except asyncio.TimeoutError:
                 fallos_consecutivos += 1
                 log.warning('⚠️ flush_operaciones se excedió de tiempo (30s)')
             except Exception as e:
                 fallos_consecutivos += 1
                 log.error(f'❌ Error en flush periódico: {e}')
+                _FLUSH_FUTURE = None
             if fallos_consecutivos >= max_fallos:
                 mensaje = (
                     f'flush_periodico falló {fallos_consecutivos} veces consecutivas; deteniendo.'
@@ -672,6 +684,12 @@ async def flush_periodico(
                 await asyncio.sleep(reintento)
                 fallos_consecutivos = 0
     except asyncio.CancelledError:
+        if _FLUSH_FUTURE and not _FLUSH_FUTURE.done():
+            log.info('Esperando a que flush_operaciones termine antes de cancelar.')
+            try:
+                await asyncio.wait_for(_FLUSH_FUTURE, timeout=5)
+            except Exception:
+                pass
         log.info('🛑 flush_periodico cancelado correctamente.')
         raise
 

@@ -12,16 +12,18 @@ log = configurar_logger('reporte_diario')
 
 class ReporterDiario:
 
-    def __init__(self, carpeta='reportes_diarios'):
+    def __init__(self, carpeta='reportes_diarios', max_operaciones=1000):
         log.info('➡️ Entrando en __init__()')
         self.carpeta = carpeta
         os.makedirs(self.carpeta, exist_ok=True)
         self.fecha_actual = datetime.utcnow().date()
         self.log = configurar_logger('reporte')
-        self.estadisticas_archivo = os.path.join(self.carpeta,
-            'estadisticas.csv')
+        self.estadisticas_archivo = os.path.join(
+            self.carpeta, 'estadisticas.csv'
+        )
         self._cargar_estadisticas()
         self.ultimas_operaciones = {}
+        self.max_operaciones = max_operaciones
 
     def _cargar_estadisticas(self):
         log.info('➡️ Entrando en _cargar_estadisticas()')
@@ -96,8 +98,10 @@ class ReporterDiario:
             df.to_csv(archivo, index=False)
         symbol = info.get('symbol') or info.get('simbolo')
         if symbol:
-            self.ultimas_operaciones.setdefault(symbol, [])
-            self.ultimas_operaciones[symbol].append(info)
+            ops = self.ultimas_operaciones.setdefault(symbol, [])
+            ops.append(info)
+            if len(ops) > self.max_operaciones:
+                self.ultimas_operaciones[symbol] = ops[-self.max_operaciones:]
         self.log.info(f'📝 Operación registrada para reporte {fecha}')
         self._actualizar_estadisticas(info)
         if fecha != self.fecha_actual:

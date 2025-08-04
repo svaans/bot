@@ -109,16 +109,27 @@ class StreamContexto:
                 ahora = datetime.utcnow()
                 for sym, task in list(self._tasks.items()):
                     ultimo = self._last.get(sym)
-                    if task.done() or (
-                        ultimo
-                        and (ahora - ultimo).total_seconds() > self.inactivity_timeout
-                    ):
+                    if task.done():
                         log.warning(
-                            f'🔄 Stream contexto {sym} inactivo o finalizado; reiniciando'
+                            f'🔄 Stream contexto {sym} finalizado; reiniciando'
                         )
-                        if not task.done():
-                            task.cancel()
-                            await asyncio.gather(task, return_exceptions=True)
+                        self._tasks[sym] = supervised_task(
+                            lambda sym=sym: self._stream(sym, self._handler_actual),
+                            name=f"context_stream_{sym}",
+                        )
+                        continue
+                    if ultimo and (ahora - ultimo).total_seconds() > self.inactivity_timeout:
+                        if sym not in _PUNTAJES:
+                            log.debug(
+                                f'⏳ Contexto {sym} sin datos recientes; omitiendo reinicio'
+                            )
+                            self._last[sym] = ahora
+                            continue
+                        log.warning(
+                            f'🔄 Stream contexto {sym} inactivo; reiniciando'
+                        )
+                        task.cancel()
+                        await asyncio.gather(task, return_exceptions=True)
                         self._tasks[sym] = supervised_task(
                             lambda sym=sym: self._stream(sym, self._handler_actual),
                             name=f"context_stream_{sym}",
@@ -143,9 +154,11 @@ class StreamContexto:
                 lambda sym=sym: self._stream(sym, handler),
                 name=f"context_stream_{sym}",
             )
-        if self._tasks:
-            await asyncio.gather(*self._tasks.values())
-        self._running = False
+        try:
+            while self._running:
+                await asyncio.sleep(1)
+        finally:
+            self._running = False
 
     async def detener(self) -> None:
         log.info('➡️ Entrando en detener()')
