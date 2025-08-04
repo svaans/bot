@@ -839,6 +839,7 @@ class Trader:
                             f'⏰ Tarea {nombre} sin actividad. Reiniciando.'
                         )
                         task.cancel()
+                        await asyncio.gather(task, return_exceptions=True)
                         self._iniciar_tarea(nombre, self._factories[nombre])
                         log.info(f'🔄 Tarea {nombre} reiniciada por inactividad')
                     else:
