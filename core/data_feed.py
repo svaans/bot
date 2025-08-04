@@ -19,7 +19,7 @@ class DataFeed:
         intervalo: str,
         monitor_interval: int = 5,
         max_restarts: int = 5,
-        inactivity_intervals: int = 4,
+        inactivity_intervals: int = 12,
         usar_stream_combinado: bool = False,
     ) -> None:
         log.info('➡️ Entrando en __init__()')
@@ -87,6 +87,7 @@ class DataFeed:
             self.tiempo_inactividad,
             self.ping_interval,
             cliente=self._cliente,
+            mensaje_timeout=self.tiempo_inactividad,
         )
 
     async def _relanzar_stream(
@@ -104,6 +105,7 @@ class DataFeed:
                     self.tiempo_inactividad,
                     self.ping_interval,
                     cliente=self._cliente,
+                    mensaje_timeout=self.tiempo_inactividad,
                 )
                 log.warning(f'🔁 Conexión de {symbol} finalizada; reintentando en 1s')
                 attempts = 0
