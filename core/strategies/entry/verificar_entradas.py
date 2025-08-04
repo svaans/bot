@@ -120,7 +120,7 @@ async def verificar_entrada(trader, symbol: str, df: pd.DataFrame, estado) ->(
         pesos_por_simbolo.get(symbol, {}), df, config.get('modo_agresivo', 
         False)):
         razones.append('diversidad')
-    if not trader._validar_estrategia(symbol, df, estrategias):
+    if not trader._validar_estrategia(symbol, df, estrategias, config):
         razones.append('estrategia')
     if not ok_pers:
         razones.append('persistencia')

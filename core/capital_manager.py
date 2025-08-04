@@ -63,8 +63,14 @@ class CapitalManager:
         symbol = data.get('symbol')
         precio = data.get('precio')
         exposicion = data.get('exposicion_total', 0.0)
+        stop_loss = data.get('stop_loss')
         if fut:
-            cantidad = await self.calcular_cantidad_async(symbol, precio, exposicion)
+            cantidad = await self.calcular_cantidad_async(
+                symbol,
+                precio,
+                exposicion_total=exposicion,
+                stop_loss=stop_loss,
+            )
             fut.set_result(cantidad)
 
     async def _on_actualizar_capital(self, data: dict) -> None:
@@ -89,8 +95,13 @@ class CapitalManager:
             log.debug(f'No se pudo obtener mínimo para {symbol}: {e}')
             return None
 
-    async def calcular_cantidad_async(self, symbol: str, precio: float,
-        exposicion_total: float = 0.0) ->float:
+    async def calcular_cantidad_async(
+        self,
+        symbol: str,
+        precio: float,
+        exposicion_total: float = 0.0,
+        stop_loss: float | None = None,
+    ) -> float:
         log.info('➡️ Entrando en calcular_cantidad_async()')
         if self.modo_real and self.cliente:
             balance = await fetch_balance_async(self.cliente)
@@ -116,28 +127,62 @@ class CapitalManager:
             ajuste = max(0.0, 1 - exposicion_total / (capital_total * self.riesgo_maximo_diario))
             riesgo_teorico *= ajuste
         minimo_dinamico = max(10.0, capital_total * 0.02)
-        riesgo = max(riesgo_teorico, minimo_dinamico)
-        riesgo = min(riesgo, capital_total * self.riesgo_maximo_diario)
-        riesgo = min(riesgo, capital_total)
+        riesgo_permitido = max(riesgo_teorico, minimo_dinamico)
+        riesgo_permitido = min(riesgo_permitido, capital_total * self.riesgo_maximo_diario)
+        riesgo_permitido = min(riesgo_permitido, capital_total)
         minimo_binance = await self._obtener_minimo_binance(symbol)
-        cantidad = riesgo / precio
-        if cantidad * precio < minimo_dinamico:
-            log.debug(
-                f'Orden mínima {minimo_dinamico:.2f}{self.capital_currency}, intento {cantidad * precio:.2f}{self.capital_currency}'
+        cantidad = 0.0
+        distancia_sl = abs(precio - stop_loss) if isinstance(stop_loss, (int, float)) else None
+        if distancia_sl and distancia_sl > 0:
+            cantidad = riesgo_permitido / distancia_sl
+            capital_necesario = cantidad * precio
+            if capital_necesario > capital_total:
+                cantidad = capital_total / precio
+                capital_necesario = capital_total
+            riesgo_final = cantidad * distancia_sl
+            if capital_necesario < minimo_dinamico:
+                log.debug(
+                    f'Orden mínima {minimo_dinamico:.2f}{self.capital_currency}, intento {capital_necesario:.2f}{self.capital_currency}'
                 )
-            return 0.0
-        if minimo_binance and cantidad * precio < minimo_binance:
-            log.warning(
-                f'⛔ Orden para {symbol} por {cantidad * precio:.2f}{self.capital_currency} inferior al mínimo Binance {minimo_binance:.2f}{self.capital_currency}'
-            )
-            return 0.0
+                return 0.0
+            if minimo_binance and capital_necesario < minimo_binance:
+                log.warning(
+                    f'⛔ Orden para {symbol} por {capital_necesario:.2f}{self.capital_currency} inferior al mínimo Binance {minimo_binance:.2f}{self.capital_currency}'
+                )
+                return 0.0
+        else:
+            cantidad = riesgo_permitido / precio
+            capital_necesario = cantidad * precio
+            riesgo_final = capital_necesario
+            if capital_necesario < minimo_dinamico:
+                log.debug(
+                    f'Orden mínima {minimo_dinamico:.2f}{self.capital_currency}, intento {capital_necesario:.2f}{self.capital_currency}'
+                )
+                return 0.0
+            if minimo_binance and capital_necesario < minimo_binance:
+                log.warning(
+                    f'⛔ Orden para {symbol} por {capital_necesario:.2f}{self.capital_currency} inferior al mínimo Binance {minimo_binance:.2f}{self.capital_currency}'
+                )
+                return 0.0
         log.info(
             '⚖️ Kelly ajustada: %.4f | Riesgo teórico: %.2f%s | Mínimo dinámico: %.2f%s | Riesgo final: %.2f%s',
-            fraccion, riesgo_teorico, self.capital_currency, minimo_dinamico, self.capital_currency, riesgo, self.capital_currency)
+            fraccion,
+            riesgo_teorico,
+            self.capital_currency,
+            minimo_dinamico,
+            self.capital_currency,
+            riesgo_final,
+            self.capital_currency,
+        )
         log.info(
             '📊 Capital disponible: %.2f%s | Orden: %.2f%s | Mínimo Binance: %s | %s',
-            capital_total, self.capital_currency, cantidad * precio, self.capital_currency,
-            f'{minimo_binance:.2f}{self.capital_currency}' if minimo_binance else 'desconocido', symbol)
+            capital_total,
+            self.capital_currency,
+            capital_necesario,
+            self.capital_currency,
+            f'{minimo_binance:.2f}{self.capital_currency}' if minimo_binance else 'desconocido',
+            symbol,
+        )
         return round(cantidad, 6)
 
     def actualizar_capital(self, symbol: str, retorno_total: float) ->float:

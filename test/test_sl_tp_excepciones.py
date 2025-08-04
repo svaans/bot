@@ -28,7 +28,7 @@ class DummyCapitalManager:
 async def test_abrir_operacion_real_error_en_validar_sl_tp_rechaza():
     trader = Trader.__new__(Trader)
 
-    async def fake_calcular_cantidad(symbol, precio):
+    async def fake_calcular_cantidad(symbol, precio, stop_loss):
         return 100
 
     trader._calcular_cantidad_async = fake_calcular_cantidad

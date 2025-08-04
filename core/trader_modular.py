@@ -679,19 +679,24 @@ class Trader:
                 await asyncio.sleep(espera)
                 restante -= espera
 
-    async def _calcular_cantidad_async(self, symbol: str, precio: float
-        ) ->float:
+    async def _calcular_cantidad_async(self, symbol: str, precio: float, stop_loss: float
+        ) -> float:
         log.info('➡️ Entrando en _calcular_cantidad_async()')
         """Solicita la cantidad al servicio de capital mediante eventos."""
-        exposicion = sum(o.cantidad_abierta * o.precio_entrada for o in
-            self.orders.ordenes.values())
+        exposicion = sum(
+            o.cantidad_abierta * o.precio_entrada for o in self.orders.ordenes.values()
+        )
         fut = asyncio.get_running_loop().create_future()
-        await self.bus.publish('calcular_cantidad', {
-            'symbol': symbol,
-            'precio': precio,
-            'exposicion_total': exposicion,
-            'future': fut,
-        })
+        await self.bus.publish(
+            'calcular_cantidad',
+            {
+                'symbol': symbol,
+                'precio': precio,
+                'stop_loss': stop_loss,
+                'exposicion_total': exposicion,
+                'future': fut,
+            },
+        )
         try:
             return await asyncio.wait_for(
                 fut, timeout=self.config.timeout_bus_eventos
@@ -1009,10 +1014,16 @@ class Trader:
         return True
 
     def _validar_estrategia(self, symbol: str, df: pd.DataFrame,
-        estrategias: Dict) ->bool:
+        estrategias: Dict, config: Dict | None=None) ->bool:
         log.info('➡️ Entrando en _validar_estrategia()')
-        """Aplica el filtro estratégico de entradas."""
-        if not evaluar_validez_estrategica(symbol, df, estrategias):
+        """Aplica el filtro estratégico de entradas respetando la configuración."""
+        config = config or {}
+        min_div = config.get('diversidad_minima', 2)
+        peso_min = config.get('peso_minimo_total', 0.5)
+        pesos_symbol = self.pesos_por_simbolo.get(symbol, {})
+        if not evaluar_validez_estrategica(symbol, df, estrategias,
+            pesos=pesos_symbol, minimo_peso_total=peso_min,
+            min_diversidad=min_div):
             log.debug(
                 f'❌ Entrada rechazada por filtro estratégico en {symbol}.')
             return False
@@ -1026,14 +1037,14 @@ class Trader:
         """Evalúa si las señales persistentes son suficientes para entrar."""
         ventana_close = df['close'].tail(10)
         media_close = np.mean(ventana_close)
+        minimo = calcular_persistencia_minima(symbol, df, tendencia_actual,
+            base_minimo=self.persistencia.minimo)
         if np.isnan(media_close) or media_close == 0:
             log.debug(
                 f'⚠️ {symbol}: Media de cierre inválida para persistencia')
-            return False
+            return False, 0.0, minimo
         repetidas = coincidencia_parcial(estado.estrategias_buffer,
             pesos_symbol, ventanas=5)
-        minimo = calcular_persistencia_minima(symbol, df, tendencia_actual,
-            base_minimo=self.persistencia.minimo)
         log.info(
             f'Persistencia detectada {repetidas:.2f} | Mínimo requerido {minimo:.2f}'
             )
@@ -1299,7 +1310,7 @@ class Trader:
                 self._limite_riesgo_notificado = True
             self._stop_event.set()
             return
-        cantidad_total = await self._calcular_cantidad_async(symbol, precio)
+        cantidad_total = await self._calcular_cantidad_async(symbol, precio, sl)
         if cantidad_total <= 0:
             capital_disp = self.capital_manager.capital_por_simbolo.get(
                 symbol, 0.0)
