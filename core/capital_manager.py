@@ -131,12 +131,6 @@ class CapitalManager:
             minimo_binance else 'desconocido', symbol)
         return round(cantidad, 6)
 
-    def calcular_cantidad(self, symbol: str, precio: float,
-        exposicion_total: float = 0.0) ->float:
-        log.info('➡️ Entrando en calcular_cantidad()')
-        return asyncio.run(self.calcular_cantidad_async(symbol, precio,
-            exposicion_total))
-
     def actualizar_capital(self, symbol: str, retorno_total: float) ->float:
         log.info('➡️ Entrando en actualizar_capital()')
         capital_inicial = self.capital_por_simbolo.get(symbol, 0.0)

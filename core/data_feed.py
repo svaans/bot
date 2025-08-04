@@ -137,7 +137,7 @@ class DataFeed:
                     log.debug(
                         f"Stream {symbol} detenido tras {attempts} intentos"
                     )
-                    try:
+                try:
                     await self.notificador.enviar_async(
                         f'❌ Stream {symbol} superó el límite de {self.max_stream_restarts} intentos',
                         'CRITICAL',
@@ -146,7 +146,7 @@ class DataFeed:
                     tick('data_feed')
                     pass
                 raise
-                await asyncio.sleep(5)
+            await asyncio.sleep(5)
                 
 
     async def _monitor_global_inactividad(self) -> None:

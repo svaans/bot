@@ -23,17 +23,9 @@ class PositionManager:
     async def abrir_async(self, *args, **kwargs):
         return await self._manager.abrir_async(*args, **kwargs)
 
-    def abrir(self, *args, **kwargs):
-        return self._manager.abrir(*args, **kwargs)
-
     async def cerrar_async(self, *args, **kwargs):
         return await self._manager.cerrar_async(*args, **kwargs)
-
-    def cerrar(self, *args, **kwargs):
-        return self._manager.cerrar(*args, **kwargs)
 
     async def cerrar_parcial_async(self, *args, **kwargs):
         return await self._manager.cerrar_parcial_async(*args, **kwargs)
 
-    def cerrar_parcial(self, *args, **kwargs):
-        return self._manager.cerrar_parcial(*args, **kwargs)

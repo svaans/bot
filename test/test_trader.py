@@ -1,3 +1,4 @@
+import asyncio
 from config.config_manager import Config
 from core.trader_modular import Trader
 
@@ -23,5 +24,5 @@ def test_calcular_cantidad(monkeypatch):
         intervalo_velas='1m', symbols=['BTC/EUR'], umbral_riesgo_diario=0.1,
         min_order_eur=10)
     trader = Trader(cfg)
-    qty = trader._calcular_cantidad('BTC/EUR', 10)
+    qty = asyncio.run(trader._calcular_cantidad_async('BTC/EUR', 10))
     assert qty == 10.0

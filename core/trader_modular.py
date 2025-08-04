@@ -631,6 +631,7 @@ class Trader:
         # intervalo en el que se reporta actividad al supervisor
         intervalo_tick = max(1, self.heartbeat_interval // 2)
         while True:
+            inicio = time.time()
             try:
                 loop = asyncio.get_running_loop()
                 futuro = loop.run_in_executor(None, ciclo_aprendizaje)
@@ -652,7 +653,7 @@ class Trader:
                     )
                     break
             # esperamos hasta la siguiente iteración, emitiendo ticks para evitar reinicios
-            restante = intervalo
+            restante = max(0, intervalo - (time.time() - inicio))
             while restante > 0:
                 tick('aprendizaje')
                 espera = min(restante, intervalo_tick)
@@ -679,11 +680,6 @@ class Trader:
         except asyncio.TimeoutError:
             log.error(f'⏰ Timeout calculando cantidad para {symbol}')
             return 0.0
-
-    def _calcular_cantidad(self, symbol: str, precio: float) ->float:
-        log.info('➡️ Entrando en _calcular_cantidad()')
-        """Versión síncrona de :meth:`_calcular_cantidad_async`."""
-        return asyncio.run(self._calcular_cantidad_async(symbol, precio))
 
     def _metricas_recientes(self, dias: int=7) ->dict:
         log.info('➡️ Entrando en _metricas_recientes()')

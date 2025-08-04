@@ -126,11 +126,6 @@ class OrderManager:
             mensaje = f"""🟢 Compra {symbol}\nPrecio: {precio:.2f} Cantidad: {cantidad}\nSL: {sl:.2f} TP: {tp:.2f}\nEstrategias: {estrategias_txt}"""
             await self.bus.publish('notify', {'mensaje': mensaje})
 
-    def abrir(self, *args, **kwargs) ->None:
-        log.info('➡️ Entrando en abrir()')
-        """Versión síncrona de :meth:`abrir_async`."""
-        asyncio.run(self.abrir_async(*args, **kwargs))
-
     async def agregar_parcial_async(self, symbol: str, precio: float,
         cantidad: float) ->bool:
         log.info('➡️ Entrando en agregar_parcial_async()')
@@ -165,10 +160,6 @@ class OrderManager:
             orden.entradas = []
         orden.entradas.append({'precio': precio, 'cantidad': cantidad})
         return True
-
-    def agregar_parcial(self, *args, **kwargs) ->bool:
-        log.info('➡️ Entrando en agregar_parcial()')
-        return asyncio.run(self.agregar_parcial_async(*args, **kwargs))
 
     async def cerrar_async(self, symbol: str, precio: float, motivo: str
         ) ->bool:
@@ -236,11 +227,6 @@ class OrderManager:
             await self.bus.publish('notify', {'mensaje': mensaje})
         return True
 
-    def cerrar(self, *args, **kwargs) ->bool:
-        log.info('➡️ Entrando en cerrar()')
-        """Versión síncrona de :meth:`cerrar_async`."""
-        return asyncio.run(self.cerrar_async(*args, **kwargs))
-
     async def cerrar_parcial_async(self, symbol: str, cantidad: float,
         precio: float, motivo: str) ->bool:
         log.info('➡️ Entrando en cerrar_parcial_async()')
@@ -279,11 +265,6 @@ class OrderManager:
         if orden.cantidad_abierta <= 0:
             self.ordenes.pop(symbol, None)
         return True
-
-    def cerrar_parcial(self, *args, **kwargs) ->bool:
-        log.info('➡️ Entrando en cerrar_parcial()')
-        """Versión síncrona de :meth:`cerrar_parcial_async`."""
-        return asyncio.run(self.cerrar_parcial_async(*args, **kwargs))
 
     def obtener(self, symbol: str) ->Optional[Order]:
         log.info('➡️ Entrando en obtener()')
