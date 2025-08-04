@@ -100,7 +100,12 @@ class StrategyEngine:
             validaciones_fallidas = [k for k, v in validaciones.items() if not v]
             contradiccion = hay_contradicciones(estrategias_activas)
             score_tec = calcular_score_tecnico(
-                df, rsi_val, mom_val, slope_val, tendencia
+                df,
+                rsi_val,
+                mom_val,
+                slope_val,
+                tendencia,
+                direccion,
             )
             cumple_div = diversidad >= (config or {}).get("diversidad_minima", 1)
             umbral_score = (config or {}).get("umbral_score_tecnico", 1.0)

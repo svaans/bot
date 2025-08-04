@@ -11,6 +11,7 @@ def calcular_score_tecnico(
     momentum: Optional[float],
     slope: Optional[float],
     tendencia: str,
+    direccion: str = "long",
 ) -> float:
     """Delegado de compatibilidad que utiliza :class:`TechnicalScorer`."""
-    return TechnicalScorer.calcular(df, rsi, momentum, slope, tendencia)
+    return TechnicalScorer.calcular(df, rsi, momentum, slope, tendencia, direccion)

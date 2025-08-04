@@ -33,8 +33,14 @@ def validar_sl_tecnico(df: pd.DataFrame, direccion: str='long') ->bool:
         debajo_vwap = vwap is not None and precio < vwap
         velas_rojas = (df['close'].diff().tail(5) < 0).sum()
         persistencia = velas_rojas >= 3
-        score = calcular_score_tecnico(df, rsi, momentum, slope, 'bajista' if
-            direccion in ['long', 'compra'] else 'alcista')
+        score = calcular_score_tecnico(
+            df,
+            rsi,
+            momentum,
+            slope,
+            'bajista' if direccion in ['long', 'compra'] else 'alcista',
+            direccion,
+        )
         if direccion in ['long', 'compra']:
             return score >= 2 and (debajo_vwap or debajo_ma) and persistencia
         return True

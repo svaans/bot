@@ -18,6 +18,7 @@ def calcular_score_tecnico(
     momentum: Optional[float],
     slope: Optional[float],
     tendencia: str,
+    direccion: str = "long",
 ) -> float:
     """Agrega RSI, momentum y slope ponderados para obtener un score técnico."""
     score = 0.0
@@ -29,8 +30,13 @@ def calcular_score_tecnico(
             score += peso_rsi
         elif 45 <= rsi <= 55:
             score += peso_rsi * 0.5
-    if momentum is not None and momentum > 0:
-        score += PESOS_SCORE_TECNICO.get("Momentum", 1.0)
+    umbral_mom = 0.001
+    if momentum is not None:
+        peso_mom = PESOS_SCORE_TECNICO.get("Momentum", 1.0)
+        if direccion == "long" and momentum > umbral_mom:
+            score += peso_mom
+        elif direccion == "short" and momentum < -umbral_mom:
+            score += peso_mom
     if slope is not None:
         peso_slope = PESOS_SCORE_TECNICO.get("Slope", 1.0)
         if tendencia == "alcista" and slope > 0:
@@ -49,7 +55,8 @@ class TechnicalScorer:
         momentum: Optional[float],
         slope: Optional[float],
         tendencia: str,
+        direccion: str = "long",
     ) -> float:
         """Delegado estático al cálculo procedural."""
-        return calcular_score_tecnico(df, rsi, momentum, slope, tendencia)
+        return calcular_score_tecnico(df, rsi, momentum, slope, tendencia, direccion)
 

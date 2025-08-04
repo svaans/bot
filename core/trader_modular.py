@@ -1142,7 +1142,7 @@ class Trader:
         """Calcula un puntaje técnico simple a partir de varios indicadores."""
         slope = calcular_slope(df)
         score_indicadores = calcular_score_tecnico(df, rsi, momentum, slope,
-            tendencia)
+            tendencia, direccion)
         resultados = {'RSI': False, 'Momentum': False, 'Slope': False,
             'Tendencia': False}
         if rsi is not None:
@@ -1151,7 +1151,10 @@ class Trader:
             else:
                 resultados['RSI'] = rsi < 50 or 45 <= rsi <= 55
         if momentum is not None:
-            resultados['Momentum'] = momentum > 0
+            if direccion == 'long':
+                resultados['Momentum'] = momentum > 0.001
+            else:
+                resultados['Momentum'] = momentum < -0.001
         if slope is not None:
             if direccion == 'long':
                 resultados['Slope'] = slope > 0
