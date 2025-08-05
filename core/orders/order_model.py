@@ -32,6 +32,7 @@ class Order:
     break_even_activado: bool = False
     duracion_en_velas: int = 0
     intentos_cierre: int = 0
+    sl_emergencia: float | None = None
 
     @staticmethod
     def from_dict(data: Dict[str, Any]) ->'Order':
@@ -61,6 +62,7 @@ class Order:
         data.setdefault('break_even_activado', False)
         data.setdefault('duracion_en_velas', 0)
         data.setdefault('intentos_cierre', 0)
+        data.setdefault('sl_emergencia', None)
         return Order(**data)
 
     def to_dict(self) ->Dict[str, Any]:
