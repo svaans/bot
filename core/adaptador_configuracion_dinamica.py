@@ -37,13 +37,13 @@ def _alertar_inconsistencias(symbol: str, sl: float, tp: float) ->None:
             )
 
 
-def _adaptar_configuracion_indicadores(symbol: str, df: pd.DataFrame) ->dict:
+def _adaptar_configuracion_indicadores(symbol: str, df: pd.DataFrame, base_config: dict | None=None) ->dict:
     log.info('➡️ Entrando en _adaptar_configuracion_indicadores()')
     """Ajusta los parámetros del bot según contexto de mercado."""
     if not _validar_dataframe(df):
-        log.warning(f'[{symbol}] Datos insuficientes para adaptación dinámica.'
-            )
+        log.warning(f'[{symbol}] Datos insuficientes para adaptación dinámica.')
         return {}
+    base_config = base_config or {}
     df = df.tail(60).copy()
     close_actual = df['close'].iloc[-1]
     atr = calcular_atr(df)
@@ -118,9 +118,9 @@ def _adaptar_configuracion_indicadores(symbol: str, df: pd.DataFrame) ->dict:
         cooldown_tras_perdida = 4
     elif atr_pct < 0.01 and abs(slope_pct) > 0.001:
         cooldown_tras_perdida = 1
-    diversidad_minima = 2
+    diversidad_minima = base_config.get('diversidad_minima', 2)
     if modo_agresivo or atr_pct < 0.012 or slope_pct > 0.003:
-        diversidad_minima = 1
+        diversidad_minima = max(1, diversidad_minima - 1)
     config = {'modo_agresivo': modo_agresivo, 'factor_umbral': round(
         factor_umbral, 2), 'tp_ratio': round(tp_ratio, 2), 'sl_ratio':
         round(sl_ratio, 2), 'riesgo_maximo_diario': round(
