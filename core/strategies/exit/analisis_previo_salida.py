@@ -1,7 +1,6 @@
 import pandas as pd
 from typing import Dict, Any
-from indicators.helpers import get_rsi, get_momentum
-from indicators.slope import calcular_slope
+from indicators.helpers import get_rsi, get_momentum, get_slope
 from indicators.divergencia_rsi import detectar_divergencia_alcista
 from core.strategies.tendencia import detectar_tendencia
 from core.scoring import PESOS_SCORE_TECNICO
@@ -56,7 +55,7 @@ def _score_tecnico_basico(df: pd.DataFrame, direccion: str) ->float:
     """Calcula un score técnico sencillo aplicando pesos configurables."""
     rsi = get_rsi(df)
     momentum = get_momentum(df)
-    slope = calcular_slope(df)
+    slope = get_slope(df)
     tendencia, _ = detectar_tendencia('', df)
     puntos = 0.0
     peso_rsi = PESOS_SCORE_TECNICO.get('RSI', 1.0)
@@ -96,7 +95,7 @@ def evaluar_condiciones_de_cierre_anticipado(symbol: str, df: pd.DataFrame,
     volumen_rel = (
         volumen_actual / volumen_promedio if volumen_promedio else 0.0
     )
-    slope = calcular_slope(df)
+    slope = get_slope(df)
     tendencia_actual, _ = detectar_tendencia(symbol, df)
     cond_rsi = rsi is not None and (rsi > 55 if direccion == 'long' else rsi < 45)
     cond_vol = volumen_rel >= 1.5
@@ -158,7 +157,7 @@ def permitir_cierre_tecnico(
     cuerpo = abs(cierre - apertura)
     rsi = get_rsi(df)
     rsi_series = get_rsi(df, serie_completa=True)
-    pendiente_rsi = calcular_slope(pd.DataFrame({'close': rsi_series.dropna()})
+    pendiente_rsi = get_slope(pd.DataFrame({'close': rsi_series.dropna()})
         ) if isinstance(rsi_series, pd.Series) and len(df) >= 30 else None
     direccion = orden.get('direccion', 'long') if orden else 'long'
     score = _score_tecnico_basico(df, direccion)
