@@ -1138,10 +1138,18 @@ class Trader:
     def _validar_sl_tp(self, symbol: str, precio: float, sl: float,
         tp: float) ->bool:
         log.info('➡️ Entrando en _validar_sl_tp()')
-        df = self._obtener_historico(symbol)
+        try:
+            df = self._obtener_historico(symbol)
+        except Exception as e:
+            log.debug(f'No se pudo obtener histórico para {symbol}: {e}')
+            return True
         if df is None or len(df) < 30:
             return True
-        atr = calcular_atr(df.tail(100))
+        try:
+            atr = calcular_atr(df.tail(100))
+        except Exception as e:
+            log.debug(f'No se pudo calcular ATR para {symbol}: {e}')
+            return True
         if not atr:
             return True
         min_sl = atr * getattr(self.config, 'factor_sl_atr', 0.5)
@@ -1277,7 +1285,11 @@ class Trader:
                         symbol,
                         df,
                         tendencia=tendencia_actual,
-                        config=config_actual,
+                        config={
+                            **config_actual,
+                            "contradicciones_bloquean_entrada": self.contradicciones_bloquean_entrada,
+                            "usar_score_tecnico": self.usar_score_tecnico,
+                        },
                         pesos_symbol=self.pesos_por_simbolo.get(symbol, {}),
                     ),
                 ),
@@ -1317,8 +1329,10 @@ class Trader:
         direccion: str, puntaje: float=0.0, umbral: float=0.0,
         detalles_tecnicos: (dict | None)=None, **kwargs) ->None:
         log.info('➡️ Entrando en _abrir_operacion_real()')
-        capital_total = sum(self.capital_inicial_diario.values())
-        if self.risk.riesgo_superado(capital_total):
+        capital_total = sum(
+            getattr(self, "capital_inicial_diario", self.capital_manager.capital_por_simbolo).values()
+        )
+        if getattr(self, 'risk', None) and self.risk.riesgo_superado(capital_total):
             log.warning(
                 f'⛔ No se abre posición en {symbol}: límite de riesgo diario superado.'
             )
