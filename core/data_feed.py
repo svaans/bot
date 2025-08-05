@@ -11,6 +11,7 @@ from core.supervisor import (
     tick_data,
     supervised_task,
     registrar_reinicio_inactividad,
+    registrar_reconexion_datafeed,
 )
 from core.notificador import crear_notificador_desde_env
 log = configurar_logger('datafeed', modo_silencioso=True)
@@ -51,6 +52,8 @@ class DataFeed:
         self._symbols: list[str] = []
         self.reinicios_forzados_total = 0
         self.handler_timeout = handler_timeout
+        self._reiniciando = False
+        registrar_reconexion_datafeed(self._reconectar_por_supervisor)
 
     @property
     def activos(self) ->list[str]:
@@ -162,6 +165,21 @@ class DataFeed:
                         pass
                     raise
                 await asyncio.sleep(5)
+
+    
+    async def _reconectar_por_supervisor(self, symbol: str) -> None:
+        """Reinicia completamente el DataFeed ante falta global de datos."""
+        if not self._running or self._reiniciando:
+            return
+        self._reiniciando = True
+        log.critical(
+            "🔁 Reinicio de DataFeed solicitado por supervisor (%s)", symbol
+        )
+        self.reinicios_forzados_total += 1
+        try:
+            await self.detener()
+        finally:
+            self._reiniciando = False
                 
 
     async def _monitor_global_inactividad(self) -> None:
@@ -347,18 +365,6 @@ class DataFeed:
     async def detener(self) ->None:
         log.info('➡️ Entrando en detener()')
         """Cancela todos los streams en ejecución."""
-        for task in self._tasks.values():
-            task.cancel()
-        try:
-            await asyncio.wait_for(
-                asyncio.gather(*self._tasks.values(), return_exceptions=True),
-                timeout=self.cancel_timeout,
-            )
-        except asyncio.TimeoutError:
-            log.warning("⏱️ Timeout cancelando streams activos")
-        self._tasks.clear()
-        self._last.clear()
-        self._symbols = []
         if self._monitor_global_task and not self._monitor_global_task.done():
             self._monitor_global_task.cancel()
             try:
@@ -369,6 +375,24 @@ class DataFeed:
                     timeout=self.cancel_timeout,
                 )
             except asyncio.TimeoutError:
-                log.warning("⏱️ Timeout cancelando monitor global")
+                log.warning("🧟 Timeout cancelando monitor global (tarea zombie)")
         self._monitor_global_task = None
+
+        for task in self._tasks.values():
+            task.cancel()
+        for nombre, task in list(self._tasks.items()):
+            if task.done():
+                continue
+            try:
+                await asyncio.wait_for(
+                    asyncio.gather(task, return_exceptions=True),
+                    timeout=self.cancel_timeout,
+                )
+            except asyncio.TimeoutError:
+                log.warning(
+                    f"🧟 Timeout cancelando stream {nombre} (tarea zombie)"
+                )
+        self._tasks.clear()
+        self._last.clear()
+        self._symbols = []
         self._running = False

@@ -34,6 +34,8 @@ ALERTA_SIN_DATOS_INTERVALO = 300  # segundos entre alertas repetidas
 last_data_alert: Dict[str, datetime] = {}
 reinicios_inactividad: Dict[str, int] = {}
 notificador = crear_notificador_desde_env()
+data_feed_reconnector: Callable[[str], Awaitable[None]] | None = None
+main_loop: asyncio.AbstractEventLoop | None = None
 
 
 def tick(name: str) -> None:
@@ -62,6 +64,12 @@ def registrar_reinicio_inactividad(symbol: str) -> None:
         symbol,
         reinicios_inactividad[symbol],
     )
+
+
+def registrar_reconexion_datafeed(cb: Callable[[str], Awaitable[None]]) -> None:
+    """Registra ``cb`` para reiniciar el DataFeed cuando falten datos."""
+    global data_feed_reconnector
+    data_feed_reconnector = cb
 
 
 def heartbeat(interval: int = 60) -> None:
@@ -113,6 +121,14 @@ def watchdog(timeout: int = 120, check_interval: int = 10) -> None:
                         )
                     except Exception:
                         pass
+                    if data_feed_reconnector and main_loop:
+                        try:
+                            asyncio.run_coroutine_threadsafe(
+                                data_feed_reconnector(sym),
+                                main_loop,
+                            )
+                        except Exception:
+                            log.debug("No se pudo ejecutar reconector de DataFeed")
         time.sleep(check_interval)
 
 
@@ -131,9 +147,10 @@ def start_supervision() -> None:
                 log.critical("Excepcion no controlada en loop: %s", exc, exc_info=exc)
         else:
             log.critical("Error en loop: %s", context.get("message"))
-
+    global main_loop
     loop = asyncio.get_event_loop()
     loop.set_exception_handler(exception_handler)
+    main_loop = loop
 
     def thread_excepthook(args: threading.ExceptHookArgs) -> None:
         log.critical(

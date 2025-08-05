@@ -36,11 +36,13 @@ class StreamContexto:
         url_template: str | None = None,
         monitor_interval: int = 30,
         inactivity_timeout: int = 300,
+        cancel_timeout: float = 5,
     ) -> None:
         log.info('➡️ Entrando en __init__()')
         self.url_template = url_template or CONTEXT_WS_URL
         self.monitor_interval = max(1, monitor_interval)
         self.inactivity_timeout = inactivity_timeout
+        self.cancel_timeout = cancel_timeout
         self._tasks: Dict[str, asyncio.Task] = {}
         self._last: Dict[str, datetime] = {}
         self._monitor_task: asyncio.Task | None = None
@@ -163,17 +165,32 @@ class StreamContexto:
     async def detener(self) -> None:
         log.info('➡️ Entrando en detener()')
         """Cancela todos los streams en ejecución."""
-        for task in self._tasks.values():
-            task.cancel()
-        await asyncio.gather(*self._tasks.values(), return_exceptions=True)
-        self._tasks.clear()
-        self._symbols = []
         if self._monitor_task and not self._monitor_task.done():
             self._monitor_task.cancel()
-        await asyncio.gather(
-            *(t for t in [self._monitor_task] if t), return_exceptions=True
-        )
+            try:
+                await asyncio.wait_for(
+                    asyncio.gather(
+                        self._monitor_task, return_exceptions=True
+                    ),
+                    timeout=self.cancel_timeout,
+                )
+            except asyncio.TimeoutError:
+                log.warning('🧟 Timeout cancelando monitor global (tarea zombie)')
+        self._monitor_task = None
+        for task in self._tasks.values():
+            task.cancel()
+        for nombre, task in list(self._tasks.items()):
+            if task.done():
+                continue
+            try:
+                await asyncio.wait_for(
+                    asyncio.gather(task, return_exceptions=True),
+                    timeout=self.cancel_timeout,
+                )
+            except asyncio.TimeoutError:
+                log.warning(f'🧟 Timeout cancelando stream {nombre} (tarea zombie)')
         self._tasks.clear()
+        self._symbols = []
 
 
 __all__ = ['StreamContexto', 'obtener_puntaje_contexto',
