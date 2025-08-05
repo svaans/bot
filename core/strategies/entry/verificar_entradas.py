@@ -42,8 +42,10 @@ async def verificar_entrada(trader, symbol: str, df: pd.DataFrame, estado) ->(
         tendencia=tendencia,
         config={
             **config,
-            "contradicciones_bloquean_entrada": trader.contradicciones_bloquean_entrada,
-            "usar_score_tecnico": trader.usar_score_tecnico,
+            "contradicciones_bloquean_entrada": getattr(
+                trader, "contradicciones_bloquean_entrada", True
+            ),
+            "usar_score_tecnico": getattr(trader, "usar_score_tecnico", True),
         },
         pesos_symbol=trader.pesos_por_simbolo.get(symbol, {}),
     )
