@@ -91,14 +91,21 @@ class StrategyEngine:
             }
             umbral = calcular_umbral_adaptativo(symbol, df, contexto)
             direccion = "short" if tendencia == "bajista" else "long"
-            validaciones = {
-                "volumen": validar_volumen(df),
-                "rsi": validar_rsi(df, direccion),
-                "slope": validar_slope(df, tendencia),
-                "bollinger": validar_bollinger(df),
-            }
+            usar_score = (config or {}).get("usar_score_tecnico", True)
+            validaciones = {"volumen": validar_volumen(df)}
+            if usar_score:
+                validaciones.update(
+                    {
+                        "rsi": validar_rsi(df, direccion),
+                        "slope": validar_slope(df, tendencia),
+                        "bollinger": validar_bollinger(df),
+                    }
+                )
             validaciones_fallidas = [k for k, v in validaciones.items() if not v]
             contradiccion = hay_contradicciones(estrategias_activas)
+            bloquear_contradicciones = (config or {}).get(
+                "contradicciones_bloquean_entrada", True
+            )
             score_tec = calcular_score_tecnico(
                 df,
                 rsi_val,
@@ -113,8 +120,8 @@ class StrategyEngine:
                 score_total >= umbral
                 and score_tec >= umbral_score
                 and cumple_div
-                and not contradiccion
                 and not validaciones_fallidas
+                and (not bloquear_contradicciones or not contradiccion)
             )
             motivo = None
             if not permitido:
