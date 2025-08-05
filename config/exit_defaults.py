@@ -27,6 +27,7 @@ DEFAULT_EXIT_CFG: Dict[str, Any] = {
     'umbral_puntaje_macro_cierre': 6,
     'max_intentos_cierre': 3,
     'delay_reintento_cierre': 1,
+    'sl_emergency_pct': 0.02,
 }
 
 
