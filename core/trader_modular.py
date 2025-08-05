@@ -184,6 +184,7 @@ class Trader:
             log.error(f'❌ {e}')
             raise
         self.historial_cierres: Dict[str, dict] = {}
+        self.capital_inicial_orden: Dict[str, float] = {}
         self._tareas: dict[str, asyncio.Task] = {}
         self._factories: dict[str, Callable[[], Awaitable]] = {}
         self._stop_event = asyncio.Event()
@@ -202,6 +203,8 @@ class Trader:
                 )
             raise
         if self.orders.ordenes:
+            for s in self.orders.ordenes:
+                self.capital_inicial_orden[s] = self.capital_por_simbolo.get(s, 0.0)
             log.warning(
                 '⚠️ Órdenes abiertas encontradas al iniciar. Serán monitoreadas.'
                 )
@@ -287,13 +290,17 @@ class Trader:
         tendencia: (str | None)=None, df: (pd.DataFrame | None)=None) ->None:
         log.info('➡️ Entrando en _cerrar_y_reportar()')
         """Cierra ``orden`` y registra la operación para el reporte diario."""
-        retorno_total = (precio - orden.precio_entrada
+        retorno_unitario = (precio - orden.precio_entrada
             ) / orden.precio_entrada if orden.precio_entrada else 0.0
+        fraccion = orden.cantidad_abierta / orden.cantidad if orden.cantidad else 0.0
+        retorno_parcial = retorno_unitario * fraccion
+        retorno_total = (orden.retorno_total or 0.0) + retorno_parcial
+        capital_base = self.capital_inicial_orden.get(orden.symbol,
+            self.capital_por_simbolo.get(orden.symbol, 0.0))
         info = orden.to_dict()
         info.update({'precio_cierre': precio, 'fecha_cierre': datetime.
             utcnow().isoformat(), 'motivo_cierre': motivo, 'retorno_total':
-            retorno_total, 'capital_inicial': self.capital_por_simbolo.get(
-            orden.symbol, 0.0)})
+            retorno_total, 'capital_inicial': capital_base})
         fut = asyncio.get_running_loop().create_future()
         await self.bus.publish('cerrar_orden', {'symbol': orden.symbol, 'precio': precio, 'motivo': motivo, 'future': fut})
         try:
@@ -308,10 +315,11 @@ class Trader:
                 f'❌ No se pudo confirmar el cierre de {orden.symbol}. Se omitirá el registro.'
             )
             return False
-        capital_inicial = self.capital_por_simbolo.get(orden.symbol, 0.0)
-        ganancia = capital_inicial * retorno_total
-        capital_final = capital_inicial + ganancia
-        self.capital_por_simbolo[orden.symbol] = capital_final
+        capital_actual = self.capital_por_simbolo.get(orden.symbol, 0.0)
+        ganancia_parcial = capital_base * retorno_parcial
+        self.capital_por_simbolo[orden.symbol] = capital_actual + ganancia_parcial
+        capital_final = self.capital_por_simbolo[orden.symbol]
+        ganancia_total = capital_base * retorno_total
         info['capital_final'] = capital_final
         if getattr(orden, 'sl_evitar_info', None):
             self._log_impacto_sl(orden, precio)
@@ -353,10 +361,10 @@ class Trader:
         else:
             self.historial_cierres[orden.symbol]['perdidas_consecutivas'] = 0
         log.info(
-            f'✅ CIERRE {motivo.upper()}: {orden.symbol} | Beneficio: {ganancia:.2f} €'
+            f'✅ CIERRE {motivo.upper()}: {orden.symbol} | Beneficio: {ganancia_total:.2f} €'
             )
         registro_metrico.registrar('cierre', {'symbol': orden.symbol,
-            'motivo': motivo, 'retorno': retorno_total, 'beneficio': ganancia})
+            'motivo': motivo, 'retorno': retorno_total, 'beneficio': ganancia_total})
         self._registrar_salida_profesional(orden.symbol, {'tipo_salida':
             motivo, 'estrategias_activas': orden.estrategias_activas,
             'score_tecnico_al_cierre': self._calcular_score_tecnico(df,
@@ -380,6 +388,7 @@ class Trader:
                 orden.symbol, {}))
         except Exception as e:
             log.debug(f'No se pudo registrar auditoría de cierre: {e}')
+        self.capital_inicial_orden.pop(orden.symbol, None)
         return True
 
     def _registrar_salida_profesional(self, symbol: str, info: dict) ->None:
@@ -444,17 +453,20 @@ class Trader:
             ) / orden.precio_entrada if orden.precio_entrada else 0.0
         fraccion = cantidad / orden.cantidad if orden.cantidad else 0.0
         retorno_total = retorno_unitario * fraccion
+        orden.retorno_total = (orden.retorno_total or 0.0) + retorno_total
+        capital_base = self.capital_inicial_orden.get(orden.symbol,
+            self.capital_por_simbolo.get(orden.symbol, 0.0))
         info = orden.to_dict()
         info.update({'precio_cierre': precio, 'fecha_cierre': datetime.
             utcnow().isoformat(), 'motivo_cierre': motivo, 'retorno_total':
             retorno_total, 'cantidad_cerrada': cantidad, 'capital_inicial':
-            self.capital_por_simbolo.get(orden.symbol, 0.0)})
+            capital_base})
         reporter_diario.registrar_operacion(info)
         registrar_resultado_trade(orden.symbol, info, retorno_total)
-        capital_inicial = self.capital_por_simbolo.get(orden.symbol, 0.0)
-        ganancia = capital_inicial * retorno_total
-        capital_final = capital_inicial + ganancia
-        self.capital_por_simbolo[orden.symbol] = capital_final
+        ganancia = capital_base * retorno_total
+        self.capital_por_simbolo[orden.symbol] = (self.capital_por_simbolo.get(
+            orden.symbol, 0.0) + ganancia)
+        capital_final = self.capital_por_simbolo[orden.symbol]
         info['capital_final'] = capital_final
         log.info(
             f'✅ CIERRE PARCIAL: {orden.symbol} | Beneficio: {ganancia:.2f} €')
@@ -1402,20 +1414,21 @@ class Trader:
                     log.error(f'❌ Error enviando notificación: {e_notif}')
             return
         await self.orders.abrir_async(
-            symbol=symbol,
-            precio=precio,
-            sl=sl,
-            tp=tp,
-            estrategias=estrategias_dict,
-            tendencia=tendencia,
-            direccion=direccion,
-            cantidad=cantidad,
-            puntaje=puntaje,
-            umbral=umbral,
+            symbol,
+            precio,
+            sl,
+            tp,
+            estrategias_dict,
+            tendencia,
+            direccion,
+            cantidad,
+            puntaje,
+            umbral,
             objetivo=cantidad_total,
             fracciones=fracciones,
             detalles_tecnicos=detalles_tecnicos or {},
         )
+        self.capital_inicial_orden[symbol] = self.capital_por_simbolo.get(symbol, 0.0)
         estrategias_list = list(estrategias_dict.keys())
         log.info(
             f'🟢 ENTRADA: {symbol} | Puntaje: {puntaje:.2f} / Umbral: {umbral:.2f} | Estrategias: {estrategias_list}'
