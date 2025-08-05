@@ -41,6 +41,7 @@ class Config:
     symbols: List[str]
     umbral_riesgo_diario: float
     min_order_eur: float
+    diversidad_minima: int = 2
     capital_currency: str | None = None
     persistencia_minima: int = 1
     peso_extra_persistencia: float = 0.5
@@ -108,6 +109,7 @@ class ConfigManager:
             symbols=symbols,
             umbral_riesgo_diario=_cargar_float('UMBRAL_RIESGO_DIARIO', defaults.umbral_riesgo_diario),
             min_order_eur=_cargar_float('MIN_ORDER_EUR', defaults.min_order_eur),
+            diversidad_minima=_cargar_int('DIVERSIDAD_MINIMA', defaults.diversidad_minima),
             capital_currency=capital_currency,
             persistencia_minima=_cargar_int('PERSISTENCIA_MINIMA', defaults.persistencia_minima),
             peso_extra_persistencia=_cargar_float('PESO_EXTRA_PERSISTENCIA', defaults.peso_extra_persistencia),
