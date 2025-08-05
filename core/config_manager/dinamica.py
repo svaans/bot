@@ -28,7 +28,7 @@ def adaptar_configuracion(symbol: str, df: pd.DataFrame, base_config: dict | Non
         base_config = {}
     config = base_config.copy()
     # Ajustes según indicadores (ATR, RSI, pendiente, volumen...)
-    config.update(_adaptar_indicadores(symbol, df) or {})
+    config.update(_adaptar_indicadores(symbol, df, config) or {})
     # Ajustes finales del adaptador base
     config = _adaptar_base(symbol, df, config)
     return config
