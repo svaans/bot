@@ -26,6 +26,7 @@ class DataFeed:
         max_restarts: int = 5,
         inactivity_intervals: int = 12,
         usar_stream_combinado: bool = False,
+        handler_timeout: float = 5,
     ) -> None:
         log.info('➡️ Entrando en __init__()')
         self.intervalo = intervalo
@@ -47,6 +48,7 @@ class DataFeed:
         self.usar_stream_combinado = usar_stream_combinado
         self._symbols: list[str] = []
         self.reinicios_forzados_total = 0
+        self.handler_timeout = handler_timeout
 
     @property
     def activos(self) ->list[str]:
@@ -63,7 +65,12 @@ class DataFeed:
             self._last[symbol] = datetime.utcnow()
             log.info(f'[{symbol}] Recibida vela: timestamp={candle.get("timestamp")}')
             tick_data(symbol)
-            await handler(candle)
+            try:
+                await asyncio.wait_for(handler(candle), timeout=self.handler_timeout)
+            except asyncio.TimeoutError:
+                log.error(
+                    f'Handler de {symbol} superó {self.handler_timeout}s; omitiendo vela'
+                )
 
         await self._relanzar_stream(symbol, wrapper)
 
@@ -76,7 +83,12 @@ class DataFeed:
             self._last[symbol] = datetime.utcnow()
             log.info(f'[{symbol}] Recibida vela: timestamp={candle.get("timestamp")}')
             tick_data(symbol)
-            await handler(candle)
+            try:
+                await asyncio.wait_for(handler(candle), timeout=self.handler_timeout)
+            except asyncio.TimeoutError:
+                log.error(
+                    f'Handler de {symbol} superó {self.handler_timeout}s; omitiendo vela'
+                )
 
         handlers: Dict[str, Callable[[dict], Awaitable[None]]] = {}
         for sym in symbols:

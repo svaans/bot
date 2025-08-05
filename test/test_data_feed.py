@@ -197,6 +197,35 @@ def test_inactivity_intervals_parameter():
     feed = DataFeed('5m', inactivity_intervals=2)
     assert feed.tiempo_inactividad == 600
 
+def test_handler_timeout(monkeypatch):
+    cancelado = False
+
+    async def fake_listen(symbol, interval, handler, *args, **kwargs):
+        await handler({'symbol': symbol, 'timestamp': 1})
+
+    monkeypatch.setattr('core.data_feed.escuchar_velas', fake_listen)
+
+    feed = DataFeed('1m', handler_timeout=0.01)
+
+    async def handler(candle):
+        nonlocal cancelado
+        try:
+            await asyncio.sleep(0.02)
+        except asyncio.CancelledError:
+            cancelado = True
+            raise
+
+    async def run():
+        task = asyncio.create_task(feed.escuchar(['BTC/EUR'], handler))
+        await asyncio.sleep(0.05)
+        await feed.detener()
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+
+    asyncio.run(run())
+    assert cancelado
+
 
 def test_monitor_interval_minimum():
     feed = DataFeed('1m', monitor_interval=0)
