@@ -118,9 +118,13 @@ async def verificar_entrada(trader, symbol: str, df: pd.DataFrame, estado) ->(
     rsi = engine_eval.get('rsi')
     if rsi is None:
         rsi = get_rsi(df)
+    elif isinstance(rsi, pd.Series):
+        rsi = rsi.iloc[-1]
     momentum = engine_eval.get('momentum')
     if momentum is None:
         momentum = get_momentum(df)
+    elif isinstance(momentum, pd.Series):
+        momentum = momentum.iloc[-1]
     if trader.usar_score_tecnico:
         score_tecnico, puntos_tecnicos = trader._calcular_score_tecnico(df, rsi,
             momentum, tendencia, direccion)
@@ -144,7 +148,9 @@ async def verificar_entrada(trader, symbol: str, df: pd.DataFrame, estado) ->(
         umbral_score_unico = config.get('umbral_score_estrategia_unica',
             trader.umbral_score_tecnico * 1.5)
         high_weight = peso_total >= umbral_peso_unico
-        high_score = (score_tecnico or 0) >= umbral_score_unico
+        high_score = (
+            (score_tecnico if score_tecnico is not None else 0) >= umbral_score_unico
+        )
         if not (high_weight or high_score or config.get('modo_agresivo', False)):
             razones.append('diversidad')
     if not trader._validar_estrategia(symbol, df, estrategias, config):

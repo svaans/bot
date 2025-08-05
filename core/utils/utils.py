@@ -251,10 +251,16 @@ def leer_reporte_seguro(path: str, columnas_esperadas: int=24) ->pd.DataFrame:
     """Lee un reporte diario garantizando la estructura correcta."""
     try:
         df = pd.read_csv(path)
-        if df.shape[1] != columnas_esperadas:
+        if df.shape[1] < columnas_esperadas:
             raise ValueError(
                 f'📛 Columnas esperadas: {columnas_esperadas}, encontradas: {df.shape[1]}'
                 )
+        if df.shape[1] > columnas_esperadas:
+            log.warning(
+                f'⚠️ Columnas extras detectadas en {path}: {df.shape[1]}. '
+                f'Se recortarán a {columnas_esperadas}.'
+            )
+            df = df.iloc[:, :columnas_esperadas]
         return df
     except Exception as e:
         log.warning(f'⚠️ Error leyendo archivo {path}: {e}')
