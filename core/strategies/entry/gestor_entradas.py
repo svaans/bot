@@ -33,8 +33,14 @@ def evaluar_estrategias(symbol: str, df: pd.DataFrame, tendencia: str) ->dict:
             continue
         try:
             resultado = func(df)
-            activo = bool(resultado.get('activo')) if isinstance(resultado,
-                dict) else False
+            if isinstance(resultado, dict):
+                valor = resultado.get('activo')
+                if isinstance(valor, pd.Series):
+                    activo = bool(valor.iloc[-1])
+                else:
+                    activo = bool(valor)
+            else:
+                activo = False
         except Exception as exc:
             log.warning(f'Error ejecutando {nombre}: {exc}')
             activo = False
