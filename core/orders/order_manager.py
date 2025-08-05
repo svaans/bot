@@ -265,8 +265,6 @@ class OrderManager:
             ) / orden.precio_entrada if orden.precio_entrada else 0.0
         fraccion = cantidad / orden.cantidad if orden.cantidad else 0.0
         retorno_total = retorno_unitario * fraccion
-        if retorno_total < 0 and self.bus:
-            await self.bus.publish('registrar_perdida', {'symbol': symbol, 'perdida': retorno_total})
         log.info(
             f'📤 Cierre parcial de {symbol}: {cantidad} @ {precio:.2f} | {motivo}'
             )
