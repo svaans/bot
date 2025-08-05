@@ -48,7 +48,7 @@ def calcular_umbral_adaptativo(
       umbral.
     """
     config = _cargar_config().get(symbol, {})
-    base = config.get("peso_minimo_total", 2.0)
+    base = config.get("peso_minimo_total", 0.5)
     factor = config.get("factor_umbral", 1.0)
 
     def _factor_volatilidad() -> float:
