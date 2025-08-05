@@ -70,7 +70,8 @@ async def procesar_vela(trader, vela: dict) -> None:
     log.debug(f"Procesando vela {symbol} | Precio: {vela.get('close')}")
 
     try:
-        if trader.orders.obtener(symbol):
+        orden_existente = trader.orders.obtener(symbol)
+        if orden_existente is not None:
             # ⚠️ Validar salidas activas con timeout
             try:
                 await asyncio.wait_for(
