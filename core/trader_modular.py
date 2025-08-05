@@ -175,8 +175,10 @@ class Trader:
         self.estado: Dict[str, EstadoSimbolo] = {s: EstadoSimbolo([]) for s in
             config.symbols}
         self.estado_tendencia: Dict[str, str] = {}
-        self.config_por_simbolo: Dict[str, dict] = {s: {} for s in config.
-            symbols}
+        self.config_por_simbolo: Dict[str, dict] = {
+            s: {'diversidad_minima': getattr(config, 'diversidad_minima', 2)}
+            for s in config.symbols
+        }
         try:
             self.pesos_por_simbolo: Dict[str, Dict[str, float]
                 ] = cargar_pesos_estrategias()
