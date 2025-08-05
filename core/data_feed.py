@@ -46,6 +46,7 @@ class DataFeed:
         self.notificador = crear_notificador_desde_env()
         self.usar_stream_combinado = usar_stream_combinado
         self._symbols: list[str] = []
+        self.reinicios_forzados_total = 0
 
     @property
     def activos(self) ->list[str]:
@@ -167,30 +168,50 @@ class DataFeed:
                     inactivos = [
                         sym
                         for sym in self._symbols
-                    if (
+                        if (
                             self._last.get(sym)
                             and (ahora - self._last[sym]).total_seconds() > self.tiempo_inactividad
                         )
                     ]
+                    if inactivos:
+                        log.warning(f"⏸ Símbolos inactivos detectados: {inactivos}")
+                    all_inactivos = len(inactivos) == len(self._symbols) and bool(self._symbols)
                     if task.done() or inactivos:
-                        log.warning(
-                            "🔄 Stream combinado inactivo o finalizado; reiniciando"
-                        )
-                        log.debug(
-                            f"Tareas antes de reinicio: {list(self._tasks.keys())}"
-                        )
+                        log.debug(f"Estado task.done() antes de cancelar: {task.done()}")
+                        if all_inactivos:
+                            log.critical(
+                                "⛔ Todos los símbolos sin datos — Forzando reinicio completo de stream combinado"
+                            )
+                            self.reinicios_forzados_total += 1
+                            try:
+                                await self.notificador.enviar_async(
+                                    '🔄 Reinicio forzado de stream combinado por inactividad global',
+                                    'CRITICAL',
+                                )
+                            except Exception:
+                                tick('data_feed')
+                                pass
+                        if self._handler_actual is None:
+                            log.error("Handler actual es None; no se puede reiniciar stream combinado")
+                            continue
+                        log.debug(f"Tareas antes de reinicio: {list(self._tasks.keys())}")
                         if not task.done():
+                            log.info("Cancelando tarea 'combined'")
                             task.cancel()
                             await asyncio.gather(task, return_exceptions=True)
-                        self._tasks["combined"] = supervised_task(
-                            lambda: self._stream_combinado(
-                                self._symbols, self._handler_actual
-                            ),
-                            "stream_combined",
+                            log.debug(
+                                f"Tarea 'combined' cancelada: cancelled={task.cancelled()} done={task.done()}"
+                            )
+                        nueva = supervised_task(
+                            lambda: self._stream_combinado(self._symbols, self._handler_actual),
+                            'stream_combined',
                             max_restarts=0,
                         )
-                        log.info(
-                            "📡 _stream_combinado reiniciado para %s", self._symbols
+                        self._tasks['combined'] = nueva
+                        inicio = datetime.utcnow()
+                        log.info("📡 _stream_combinado reiniciado para %s", self._symbols)
+                        log.debug(
+                            f"Inicio: {inicio.isoformat()} nombre={nueva.get_name()} done={nueva.done()} id={id(nueva)}"
                         )
                         log.debug(
                             f"Tareas después de reinicio: {list(self._tasks.keys())}"
@@ -207,7 +228,7 @@ class DataFeed:
                     )
                     if task.done() or inactivo:
                         log.warning(
-                            f"🔄 Stream {sym} inactivo o finalizado; relanzando"
+                            f"🔄 Stream {sym} inactivo o finalizado; relanzando",
                         )
                         log.debug(
                             f"Tareas antes de reinicio: {list(self._tasks.keys())}"
@@ -259,10 +280,15 @@ class DataFeed:
                 self._monitor_global_inactividad()
             )
         if self.usar_stream_combinado:
-            self._tasks['combined'] = supervised_task(
+            tarea = supervised_task(
                 lambda: self._stream_combinado(self._symbols, handler),
                 'stream_combined',
                 max_restarts=0,
+            )
+            self._tasks['combined'] = tarea
+            inicio = datetime.utcnow()
+            log.info(
+                f"🚀 _stream_combinado lanzado {inicio.isoformat()} nombre={tarea.get_name()} done={tarea.done()} id={id(tarea)}"
             )
         else:
             for sym in self._symbols:
