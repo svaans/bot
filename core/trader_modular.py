@@ -44,12 +44,9 @@ from learning.aprendizaje_continuo import ejecutar_ciclo as ciclo_aprendizaje
 from core.strategies.exit.gestor_salidas import verificar_filtro_tecnico
 from core.strategies.tendencia import detectar_tendencia
 from core.strategies.entry.validador_entradas import evaluar_validez_estrategica
-from indicators.rsi import calcular_rsi
-from indicators.momentum import calcular_momentum
-from indicators.slope import calcular_slope
+from indicators.helpers import get_rsi, get_momentum, get_atr, get_slope
 from core.strategies.evaluador_tecnico import actualizar_pesos_tecnicos
 from core.auditoria import registrar_auditoria
-from indicators.atr import calcular_atr
 from core.strategies.exit.verificar_salidas import verificar_salidas
 from core.strategies.entry.verificar_entradas import verificar_entrada
 from core.procesar_vela import procesar_vela
@@ -367,27 +364,34 @@ class Trader:
             )
         registro_metrico.registrar('cierre', {'symbol': orden.symbol,
             'motivo': motivo, 'retorno': retorno_total, 'beneficio': ganancia_total})
-        self._registrar_salida_profesional(orden.symbol, {'tipo_salida':
-            motivo, 'estrategias_activas': orden.estrategias_activas,
-            'score_tecnico_al_cierre': self._calcular_score_tecnico(df,
-            calcular_rsi(df), calcular_momentum(df), tendencia or '', orden
-            .direccion)[0] if df is not None else 0.0, 'capital_final':
-            capital_final, 'configuracion_usada': self.config_por_simbolo.
-            get(orden.symbol, {}), 'tiempo_operacion': duracion,
-            'beneficio_relativo': retorno_total})
+        rsi_val = get_rsi(df) if df is not None else None
+        mom_val = get_momentum(df) if df is not None else None
+        score_val, _ = self._calcular_score_tecnico(
+            df, rsi_val, mom_val, tendencia or '', orden.direccion
+        ) if df is not None else (0.0, {})
+        self._registrar_salida_profesional(orden.symbol, {
+            'tipo_salida': motivo,
+            'estrategias_activas': orden.estrategias_activas,
+            'score_tecnico_al_cierre': score_val,
+            'capital_final': capital_final,
+            'configuracion_usada': self.config_por_simbolo.get(orden.symbol, {}),
+            'tiempo_operacion': duracion,
+            'beneficio_relativo': retorno_total,
+        })
         metricas = self._metricas_recientes()
         await self.bus.publish('ajustar_riesgo', metricas)
         try:
-            rsi_val = calcular_rsi(df) if df is not None else None
-            score, _ = self._calcular_score_tecnico(df, rsi_val,
-                calcular_momentum(df), tendencia or '', orden.direccion
-                ) if df is not None else (None, None)
-            registrar_auditoria(symbol=orden.symbol, evento=motivo,
+            registrar_auditoria(
+                symbol=orden.symbol,
+                evento=motivo,
                 resultado='ganancia' if retorno_total > 0 else 'pérdida',
-                estrategias_activas=orden.estrategias_activas, score=score,
-                rsi=rsi_val, tendencia=tendencia, capital_actual=
-                capital_final, config_usada=self.config_por_simbolo.get(
-                orden.symbol, {}))
+                estrategias_activas=orden.estrategias_activas,
+                score=score_val,
+                rsi=rsi_val,
+                tendencia=tendencia,
+                capital_actual=capital_final,
+                config_usada=self.config_por_simbolo.get(orden.symbol, {}),
+            )
         except Exception as e:
             log.debug(f'No se pudo registrar auditoría de cierre: {e}')
         self.capital_inicial_orden.pop(orden.symbol, None)
@@ -472,26 +476,33 @@ class Trader:
         info['capital_final'] = capital_final
         log.info(
             f'✅ CIERRE PARCIAL: {orden.symbol} | Beneficio: {ganancia:.2f} €')
-        registro_metrico.registrar('cierre_parcial', {'symbol': orden.
-            symbol, 'retorno': retorno_total, 'beneficio': ganancia})
-        self._registrar_salida_profesional(orden.symbol, {'tipo_salida':
-            'parcial', 'estrategias_activas': orden.estrategias_activas,
-            'score_tecnico_al_cierre': self._calcular_score_tecnico(df,
-            calcular_rsi(df), calcular_momentum(df), orden.tendencia, orden
-            .direccion)[0] if df is not None else 0.0,
-            'configuracion_usada': self.config_por_simbolo.get(orden.symbol,
-            {}), 'tiempo_operacion': 0.0, 'beneficio_relativo': retorno_total})
+        registro_metrico.registrar('cierre_parcial', {'symbol': orden.symbol,
+            'retorno': retorno_total, 'beneficio': ganancia})
+        rsi_val = get_rsi(df) if df is not None else None
+        mom_val = get_momentum(df) if df is not None else None
+        score_val, _ = self._calcular_score_tecnico(
+            df, rsi_val, mom_val, orden.tendencia, orden.direccion
+        ) if df is not None else (0.0, {})
+        self._registrar_salida_profesional(orden.symbol, {
+            'tipo_salida': 'parcial',
+            'estrategias_activas': orden.estrategias_activas,
+            'score_tecnico_al_cierre': score_val,
+            'configuracion_usada': self.config_por_simbolo.get(orden.symbol, {}),
+            'tiempo_operacion': 0.0,
+            'beneficio_relativo': retorno_total,
+        })
         try:
-            rsi_val = calcular_rsi(df) if df is not None else None
-            score, _ = self._calcular_score_tecnico(df, rsi_val,
-                calcular_momentum(df), orden.tendencia, orden.direccion
-                ) if df is not None else (None, None)
-            registrar_auditoria(symbol=orden.symbol, evento=motivo,
+            registrar_auditoria(
+                symbol=orden.symbol,
+                evento=motivo,
                 resultado='ganancia' if retorno_total > 0 else 'pérdida',
-                estrategias_activas=orden.estrategias_activas, score=score,
-                rsi=rsi_val, tendencia=orden.tendencia, capital_actual=
-                capital_final, config_usada=self.config_por_simbolo.get(
-                orden.symbol, {}))
+                estrategias_activas=orden.estrategias_activas,
+                score=score_val,
+                rsi=rsi_val,
+                tendencia=orden.tendencia,
+                capital_actual=capital_final,
+                config_usada=self.config_por_simbolo.get(orden.symbol, {}),
+            )
         except Exception as e:
             log.debug(f'No se pudo registrar auditoría de cierre parcial: {e}')
         return True
@@ -1160,7 +1171,7 @@ class Trader:
         if df is None or len(df) < 30:
             return True
         try:
-            atr = calcular_atr(df.tail(100))
+            atr = get_atr(df)
         except Exception as e:
             log.debug(f'No se pudo calcular ATR para {symbol}: {e}')
             return True
@@ -1182,7 +1193,7 @@ class Trader:
         float, dict]:
         log.info('➡️ Entrando en _calcular_score_tecnico()')
         """Calcula un puntaje técnico simple a partir de varios indicadores."""
-        slope = calcular_slope(df)
+        slope = get_slope(df)
         score_indicadores = calcular_score_tecnico(df, rsi, momentum, slope,
             tendencia, direccion)
         resultados = {'RSI': False, 'Momentum': False, 'Slope': False,
@@ -1242,7 +1253,7 @@ class Trader:
     def _validar_temporalidad(self, df: pd.DataFrame, direccion: str) ->bool:
         log.info('➡️ Entrando en _validar_temporalidad()')
         """Verifica que las señales no estén perdiendo fuerza."""
-        rsi_series = calcular_rsi(df, serie_completa=True)
+        rsi_series = get_rsi(df, serie_completa=True)
         if rsi_series is None or len(rsi_series) < 3:
             return True
         r = rsi_series.iloc[-3:]
@@ -1250,8 +1261,8 @@ class Trader:
             return False
         if direccion == 'short' and not r.iloc[-1] < r.iloc[-2] < r.iloc[-3]:
             return False
-        slope3 = calcular_slope(df, periodo=3)
-        slope5 = calcular_slope(df, periodo=5)
+        slope3 = get_slope(df, periodo=3)
+        slope5 = get_slope(df, periodo=5)
         if direccion == 'long' and not slope3 > slope5:
             return False
         if direccion == 'short' and not slope3 < slope5:
