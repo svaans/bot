@@ -15,8 +15,11 @@ def validar_necesidad_de_salida(df, orden, estrategias_activas: dict,
             cfg.update(config)
         umbral_rsi = cfg['umbral_rsi_salida']
         factor_umbral_puntaje = cfg['factor_umbral_validacion_salida']
-        if orden.get('direccion') == 'long' and rsi is not None and rsi[-1
-            ] > umbral_rsi:
+        if (
+            orden.get('direccion') == 'long'
+            and rsi is not None
+            and rsi > umbral_rsi
+        ):
             if puntaje and umbral and puntaje > factor_umbral_puntaje * umbral:
                 return False
         macd_line, signal = calcular_macd(df)
