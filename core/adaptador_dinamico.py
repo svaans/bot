@@ -67,7 +67,7 @@ def _adaptar_configuracion_base(symbol: str, df: pd.DataFrame, base_config: dict
         tp_ratio *= 1.1
     config['sl_ratio'] = round(min(5.0, max(sl_ratio, 0.5)), 2)
     config['tp_ratio'] = round(min(8.0, max(tp_ratio, 1.0)), 2)
-    base_peso = base_config.get('peso_minimo_total', 2.0)
+    base_peso = base_config.get('peso_minimo_total', 0.5)
     config['peso_minimo_total'] = round(min(5.0, base_peso * (1 + 
         volatilidad * 1.5)), 2)
     if slope < -0.002:
