@@ -8,7 +8,7 @@ log = configurar_logger('config_service')
 CONFIG_BASE = {'factor_umbral': 1.0, 'ajuste_volatilidad': 1.0,
     'riesgo_maximo_diario': 2.0, 'ponderar_por_diversidad': True,
     'modo_agresivo': False, 'multiplicador_estrategias_recurrentes': 1.5,
-    'peso_minimo_total': 2.0, 'diversidad_minima': 2,
+    'peso_minimo_total': 0.5, 'diversidad_minima': 2,
     'umbral_peso_estrategia_unica': 3.5,
     'umbral_score_estrategia_unica': 5.0,
     'cooldown_tras_perdida': 3, 'sl_ratio': 1.5, 'tp_ratio': 3.0,
