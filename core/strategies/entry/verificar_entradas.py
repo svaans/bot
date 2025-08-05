@@ -8,10 +8,7 @@ from core.data import coincidencia_parcial
 from core.estrategias import filtrar_por_direccion
 from core.strategies.tendencia import detectar_tendencia
 from core.strategies.evaluador_tecnico import evaluar_puntaje_tecnico, calcular_umbral_adaptativo as calc_umbral_tecnico, cargar_pesos_tecnicos
-from indicators.rsi import calcular_rsi
-from indicators.momentum import calcular_momentum
-from indicators.slope import calcular_slope
-from indicators.atr import calcular_atr
+from indicators.helpers import get_rsi, get_momentum, get_atr
 from core.utils.utils import distancia_minima_valida, verificar_integridad_datos
 from core.contexto_externo import obtener_puntaje_contexto
 from core.metricas_semanales import metricas_tracker
@@ -118,9 +115,12 @@ async def verificar_entrada(trader, symbol: str, df: pd.DataFrame, estado) ->(
         estrategias_persistentes)
     peso_min_total = config.get('peso_minimo_total', 0.5)
     diversidad_min = config.get('diversidad_minima', 2)
-    rsi = calcular_rsi(df)
-    momentum = calcular_momentum(df)
-    slope = calcular_slope(df)
+    rsi = engine_eval.get('rsi')
+    if rsi is None:
+        rsi = get_rsi(df)
+    momentum = engine_eval.get('momentum')
+    if momentum is None:
+        momentum = get_momentum(df)
     if trader.usar_score_tecnico:
         score_tecnico, puntos_tecnicos = trader._calcular_score_tecnico(df, rsi,
             momentum, tendencia, direccion)
@@ -192,7 +192,7 @@ async def verificar_entrada(trader, symbol: str, df: pd.DataFrame, estado) ->(
     # El trader validará SL y TP con ATR al abrir la orden, por lo que
     # evitamos duplicar esta comprobación aquí. Solo calculamos ATR una vez
     # para posibles ajustes posteriores.
-    atr = calcular_atr(df)
+    atr = get_atr(df)
     eval_tecnica = evaluar_puntaje_tecnico(symbol, df, precio, sl, tp)
     score_total = eval_tecnica['score_total']
     score_normalizado = eval_tecnica.get('score_normalizado')
