@@ -3,9 +3,7 @@ from __future__ import annotations
 import pandas as pd
 import numpy as np
 from core.utils.utils import configurar_logger
-from indicators.atr import calcular_atr
-from indicators.rsi import calcular_rsi
-from indicators.slope import calcular_slope
+from indicators.helpers import get_atr, get_rsi, get_slope
 log = configurar_logger('adaptador_dinamico')
 
 
@@ -46,10 +44,10 @@ def _adaptar_configuracion_indicadores(symbol: str, df: pd.DataFrame, base_confi
     base_config = base_config or {}
     df = df.tail(60).copy()
     close_actual = df['close'].iloc[-1]
-    atr = calcular_atr(df)
-    rsi = calcular_rsi(df)
+    atr = get_atr(df)
+    rsi = get_rsi(df)
     ma30 = df['close'].rolling(30).mean().dropna()
-    slope = calcular_slope(pd.DataFrame({'close': ma30})
+    slope = get_slope(pd.DataFrame({'close': ma30})
         ) if not ma30.empty else 0.0
     if atr is None or rsi is None:
         log.warning(f'[{symbol}] Indicadores insuficientes para adaptación.')
