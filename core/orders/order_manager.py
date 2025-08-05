@@ -167,6 +167,7 @@ class OrderManager:
         if orden.entradas is None:
             orden.entradas = []
         orden.entradas.append({'precio': precio, 'cantidad': cantidad})
+        orden.precio_ultima_piramide = precio
         return True
 
     async def cerrar_async(self, symbol: str, precio: float, motivo: str
