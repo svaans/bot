@@ -28,6 +28,7 @@ DEFAULT_EXIT_CFG: Dict[str, Any] = {
     'max_intentos_cierre': 3,
     'delay_reintento_cierre': 1,
     'sl_emergency_pct': 0.02,
+    'max_velas_reversion_tendencia': 0,
 }
 
 
