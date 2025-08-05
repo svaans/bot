@@ -1,7 +1,7 @@
 import json
 import os
 import pandas as pd
-from indicators.rsi import calcular_rsi
+from indicators.helpers import get_rsi
 from core.utils.utils import configurar_logger
 log = configurar_logger('eval_tecnico')
 RUTA_PESOS = 'config/pesos_tecnicos.json'
@@ -74,8 +74,8 @@ def evaluar_puntaje_tecnico(symbol: str, df: pd.DataFrame, precio: float,
     bajo = float(vela['low'])
     cuerpo = abs(cierre - apertura)
     rango_total = alto - bajo
-    rsi = calcular_rsi(df)
-    rsi_ant = calcular_rsi(df.iloc[:-1]) if len(df) > 15 else rsi
+    rsi = get_rsi(df)
+    rsi_ant = get_rsi(df.iloc[:-1]) if len(df) > 15 else rsi
     volumen_actual = float(vela['volume'])
     volumen_prev = float(df.iloc[-2]['volume'])
     media_vol = df['volume'].rolling(20).mean().iloc[-1]
