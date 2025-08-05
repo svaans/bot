@@ -103,6 +103,8 @@ class StrategyEngine:
                 )
             validaciones_fallidas = [k for k, v in validaciones.items() if not v]
             contradiccion = hay_contradicciones(estrategias_activas)
+            rsi_contra = rsi_val > 70 or rsi_val < 30
+            contradiccion = contradiccion or rsi_contra
             bloquear_contradicciones = (config or {}).get(
                 "contradicciones_bloquean_entrada", True
             )
