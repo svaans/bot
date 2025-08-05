@@ -1,6 +1,6 @@
 import pandas as pd
 from core.utils.utils import configurar_logger
-from indicators.rsi import calcular_rsi
+from indicators.helpers import get_rsi
 UMBRAL_PERDIDA_DIA = -0.02
 UMBRAL_CERCANIA_EXTREMO = 0.003
 UMBRAL_CUERPO_DOJI = 0.3
@@ -24,7 +24,7 @@ def validar_condiciones_tecnicas_extra(symbol: str, datos: pd.DataFrame,
     volumen_actual = float(vela['volume'])
     cuerpo = abs(cierre - apertura)
     rango_total = alto - bajo
-    rsi = calcular_rsi(datos)
+    rsi = get_rsi(datos)
     cambio_diario_pct = (cierre - datos['close'].iloc[-2]) / datos['close'
         ].iloc[-2] * 100
     tp_sl_ratio = (tp - precio) / (precio - sl) if sl != precio else 999
