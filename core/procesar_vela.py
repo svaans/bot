@@ -110,8 +110,12 @@ async def procesar_vela(trader, vela: dict) -> None:
                 trader.evaluar_condiciones_de_entrada(symbol, df, estado),
                 timeout=trader.config.timeout_evaluar_condiciones,
             )
-            if info:
+            if isinstance(info, dict) and info:
                 await trader._abrir_operacion_real(**info)
+            elif info is not None:
+                log.warning(
+                    f'⚠️ Resultado inesperado al evaluar entrada para {symbol}: {type(info)}'
+                )
         except asyncio.TimeoutError:
             log.error(
                 f'⏰ Timeout en evaluar_condiciones_de_entrada para {symbol}'

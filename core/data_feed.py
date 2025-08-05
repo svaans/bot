@@ -24,17 +24,19 @@ class DataFeed:
         intervalo: str,
         monitor_interval: int = 5,
         max_restarts: int = 5,
-        inactivity_intervals: int = 12,
+        inactivity_intervals: int = 4,
         usar_stream_combinado: bool = False,
         handler_timeout: float = 5,
+        cancel_timeout: float = 5,
     ) -> None:
         log.info('➡️ Entrando en __init__()')
         self.intervalo = intervalo
         self.intervalo_segundos = intervalo_a_segundos(intervalo)
         self.inactivity_intervals = inactivity_intervals
         self.tiempo_inactividad = max(
-            self.intervalo_segundos * self.inactivity_intervals, 60
+            self.intervalo_segundos * self.inactivity_intervals, 300
         )
+        self.cancel_timeout = cancel_timeout
         self.ping_interval = 60  # frecuencia fija de ping en segundos
         self.monitor_interval = max(1, monitor_interval)
         self.max_stream_restarts = max_restarts
@@ -210,7 +212,15 @@ class DataFeed:
                         if not task.done():
                             log.info("Cancelando tarea 'combined'")
                             task.cancel()
-                            await asyncio.gather(task, return_exceptions=True)
+                            try:
+                                await asyncio.wait_for(
+                                    asyncio.gather(task, return_exceptions=True),
+                                    timeout=self.cancel_timeout,
+                                )
+                            except asyncio.TimeoutError:
+                                log.warning(
+                                    "⏱️ Timeout cancelando stream combinado"
+                                )
                             log.debug(
                                 f"Tarea 'combined' cancelada: cancelled={task.cancelled()} done={task.done()}"
                             )
@@ -247,7 +257,15 @@ class DataFeed:
                         )
                         if not task.done():
                             task.cancel()
-                            await asyncio.gather(task, return_exceptions=True)
+                            try:
+                                await asyncio.wait_for(
+                                    asyncio.gather(task, return_exceptions=True),
+                                    timeout=self.cancel_timeout,
+                                )
+                            except asyncio.TimeoutError:
+                                log.warning(
+                                    f"⏱️ Timeout cancelando stream {sym}"
+                                )
                         self._tasks[sym] = supervised_task(
                             lambda sym=sym: self.stream(sym, self._handler_actual),
                             f"stream_{sym}",
@@ -331,12 +349,26 @@ class DataFeed:
         """Cancela todos los streams en ejecución."""
         for task in self._tasks.values():
             task.cancel()
-        await asyncio.gather(*self._tasks.values(), return_exceptions=True)
+        try:
+            await asyncio.wait_for(
+                asyncio.gather(*self._tasks.values(), return_exceptions=True),
+                timeout=self.cancel_timeout,
+            )
+        except asyncio.TimeoutError:
+            log.warning("⏱️ Timeout cancelando streams activos")
         self._tasks.clear()
         self._last.clear()
         self._symbols = []
         if self._monitor_global_task and not self._monitor_global_task.done():
             self._monitor_global_task.cancel()
-            await asyncio.gather(self._monitor_global_task, return_exceptions=True)
+            try:
+                await asyncio.wait_for(
+                    asyncio.gather(
+                        self._monitor_global_task, return_exceptions=True
+                    ),
+                    timeout=self.cancel_timeout,
+                )
+            except asyncio.TimeoutError:
+                log.warning("⏱️ Timeout cancelando monitor global")
         self._monitor_global_task = None
         self._running = False
