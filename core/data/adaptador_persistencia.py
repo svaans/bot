@@ -2,7 +2,7 @@ import numpy as np
 import pandas as pd
 from ta.momentum import RSIIndicator
 from core.utils.utils import configurar_logger
-from indicators.slope import calcular_slope
+from indicators.helpers import get_slope
 log = configurar_logger('persistencia')
 
 
@@ -23,7 +23,7 @@ def calcular_persistencia_minima(symbol: str, df: pd.DataFrame, tendencia:
             )
         return base_minimo
     volatilidad = np.std(ventana) / media
-    slope = calcular_slope(df, periodo=10)
+    slope = get_slope(df, periodo=10)
     if 'volume' in df.columns:
         vol_act = float(df['volume'].iloc[-1])
         vol_med = float(df['volume'].tail(10).mean())
