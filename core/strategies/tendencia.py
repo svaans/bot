@@ -1,6 +1,6 @@
 """Detección de tendencia del mercado y evaluación de señales persistentes."""
 import pandas as pd
-from indicators.rsi import calcular_rsi
+from indicators.helpers import get_rsi
 from indicators.adx import calcular_adx
 from core.strategies.entry.gestor_entradas import evaluar_estrategias
 from core.estrategias import obtener_estrategias_por_tendencia
@@ -19,7 +19,7 @@ def detectar_tendencia(symbol: str, df: pd.DataFrame) -> tuple[str, dict[str, bo
     df["ema_slow"] = df["close"].ewm(span=30, adjust=False).mean()
     delta = df["ema_fast"].iloc[-1] - df["ema_slow"].iloc[-1]
     slope = (df["ema_slow"].iloc[-1] - df["ema_slow"].iloc[-5]) / 5
-    rsi = calcular_rsi(df)
+    rsi = get_rsi(df)
     close_std = df["close"].std()
     umbral = max(close_std * 0.02, 0.1)
     puntos_alcista = 0
