@@ -8,6 +8,7 @@ INTERVALO_VELAS = cfg.intervalo_velas
 SYMBOLS = cfg.symbols
 UMBRAL_RIESGO_DIARIO = cfg.umbral_riesgo_diario
 MIN_ORDER_EUR = cfg.min_order_eur
+DIVERSIDAD_MINIMA = cfg.diversidad_minima
 PERSISTENCIA_MINIMA = cfg.persistencia_minima
 PESO_EXTRA_PERSISTENCIA = cfg.peso_extra_persistencia
 MODO_CAPITAL_BAJO = cfg.modo_capital_bajo
