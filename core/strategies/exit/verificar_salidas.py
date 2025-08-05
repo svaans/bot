@@ -214,9 +214,42 @@ async def _manejar_cambio_tendencia(trader, orden, df) -> bool:
     symbol = orden.symbol
     config_actual = trader.config_por_simbolo.get(symbol, load_exit_config(symbol))
     if not verificar_reversion_tendencia(symbol, df, orden.tendencia):
+        orden.reversion_tendencia_contador = 0
         return False
+
+    # Contador de reversiones consecutivas
+    orden.reversion_tendencia_contador = getattr(
+        orden, 'reversion_tendencia_contador', 0
+    ) + 1
+
+    max_velas = config_actual.get('max_velas_reversion_tendencia', 0)
+    if max_velas and orden.reversion_tendencia_contador >= max_velas:
+        nueva_tendencia = trader.estado_tendencia.get(symbol)
+        if not nueva_tendencia:
+            nueva_tendencia, _ = detectar_tendencia(symbol, df)
+            trader.estado_tendencia[symbol] = nueva_tendencia
+        precio_cierre = float(df['close'].iloc[-1])
+        if not permitir_cierre_tecnico(symbol, df, precio_cierre, orden.to_dict()):
+            log.info(f'🛡️ Cierre evitado por análisis técnico: {symbol}')
+            return False
+        if await trader._cerrar_y_reportar(
+            orden,
+            precio_cierre,
+            'Cambio de tendencia forzado',
+            tendencia=nueva_tendencia,
+            df=df,
+        ):
+            log.info(
+                f'🔄 Cambio de tendencia persistente para {symbol}. Cierre forzado.'
+            )
+            orden.reversion_tendencia_contador = 0
+            return True
+        return False
+        
     pesos_symbol = trader.pesos_por_simbolo.get(symbol, {})
-    if not verificar_filtro_tecnico(symbol, df, orden.estrategias_activas, pesos_symbol, config=config_actual):
+    if not verificar_filtro_tecnico(
+        symbol, df, orden.estrategias_activas, pesos_symbol, config=config_actual
+    ):
         nueva_tendencia = trader.estado_tendencia.get(symbol)
         if not nueva_tendencia:
             nueva_tendencia, _ = detectar_tendencia(symbol, df)
