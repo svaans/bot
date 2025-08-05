@@ -14,9 +14,7 @@ from core.strategies.entry.validadores import (
     validar_volumen_real,
     validar_spread,
 )
-from indicators.slope import calcular_slope
-from indicators.momentum import calcular_momentum
-from indicators.rsi import calcular_rsi
+from indicators.helpers import get_rsi, get_momentum, get_slope
 import pandas as pd
 from core.evaluacion_tecnica import evaluar_estrategias
 from core.strategies.entry.validaciones_tecnicas import hay_contradicciones
@@ -78,9 +76,9 @@ class StrategyEngine:
             diversidad = resultado.get("diversidad", 0)
             sinergia = min(resultado.get("sinergia", 0.0), 0.5)
             score_total = score_base * (1 + sinergia)
-            rsi_val = calcular_rsi(df)
-            slope_val = calcular_slope(df)
-            mom_val = calcular_momentum(df)
+            rsi_val = get_rsi(df)
+            slope_val = get_slope(df)
+            mom_val = get_momentum(df)
             ventana_vol = min(20, len(df))
             vol_media = df["volume"].rolling(ventana_vol).mean().iloc[-1]
             contexto = {
