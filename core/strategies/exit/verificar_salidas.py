@@ -42,22 +42,99 @@ async def _manejar_stop_loss(trader, orden, df) -> bool:
 
     symbol = orden.symbol
     precio_min = float(df['low'].iloc[-1])
+    precio_cierre = float(df['close'].iloc[-1])
+    sl_emergencia = getattr(orden, 'sl_emergencia', None)
+    if sl_emergencia is not None:
+        cond_emergencia = (
+            orden.direccion in ('long', 'compra') and precio_min <= sl_emergencia
+        ) or (
+            orden.direccion in ('short', 'venta') and precio_min >= sl_emergencia
+        )
+        if cond_emergencia:
+            await trader._cerrar_y_reportar(
+                orden, precio_cierre, 'Stop Loss de emergencia', df=df
+            )
+            return True
     if precio_min > orden.stop_loss:
         return False
-    precio_cierre = float(df['close'].iloc[-1])
-    config_actual = trader.config_por_simbolo.get(symbol, load_exit_config(symbol))
-    resultado = verificar_salida_stoploss(orden.to_dict(), df, config=config_actual)
+    config_actual = trader.config_por_simbolo.get(
+        symbol, load_exit_config(symbol)
+    )
+    resultado = verificar_salida_stoploss(
+        orden.to_dict(), df, config=config_actual
+    )
+
+    def establecer_sl_emergencia():
+        extra = config_actual.get('sl_emergency_pct', 0.0)
+        if extra > 0 and getattr(orden, 'sl_emergencia', None) is None:
+            if orden.direccion in ('long', 'compra'):
+                orden.sl_emergencia = orden.stop_loss * (1 - extra)
+            else:
+                orden.sl_emergencia = orden.stop_loss * (1 + extra)
+            log.info(
+                f'⚠️ SL de emergencia establecido en {orden.sl_emergencia:.2f}'
+            )
     if resultado.get('cerrar'):
-        if not permitir_cierre_tecnico(symbol, df, precio_cierre, orden.to_dict()):
+        if not permitir_cierre_tecnico(
+            symbol, df, precio_cierre, orden.to_dict()
+        ):
             log.info(f'🛡️ Cierre evitado por análisis técnico: {symbol}')
+            metricas_tracker.registrar_sl_evitado()
+            orden.sl_evitar_info = orden.sl_evitar_info or []
+            orden.sl_evitar_info.append(
+                {
+                    'timestamp': datetime.utcnow().isoformat(),
+                    'sl': orden.stop_loss,
+                    'precio': precio_cierre,
+                }
+            )
+            establecer_sl_emergencia()
+            if getattr(orden, 'sl_emergencia', None) is not None:
+                cond = (
+                    orden.direccion in ('long', 'compra')
+                    and precio_min <= orden.sl_emergencia
+                ) or (
+                    orden.direccion in ('short', 'venta')
+                    and precio_min >= orden.sl_emergencia
+                )
+                if cond:
+                    await trader._cerrar_y_reportar(
+                        orden,
+                        precio_cierre,
+                        'Stop Loss de emergencia',
+                        df=df,
+                    )
+                    return True
             return False
         await trader._cerrar_y_reportar(orden, precio_cierre, 'Stop Loss', df=df)
         return True
     if resultado.get('evitado'):
         metricas_tracker.registrar_sl_evitado()
         orden.sl_evitar_info = orden.sl_evitar_info or []
-        orden.sl_evitar_info.append({'timestamp': datetime.utcnow().isoformat(), 'sl': orden.stop_loss, 'precio': precio_cierre})
-        log.info(f"🛡️ SL evitado para {symbol} → {resultado.get('motivo', '')}")
+        orden.sl_evitar_info.append(
+            {
+                'timestamp': datetime.utcnow().isoformat(),
+                'sl': orden.stop_loss,
+                'precio': precio_cierre,
+            }
+        )
+        log.info(
+            f"🛡️ SL evitado para {symbol} → {resultado.get('motivo', '')}"
+        )
+        establecer_sl_emergencia()
+        if getattr(orden, 'sl_emergencia', None) is not None:
+            cond = (
+                orden.direccion in ('long', 'compra')
+                and precio_min <= orden.sl_emergencia
+            ) or (
+                orden.direccion in ('short', 'venta')
+                and precio_min >= orden.sl_emergencia
+            )
+            if cond:
+                await trader._cerrar_y_reportar(
+                    orden, precio_cierre, 'Stop Loss de emergencia', df=df
+                )
+                return True
     else:
         log.info(f"ℹ️ {symbol} → {resultado.get('motivo', '')}")
     return False
