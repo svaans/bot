@@ -2,7 +2,7 @@
 from __future__ import annotations
 import numpy as np
 from core.utils.utils import configurar_logger
-from core.risk.riesgo import riesgo_superado as _riesgo_superado, actualizar_perdida
+import core.risk_manager as risk_alias
 from core.reporting import reporter_diario
 from core.event_bus import EventBus
 from typing import Any
@@ -32,13 +32,13 @@ class RiskManager:
     def riesgo_superado(self, capital_total: float) ->bool:
         log.info('➡️ Entrando en riesgo_superado()')
         """Indica si el capital perdido supera el umbral configurado."""
-        return _riesgo_superado(self.umbral, capital_total)
+        return risk_alias._riesgo_superado(self.umbral, capital_total)
 
     def registrar_perdida(self, symbol: str, perdida: float) ->None:
         log.info('➡️ Entrando en registrar_perdida()')
         """Registra una pérdida para ``symbol``."""
         if perdida < 0:
-            actualizar_perdida(symbol, perdida)
+            risk_alias.actualizar_perdida(symbol, perdida)
 
     def ajustar_umbral(self, segun_metricas: dict) ->None:
         log.info('➡️ Entrando en ajustar_umbral()')
