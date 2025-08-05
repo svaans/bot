@@ -36,9 +36,17 @@ async def verificar_entrada(trader, symbol: str, df: pd.DataFrame, estado) ->(
         tendencia, _ = detectar_tendencia(symbol, df)
         trader.estado_tendencia[symbol] = tendencia
     log.debug(f'[{symbol}] Tendencia: {tendencia}')
-    engine_eval = trader.engine.evaluar_entrada(symbol, df, tendencia=
-        tendencia, config=config, pesos_symbol=trader.pesos_por_simbolo.get
-        (symbol, {}))
+    engine_eval = trader.engine.evaluar_entrada(
+        symbol,
+        df,
+        tendencia=tendencia,
+        config={
+            **config,
+            "contradicciones_bloquean_entrada": trader.contradicciones_bloquean_entrada,
+            "usar_score_tecnico": trader.usar_score_tecnico,
+        },
+        pesos_symbol=trader.pesos_por_simbolo.get(symbol, {}),
+    )
     estrategias = engine_eval.get('estrategias_activas', {})
     if not estrategias:
         log.warning(f'[{symbol}] Sin estrategias activas tras engine.')
