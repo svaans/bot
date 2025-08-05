@@ -1,9 +1,8 @@
 """Validadores de condiciones técnicas para entradas."""
 from __future__ import annotations
 import pandas as pd
-from indicators.slope import calcular_slope
 from indicators.bollinger import calcular_bollinger
-from indicators.rsi import calcular_rsi
+from indicators.helpers import get_rsi, get_slope
 
 
 def _distancia_relativa(valor_actual: float, extremo: float) ->float:
@@ -25,7 +24,7 @@ def validar_volumen(df: pd.DataFrame) ->bool:
 
 
 def validar_rsi(df: pd.DataFrame, direccion: str='long') ->bool:
-    valor = calcular_rsi(df)
+    valor = get_rsi(df)
     if valor is None:
         return True
     if valor > 75:
@@ -36,7 +35,7 @@ def validar_rsi(df: pd.DataFrame, direccion: str='long') ->bool:
 
 
 def validar_slope(df: pd.DataFrame, tendencia: (str | None)) ->bool:
-    pendiente = calcular_slope(df)
+    pendiente = get_slope(df)
     if tendencia == 'alcista' and pendiente < 0:
         return False
     if tendencia == 'bajista' and pendiente > 0:
