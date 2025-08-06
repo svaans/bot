@@ -61,7 +61,7 @@ Las funcionalidades principales del bot están divididas en componentes dentro d
   algunas plataformas cierran WebSockets inactivos tras unos minutos.
   El intervalo de vigilancia se controla con `MONITOR_INTERVAL` (5 s por defecto)
   y los streams se reinician tras `INACTIVITY_INTERVALS` intervalos sin datos
-  (valor predeterminado 4).
+  (valor predeterminado 3, sin mínimo fijo de 300 s).
 - **StrategyEngine** evalúa las estrategias de entrada y salida.
 - **RiskManager** centraliza las comprobaciones de riesgo diario.
 - **OrderManager** registra y ejecuta las operaciones reales.

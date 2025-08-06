@@ -25,7 +25,7 @@ class DataFeed:
         intervalo: str,
         monitor_interval: int = 5,
         max_restarts: int = 5,
-        inactivity_intervals: int = 4,
+        inactivity_intervals: int = 3,
         usar_stream_combinado: bool = False,
         handler_timeout: float = 5,
         cancel_timeout: float = 5,
@@ -34,8 +34,8 @@ class DataFeed:
         self.intervalo = intervalo
         self.intervalo_segundos = intervalo_a_segundos(intervalo)
         self.inactivity_intervals = inactivity_intervals
-        self.tiempo_inactividad = max(
-            self.intervalo_segundos * self.inactivity_intervals, 300
+        self.tiempo_inactividad = (
+            self.intervalo_segundos * self.inactivity_intervals
         )
         self.cancel_timeout = cancel_timeout
         self.ping_interval = 60  # frecuencia fija de ping en segundos

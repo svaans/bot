@@ -85,7 +85,7 @@ class Trader:
             config.intervalo_velas,
             getattr(config, 'monitor_interval', 5),
             getattr(config, 'max_stream_restarts', 5),
-            getattr(config, 'inactivity_intervals', 4),
+            getattr(config, 'inactivity_intervals', 3),
         )
         self.engine = StrategyEngine()
         self.bus = EventBus()

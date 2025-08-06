@@ -121,14 +121,12 @@ def watchdog(timeout: int = 120, check_interval: int = 10) -> None:
                         )
                     except Exception:
                         pass
-                    if data_feed_reconnector and main_loop:
+                    task = tasks.get(f"stream_{sym}")
+                    if task and main_loop:
                         try:
-                            asyncio.run_coroutine_threadsafe(
-                                data_feed_reconnector(sym),
-                                main_loop,
-                            )
+                            main_loop.call_soon_threadsafe(task.cancel)
                         except Exception:
-                            log.debug("No se pudo ejecutar reconector de DataFeed")
+                            log.debug("No se pudo cancelar stream %s", sym)
         time.sleep(check_interval)
 
 
@@ -147,10 +145,10 @@ def start_supervision() -> None:
                 log.critical("Excepcion no controlada en loop: %s", exc, exc_info=exc)
         else:
             log.critical("Error en loop: %s", context.get("message"))
-    global main_loop
-    loop = asyncio.get_event_loop()
-    loop.set_exception_handler(exception_handler)
-    main_loop = loop
+        global main_loop
+        loop = asyncio.get_event_loop()
+        loop.set_exception_handler(exception_handler)
+        main_loop = loop
 
     def thread_excepthook(args: threading.ExceptHookArgs) -> None:
         log.critical(
