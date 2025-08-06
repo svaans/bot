@@ -64,6 +64,7 @@ class EstadoSimbolo:
     ultimo_timestamp: int | None = None
     tendencia_detectada: str | None = None
     timeouts_salidas: int = 0
+    df: pd.DataFrame = field(default_factory=pd.DataFrame)
 
 
 class Trader:
