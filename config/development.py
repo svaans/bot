@@ -34,5 +34,8 @@ class DevelopmentConfig:
     heartbeat_interval: int = 60
     monitor_interval: int = 5
     max_stream_restarts: int = 5
-    inactivity_intervals: int = 12
+    inactivity_intervals: int = 3
     frecuencia_correlaciones: int = 300
+    umbral_alerta_cpu: float = 85.0
+    umbral_alerta_mem: float = 90.0
+    ciclos_alerta_recursos: int = 5

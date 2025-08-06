@@ -190,6 +190,8 @@ class Trader:
         self._stop_event = asyncio.Event()
         self._limite_riesgo_notificado = False
         self._cerrado = False
+        self._cpu_high_cycles = 0
+        self._mem_high_cycles = 0
         self.context_stream = StreamContexto()
         self.puntajes_contexto: Dict[str, float] = {}
         try:
@@ -565,6 +567,18 @@ class Trader:
         datetime.date | None)=None) ->None:
         log.info('➡️ Entrando en ajustar_capital_diario()')
         """Redistribuye el capital según múltiples métricas adaptativas."""
+        if self._limite_riesgo_notificado:
+            if self.notificador:
+                try:
+                    asyncio.create_task(
+                        self.notificador.enviar_async(
+                            '✅ Riesgo diario restablecido. Bot reanudado.',
+                            'INFO',
+                        )
+                    )
+                except Exception as e:
+                    log.error(f'❌ Error enviando notificación: {e}')
+            self._limite_riesgo_notificado = False
         total = sum(self.capital_por_simbolo.values())
         metricas_globales = self._metricas_recientes()
         semanales = metricas_semanales()

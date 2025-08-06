@@ -116,6 +116,15 @@ las métricas principales: ganancia acumulada, winrate y drawdown.
 Además, cada ciclo de `procesar_vela` registra el uso de CPU y memoria para
 facilitar la detección de cuellos de botella.
 
+## Supervisión proactiva
+
+- Se envía una alerta si el uso de CPU o memoria supera los umbrales
+  `UMBRAL_ALERTA_CPU` o `UMBRAL_ALERTA_MEM` durante `CICLOS_ALERTA_RECURSOS`
+  ciclos consecutivos.
+- Al comenzar un nuevo día, si se había alcanzado el límite de riesgo diario,
+  el bot notifica que el riesgo se restableció y que las operaciones se
+  reanudan.
+
 
 ## Instalación
 

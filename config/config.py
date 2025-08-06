@@ -18,3 +18,6 @@ UMBRAL_SCORE_TECNICO = cfg.umbral_score_tecnico
 USAR_SCORE_TECNICO = cfg.usar_score_tecnico
 CONTRADICCIONES_BLOQUEAN_ENTRADA = cfg.contradicciones_bloquean_entrada
 REGISTRO_TECNICO_CSV = cfg.registro_tecnico_csv
+UMBRAL_ALERTA_CPU = cfg.umbral_alerta_cpu
+UMBRAL_ALERTA_MEM = cfg.umbral_alerta_mem
+CICLOS_ALERTA_RECURSOS = cfg.ciclos_alerta_recursos

@@ -58,9 +58,15 @@ async def procesar_vela(trader, vela: dict) -> None:
 
     estado.ultimo_timestamp = vela.get('timestamp')
 
-    # Crear DataFrame y detectar tendencia
-    df = pd.DataFrame(estado.buffer)
-    df = df.drop(columns=['estrategias_activas'], errors='ignore')
+    # Actualizar DataFrame incrementalmente y detectar tendencia
+    if estado.df.empty:
+        estado.df = pd.DataFrame([vela])
+    else:
+        estado.df = pd.concat([estado.df, pd.DataFrame([vela])], ignore_index=True)
+        if len(estado.df) > MAX_BUFFER_VELAS:
+            estado.df = estado.df.tail(MAX_BUFFER_VELAS).reset_index(drop=True)
+
+    df = estado.df.drop(columns=['estrategias_activas'], errors='ignore')
     if df.empty or 'close' not in df.columns:
         log.error(f"❌ DataFrame inválido para {symbol}: {df}")
         return
@@ -143,3 +149,24 @@ async def procesar_vela(trader, vela: dict) -> None:
             log.debug(
                 f'✅ procesar_vela completado en {duracion:.2f}s para {symbol} | CPU: {cpu:.1f}% | Memoria: {mem:.1f}%'
             )
+        if cpu > trader.config.umbral_alerta_cpu:
+            trader._cpu_high_cycles += 1
+        else:
+            trader._cpu_high_cycles = 0
+        if mem > trader.config.umbral_alerta_mem:
+            trader._mem_high_cycles += 1
+        else:
+            trader._mem_high_cycles = 0
+        if (
+            trader._cpu_high_cycles >= trader.config.ciclos_alerta_recursos
+            or trader._mem_high_cycles >= trader.config.ciclos_alerta_recursos
+        ):
+            if trader.notificador:
+                try:
+                    await trader.notificador.enviar_async(
+                        f'⚠️ Uso de recursos elevado: CPU {cpu:.1f}% | Memoria {mem:.1f}%'
+                    )
+                except Exception as e:
+                    log.error(f'❌ Error enviando notificación: {e}')
+            trader._cpu_high_cycles = 0
+            trader._mem_high_cycles = 0

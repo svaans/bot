@@ -68,6 +68,9 @@ class Config:
     max_stream_restarts: int = 5
     inactivity_intervals: int = 3
     frecuencia_correlaciones: int = 300
+    umbral_alerta_cpu: float = 85.0
+    umbral_alerta_mem: float = 90.0
+    ciclos_alerta_recursos: int = 5
 
 
 class ConfigManager:
@@ -135,4 +138,7 @@ class ConfigManager:
             inactivity_intervals=_cargar_int('INACTIVITY_INTERVALS', defaults.inactivity_intervals),
             max_stream_restarts=_cargar_int('MAX_STREAM_RESTARTS', defaults.max_stream_restarts),
             frecuencia_correlaciones=_cargar_int('FRECUENCIA_CORRELACIONES', defaults.frecuencia_correlaciones),
+            umbral_alerta_cpu=_cargar_float('UMBRAL_ALERTA_CPU', defaults.umbral_alerta_cpu),
+            umbral_alerta_mem=_cargar_float('UMBRAL_ALERTA_MEM', defaults.umbral_alerta_mem),
+            ciclos_alerta_recursos=_cargar_int('CICLOS_ALERTA_RECURSOS', defaults.ciclos_alerta_recursos),
         )
