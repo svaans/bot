@@ -107,7 +107,7 @@ async def escuchar_velas(
         # Margen amplio: esperamos ~4 intervalos antes de forzar reconexión
         tiempo_maximo = max(intervalo_a_segundos(intervalo) * 4, 60)
     if ping_interval is None:
-        ping_interval = 60  # ping fijo para detectar antes conexiones muertas
+        ping_interval = 30  # ping manual para detectar antes conexiones muertas
     if mensaje_timeout is None:
         mensaje_timeout = tiempo_maximo
     fallos_consecutivos = 0
@@ -123,8 +123,8 @@ async def escuchar_velas(
                     url,
                     open_timeout=10,
                     close_timeout=10,
-                    ping_interval=None,
-                    ping_timeout=None,
+                    ping_interval=20,
+                    ping_timeout=20,
                     max_size=2 ** 20,
                 ),
                 timeout=15,
@@ -340,7 +340,7 @@ async def escuchar_velas_combinado(
     if tiempo_maximo is None:
         tiempo_maximo = max(intervalo_a_segundos(intervalo) * 4, 60)
     if ping_interval is None:
-        ping_interval = 60
+        ping_interval = 30
     if mensaje_timeout is None:
         mensaje_timeout = tiempo_maximo
     fallos_consecutivos = 0
@@ -356,8 +356,8 @@ async def escuchar_velas_combinado(
                     url,
                     open_timeout=10,
                     close_timeout=10,
-                    ping_interval=None,
-                    ping_timeout=None,
+                    ping_interval=20,
+                    ping_timeout=20,
                     max_size=2 ** 20,
                 ),
                 timeout=15,
@@ -434,6 +434,7 @@ async def escuchar_velas_combinado(
                                 break
                             await asyncio.sleep(espera)
                             espera *= 2
+            try:
                 while True:
                     try:
                         if mensaje_timeout:
@@ -602,7 +603,7 @@ async def _watchdog(
         tick('data_feed')
         tick_data(symbol)
 
-async def _keepalive(ws, symbol, intervalo=60):
+async def _keepalive(ws, symbol, intervalo=30):
     """Envía ping periódicamente para mantener viva la conexión."""
     try:
         while True:
@@ -611,6 +612,7 @@ async def _keepalive(ws, symbol, intervalo=60):
                 log.debug(f'🏓 Enviando ping a {symbol}')
                 pong = await ws.ping()
                 await asyncio.wait_for(pong, timeout=10)
+                log.debug(f'🏓 Pong recibido de {symbol}')
             except Exception as e:
                 log.warning(f'❌ Ping falló para {symbol}: {e}')
                 await ws.close()
