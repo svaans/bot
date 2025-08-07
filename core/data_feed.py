@@ -53,6 +53,7 @@ class DataFeed:
         self.reinicios_forzados_total = 0
         self.handler_timeout = handler_timeout
         self._reiniciando = False
+        self._handler_timeouts: Dict[str, int] = {}
         registrar_reconexion_datafeed(self._reconectar_por_supervisor)
 
     @property
@@ -60,6 +61,11 @@ class DataFeed:
         log.info('➡️ Entrando en activos()')
         """Lista de símbolos con streams activos."""
         return list(self._symbols)
+    
+    @property
+    def handler_timeouts(self) -> Dict[str, int]:
+        """Contador de velas descartadas por exceder ``handler_timeout``."""
+        return dict(self._handler_timeouts)
     
 
     async def stream(self, symbol: str, handler: Callable[[dict], Awaitable[None]]) -> None:
@@ -73,8 +79,12 @@ class DataFeed:
             try:
                 await asyncio.wait_for(handler(candle), timeout=self.handler_timeout)
             except asyncio.TimeoutError:
+                self._handler_timeouts[symbol] = (
+                    self._handler_timeouts.get(symbol, 0) + 1
+                )
                 log.error(
-                    f'Handler de {symbol} superó {self.handler_timeout}s; omitiendo vela'
+                    f"Handler de {symbol} superó {self.handler_timeout}s; omitiendo vela"
+                    f" (total {self._handler_timeouts[symbol]})"
                 )
 
         await self._relanzar_stream(symbol, wrapper)
@@ -91,8 +101,12 @@ class DataFeed:
             try:
                 await asyncio.wait_for(handler(candle), timeout=self.handler_timeout)
             except asyncio.TimeoutError:
+                self._handler_timeouts[symbol] = (
+                    self._handler_timeouts.get(symbol, 0) + 1
+                )
                 log.error(
-                    f'Handler de {symbol} superó {self.handler_timeout}s; omitiendo vela'
+                    f"Handler de {symbol} superó {self.handler_timeout}s; omitiendo vela"
+                    f" (total {self._handler_timeouts[symbol]})"
                 )
 
         handlers: Dict[str, Callable[[dict], Awaitable[None]]] = {}

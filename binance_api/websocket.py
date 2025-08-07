@@ -142,40 +142,51 @@ async def escuchar_velas(
             keeper = asyncio.create_task(_keepalive(ws, symbol, ping_interval))
 
             if cliente and ultimo_timestamp is not None:
-                try:
-                    ohlcv = await fetch_ohlcv_async(
-                        cliente,
-                        symbol=symbol,
-                        timeframe=intervalo,
-                        since=ultimo_timestamp + 1,
-                    )
-                    for o in ohlcv:
-                        ts = o[0]
-                        if ts > ultimo_timestamp:
-                            ultimo_timestamp = await _rellenar_gaps(
-                                callback,
-                                symbol,
-                                ultimo_timestamp,
-                                ultimo_cierre,
-                                ts,
-                                intervalo_ms,
+                intentos = 0
+                espera = 1
+                while True:
+                    try:
+                        ohlcv = await fetch_ohlcv_async(
+                            cliente,
+                            symbol=symbol,
+                            timeframe=intervalo,
+                            since=ultimo_timestamp + 1,
+                        )
+                        for o in ohlcv:
+                            ts = o[0]
+                            if ts > ultimo_timestamp:
+                                ultimo_timestamp = await _rellenar_gaps(
+                                    callback,
+                                    symbol,
+                                    ultimo_timestamp,
+                                    ultimo_cierre,
+                                    ts,
+                                    intervalo_ms,
+                                )
+                                await callback(
+                                    {
+                                        'symbol': symbol,
+                                        'timestamp': ts,
+                                        'open': float(o[1]),
+                                        'high': float(o[2]),
+                                        'low': float(o[3]),
+                                        'close': float(o[4]),
+                                        'volume': float(o[5]),
+                                    }
+                                )
+                                ultimo_timestamp = ts
+                                ultimo_cierre = float(o[4])
+                        break
+                    except Exception as e:
+                        intentos += 1
+                        if intentos >= 3:
+                            log.warning(
+                                f'❌ Error al backfillear {symbol} tras {intentos} intentos: {e}'
                             )
-                            await callback(
-                                {
-                                    'symbol': symbol,
-                                    'timestamp': ts,
-                                    'open': float(o[1]),
-                                    'high': float(o[2]),
-                                    'low': float(o[3]),
-                                    'close': float(o[4]),
-                                    'volume': float(o[5]),
-                                }
-                            )
-                            ultimo_timestamp = ts
-                            ultimo_cierre = float(o[4])
-                except Exception as e:
-                    log.warning(f'❌ Error al backfillear {symbol}: {e}')
-                    tick('data_feed')
+                            tick('data_feed')
+                            break
+                        await asyncio.sleep(espera)
+                        espera *= 2
             try:
                 while True:
                     try:
@@ -377,41 +388,52 @@ async def escuchar_velas_combinado(
                     ts = ultimo_timestamp.get(s)
                     if ts is None:
                         continue
-                    try:
-                        ohlcv = await fetch_ohlcv_async(
-                            cliente,
-                            symbol=s,
-                            timeframe=intervalo,
-                            since=ts + 1,
-                        )
-                        for o in ohlcv:
-                            tss = o[0]
-                            if tss > ts:
-                                uc = ultimo_cierre.get(s)
-                                ts = await _rellenar_gaps(
-                                    handlers[s],
-                                    s,
-                                    ts,
-                                    uc,
-                                    tss,
-                                    intervalo_ms,
+                    intentos = 0
+                    espera = 1
+                    while True:
+                        try:
+                            ohlcv = await fetch_ohlcv_async(
+                                cliente,
+                                symbol=s,
+                                timeframe=intervalo,
+                                since=ts + 1,
+                            )
+                            for o in ohlcv:
+                                tss = o[0]
+                                if tss > ts:
+                                    uc = ultimo_cierre.get(s)
+                                    ts = await _rellenar_gaps(
+                                        handlers[s],
+                                        s,
+                                        ts,
+                                        uc,
+                                        tss,
+                                        intervalo_ms,
+                                    )
+                                    await handlers[s](
+                                        {
+                                            'symbol': s,
+                                            'timestamp': tss,
+                                            'open': float(o[1]),
+                                            'high': float(o[2]),
+                                            'low': float(o[3]),
+                                            'close': float(o[4]),
+                                            'volume': float(o[5]),
+                                        }
+                                    )
+                                    ultimo_timestamp[s] = tss
+                                    ultimo_cierre[s] = float(o[4])
+                            break
+                        except Exception as e:
+                            intentos += 1
+                            if intentos >= 3:
+                                log.warning(
+                                    f'❌ Error al backfillear {s} tras {intentos} intentos: {e}'
                                 )
-                                await handlers[s](
-                                    {
-                                        'symbol': s,
-                                        'timestamp': tss,
-                                        'open': float(o[1]),
-                                        'high': float(o[2]),
-                                        'low': float(o[3]),
-                                        'close': float(o[4]),
-                                        'volume': float(o[5]),
-                                    }
-                                )
-                                ultimo_timestamp[s] = tss
-                                ultimo_cierre[s] = float(o[4])
-                    except Exception as e:
-                        log.warning(f'❌ Error al backfillear {s}: {e}')
-            try:
+                                tick('data_feed')
+                                break
+                            await asyncio.sleep(espera)
+                            espera *= 2
                 while True:
                     try:
                         if mensaje_timeout:
