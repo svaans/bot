@@ -10,3 +10,4 @@ class ProductionConfig(DevelopmentConfig):
     intervalo_velas: str = '5m'
     symbols: List[str] = field(default_factory=lambda : ['BTC/EUR',
         'ETH/EUR', 'ADA/EUR', 'SOL/EUR', 'BNB/EUR'])
+    contradicciones_bloquean_entrada: bool = True

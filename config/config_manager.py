@@ -62,7 +62,6 @@ class Config:
     timeout_evaluar_condiciones: int = 15
     timeout_bus_eventos: int = 10
     max_timeouts_salidas: int = 3
-    timeout_bus_eventos: int = 10
     heartbeat_interval: int = 60
     monitor_interval: int = 5
     max_stream_restarts: int = 5

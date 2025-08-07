@@ -25,8 +25,10 @@ class RegistroMetrico:
         registro.update(datos)
         with self.lock:
             self.buffer.append(registro)
-            if guardar_inmediatamente or len(self.buffer) >= self.buffer_max:
-                self.exportar()
+            debe_exportar = guardar_inmediatamente or len(self.buffer) >= self.buffer_max
+
+        if debe_exportar:
+            self.exportar()
 
     def exportar(self) ->None:
         """Guarda todos los registros actuales del buffer a disco."""

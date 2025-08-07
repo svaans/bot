@@ -1554,6 +1554,7 @@ class Trader:
         await self.bus.close()
         real_orders.flush_operaciones()
         self._flush_rechazos()
+        registro_metrico.exportar()
         self._guardar_estado_persistente()
 
     def _guardar_estado_persistente(self) ->None:

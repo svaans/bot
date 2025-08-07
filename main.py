@@ -17,7 +17,11 @@ def mostrar_banner():
 
 async def main():
     start_supervision()
-    config = ConfigManager.load_from_env()
+    try:
+        config = ConfigManager.load_from_env()
+    except ValueError as e:
+        print(f'❌ Error de configuración: {e}')
+        return
     observer = start_hot_reload(path=Path.cwd(), modules=None)
     try:
         from learning.reset_pesos import resetear_pesos_diarios_si_corresponde

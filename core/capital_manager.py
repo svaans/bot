@@ -133,13 +133,13 @@ class CapitalManager:
         minimo_binance = await self._obtener_minimo_binance(symbol)
         cantidad = 0.0
         distancia_sl = abs(precio - stop_loss) if isinstance(stop_loss, (int, float)) else None
-        if distancia_sl and distancia_sl > 0:
-            cantidad = riesgo_permitido / distancia_sl
-            capital_necesario = cantidad * precio
-            if capital_necesario > capital_total:
-                cantidad = capital_total / precio
-                capital_necesario = capital_total
-            riesgo_final = cantidad * distancia_sl
+        if not distancia_sl or distancia_sl <= 0:
+            log.warning(
+                f'⚠️ Stop Loss no especificado para {symbol}. Limitando la posición a una fracción del capital disponible.'
+            )
+            capital_necesario = riesgo_permitido
+            cantidad = capital_necesario / precio
+            riesgo_final = capital_necesario
             if capital_necesario < minimo_dinamico:
                 log.debug(
                     f'Orden mínima {minimo_dinamico:.2f}{self.capital_currency}, intento {capital_necesario:.2f}{self.capital_currency}'
@@ -151,9 +151,12 @@ class CapitalManager:
                 )
                 return 0.0
         else:
-            cantidad = riesgo_permitido / precio
+            cantidad = riesgo_permitido / distancia_sl
             capital_necesario = cantidad * precio
-            riesgo_final = capital_necesario
+            if capital_necesario > capital_total:
+                cantidad = capital_total / precio
+                capital_necesario = capital_total
+            riesgo_final = cantidad * distancia_sl
             if capital_necesario < minimo_dinamico:
                 log.debug(
                     f'Orden mínima {minimo_dinamico:.2f}{self.capital_currency}, intento {capital_necesario:.2f}{self.capital_currency}'
