@@ -114,8 +114,11 @@ def verificar_integridad_datos(df: pd.DataFrame, max_gap_pct: float = 0.5) -> bo
     if df is None or df.empty:
         return False
     if df.isna().any().any():
-        log.warning('⚠️ DataFrame con NaNs detectado')
-        return False
+        log.warning('⚠️ DataFrame con NaNs detectado — limpiando')
+        df.dropna(inplace=True)
+        if df.empty or df.isna().any().any():
+            log.warning('⚠️ DataFrame vacío o con NaNs tras limpieza')
+            return False
     if 'timestamp' in df.columns:
         # ``timestamp`` llega en milisegundos desde epoch; sin especificar la
         # unidad Pandas asume nanosegundos, lo que puede generar fechas de 1970
