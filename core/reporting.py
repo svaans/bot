@@ -1,5 +1,7 @@
 import os
 import json
+import atexit
+from concurrent.futures import ProcessPoolExecutor
 from datetime import datetime
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -8,6 +10,9 @@ from core.utils.utils import configurar_logger
 from core.utils.utils import leer_csv_seguro
 
 log = configurar_logger('reporte_diario')
+
+_executor = ProcessPoolExecutor(max_workers=1)
+atexit.register(_executor.shutdown)
 
 
 class ReporterDiario:
@@ -105,7 +110,10 @@ class ReporterDiario:
         self.log.info(f'📝 Operación registrada para reporte {fecha}')
         self._actualizar_estadisticas(info)
         if fecha != self.fecha_actual:
-            self.generar_informe(self.fecha_actual)
+            try:
+                _executor.submit(self.generar_informe, self.fecha_actual)
+            except Exception:
+                self.log.exception('Error al generar informe en proceso separado')
             self.fecha_actual = fecha
 
     def generar_informe(self, fecha):
