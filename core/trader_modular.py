@@ -703,6 +703,22 @@ class Trader:
                     self.estado[symbol].ultimo_timestamp = ultimo[0]
                 except (IndexError, TypeError):
                     self.estado[symbol].ultimo_timestamp = ultimo
+                # Construir DataFrame con el histórico precargado
+                self.estado[symbol].df = pd.DataFrame(
+                    self.estado[symbol].buffer
+                ).drop(columns=['symbol'], errors='ignore')
+                # Adaptar configuración inicial con los datos precargados
+                self.config_por_simbolo[symbol] = adaptar_configuracion(
+                    symbol,
+                    self.estado[symbol].df,
+                    self.config_por_simbolo.get(symbol, {}),
+                )
+                # Detectar tendencia inicial a partir del histórico
+                tendencia, _ = detectar_tendencia(
+                    symbol, self.estado[symbol].df
+                )
+                self.estado[symbol].tendencia_detectada = tendencia
+                self.estado_tendencia[symbol] = tendencia
         if cliente_temp is not None:
             try:
                 cliente_temp.close()
