@@ -17,6 +17,7 @@ from core.config_manager.dinamica import adaptar_configuracion
 from core.adaptador_dinamico import calcular_umbral_adaptativo
 from core.metricas_semanales import metricas_tracker
 from config.exit_defaults import load_exit_config
+import time
 
 log = configurar_logger('verificar_salidas')
 
@@ -327,6 +328,7 @@ async def verificar_salidas(trader, symbol: str, df: pd.DataFrame) -> None:
     log.info('➡️ Entrando en verificar_salidas()')
     """Evalúa si la orden abierta debe cerrarse."""
     
+    inicio_total = time.time()
     trader.config_por_simbolo[symbol] = load_exit_config(symbol)
     orden = trader.orders.obtener(symbol)
     if not orden:
@@ -336,16 +338,30 @@ async def verificar_salidas(trader, symbol: str, df: pd.DataFrame) -> None:
     orden.duracion_en_velas = getattr(orden, 'duracion_en_velas', 0) + 1
     await trader._piramidar(symbol, orden, df)
 
+    t = time.time()
     if await _chequear_contexto_macro(trader, orden, df):
+        log.debug(f'_chequear_contexto_macro tardó {time.time() - t:.2f}s para {symbol}')
         return
+    t = time.time()
     if await _manejar_stop_loss(trader, orden, df):
+        log.debug(f'_manejar_stop_loss tardó {time.time() - t:.2f}s para {symbol}')
         return
+    t = time.time()
     if await _procesar_take_profit(trader, orden, df):
+        log.debug(f'_procesar_take_profit tardó {time.time() - t:.2f}s para {symbol}')
         return
     if orden.cantidad_abierta <= 0:
+        log.debug(f'_procesar_take_profit dejó posición vacía en {symbol} tras {time.time() - inicio_total:.2f}s')
         return
+    t = time.time()
     if await _manejar_trailing_stop(trader, orden, df):
+        log.debug(f'_manejar_trailing_stop tardó {time.time() - t:.2f}s para {symbol}')
         return
+    t = time.time()
     if await _manejar_cambio_tendencia(trader, orden, df):
+        log.debug(f'_manejar_cambio_tendencia tardó {time.time() - t:.2f}s para {symbol}')
         return
+    t = time.time()
     await _aplicar_salidas_adicionales(trader, orden, df)
+    log.debug(f'_aplicar_salidas_adicionales tardó {time.time() - t:.2f}s para {symbol}')
+    log.debug(f'verificar_salidas total {time.time() - inicio_total:.2f}s para {symbol}')

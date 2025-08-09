@@ -339,8 +339,9 @@ class Trader:
         info['capital_final'] = capital_final
         if getattr(orden, 'sl_evitar_info', None):
             self._log_impacto_sl(orden, precio)
-        reporter_diario.registrar_operacion(info)
-        registrar_resultado_trade(orden.symbol, info, retorno_total)
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(None, reporter_diario.registrar_operacion, info)
+        await loop.run_in_executor(None, registrar_resultado_trade, orden.symbol, info, retorno_total)
         try:
             if orden.detalles_tecnicos:
                 actualizar_pesos_tecnicos(orden.symbol, orden.
@@ -484,8 +485,9 @@ class Trader:
             utcnow().isoformat(), 'motivo_cierre': motivo, 'retorno_total':
             retorno_total, 'cantidad_cerrada': cantidad, 'capital_inicial':
             capital_base})
-        reporter_diario.registrar_operacion(info)
-        registrar_resultado_trade(orden.symbol, info, retorno_total)
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(None, reporter_diario.registrar_operacion, info)
+        await loop.run_in_executor(None, registrar_resultado_trade, orden.symbol, info, retorno_total)
         ganancia = capital_base * retorno_total
         self.capital_por_simbolo[orden.symbol] = (self.capital_por_simbolo.get(
             orden.symbol, 0.0) + ganancia)
