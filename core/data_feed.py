@@ -54,6 +54,8 @@ class DataFeed:
         self.handler_timeout = handler_timeout
         self._reiniciando = False
         self._handler_timeouts: Dict[str, int] = {}
+        self._queues: Dict[str, asyncio.Queue] = {}
+        self._consumer_tasks: Dict[str, asyncio.Task] = {}
         registrar_reconexion_datafeed(self._reconectar_por_supervisor)
 
     @property
@@ -77,13 +79,13 @@ class DataFeed:
             log.info(f'[{symbol}] Recibida vela: timestamp={candle.get("timestamp")}')
             tick_data(symbol)
             try:
-                await asyncio.wait_for(handler(candle), timeout=self.handler_timeout)
-            except asyncio.TimeoutError:
+                self._queues[symbol].put_nowait(candle)
+            except asyncio.QueueFull:
                 self._handler_timeouts[symbol] = (
                     self._handler_timeouts.get(symbol, 0) + 1
                 )
                 log.error(
-                    f"Handler de {symbol} superó {self.handler_timeout}s; omitiendo vela"
+                    f"Queue de {symbol} llena; omitiendo vela"
                     f" (total {self._handler_timeouts[symbol]})"
                 )
 
@@ -99,13 +101,13 @@ class DataFeed:
             log.info(f'[{symbol}] Recibida vela: timestamp={candle.get("timestamp")}')
             tick_data(symbol)
             try:
-                await asyncio.wait_for(handler(candle), timeout=self.handler_timeout)
-            except asyncio.TimeoutError:
+                self._queues[symbol].put_nowait(candle)
+            except asyncio.QueueFull:
                 self._handler_timeouts[symbol] = (
                     self._handler_timeouts.get(symbol, 0) + 1
                 )
                 log.error(
-                    f"Handler de {symbol} superó {self.handler_timeout}s; omitiendo vela"
+                    f"Queue de {symbol} llena; omitiendo vela"
                     f" (total {self._handler_timeouts[symbol]})"
                 )
 
@@ -126,6 +128,26 @@ class DataFeed:
             cliente=self._cliente,
             mensaje_timeout=self.tiempo_inactividad,
         )
+
+    async def _consumer(
+        self, symbol: str, handler: Callable[[dict], Awaitable[None]]
+    ) -> None:
+        """Procesa las velas encoladas para ``symbol`` de forma asíncrona."""
+        queue = self._queues[symbol]
+        while self._running:
+            candle = await queue.get()
+            try:
+                await asyncio.wait_for(handler(candle), timeout=self.handler_timeout)
+            except asyncio.TimeoutError:
+                self._handler_timeouts[symbol] = (
+                    self._handler_timeouts.get(symbol, 0) + 1
+                )
+                log.error(
+                    f"Handler de {symbol} superó {self.handler_timeout}s; omitiendo vela"
+                    f" (total {self._handler_timeouts[symbol]})"
+                )
+            finally:
+                queue.task_done()
 
     async def _relanzar_stream(
         self, symbol: str, handler: Callable[[dict], Awaitable[None]]
@@ -344,6 +366,13 @@ class DataFeed:
         if cliente is not None:
             self._cliente = cliente
         self._running = True
+        self._queues = {sym: asyncio.Queue(maxsize=100) for sym in self._symbols}
+        for sym in self._symbols:
+            self._consumer_tasks[sym] = supervised_task(
+                lambda sym=sym: self._consumer(sym, handler),
+                f"consumer_{sym}",
+                max_restarts=0,
+            )
         if (
             self._monitor_global_task is None
             or self._monitor_global_task.done()
@@ -385,6 +414,11 @@ class DataFeed:
                 )
             else:
                 log.debug(f"Tarea {nombre} estado: {estado}")
+        for task in self._consumer_tasks.values():
+            task.cancel()
+        await asyncio.gather(*self._consumer_tasks.values(), return_exceptions=True)
+        self._consumer_tasks.clear()
+        self._queues.clear()
         self._running = False
     async def detener(self) ->None:
         log.info('➡️ Entrando en detener()')
@@ -417,6 +451,22 @@ class DataFeed:
                     f"🧟 Timeout cancelando stream {nombre} (tarea zombie)"
                 )
         self._tasks.clear()
+        for task in self._consumer_tasks.values():
+            task.cancel()
+        for nombre, task in list(self._consumer_tasks.items()):
+            if task.done():
+                continue
+            try:
+                await asyncio.wait_for(
+                    asyncio.gather(task, return_exceptions=True),
+                    timeout=self.cancel_timeout,
+                )
+            except asyncio.TimeoutError:
+                log.warning(
+                    f"🧟 Timeout cancelando consumer {nombre} (tarea zombie)"
+                )
+        self._consumer_tasks.clear()
+        self._queues.clear()
         self._last.clear()
         self._symbols = []
         self._running = False
