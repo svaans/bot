@@ -1,5 +1,5 @@
 from dataclasses import dataclass, field
-from typing import Dict, List
+from typing import Dict, Sequence
 
 
 @dataclass
@@ -30,13 +30,14 @@ class PersistenciaTecnica:
             .es_persistente(symbol, e)}
 
 
-def coincidencia_parcial(historial: List[dict], pesos: Dict[str, float],
+def coincidencia_parcial(historial: Sequence[dict], pesos: Dict[str, float],
     ventanas: int = 5) -> float:
     """Calcula un puntaje de coincidencia parcial de estrategias en las últimas ``ventanas`` velas."""
     if len(historial) < ventanas:
         return 0.0
+    recientes = list(historial)[-ventanas:]
     conteo: Dict[str, int] = {}
-    for estrategias in historial[-ventanas:]:
+    for estrategias in recientes:
         for nombre, activa in estrategias.items():
             if activa:
                 conteo[nombre] = conteo.get(nombre, 0) + 1

@@ -3,9 +3,11 @@ import asyncio
 import logging
 import time
 from datetime import datetime
+from collections import deque
 import pandas as pd
 from core.utils.utils import configurar_logger, obtener_uso_recursos
 from core.strategies.tendencia import detectar_tendencia
+from indicators.helpers import clear_cache
 
 log = configurar_logger('procesar_vela')
 
@@ -33,11 +35,11 @@ async def procesar_vela(trader, vela: dict) -> None:
     vela.setdefault('volume', 0)
     estado = trader.estado[symbol]
 
-    # Asegurar que los buffers existen para evitar errores al usar len()
-    if not isinstance(estado.buffer, list):
-        estado.buffer = []
-    if not isinstance(estado.estrategias_buffer, list):
-        estado.estrategias_buffer = []
+    # Asegurar que los buffers existen como deques para evitar errores
+    if not isinstance(estado.buffer, deque):
+        estado.buffer = deque(maxlen=MAX_BUFFER_VELAS)
+    if not isinstance(estado.estrategias_buffer, deque):
+        estado.estrategias_buffer = deque(maxlen=MAX_ESTRATEGIAS_BUFFER)
 
     inicio = time.time()  # ⏱️ para medir cuánto tarda
 
@@ -49,12 +51,9 @@ async def procesar_vela(trader, vela: dict) -> None:
     if vela.get('timestamp') == estado.ultimo_timestamp:
         return
 
-    # Agregar vela al buffer y mantener tamaño
+    # Agregar vela al buffer (deque maneja el tamaño automáticamente)
     estado.buffer.append(vela)
     estado.estrategias_buffer.append({})
-    if len(estado.buffer) > MAX_BUFFER_VELAS:
-        estado.buffer = estado.buffer[-MAX_BUFFER_VELAS:]
-    estado.estrategias_buffer = estado.estrategias_buffer[-MAX_BUFFER_VELAS:]
 
     estado.ultimo_timestamp = vela.get('timestamp')
 
@@ -62,10 +61,13 @@ async def procesar_vela(trader, vela: dict) -> None:
     if estado.df.empty:
         estado.df = pd.DataFrame([vela])
     else:
-        estado.df = pd.concat([estado.df, pd.DataFrame([vela])], ignore_index=True)
+        estado.df.loc[len(estado.df)] = vela
         if len(estado.df) > MAX_BUFFER_VELAS:
-            estado.df = estado.df.tail(MAX_BUFFER_VELAS).reset_index(drop=True)
-
+            estado.df.drop(index=estado.df.index[0], inplace=True)
+            estado.df.reset_index(drop=True, inplace=True)
+    # invalidar cache de indicadores porque los datos cambiaron
+    clear_cache(estado.df)
+    
     df = estado.df.drop(columns=['estrategias_activas'], errors='ignore')
     if df.empty or 'close' not in df.columns:
         log.error(f"❌ DataFrame inválido para {symbol}: {df}")

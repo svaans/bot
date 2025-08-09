@@ -3,8 +3,8 @@ from __future__ import annotations
 import asyncio
 import time
 from dataclasses import dataclass, replace, field
-from typing import Dict, List, Callable, Awaitable, Any
-from collections import OrderedDict
+from typing import Dict, Callable, Awaitable, Any
+from collections import OrderedDict, deque
 from datetime import datetime, timedelta, date
 import json
 import os
@@ -49,7 +49,11 @@ from core.strategies.evaluador_tecnico import actualizar_pesos_tecnicos
 from core.auditoria import registrar_auditoria
 from core.strategies.exit.verificar_salidas import verificar_salidas
 from core.strategies.entry.verificar_entradas import verificar_entrada
-from core.procesar_vela import procesar_vela
+from core.procesar_vela import (
+    procesar_vela,
+    MAX_BUFFER_VELAS,
+    MAX_ESTRATEGIAS_BUFFER,
+)
 from core.scoring import calcular_score_tecnico, PESOS_SCORE_TECNICO
 from binance_api.cliente import fetch_ticker_async
 log = configurar_logger('trader')
@@ -58,8 +62,10 @@ LOG_DIR = os.getenv('LOG_DIR', 'logs')
 
 @dataclass
 class EstadoSimbolo:
-    buffer: List[dict]
-    estrategias_buffer: List[dict] = field(default_factory=list)
+    buffer: deque = field(default_factory=lambda: deque(maxlen=MAX_BUFFER_VELAS))
+    estrategias_buffer: deque = field(
+        default_factory=lambda: deque(maxlen=MAX_ESTRATEGIAS_BUFFER)
+    )
     ultimo_umbral: float = 0.0
     ultimo_timestamp: int | None = None
     tendencia_detectada: str | None = None

@@ -12,6 +12,11 @@ def _cached_value(df: pd.DataFrame, key: tuple, compute):
     return cache[key]
 
 
+def clear_cache(df: pd.DataFrame) -> None:
+    """Elimina el cache de indicadores asociado al DataFrame."""
+    df.attrs.pop('_indicators_cache', None)
+
+
 def get_rsi(df: pd.DataFrame, periodo: int = 14, serie_completa: bool = False):
     """Obtiene el RSI utilizando cache por DataFrame."""
     key = ('rsi', periodo, serie_completa)
