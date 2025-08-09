@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 from typing import Awaitable, Callable, Dict, Iterable, Any
 from datetime import datetime
-from binance_api.websocket import escuchar_velas, escuchar_velas_combinado
+from binance_api.websocket import escuchar_velas
 from core.utils.logger import configurar_logger
 from core.utils import intervalo_a_segundos
 from core.supervisor import (
@@ -26,7 +26,6 @@ class DataFeed:
         monitor_interval: int = 5,
         max_restarts: int = 5,
         inactivity_intervals: int = 3,
-        usar_stream_combinado: bool = False,
         handler_timeout: float = 5,
         cancel_timeout: float = 5,
     ) -> None:
@@ -48,7 +47,6 @@ class DataFeed:
         self._running = False
         self._cliente: Any | None = None
         self.notificador = crear_notificador_desde_env()
-        self.usar_stream_combinado = usar_stream_combinado
         self._symbols: list[str] = []
         self.reinicios_forzados_total = 0
         self.handler_timeout = handler_timeout
@@ -91,43 +89,6 @@ class DataFeed:
 
         await self._relanzar_stream(symbol, wrapper)
 
-    async def _stream_combinado(
-        self, symbols: Iterable[str], handler: Callable[[dict], Awaitable[None]]
-    ) -> None:
-        """Escucha múltiples símbolos en un único WebSocket."""
-
-        async def wrapper(symbol: str, candle: dict) -> None:
-            self._last[symbol] = datetime.utcnow()
-            log.info(f'[{symbol}] Recibida vela: timestamp={candle.get("timestamp")}')
-            tick_data(symbol)
-            try:
-                self._queues[symbol].put_nowait(candle)
-            except asyncio.QueueFull:
-                self._handler_timeouts[symbol] = (
-                    self._handler_timeouts.get(symbol, 0) + 1
-                )
-                log.error(
-                    f"Queue de {symbol} llena; omitiendo vela"
-                    f" (total {self._handler_timeouts[symbol]})"
-                )
-
-        handlers: Dict[str, Callable[[dict], Awaitable[None]]] = {}
-        for sym in symbols:
-            async def h(candle, s=sym):
-                await wrapper(s, candle)
-
-            handlers[sym] = h
-
-        await escuchar_velas_combinado(
-            list(symbols),
-            self.intervalo,
-            handlers,
-            self._last,
-            self.tiempo_inactividad,
-            self.ping_interval,
-            cliente=self._cliente,
-            mensaje_timeout=self.tiempo_inactividad,
-        )
 
     async def _consumer(
         self, symbol: str, handler: Callable[[dict], Awaitable[None]]
@@ -233,75 +194,6 @@ class DataFeed:
                 if not self._tasks:
                     continue
                 ahora = datetime.utcnow()
-                if self.usar_stream_combinado:
-                    task = self._tasks.get("combined")
-                    if not task:
-                        continue
-                    inactivos = [
-                        sym
-                        for sym in self._symbols
-                        if (
-                            self._last.get(sym)
-                            and (ahora - self._last[sym]).total_seconds() > self.tiempo_inactividad
-                        )
-                    ]
-                    if inactivos:
-                        log.warning(f"⏸ Símbolos inactivos detectados: {inactivos}")
-                    all_inactivos = len(inactivos) == len(self._symbols) and bool(self._symbols)
-                    if task.done() or inactivos:
-                        log.debug(f"Estado task.done() antes de cancelar: {task.done()}")
-                        if all_inactivos:
-                            log.critical(
-                                "⛔ Todos los símbolos sin datos — Forzando reinicio completo de stream combinado"
-                            )
-                            self.reinicios_forzados_total += 1
-                            try:
-                                await self.notificador.enviar_async(
-                                    '🔄 Reinicio forzado de stream combinado por inactividad global',
-                                    'CRITICAL',
-                                )
-                            except Exception:
-                                tick('data_feed')
-                                pass
-                        if self._handler_actual is None:
-                            log.error("Handler actual es None; no se puede reiniciar stream combinado")
-                            continue
-                        log.debug(f"Tareas antes de reinicio: {list(self._tasks.keys())}")
-                        if not task.done():
-                            log.info("Cancelando tarea 'combined'")
-                            task.cancel()
-                            log.debug("Tarea 'combined' cancelada; se reiniciará el stream")
-                            try:
-                                await asyncio.wait_for(
-                                    asyncio.gather(task, return_exceptions=True),
-                                    timeout=self.cancel_timeout,
-                                )
-                            except asyncio.TimeoutError:
-                                log.warning(
-                                    "⏱️ Timeout cancelando stream combinado"
-                                )
-                            log.debug(
-                                f"Tarea 'combined' cancelada: cancelled={task.cancelled()} done={task.done()}"
-                            )
-                        nueva = supervised_task(
-                            lambda: self._stream_combinado(self._symbols, self._handler_actual),
-                            'stream_combined',
-                            max_restarts=0,
-                        )
-                        self._tasks['combined'] = nueva
-                        inicio = datetime.utcnow()
-                        log.info("📡 _stream_combinado reiniciado para %s", self._symbols)
-                        log.debug(
-                            f"Inicio: {inicio.isoformat()} nombre={nueva.get_name()} done={nueva.done()} id={id(nueva)}"
-                        )
-                        log.debug(
-                            f"Tareas después de reinicio: {list(self._tasks.keys())}"
-                        )
-                        for sym in self._symbols:
-                            tick_data(sym, reinicio=True)
-                        for sym in inactivos:
-                            registrar_reinicio_inactividad(sym)
-                    continue
 
                 for sym, task in list(self._tasks.items()):
                     ultimo = self._last.get(sym)
@@ -357,7 +249,7 @@ class DataFeed:
         cliente: Any | None = None,
     ) -> None:
         log.info('➡️ Entrando en escuchar()')
-        """Inicia un stream por símbolo o uno combinado y espera a que finalicen.
+        """Inicia un stream independiente por símbolo y espera a que finalicen.
 
         Si ``cliente`` se proporciona, se usará para recuperar velas perdidas tras
         una reconexión.
@@ -384,27 +276,15 @@ class DataFeed:
             self._monitor_global_task = asyncio.create_task(
                 self._monitor_global_inactividad()
             )
-        if self.usar_stream_combinado:
-            tarea = supervised_task(
-                lambda: self._stream_combinado(self._symbols, handler),
-                'stream_combined',
+        for sym in self._symbols:
+            if sym in self._tasks:
+                log.warning(f'⚠️ Stream duplicado para {sym}. Ignorando.')
+                continue
+            self._tasks[sym] = supervised_task(
+                lambda sym=sym: self.stream(sym, handler),
+                f'stream_{sym}',
                 max_restarts=0,
             )
-            self._tasks['combined'] = tarea
-            inicio = datetime.utcnow()
-            log.info(
-                f"🚀 _stream_combinado lanzado {inicio.isoformat()} nombre={tarea.get_name()} done={tarea.done()} id={id(tarea)}"
-            )
-        else:
-            for sym in self._symbols:
-                if sym in self._tasks:
-                    log.warning(f'⚠️ Stream duplicado para {sym}. Ignorando.')
-                    continue
-                self._tasks[sym] = supervised_task(
-                    lambda sym=sym: self.stream(sym, handler),
-                    f'stream_{sym}',
-                    max_restarts=0,
-                )
         if self._tasks:
             while self._running and any(
                 not t.done() for t in self._tasks.values()

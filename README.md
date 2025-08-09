@@ -69,41 +69,12 @@ Las funcionalidades principales del bot están divididas en componentes dentro d
 La clase `Trader` orquesta estos módulos y mantiene compatibilidad con
 `TraderSimulado` para los escenarios de backtesting.
 
-## Streams combinados
+## Streams por símbolo
 
-Para reducir el número de conexiones WebSocket, el bot puede agrupar
-varios pares en un único stream utilizando la URL oficial de Binance:
-
-`wss://stream.binance.com:9443/stream?streams=<stream1>/<stream2>`
-
-### Cómo habilitarlo
-
-1. Instancia `DataFeed` con `usar_stream_combinado=True`.
-2. Llama a `escuchar` pasando una lista de símbolos:
-
-   ```python
-   import asyncio
-   from core.data_feed import DataFeed
-
-   feed = DataFeed('1m', usar_stream_combinado=True)
-
-   async def handle(candle):
-       print(candle)
-
-   asyncio.run(feed.escuchar(['BTC/USDT', 'ETH/USDT'], handle))
-   ```
-
-### Ventajas
-
-- Menos conexiones simultáneas contra Binance.
-- La lógica de reconexión se centraliza en un solo WebSocket.
-
-### Advertencias
-
-- No soluciona cuellos de botella de CPU; cada vela sigue procesándose
-  secuencialmente.
-- Un fallo en la conexión o la inactividad de un solo símbolo provoca la
-  reconexión del stream completo, afectando brevemente a los demás pares.
+El bot utiliza un WebSocket independiente para cada par, lo que permite
+reiniciar únicamente el flujo afectado si se detecta inactividad o una
+desconexión. De esta forma, los demás símbolos continúan recibiendo
+datos sin interrupciones.
 
 ## Logging estructurado y reportes
 
