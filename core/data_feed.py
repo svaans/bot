@@ -211,9 +211,11 @@ class DataFeed:
                             log.debug(f"Stream {sym} cancelado; se reiniciará")
                             try:
                                 await asyncio.wait_for(
-                                    asyncio.gather(task, return_exceptions=True),
+                                    task,
                                     timeout=self.cancel_timeout,
                                 )
+                            except Exception:
+                                pass
                             except asyncio.TimeoutError:
                                 log.warning(
                                     f"⏱️ Timeout cancelando stream {sym}"
@@ -296,9 +298,10 @@ class DataFeed:
                 )
             else:
                 log.debug(f"Tarea {nombre} estado: {estado}")
-        for task in self._consumer_tasks.values():
+        consumer_list = list(self._consumer_tasks.values())
+        for task in consumer_list:
             task.cancel()
-        await asyncio.gather(*self._consumer_tasks.values(), return_exceptions=True)
+        await asyncio.gather(*consumer_list, return_exceptions=True)
         self._consumer_tasks.clear()
         self._queues.clear()
         self._running = False
@@ -309,13 +312,13 @@ class DataFeed:
             self._monitor_global_task.cancel()
             try:
                 await asyncio.wait_for(
-                    asyncio.gather(
-                        self._monitor_global_task, return_exceptions=True
-                    ),
+                    self._monitor_global_task,
                     timeout=self.cancel_timeout,
                 )
             except asyncio.TimeoutError:
                 log.warning("🧟 Timeout cancelando monitor global (tarea zombie)")
+            except Exception:
+                pass
         self._monitor_global_task = None
 
         for task in self._tasks.values():
@@ -325,13 +328,15 @@ class DataFeed:
                 continue
             try:
                 await asyncio.wait_for(
-                    asyncio.gather(task, return_exceptions=True),
+                    task,
                     timeout=self.cancel_timeout,
                 )
             except asyncio.TimeoutError:
                 log.warning(
                     f"🧟 Timeout cancelando stream {nombre} (tarea zombie)"
                 )
+            except Exception:
+                pass
         self._tasks.clear()
         for task in self._consumer_tasks.values():
             task.cancel()
@@ -340,13 +345,15 @@ class DataFeed:
                 continue
             try:
                 await asyncio.wait_for(
-                    asyncio.gather(task, return_exceptions=True),
+                    task,
                     timeout=self.cancel_timeout,
                 )
             except asyncio.TimeoutError:
                 log.warning(
                     f"🧟 Timeout cancelando consumer {nombre} (tarea zombie)"
                 )
+            except Exception:
+                pass
         self._consumer_tasks.clear()
         self._queues.clear()
         self._last.clear()

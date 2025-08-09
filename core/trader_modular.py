@@ -967,7 +967,10 @@ class Trader:
                             f'⏰ Tarea {nombre} sin actividad desde {hb.isoformat()} ({elapsed:.1f}s). Reiniciando.'
                         )
                         task.cancel()
-                        await asyncio.gather(task, return_exceptions=True)
+                        try:
+                            await task
+                        except Exception:
+                            pass
                         otra_activa = any(
                             t.get_name() == nombre for t in asyncio.all_tasks()
                         )

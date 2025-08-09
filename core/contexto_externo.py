@@ -131,7 +131,10 @@ class StreamContexto:
                             f'🔄 Stream contexto {sym} inactivo; reiniciando'
                         )
                         task.cancel()
-                        await asyncio.gather(task, return_exceptions=True)
+                        try:
+                            await task
+                        except Exception:
+                            pass
                         self._tasks[sym] = supervised_task(
                             lambda sym=sym: self._stream(sym, self._handler_actual),
                             name=f"context_stream_{sym}",
@@ -169,13 +172,13 @@ class StreamContexto:
             self._monitor_task.cancel()
             try:
                 await asyncio.wait_for(
-                    asyncio.gather(
-                        self._monitor_task, return_exceptions=True
-                    ),
+                    self._monitor_task,
                     timeout=self.cancel_timeout,
                 )
             except asyncio.TimeoutError:
                 log.warning('🧟 Timeout cancelando monitor global (tarea zombie)')
+            except Exception:
+                pass
         self._monitor_task = None
         for task in self._tasks.values():
             task.cancel()
@@ -184,11 +187,13 @@ class StreamContexto:
                 continue
             try:
                 await asyncio.wait_for(
-                    asyncio.gather(task, return_exceptions=True),
+                    task,
                     timeout=self.cancel_timeout,
                 )
             except asyncio.TimeoutError:
                 log.warning(f'🧟 Timeout cancelando stream {nombre} (tarea zombie)')
+            except Exception:
+                pass
         self._tasks.clear()
         self._symbols = []
 
