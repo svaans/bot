@@ -17,6 +17,9 @@ Variables de entorno relevantes:
   automáticos (por defecto ``300``).
 - ``USE_PROCESS_POOL`` si se establece en ``1``/``true``/``yes`` permite
   persistir operaciones en un ``ProcessPoolExecutor`` evitando el GIL.
+  ``FLUSH_BATCH_SIZE`` determina cuántas operaciones se persisten por lote
+  (por defecto ``100``). Si un ``flush`` supera los 30s, el tamaño del lote se
+  reduce automáticamente para disminuir la carga de cada escritura.
 """
 import os
 import json
@@ -582,7 +585,7 @@ def _chunked(seq: list, size: int):
 
 
 def flush_operaciones() ->None:
-    global _SLOW_FLUSHES, _USE_PROCESS_POOL, _ULTIMO_FLUSH
+    global _SLOW_FLUSHES, _USE_PROCESS_POOL, _ULTIMO_FLUSH, _FLUSH_BATCH_SIZE
     log.info('➡️ Entrando en flush_operaciones()')
     """Guarda en disco todas las operaciones acumuladas.
 
@@ -629,6 +632,17 @@ def flush_operaciones() ->None:
         )
     if duracion > _SLOW_FLUSH_THRESHOLD:
         _SLOW_FLUSHES += 1
+        log.warning(
+            f'⚠️ flush_operaciones tardó {duracion:.2f}s; considerar reducir '
+            'FLUSH_BATCH_SIZE o activar USE_PROCESS_POOL'
+        )
+        if _FLUSH_BATCH_SIZE > 10:
+            nuevo_tam = max(_FLUSH_BATCH_SIZE // 2, 10)
+            if nuevo_tam < _FLUSH_BATCH_SIZE:
+                _FLUSH_BATCH_SIZE = nuevo_tam
+                log.info(
+                    f'ℹ️ FLUSH_BATCH_SIZE reducido a {_FLUSH_BATCH_SIZE} por flush lento'
+                )
     else:
         _SLOW_FLUSHES = 0
     if _SLOW_FLUSHES >= _SLOW_FLUSH_LIMIT and not _USE_PROCESS_POOL:
