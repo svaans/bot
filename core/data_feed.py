@@ -95,13 +95,11 @@ class DataFeed:
     ) -> None:
         """Procesa las velas encoladas para ``symbol`` de forma asíncrona."""
         queue = self._queues[symbol]
-        loop = asyncio.get_running_loop()
         while self._running:
             candle = await queue.get()
             try:
                 await asyncio.wait_for(
-                    loop.run_in_executor(None, lambda: asyncio.run(handler(candle))),
-                    timeout=self.handler_timeout,
+                    handler(candle), timeout=self.handler_timeout
                 )
             except asyncio.TimeoutError:
                 self._handler_timeouts[symbol] = (
