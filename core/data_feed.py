@@ -244,6 +244,7 @@ class DataFeed:
                         if not task.done():
                             log.info("Cancelando tarea 'combined'")
                             task.cancel()
+                            log.debug("Tarea 'combined' cancelada; se reiniciará el stream")
                             try:
                                 await asyncio.wait_for(
                                     asyncio.gather(task, return_exceptions=True),
@@ -270,6 +271,8 @@ class DataFeed:
                         log.debug(
                             f"Tareas después de reinicio: {list(self._tasks.keys())}"
                         )
+                        for sym in self._symbols:
+                            tick_data(sym, reinicio=True)
                         for sym in inactivos:
                             registrar_reinicio_inactividad(sym)
                     continue
@@ -289,6 +292,7 @@ class DataFeed:
                         )
                         if not task.done():
                             task.cancel()
+                            log.debug(f"Stream {sym} cancelado; se reiniciará")
                             try:
                                 await asyncio.wait_for(
                                     asyncio.gather(task, return_exceptions=True),
@@ -307,12 +311,18 @@ class DataFeed:
                         log.debug(
                             f"Tareas después de reinicio: {list(self._tasks.keys())}"
                         )
+                        tick_data(sym, reinicio=True)
                         if inactivo:
                             registrar_reinicio_inactividad(sym)
         
         except asyncio.CancelledError:
             tick('data_feed')
-            pass
+            raise
+        except Exception as e:
+            log.exception(
+                "Error inesperado en _monitor_global_inactividad: %s", e
+            )
+            tick('data_feed')
 
     async def escuchar(
         self,

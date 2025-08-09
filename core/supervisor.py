@@ -45,10 +45,21 @@ def tick(name: str) -> None:
     last_alive = datetime.utcnow()
     task_heartbeat[name] = last_alive
 
-def tick_data(symbol: str) -> None:
-    """Actualiza la marca de tiempo de la última vela recibida para ``symbol``."""
+def tick_data(symbol: str, reinicio: bool = False) -> None:
+    """Actualiza la marca de tiempo de la última vela recibida para ``symbol``.
+
+    Parameters
+    ----------
+    symbol: str
+        Símbolo al que pertenece el latido de datos.
+    reinicio: bool, optional
+        Cuando ``True`` indica que el stream se reinició y todavía no se han
+        recibido datos. Se registra para facilitar la depuración.
+    """
     ahora = datetime.utcnow()
     data_heartbeat[symbol] = ahora
+    if reinicio:
+        log.info("🔄 Reinicio exitoso del stream %s, esperando datos...", symbol)
     if symbol in last_data_alert:
         log.info("✅ %s retomó latidos de datos", symbol)
         last_data_alert.pop(symbol, None)
@@ -140,6 +151,9 @@ def watchdog(timeout: int = 120, check_interval: int = 10) -> None:
                         try:
                             log.warning("Cancelando stream %s desde watchdog", sym)
                             main_loop.call_soon_threadsafe(task.cancel)
+                            log.debug(
+                                "Stream %s cancelado; el monitor debería reiniciarlo", sym
+                            )
                         except Exception as e:
                             log.debug(
                                 "No se pudo cancelar stream %s: %s", sym, e
