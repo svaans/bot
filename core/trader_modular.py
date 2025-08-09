@@ -18,6 +18,7 @@ from core.position_manager import PositionManager
 from core.notification_manager import NotificationManager
 from core.capital_manager import CapitalManager
 from core.event_bus import EventBus
+from core.rejection_handler import RejectionHandler
 from binance_api.cliente import (
     crear_cliente,
     fetch_balance_async,
@@ -107,18 +108,17 @@ class Trader:
                 '🧪 Modo simulado activado. No se inicializará cliente Binance')
         self._markets = None
         self.modo_capital_bajo = config.modo_capital_bajo
-        self.persistencia = PersistenciaTecnica(config.persistencia_minima,
-            config.peso_extra_persistencia)
-        os.makedirs(os.path.join(LOG_DIR, 'rechazos'), exist_ok=True)
-        os.makedirs(os.path.dirname(config.registro_tecnico_csv), exist_ok=True
-            )
+        self.persistencia = PersistenciaTecnica(
+            config.persistencia_minima, config.peso_extra_persistencia
+        )
+        self.rejection_handler = RejectionHandler(
+            LOG_DIR, config.registro_tecnico_csv
+        )
         self.umbral_score_tecnico = config.umbral_score_tecnico
         self.usar_score_tecnico = getattr(config, 'usar_score_tecnico', True)
-        self.contradicciones_bloquean_entrada = (config.
-            contradicciones_bloquean_entrada)
-        self.registro_tecnico_csv = config.registro_tecnico_csv
-        self._rechazos_buffer: list[dict] = []
-        self._rechazos_batch_size = 10
+        self.contradicciones_bloquean_entrada = (
+            config.contradicciones_bloquean_entrada
+        )
         self._rechazos_intervalo_flush = 5
         # Cache limitada para históricos de velas
         self.historicos: OrderedDict[str, pd.DataFrame] = OrderedDict()
@@ -975,66 +975,6 @@ class Trader:
             tick('heartbeat')
             await asyncio.sleep(intervalo)
 
-    def _flush_rechazos(self) ->None:
-        log.info('➡️ Entrando en _flush_rechazos()')
-        # Filtrar registros nulos para evitar errores al convertir a DataFrame
-        buffer = [r for r in self._rechazos_buffer if r]
-        if not buffer:
-            return
-        fecha = datetime.utcnow().strftime('%Y%m%d')
-        archivo = os.path.join(LOG_DIR, 'rechazos', f'{fecha}.csv')
-        df = pd.DataFrame(buffer)
-        modo = 'a' if os.path.exists(archivo) else 'w'
-        df.to_csv(
-            archivo,
-            mode=modo,
-            header=not os.path.exists(archivo),
-            index=False,
-        )
-        self._rechazos_buffer.clear()
-
-    async def _flush_rechazos_periodicamente(self, intervalo: int) ->None:
-        log.info('➡️ Entrando en _flush_rechazos_periodicamente()')
-        while not self._stop_event.is_set():
-            await asyncio.sleep(intervalo)
-            self._flush_rechazos()
-
-    def _rechazo(self, symbol: str, motivo: str, puntaje: (float | None)=
-        None, peso_total: (float | None)=None, estrategias: (list[str] |
-        dict | None)=None) ->None:
-        log.info('➡️ Entrando en _rechazo()')
-        """Centraliza los mensajes de descartes de entrada."""
-        mensaje = f'🔴 RECHAZO: {symbol} | Causa: {motivo}'
-        if puntaje is not None:
-            mensaje += f' | Puntaje: {puntaje:.2f}'
-        if peso_total is not None:
-            mensaje += f' | Peso: {peso_total:.2f}'
-        if estrategias:
-            estr = estrategias
-            if isinstance(estr, dict):
-                estr = list(estr.keys())
-            mensaje += f' | Estrategias: {estr}'
-        log.info(mensaje)
-        registro = {
-            'symbol': symbol,
-            'motivo': motivo,
-            'puntaje': puntaje,
-            'peso_total': peso_total,
-            'estrategias': ','.join(estrategias.keys() if isinstance(estrategias, dict) else estrategias) if estrategias else ''
-        }
-        self._rechazos_buffer.append(registro)
-        if len(self._rechazos_buffer) >= self._rechazos_batch_size:
-            self._flush_rechazos()
-        registro_metrico.registrar('rechazo', registro)
-        try:
-            registrar_auditoria(symbol=symbol, evento='Entrada rechazada',
-                resultado='rechazo', estrategias_activas=estrategias, score
-                =puntaje, razon=motivo, capital_actual=self.
-                capital_por_simbolo.get(symbol, 0.0), config_usada=self.
-                config_por_simbolo.get(symbol, {}))
-        except Exception as e:
-            log.debug(f'No se pudo registrar auditoría de rechazo: {e}')
-
     def _validar_puntaje(self, symbol: str, puntaje: float, umbral: float,
         modo_agresivo: bool=False) -> bool:
         log.info('➡️ Entrando en _validar_puntaje()')
@@ -1095,9 +1035,13 @@ class Trader:
                 peso_min_total *= 0.7
         if diversidad < diversidad_min or peso_total < peso_min_total:
             if not modo_agresivo:
-                self._rechazo(symbol,
-                    f'Diversidad {diversidad} < {diversidad_min} o peso {peso_total:.2f} < {peso_min_total:.2f}'
-                    , peso_total=peso_total)
+                self.rejection_handler.registrar(
+                    symbol,
+                    f'Diversidad {diversidad} < {diversidad_min} o peso {peso_total:.2f} < {peso_min_total:.2f}',
+                    peso_total=peso_total,
+                    capital=self.capital_por_simbolo.get(symbol, 0.0),
+                    config=self.config_por_simbolo.get(symbol, {}),
+                )
                 metricas_tracker.registrar_filtro('diversidad')
                 return False
             log.debug(
@@ -1141,15 +1085,25 @@ class Trader:
             f'Persistencia detectada {repetidas:.2f} | Mínimo requerido {minimo:.2f}'
             )
         if repetidas < minimo:
-            self._rechazo(symbol,
-                f'Persistencia {repetidas:.2f} < {minimo}', puntaje=puntaje,
-                estrategias=list(estrategias.keys()))
+            self.rejection_handler.registrar(
+                symbol,
+                f'Persistencia {repetidas:.2f} < {minimo}',
+                puntaje=puntaje,
+                estrategias=list(estrategias.keys()),
+                capital=self.capital_por_simbolo.get(symbol, 0.0),
+                config=self.config_por_simbolo.get(symbol, {}),
+            )
             metricas_tracker.registrar_filtro('persistencia')
             return False, repetidas, minimo
         if repetidas < 1 and puntaje < 1.2 * umbral:
-            self._rechazo(symbol,
-                f'{repetidas:.2f} coincidencia y puntaje débil ({puntaje:.2f})'
-                , puntaje=puntaje, estrategias=list(estrategias.keys()))
+            self.rejection_handler.registrar(
+                symbol,
+                f'{repetidas:.2f} coincidencia y puntaje débil ({puntaje:.2f})',
+                puntaje=puntaje,
+                estrategias=list(estrategias.keys()),
+                capital=self.capital_por_simbolo.get(symbol, 0.0),
+                config=self.config_por_simbolo.get(symbol, {}),
+            )
             return False, repetidas, minimo
         elif repetidas < 1:
             log.info(
@@ -1316,22 +1270,6 @@ class Trader:
             return False
         return True
 
-    def _registrar_rechazo_tecnico(self, symbol: str, score: float, puntos:
-        dict, tendencia: str, precio: float, motivo: str, estrategias: (
-        dict | None)=None) ->None:
-        log.info('➡️ Entrando en _registrar_rechazo_tecnico()')
-        """Guarda detalles de rechazos técnicos en un CSV."""
-        if not self.registro_tecnico_csv:
-            return
-        fila = {'timestamp': datetime.utcnow().isoformat(), 'symbol':
-            symbol, 'puntaje_total': score, 'indicadores_fallidos': ','.
-            join([k for k, v in puntos.items() if not v]), 'estado_mercado':
-            tendencia, 'precio': precio, 'motivo': motivo, 'estrategias': 
-            ','.join(estrategias.keys()) if estrategias else ''}
-        df = pd.DataFrame([fila])
-        modo = 'a' if os.path.exists(self.registro_tecnico_csv) else 'w'
-        df.to_csv(self.registro_tecnico_csv, mode=modo, header=not os.path.
-            exists(self.registro_tecnico_csv), index=False)
 
     async def evaluar_condiciones_entrada(self, symbol: str, df: pd.DataFrame
         ) ->None:
@@ -1369,7 +1307,13 @@ class Trader:
             )
         except asyncio.TimeoutError:
             log.warning(f'⚠️ Timeout en evaluar_entrada para {symbol}')
-            self._rechazo(symbol, 'timeout_engine', estrategias=[])
+            self.rejection_handler.registrar(
+                symbol,
+                'timeout_engine',
+                estrategias=[],
+                capital=self.capital_por_simbolo.get(symbol, 0.0),
+                config=self.config_por_simbolo.get(symbol, {}),
+            )
             return
         estrategias = resultado.get('estrategias_activas', {})
         estado.estrategias_buffer[-1] = estrategias
@@ -1382,17 +1326,28 @@ class Trader:
                 score, puntos = self._calcular_score_tecnico(df, rsi, mom,
                     tendencia_actual, 'short' if tendencia_actual ==
                     'bajista' else 'long')
-                self._registrar_rechazo_tecnico(symbol, score, puntos,
+                self.rejection_handler.registrar_tecnico(symbol, score, puntos,
                     tendencia_actual, precio_actual, resultado.get(
                     'motivo_rechazo', 'desconocido'), estrategias)
-            self._rechazo(symbol, resultado.get('motivo_rechazo',
-                'desconocido'), puntaje=resultado.get('score_total'),
-                estrategias=list(estrategias.keys()))
+            self.rejection_handler.registrar(
+                symbol,
+                resultado.get('motivo_rechazo', 'desconocido'),
+                puntaje=resultado.get('score_total'),
+                estrategias=list(estrategias.keys()),
+                capital=self.capital_por_simbolo.get(symbol, 0.0),
+                config=self.config_por_simbolo.get(symbol, {}),
+            )
             return
         info = await self.evaluar_condiciones_de_entrada(symbol, df, estado)
         if not info:
-            self._rechazo(symbol, 'filtros_post_engine', puntaje=resultado.
-                get('score_total'), estrategias=list(estrategias.keys()))
+            self.rejection_handler.registrar(
+                symbol,
+                'filtros_post_engine',
+                puntaje=resultado.get('score_total'),
+                estrategias=list(estrategias.keys()),
+                capital=self.capital_por_simbolo.get(symbol, 0.0),
+                config=self.config_por_simbolo.get(symbol, {}),
+            )
             return
         await self._abrir_operacion_real(**info)
 
@@ -1458,13 +1413,25 @@ class Trader:
                 estrategias}
         try:
             if not self._validar_sl_tp(symbol, precio, sl, tp):
-                self._rechazo(symbol, 'sl_tp_invalidos', puntaje=puntaje,
-                    estrategias=list(estrategias_dict.keys()))
+                self.rejection_handler.registrar(
+                    symbol,
+                    'sl_tp_invalidos',
+                    puntaje=puntaje,
+                    estrategias=list(estrategias_dict.keys()),
+                    capital=self.capital_por_simbolo.get(symbol, 0.0),
+                    config=self.config_por_simbolo.get(symbol, {}),
+                )
                 return
         except Exception as e:
             log.error(f'❌ Error validando SL/TP para {symbol}: {e}')
-            self._rechazo(symbol, 'error_validacion_sl_tp', puntaje=puntaje,
-                estrategias=list(estrategias_dict.keys()))
+            self.rejection_handler.registrar(
+                symbol,
+                'error_validacion_sl_tp',
+                puntaje=puntaje,
+                estrategias=list(estrategias_dict.keys()),
+                capital=self.capital_por_simbolo.get(symbol, 0.0),
+                config=self.config_por_simbolo.get(symbol, {}),
+            )
             if self.notificador:
                 try:
                     await self.notificador.enviar_async(
@@ -1555,7 +1522,9 @@ class Trader:
                 symbols, handle_context
             ),
             'flush': lambda: real_orders.flush_periodico(),
-            'rechazos_flush': lambda: self._flush_rechazos_periodicamente(self._rechazos_intervalo_flush),
+            'rechazos_flush': lambda: self.rejection_handler.flush_periodically(
+                self._rechazos_intervalo_flush, self._stop_event
+            ),
         }
         if 'PYTEST_CURRENT_TEST' not in os.environ:
             tareas['aprendizaje'] = lambda : self._ciclo_aprendizaje()
@@ -1585,7 +1554,7 @@ class Trader:
         await asyncio.gather(*self._tareas.values(), return_exceptions=True)
         await self.bus.close()
         real_orders.flush_operaciones()
-        self._flush_rechazos()
+        self.rejection_handler.flush()
         registro_metrico.exportar()
         self._guardar_estado_persistente()
 
