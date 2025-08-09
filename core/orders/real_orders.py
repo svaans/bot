@@ -9,6 +9,14 @@ persistencia entre reinicios del bot.
 instancia del bot por proceso. Si se desean ejecutar múltiples bots o tests
 concurrentes en el mismo proceso, se recomienda encapsular este estado en una
 clase o crear instancias independientes.
+
+Variables de entorno relevantes:
+- ``MAX_BUFFER_OPERATIONS`` controla cuántas operaciones pueden acumularse en
+  memoria antes de forzar un ``flush`` (por defecto ``10``).
+- ``FLUSH_INTERVAL`` define el tiempo máximo en segundos entre ``flush``
+  automáticos (por defecto ``300``).
+- ``USE_PROCESS_POOL`` si se establece en ``1``/``true``/``yes`` permite
+  persistir operaciones en un ``ProcessPoolExecutor`` evitando el GIL.
 """
 import os
 import json
@@ -47,13 +55,13 @@ _CACHE_ORDENES: dict[str, Order] | None = None
 _VENTAS_FALLIDAS: set[str] = set()
 _BUFFER_OPERACIONES: list[dict] = []
 _BUFFER_LOCK = threading.Lock()
-_MAX_BUFFER = 10
-_FLUSH_INTERVAL = 300
+_MAX_BUFFER = int(os.getenv('MAX_BUFFER_OPERATIONS', '10') or 10)
+_FLUSH_INTERVAL = int(os.getenv('FLUSH_INTERVAL', '300') or 300)
 _ULTIMO_FLUSH = time.time()
 _SLOW_FLUSHES = 0
 _SLOW_FLUSH_THRESHOLD = 30
 _SLOW_FLUSH_LIMIT = 3
-_USE_PROCESS_POOL = False
+_USE_PROCESS_POOL = os.getenv('USE_PROCESS_POOL', '0').lower() in {'1', 'true', 'yes'}
 _FLUSH_FUTURE: asyncio.Future | None = None
 _FLUSH_BATCH_SIZE = int(os.getenv('FLUSH_BATCH_SIZE', '100') or 100)
 """Número máximo de operaciones a persistir por lote."""
