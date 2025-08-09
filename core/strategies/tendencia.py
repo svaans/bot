@@ -1,5 +1,6 @@
 """Detección de tendencia del mercado y evaluación de señales persistentes."""
 import pandas as pd
+from typing import Sequence
 from indicators.helpers import get_rsi
 from indicators.adx import calcular_adx
 from core.strategies.entry.gestor_entradas import evaluar_estrategias
@@ -83,7 +84,7 @@ def obtener_parametros_persistencia(
 
 
 def señales_repetidas(
-    buffer: list[dict],
+    buffer: Sequence[dict],
     estrategias_func: dict[str, float],
     tendencia_actual: str,
     volatilidad_actual: float,
@@ -98,7 +99,8 @@ def señales_repetidas(
     peso_minimo, min_estrategias = obtener_parametros_persistencia(
         tendencia_actual, volatilidad_actual
     )
-    df = pd.DataFrame(buffer[-(ventanas + 30) :])
+    datos = list(buffer)[-(ventanas + 30) :]
+    df = pd.DataFrame(datos)
     peso_max = sum(estrategias_func.values()) or 1.0
     contador = 0
     for i in range(-ventanas, 0):
