@@ -213,14 +213,23 @@ def permitir_cierre_tecnico(
                 f'⚠️ {symbol} velas verdes + SL muy cerca. Mejor esperar rebote.'
                 )
             return False
-    if rsi and pendiente_rsi and pendiente_rsi > 0 and df['close'].iloc[-1
-        ] < df['close'].iloc[-2] < df['close'].iloc[-3]:
+    if (
+        rsi is not None
+        and pendiente_rsi is not None
+        and pendiente_rsi > 0
+        and df['close'].iloc[-1] < df['close'].iloc[-2] < df['close'].iloc[-3]
+    ):
         log.info(
             f'⚠️ {symbol} divergencia alcista en RSI detectada. Posible rebote. Evitar cierre.'
             )
         return False
-    if rsi and rsi < 50 and cierre < apertura and cuerpo > 0.6 * (alto - bajo
-        ) and volumen_actual < media_vol:
+    if (
+        rsi is not None
+        and rsi < 50
+        and cierre < apertura
+        and cuerpo > 0.6 * (alto - bajo)
+        and volumen_actual < media_vol
+    ):
         log.info(
             f'✅ {symbol} debilidad confirmada → cierre justificado por rechazo bajista.'
             )
