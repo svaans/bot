@@ -33,7 +33,7 @@ async def verificar_entrada(trader, symbol: str, df: pd.DataFrame, estado) ->(
         tendencia, _ = detectar_tendencia(symbol, df)
         trader.estado_tendencia[symbol] = tendencia
     log.debug(f'[{symbol}] Tendencia: {tendencia}')
-    engine_eval = trader.engine.evaluar_entrada(
+    engine_eval = await trader.engine.evaluar_entrada(
         symbol,
         df,
         tendencia=tendencia,

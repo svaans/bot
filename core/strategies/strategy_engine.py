@@ -29,7 +29,7 @@ class StrategyEngine:
     """Evalúa estrategias de entrada y salida."""
 
     @staticmethod
-    def evaluar_entrada(
+    async def evaluar_entrada(
         symbol: str,
         df: pd.DataFrame,
         tendencia: str | None = None,
@@ -70,7 +70,7 @@ class StrategyEngine:
             if tendencia is None:
                 tendencia, _ = detectar_tendencia(symbol, df)
             log.debug(f"[{symbol}] Tendencia usada: {tendencia}")
-            resultado = evaluar_estrategias(symbol, df, tendencia)
+            resultado = await evaluar_estrategias(symbol, df, tendencia)
             estrategias_activas = resultado.get("estrategias_activas", {})
             score_base = resultado.get("puntaje_total", 0.0)
             diversidad = resultado.get("diversidad", 0)

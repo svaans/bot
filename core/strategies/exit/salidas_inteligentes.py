@@ -46,7 +46,7 @@ def verificar_take_profit(orden: Dict, df: pd.DataFrame, config: (Dict |
     return {'cerrar': False, 'razon': 'TP no alcanzado'}
 
 
-def evaluar_salida_inteligente(orden: Dict, df: pd.DataFrame, config: (Dict |
+async def evaluar_salida_inteligente(orden: Dict, df: pd.DataFrame, config: (Dict |
     None)=None) ->Dict:
     """Evalúa varias estrategias de salida y decide un cierre unificado."""
     resultados: List[Dict] = []
@@ -61,7 +61,7 @@ def evaluar_salida_inteligente(orden: Dict, df: pd.DataFrame, config: (Dict |
         spread = df['spread'].iloc[-1] / df['close'].iloc[-1]
         if spread > spread_max:
             return {'cerrar': False, 'razones': ['Spread alto'], 'estrategias_activas': 0, 'motivo_final': 'Spread excesivo'}
-    res_sl = verificar_salida_stoploss(orden, df, config=config)
+    res_sl = await verificar_salida_stoploss(orden, df, config=config)
     if res_sl.get('cerrar'):
         resultados.append({'razon': 'Stop Loss', 'detalle': res_sl.get(
             'motivo')})

@@ -60,7 +60,7 @@ async def _manejar_stop_loss(trader, orden, df) -> bool:
     config_actual = trader.config_por_simbolo.get(
         symbol, load_exit_config(symbol)
     )
-    resultado = verificar_salida_stoploss(
+    resultado = await verificar_salida_stoploss(
         orden.to_dict(), df, config=config_actual
     )
 
@@ -151,7 +151,7 @@ async def _procesar_take_profit(trader, orden, df) -> bool:
     precio_cierre = float(df['close'].iloc[-1])
     config_actual = trader.config_por_simbolo.get(symbol, load_exit_config(symbol))
     if not getattr(orden, 'parcial_cerrado', False) and orden.cantidad_abierta > 0:
-        if trader.es_salida_parcial_valida(orden, orden.take_profit, config_actual, df):
+        if await trader.es_salida_parcial_valida(orden, orden.take_profit, config_actual, df):
             cantidad_parcial = orden.cantidad_abierta * 0.5
             if await trader._cerrar_parcial_y_reportar(orden, cantidad_parcial, orden.take_profit, 'Take Profit parcial', df=df):
                 orden.parcial_cerrado = True
@@ -247,7 +247,7 @@ async def _manejar_cambio_tendencia(trader, orden, df) -> bool:
         return False
         
     pesos_symbol = trader.pesos_por_simbolo.get(symbol, {})
-    if not verificar_filtro_tecnico(
+    if not await verificar_filtro_tecnico(
         symbol, df, orden.estrategias_activas, pesos_symbol, config=config_actual
     ):
         nueva_tendencia = trader.estado_tendencia.get(symbol)
@@ -301,7 +301,13 @@ async def _aplicar_salidas_adicionales(trader, orden, df) -> bool:
         if not tendencia_actual:
             tendencia_actual, _ = detectar_tendencia(symbol, df)
             trader.estado_tendencia[symbol] = tendencia_actual
-        evaluacion = trader.engine.evaluar_entrada(symbol, df, tendencia=tendencia_actual, config=config_actual, pesos_symbol=trader.pesos_por_simbolo.get(symbol, {}))
+        evaluacion = await trader.engine.evaluar_entrada(
+            symbol,
+            df,
+            tendencia=tendencia_actual,
+            config=config_actual,
+            pesos_symbol=trader.pesos_por_simbolo.get(symbol, {}),
+        )
         estrategias = evaluacion.get('estrategias_activas', {})
         puntaje = evaluacion.get('puntaje_total', 0)
         pesos_symbol = trader.pesos_por_simbolo.get(symbol, {})

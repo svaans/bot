@@ -3,6 +3,7 @@
 Evalúa las estrategias activas y calcula el score técnico total y la diversidad.
 """
 from __future__ import annotations
+import asyncio
 import pandas as pd
 from core.strategies.pesos import gestor_pesos
 from .loader import cargar_estrategias
@@ -15,7 +16,7 @@ log = configurar_logger('entradas')
 _FUNCIONES = cargar_estrategias()
 
 
-def evaluar_estrategias(symbol: str, df: pd.DataFrame, tendencia: str) ->dict:
+async def evaluar_estrategias(symbol: str, df: pd.DataFrame, tendencia: str) -> dict:
     log.info('➡️ Entrando en evaluar_estrategias()')
     """Evalúa las estrategias correspondientes a ``tendencia``
     Retorna un diccionario con puntaje_total, estrategias_activas y diversidad.
@@ -26,13 +27,13 @@ def evaluar_estrategias(symbol: str, df: pd.DataFrame, tendencia: str) ->dict:
     nombres = obtener_estrategias_por_tendencia(tendencia)
     activas: dict[str, bool] = {}
     puntaje_total = 0.0
-    for nombre in nombres:
+    async def ejecutar(nombre: str):
         func = _FUNCIONES.get(nombre)
         if not callable(func):
             log.warning(f'Estrategia no encontrada: {nombre}')
-            continue
+            return nombre, False
         try:
-            resultado = func(df)
+            resultado = await asyncio.to_thread(func, df)
             if isinstance(resultado, dict):
                 valor = resultado.get('activo')
                 if isinstance(valor, pd.Series):
@@ -44,13 +45,21 @@ def evaluar_estrategias(symbol: str, df: pd.DataFrame, tendencia: str) ->dict:
         except Exception as exc:
             log.warning(f'Error ejecutando {nombre}: {exc}')
             activo = False
+        return nombre, activo
+
+    resultados = await asyncio.gather(*(ejecutar(n) for n in nombres))
+    for nombre, activo in resultados:
         activas[nombre] = activo
         if activo:
             puntaje_total += gestor_pesos.obtener_peso(nombre, symbol)
     diversidad = sum(1 for a in activas.values() if a)
     sinergia = calcular_sinergia(activas, tendencia)
-    return {'puntaje_total': round(puntaje_total, 2), 'estrategias_activas':
-        activas, 'diversidad': diversidad, 'sinergia': sinergia}
+    return {
+        'puntaje_total': round(puntaje_total, 2),
+        'estrategias_activas': activas,
+        'diversidad': diversidad,
+        'sinergia': sinergia,
+    }
 
 
 def _validar_correlacion(symbol: str, df: pd.DataFrame, df_ref: pd.

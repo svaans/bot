@@ -74,13 +74,13 @@ def evaluar_salidas(orden: dict, df, config=None, contexto=None):
         'score': peso_total, 'umbral': umbral}
 
 
-def verificar_filtro_tecnico(symbol, df, estrategias_activas, pesos_symbol,
+async def verificar_filtro_tecnico(symbol, df, estrategias_activas, pesos_symbol,
     config=None):
     log.info('➡️ Entrando en verificar_filtro_tecnico()')
     if not validar_dataframe(df, ['high', 'low', 'close']):
         return False
     tendencia, _ = detectar_tendencia(symbol, df)
-    evaluacion = evaluar_estrategias(symbol, df, tendencia)
+    evaluacion = await evaluar_estrategias(symbol, df, tendencia)
     if not evaluacion:
         return False
     activas = [k for k, v in evaluacion['estrategias_activas'].items() if v]

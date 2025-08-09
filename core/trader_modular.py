@@ -520,7 +520,7 @@ class Trader:
             log.debug(f'No se pudo registrar auditoría de cierre parcial: {e}')
         return True
 
-    def es_salida_parcial_valida(self, orden, precio_tp: float, config:
+    async def es_salida_parcial_valida(self, orden, precio_tp: float, config:
         dict, df: pd.DataFrame) ->bool:
         log.info('➡️ Entrando en es_salida_parcial_valida()')
         """Determina si aplicar TP parcial tiene sentido económico."""
@@ -537,7 +537,7 @@ class Trader:
         if retorno_potencial <= config.get('beneficio_minimo_parcial', 5.0):
             return False
         pesos_symbol = self.pesos_por_simbolo.get(orden.symbol, {})
-        if not verificar_filtro_tecnico(orden.symbol, df, orden.
+        if not await verificar_filtro_tecnico(orden.symbol, df, orden.
             estrategias_activas, pesos_symbol, config=config):
             return False
         return True
@@ -1290,22 +1290,18 @@ class Trader:
         if not tendencia_actual:
             tendencia_actual, _ = detectar_tendencia(symbol, df)
             self.estado_tendencia[symbol] = tendencia_actual
-        loop = asyncio.get_running_loop()
         try:
             resultado = await asyncio.wait_for(
-                loop.run_in_executor(
-                    None,
-                    lambda: self.engine.evaluar_entrada(
-                        symbol,
-                        df,
-                        tendencia=tendencia_actual,
-                        config={
-                            **config_actual,
-                            "contradicciones_bloquean_entrada": self.contradicciones_bloquean_entrada,
-                            "usar_score_tecnico": self.usar_score_tecnico,
-                        },
-                        pesos_symbol=self.pesos_por_simbolo.get(symbol, {}),
-                    ),
+                self.engine.evaluar_entrada(
+                    symbol,
+                    df,
+                    tendencia=tendencia_actual,
+                    config={
+                        **config_actual,
+                        "contradicciones_bloquean_entrada": self.contradicciones_bloquean_entrada,
+                        "usar_score_tecnico": self.usar_score_tecnico,
+                    },
+                    pesos_symbol=self.pesos_por_simbolo.get(symbol, {}),
                 ),
                 timeout=self.config.timeout_evaluar_condiciones,
             )

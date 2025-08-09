@@ -48,7 +48,7 @@ def validar_sl_tecnico(df: pd.DataFrame, direccion: str='long') ->bool:
         return True
 
 
-def salida_stoploss(orden: dict, df: pd.DataFrame, config: dict=None) ->dict:
+async def salida_stoploss(orden: dict, df: pd.DataFrame, config: dict=None) ->dict:
     log.info('➡️ Entrando en salida_stoploss()')
     """
     Evalúa si debe cerrarse una orden cuyo precio ha tocado el SL,
@@ -69,7 +69,7 @@ def salida_stoploss(orden: dict, df: pd.DataFrame, config: dict=None) ->dict:
         if not tendencia:
             return resultado_salida('Stop Loss', True,
                 'Tendencia no identificada', logger=log)
-        evaluacion = evaluar_estrategias(symbol, df, tendencia)
+        evaluacion = await evaluar_estrategias(symbol, df, tendencia)
         if not evaluacion:
             return resultado_salida('Stop Loss', True,
                 'Evaluación de estrategias fallida', logger=log)
@@ -104,7 +104,7 @@ def salida_stoploss(orden: dict, df: pd.DataFrame, config: dict=None) ->dict:
             f'Error interno en SL: {e}', logger=log)
 
 
-def verificar_salida_stoploss(orden: dict, df: pd.DataFrame, config: (dict |
+async def verificar_salida_stoploss(orden: dict, df: pd.DataFrame, config: (dict |
     None)=None) ->dict:
     log.info('➡️ Entrando en verificar_salida_stoploss()')
     """Determina si debe ejecutarse el Stop Loss o mantenerse la operación."""
@@ -162,9 +162,8 @@ def verificar_salida_stoploss(orden: dict, df: pd.DataFrame, config: (dict |
             f'SL no alcanzado aún (precio: {precio_actual:.2f} vs SL: {sl_config:.2f})'
             , evitado=False)
     tendencia, _ = detectar_tendencia(symbol, df)
-    evaluacion = evaluar_estrategias(symbol, df, tendencia)
-    estrategias_activas = evaluacion.get('estrategias_activas', {}
-        ) if evaluacion else {}
+    evaluacion = await evaluar_estrategias(symbol, df, tendencia)
+    estrategias_activas = evaluacion.get('estrategias_activas', {}) if evaluacion else {}
     puntaje = evaluacion.get('puntaje_total', 0) if evaluacion else 0
     activas = [k for k, v in estrategias_activas.items() if v]
     pesos_symbol = pesos.get(symbol, {})

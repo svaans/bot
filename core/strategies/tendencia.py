@@ -83,7 +83,7 @@ def obtener_parametros_persistencia(
         return 0.5, 2
 
 
-def señales_repetidas(
+async def señales_repetidas(
     buffer: Sequence[dict],
     estrategias_func: dict[str, float],
     tendencia_actual: str,
@@ -110,7 +110,7 @@ def señales_repetidas(
                 continue
             symbol = df.iloc[i]["symbol"]
             tendencia, _ = detectar_tendencia(symbol, ventana)
-            evaluacion = evaluar_estrategias(symbol, ventana, tendencia)
+            evaluacion = await evaluar_estrategias(symbol, ventana, tendencia)
             if not evaluacion:
                 continue
             estrategias_activas = evaluacion.get("estrategias_activas", {})
