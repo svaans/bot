@@ -4,6 +4,7 @@ import logging
 import time
 from datetime import datetime
 from collections import deque
+import numpy as np
 import pandas as pd
 from core.utils.utils import configurar_logger, obtener_uso_recursos
 from core.strategies.tendencia import detectar_tendencia
@@ -57,18 +58,29 @@ async def procesar_vela(trader, vela: dict) -> None:
 
     estado.ultimo_timestamp = vela.get('timestamp')
 
-    # Actualizar DataFrame incrementalmente y detectar tendencia
+    # Actualizar DataFrame incrementalmente usando índice rotatorio
     if estado.df.empty:
         estado.df = pd.DataFrame([vela])
-    else:
+        estado.df_idx = len(estado.df) % MAX_BUFFER_VELAS
+    elif len(estado.df) < MAX_BUFFER_VELAS:
         estado.df.loc[len(estado.df)] = vela
-        if len(estado.df) > MAX_BUFFER_VELAS:
-            estado.df.drop(index=estado.df.index[0], inplace=True)
-            estado.df.reset_index(drop=True, inplace=True)
+        estado.df_idx = len(estado.df) % MAX_BUFFER_VELAS
+    else:
+        estado.df.loc[estado.df_idx] = vela
+        estado.df_idx = (estado.df_idx + 1) % MAX_BUFFER_VELAS
     # invalidar cache de indicadores porque los datos cambiaron
     clear_cache(estado.df)
 
-    df = estado.df.drop(columns=['estrategias_activas'], errors='ignore')
+    if len(estado.df) < MAX_BUFFER_VELAS:
+        df = estado.df.drop(columns=['estrategias_activas'], errors='ignore')
+    else:
+        idx = estado.df_idx
+        orden = np.r_[idx:MAX_BUFFER_VELAS, 0:idx]
+        df = (
+            estado.df.iloc[orden]
+            .reset_index(drop=True)
+            .drop(columns=['estrategias_activas'], errors='ignore')
+        )
     if df.empty or 'close' not in df.columns:
         log.error(f"❌ DataFrame inválido para {symbol}: {df}")
         return

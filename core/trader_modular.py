@@ -72,6 +72,7 @@ class EstadoSimbolo:
     tendencia_detectada: str | None = None
     timeouts_salidas: int = 0
     df: pd.DataFrame = field(default_factory=pd.DataFrame)
+    df_idx: int = 0
     contador_tendencia: int = 0
 
 
