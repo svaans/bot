@@ -72,6 +72,7 @@ class EstadoSimbolo:
     tendencia_detectada: str | None = None
     timeouts_salidas: int = 0
     df: pd.DataFrame = field(default_factory=pd.DataFrame)
+    contador_tendencia: int = 0
 
 
 class Trader:
@@ -94,6 +95,7 @@ class Trader:
             getattr(config, 'monitor_interval', 5),
             getattr(config, 'max_stream_restarts', 5),
             getattr(config, 'inactivity_intervals', 3),
+            handler_timeout=getattr(config, 'handler_timeout', 5),
         )
         self.engine = StrategyEngine()
         self.bus = EventBus()

@@ -67,13 +67,22 @@ async def procesar_vela(trader, vela: dict) -> None:
             estado.df.reset_index(drop=True, inplace=True)
     # invalidar cache de indicadores porque los datos cambiaron
     clear_cache(estado.df)
-    
+
     df = estado.df.drop(columns=['estrategias_activas'], errors='ignore')
     if df.empty or 'close' not in df.columns:
         log.error(f"❌ DataFrame inválido para {symbol}: {df}")
         return
-    estado.tendencia_detectada, _ = detectar_tendencia(symbol, df)
-    trader.estado_tendencia[symbol] = estado.tendencia_detectada
+    # calcular tendencia solo cada ``frecuencia_tendencia`` velas
+    if getattr(estado, 'contador_tendencia', 0) == 0:
+        t_trend = time.time()
+        estado.tendencia_detectada, _ = detectar_tendencia(symbol, df)
+        trader.estado_tendencia[symbol] = estado.tendencia_detectada
+        log.debug(
+            f'detectar_tendencia tardó {time.time() - t_trend:.2f}s para {symbol}'
+        )
+    estado.contador_tendencia = (
+        getattr(estado, 'contador_tendencia', 0) + 1
+    ) % max(getattr(trader.config, 'frecuencia_tendencia', 1), 1)
 
     log.debug(f"Procesando vela {symbol} | Precio: {vela.get('close')}")
 
@@ -82,9 +91,13 @@ async def procesar_vela(trader, vela: dict) -> None:
         if orden_existente is not None:
             # ⚠️ Validar salidas activas con timeout
             try:
+                t_salidas = time.time()
                 await asyncio.wait_for(
                     trader._verificar_salidas(symbol, df),
                     timeout=trader.config.timeout_verificar_salidas,
+                )
+                log.debug(
+                    f'_verificar_salidas tardó {time.time() - t_salidas:.2f}s para {symbol}'
                 )
                 estado.timeouts_salidas = 0
             except asyncio.TimeoutError:
@@ -114,9 +127,13 @@ async def procesar_vela(trader, vela: dict) -> None:
 
         # ⚠️ Validar condiciones de entrada con timeout
         try:
+            t_entrada = time.time()
             info = await asyncio.wait_for(
                 trader.evaluar_condiciones_de_entrada(symbol, df, estado),
                 timeout=trader.config.timeout_evaluar_condiciones,
+            )
+            log.debug(
+                f'evaluar_condiciones_de_entrada tardó {time.time() - t_entrada:.2f}s para {symbol}'
             )
             if isinstance(info, dict) and info:
                 await trader._abrir_operacion_real(**info)

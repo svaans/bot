@@ -181,6 +181,10 @@ En `config/exit_defaults.py` se definen los valores iniciales para todas las est
 
 Los parámetros `timeout_verificar_salidas`, `timeout_evaluar_condiciones` y `timeout_bus_eventos` determinan los segundos máximos de espera al validar una salida, evaluar las condiciones de entrada o recibir confirmaciones del bus interno. Se recomienda mantenerlos en **20 s**, **15 s** y **10 s** respectivamente para no demorar reacciones ni sobrecargar el sistema.
 
+El parámetro `handler_timeout` controla cuánto puede tardar el procesamiento de una vela antes de descartarla (por defecto **5 s**). Ajustarlo según el hardware ayuda a evitar falsos positivos de timeout.
+
+Para reducir el costo de cálculo, `frecuencia_tendencia` permite recalcular la tendencia del mercado cada *N* velas en lugar de hacerlo en todas. Un valor de **3** suele equilibrar bien precisión y rendimiento.
+
 
 El parámetro `max_timeouts_salidas` controla cuántos timeouts consecutivos al verificar una salida se toleran antes de forzar un cierre de emergencia (por defecto **3**).
 

@@ -35,6 +35,8 @@ class DevelopmentConfig:
     monitor_interval: int = 5
     max_stream_restarts: int = 5
     inactivity_intervals: int = 3
+    handler_timeout: int = 5
+    frecuencia_tendencia: int = 3
     frecuencia_correlaciones: int = 300
     umbral_alerta_cpu: float = 85.0
     umbral_alerta_mem: float = 90.0
