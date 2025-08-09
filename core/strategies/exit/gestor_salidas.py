@@ -1,4 +1,5 @@
 import pandas as pd
+import asyncio
 import inspect
 from core.utils.utils import validar_dataframe
 from core.strategies.tendencia import detectar_tendencia
@@ -11,7 +12,7 @@ log = configurar_logger('gestor_salidas')
 from .loader_salidas import cargar_estrategias_salida
 
 
-def evaluar_salidas(orden: dict, df, config=None, contexto=None):
+async def evaluar_salidas(orden: dict, df, config=None, contexto=None):
     log.info('➡️ Entrando en evaluar_salidas()')
     symbol = orden.get('symbol', 'SYM')
     if not validar_dataframe(df, ['close', 'high', 'low', 'volume']):
@@ -41,6 +42,8 @@ def evaluar_salidas(orden: dict, df, config=None, contexto=None):
                 resultado = f(df, config=config)
             else:
                 resultado = f(df)
+            if asyncio.iscoroutine(resultado):
+                resultado = await resultado
         except Exception as e:
             log.error(
                 f'❌ Error ejecutando estrategia de salida {getattr(f, "__name__", f)} en {symbol}: {e}'

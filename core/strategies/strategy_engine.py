@@ -166,7 +166,7 @@ class StrategyEngine:
             }
 
     @staticmethod
-    def evaluar_salida(df: pd.DataFrame, orden: Dict) -> Dict:
+    async def evaluar_salida(df: pd.DataFrame, orden: Dict) -> Dict:
         log.info("➡️ Entrando en evaluar_salida()")
         """
         Evalúa si se debe cerrar una orden activa.
@@ -182,7 +182,7 @@ class StrategyEngine:
             log.warning("⚠️ Evaluación de salida con datos insuficientes.")
             return {}
         try:
-            return evaluar_salidas(orden, df)
+            return await evaluar_salidas(orden, df)
         except Exception as e:
             log.error(f"❌ Error evaluando salida: {e}")
             return {}

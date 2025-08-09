@@ -280,7 +280,7 @@ async def _aplicar_salidas_adicionales(trader, orden, df) -> bool:
         trader.estado_tendencia[symbol] = tendencia_detectada
     contexto = {'volatilidad': volatilidad_rel, 'tendencia': tendencia_detectada}
     try:
-        resultado = evaluar_salidas(
+        resultado = await evaluar_salidas(
             orden.to_dict(), df, config=config_actual, contexto=contexto
         )
     except (KeyError, ValueError, TypeError) as e:
