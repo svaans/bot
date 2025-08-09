@@ -122,11 +122,28 @@ def watchdog(timeout: int = 120, check_interval: int = 10) -> None:
                     except Exception:
                         pass
                     task = tasks.get(f"stream_{sym}")
-                    if task and main_loop:
+                    if data_feed_reconnector and main_loop:
                         try:
+                            log.warning(
+                                "Solicitando reinicio de DataFeed para %s", sym
+                            )
+                            asyncio.run_coroutine_threadsafe(
+                                data_feed_reconnector(sym), main_loop
+                            )
+                        except Exception as e:
+                            log.error(
+                                "No se pudo solicitar reinicio de DataFeed para %s: %s",
+                                sym,
+                                e,
+                            )
+                    elif task and main_loop:
+                        try:
+                            log.warning("Cancelando stream %s desde watchdog", sym)
                             main_loop.call_soon_threadsafe(task.cancel)
-                        except Exception:
-                            log.debug("No se pudo cancelar stream %s", sym)
+                        except Exception as e:
+                            log.debug(
+                                "No se pudo cancelar stream %s: %s", sym, e
+                            )
         time.sleep(check_interval)
 
 
