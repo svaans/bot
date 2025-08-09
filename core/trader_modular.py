@@ -656,15 +656,22 @@ class Trader:
     async def _precargar_historico(self, velas: int=12) ->None:
         log.info('➡️ Entrando en _precargar_historico()')
         """Carga datos recientes para todos los símbolos antes de iniciar."""
-        if not self.modo_real or not self.cliente:
-            log.info(
-                '📈 Modo simulado: se omite precarga de histórico desde Binance'
-                )
-            return
+        cliente_temp = None
+        cliente = self.cliente
+        if cliente is None:
+            try:
+                cfg_tmp = replace(self.config, modo_real=True)
+                cliente_temp = crear_cliente(cfg_tmp)
+                cliente = cliente_temp
+                log.info('📈 Precargando histórico usando cliente temporal')
+            except Exception as e:
+                log.info(
+                    f'📈 No se pudo precargar histórico desde Binance: {e}'
+                    )
+                return
         for symbol in self.estado.keys():
             try:
-                datos = await fetch_ohlcv_async(self.cliente, symbol, self.
-                    config.intervalo_velas, limit=velas)
+                datos = await fetch_ohlcv_async(cliente, symbol, self.config.intervalo_velas, limit=velas)
             except BaseError as e:
                 log.warning(f'⚠️ Error cargando histórico para {symbol}: {e}')
                 continue
@@ -681,23 +688,26 @@ class Trader:
                         f'⚠️ Formato de vela inesperado para {symbol}: {vela}'
                     )
                     continue
-                self.estado[symbol].buffer.append(
-                    {
-                        'symbol': symbol,
-                        'timestamp': ts,
-                        'open': float(open_),
-                        'high': float(high_),
-                        'low': float(low_),
-                        'close': float(close_),
-                        'volume': float(vol),
-                    }
-                )
+                self.estado[symbol].buffer.append({
+                    'symbol': symbol,
+                    'timestamp': ts,
+                    'open': float(open_),
+                    'high': float(high_),
+                    'low': float(low_),
+                    'close': float(close_),
+                    'volume': float(vol),
+                })
             if datos:
                 ultimo = datos[-1]
                 try:
                     self.estado[symbol].ultimo_timestamp = ultimo[0]
                 except (IndexError, TypeError):
                     self.estado[symbol].ultimo_timestamp = ultimo
+        if cliente_temp is not None:
+            try:
+                cliente_temp.close()
+            except Exception:
+                pass
         log.info('📈 Histórico inicial cargado')
 
     async def _ciclo_aprendizaje(self, intervalo: int = 86400, max_fallos: int = 5) -> None:
