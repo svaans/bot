@@ -4,9 +4,7 @@ numpy==2.2.5                  # Cálculos numéricos y arrays
 pandas==2.2.3                 # Manipulación de datos tabulares
 python-dateutil==2.9.0.post0  # Manejo avanzado de fechas
 scipy>=1.9.0                  # Funciones matemáticas avanzadas
-tqdm==4.67.1 
-pyspark
-pyarrow                 # Barras de progreso
+tqdm==4.67.1
 
 # ───────── TRADING Y MERCADOS ─────────
 ccxt==4.4.80                  # Conexión con exchanges (Binance, etc.)
@@ -31,7 +29,6 @@ yarl==1.20.0                  # URLs inmutables
 frozenlist==1.6.0             # Listas inmutables (requerido por aiohttp)
 multidict==6.4.3              # Diccionarios multivalor (requerido por yarl)
 pycares==4.8.0                # Wrapper de c-ares para DNS
-asyncio==3.4.3                # Librería async (en versiones antiguas de Python)
 
 # ───────── CONFIGURACIÓN Y UTILIDADES ─────────
 python-dotenv==1.1.0          # Carga de variables de entorno desde .env
@@ -68,5 +65,3 @@ pytest-asyncio==0.23.6
 
 # ───────── COMPLEMENTOS Y DEPENDENCIAS ESPECIALES ─────────
 propcache==0.3.1              # Caché de propiedades
-dotenv==0.9.9                 # ⚠️ OBSOLETO, mantenido solo si requerido por alguna librería
-six==1.17.0                   # Compatibilidad entre Python 2 y 3
