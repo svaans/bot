@@ -2,6 +2,7 @@ import asyncio
 import json
 import traceback
 from datetime import datetime
+from collections import deque
 import socket
 
 import websockets
@@ -22,6 +23,22 @@ class InactividadTimeoutError(Exception):
     pass
 
 log = configurar_logger('websocket')
+
+RECONNECT_WINDOW = 300  # 5 minutos
+RECONNECT_THRESHOLD = 250
+_reconnect_history: deque[datetime] = deque()
+
+
+def _registrar_reconexion() -> None:
+    """Registra un intento de reconexión y alerta si la tasa es elevada."""
+    ahora = datetime.utcnow()
+    _reconnect_history.append(ahora)
+    while _reconnect_history and (ahora - _reconnect_history[0]).total_seconds() > RECONNECT_WINDOW:
+        _reconnect_history.popleft()
+    if len(_reconnect_history) > RECONNECT_THRESHOLD:
+        log.warning(
+            f'⚠️ Tasa de reconexión alta: {len(_reconnect_history)} en {RECONNECT_WINDOW // 60} min'
+        )
 
 
 
@@ -322,9 +339,16 @@ async def escuchar_velas(
             log.info(
                 f'🔁 Reintentando conexión en {backoff} segundos... (total reintentos: {total_reintentos})'
             )
+            _registrar_reconexion()
             tick('data_feed')
             await asyncio.sleep(backoff)
-            backoff = min(60, backoff * 2)
+            if fallos_consecutivos >= 5:
+                backoff = min(300, backoff * 2)
+                log.warning(
+                    f'⏳ {fallos_consecutivos} fallos consecutivos. Nuevo backoff: {backoff}s'
+                )
+            else:
+                backoff = min(60, backoff * 2)
 
 
 async def escuchar_velas_combinado(
@@ -602,9 +626,16 @@ async def escuchar_velas_combinado(
             log.info(
                 f'🔁 Reintentando conexión en {backoff} segundos... (total reintentos: {total_reintentos})'
             )
+            _registrar_reconexion()
             tick('data_feed')
             await asyncio.sleep(backoff)
-            backoff = min(60, backoff * 2)
+            if fallos_consecutivos >= 5:
+                backoff = min(300, backoff * 2)
+                log.warning(
+                    f'⏳ {fallos_consecutivos} fallos consecutivos. Nuevo backoff: {backoff}s'
+                )
+            else:
+                backoff = min(60, backoff * 2)
 
 
 async def _watchdog(
