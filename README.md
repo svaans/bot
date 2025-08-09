@@ -84,8 +84,10 @@ archivo rota de manera diaria y se conservan varias copias (configurable desde
 `configurar_logger`). Cada operación cerrada se agrega al directorio
 `reportes_diarios/` y al finalizar el día se genera automáticamente un PDF con
 las métricas principales: ganancia acumulada, winrate y drawdown.
-Además, cada ciclo de `procesar_vela` registra el uso de CPU y memoria para
-facilitar la detección de cuellos de botella.
+Además, cada `frecuencia_recursos` segundos `procesar_vela` registra el uso de
+CPU y memoria para facilitar la detección de cuellos de botella.
+El intervalo se controla mediante el parámetro `FRECUENCIA_RECURSOS` (60s por
+defecto).
 
 ## Supervisión proactiva
 

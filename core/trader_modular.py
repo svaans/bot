@@ -131,6 +131,10 @@ class Trader:
         self._correlaciones_cache: pd.DataFrame | None = None
         self._correlaciones_ts: float = 0.0
         self.frecuencia_correlaciones = getattr(config, 'frecuencia_correlaciones', 300)
+        self.frecuencia_recursos = getattr(config, 'frecuencia_recursos', 60)
+        self._recursos_ts: float = 0.0
+        self._ultimo_cpu: float = 0.0
+        self._ultimo_mem: float = 0.0
         self.fraccion_kelly = calcular_fraccion_kelly()
         factor_kelly = self.risk.multiplicador_kelly()
         self.fraccion_kelly *= factor_kelly

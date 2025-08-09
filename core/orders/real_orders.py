@@ -67,6 +67,17 @@ _FLUSH_BATCH_SIZE = int(os.getenv('FLUSH_BATCH_SIZE', '100') or 100)
 """Número máximo de operaciones a persistir por lote."""
 
 
+def _connect_db() -> sqlite3.Connection:
+    """Abre la conexión SQLite aplicando configuraciones de rendimiento."""
+    conn = sqlite3.connect(RUTA_DB)
+    try:
+        conn.execute('PRAGMA journal_mode=WAL')
+        conn.execute('PRAGMA synchronous=NORMAL')
+    except sqlite3.Error as e:
+        log.warning(f'⚠️ No se pudieron aplicar PRAGMA en SQLite: {e}')
+    return conn
+
+
 def esperar_balance(cliente, symbol: str, cantidad_esperada: float,
     max_intentos: int=10, delay: float=0.3) ->float:
     log.info('➡️ Entrando en esperar_balance()')
@@ -114,7 +125,7 @@ def _init_db() ->None:
         retorno_total REAL
     """
     try:
-        with sqlite3.connect(RUTA_DB) as conn:
+        with _connect_db() as conn:
             conn.execute(
                 f'CREATE TABLE IF NOT EXISTS ordenes ({schema_base}, PRIMARY KEY(symbol))'
                 )
@@ -136,7 +147,7 @@ def cargar_ordenes() ->dict[str, Order]:
     _init_db()
     ordenes: dict[str, Order] = {}
     try:
-        with sqlite3.connect(RUTA_DB) as conn:
+        with _connect_db() as conn:
             conn.row_factory = sqlite3.Row
             filas = conn.execute('SELECT * FROM ordenes').fetchall()
             for row in filas:
@@ -165,7 +176,7 @@ def guardar_ordenes(ordenes: dict[str, Order]) ->None:
         return
     _init_db()
     try:
-        with sqlite3.connect(RUTA_DB) as conn:
+        with _connect_db() as conn:
             for orden in ordenes.values():
                 data = orden.to_dict() if isinstance(orden, Order) else orden
                 if isinstance(data.get('estrategias_activas'), dict):
@@ -253,7 +264,7 @@ def actualizar_orden(symbol: str, data: (Order | dict)) ->None:
         if isinstance(d.get('estrategias_activas'), dict):
             d['estrategias_activas'] = json.dumps(d['estrategias_activas'])
         _init_db()
-        with sqlite3.connect(RUTA_DB) as conn:
+        with _connect_db() as conn:
             conn.execute(
                 """
                 INSERT OR REPLACE INTO ordenes (
@@ -291,7 +302,7 @@ def eliminar_orden(symbol: str, forzar_log: bool=False) ->None:
                 f'Intento de eliminar orden inexistente ignorado: {symbol}')
         return
     try:
-        with sqlite3.connect(RUTA_DB) as conn:
+        with _connect_db() as conn:
             conn.execute('DELETE FROM ordenes WHERE symbol = ?', (symbol,))
             conn.commit()
         del ordenes[symbol]
@@ -504,7 +515,7 @@ def _persistir_operaciones(operaciones: list[dict]) -> tuple[int, int, list[dict
     errores_parquet = 0
     pendientes: list[dict[str, Any]] = []
     try:
-        with sqlite3.connect(RUTA_DB) as conn:
+        with _connect_db() as conn:
             for op in operaciones:
                 data = op.copy()
                 if isinstance(data.get('estrategias_activas'), dict):

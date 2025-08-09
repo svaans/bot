@@ -41,3 +41,4 @@ class DevelopmentConfig:
     umbral_alerta_cpu: float = 85.0
     umbral_alerta_mem: float = 90.0
     ciclos_alerta_recursos: int = 5
+    frecuencia_recursos: int = 60
