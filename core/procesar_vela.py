@@ -144,8 +144,8 @@ async def procesar_vela(trader, vela: dict) -> None:
                 log.error(f'❌ Error enviando notificación: {e2}')
     finally:
         duracion = time.time() - inicio
+        cpu, mem = obtener_uso_recursos()
         if log.isEnabledFor(logging.DEBUG):
-            cpu, mem = obtener_uso_recursos()
             log.debug(
                 f'✅ procesar_vela completado en {duracion:.2f}s para {symbol} | CPU: {cpu:.1f}% | Memoria: {mem:.1f}%'
             )
