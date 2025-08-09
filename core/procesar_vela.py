@@ -9,6 +9,7 @@ import pandas as pd
 from core.utils.utils import configurar_logger, obtener_uso_recursos
 from core.strategies.tendencia import detectar_tendencia
 from indicators.helpers import clear_cache
+from indicators.incremental import actualizar_rsi_incremental
 
 log = configurar_logger('procesar_vela')
 
@@ -70,6 +71,7 @@ async def procesar_vela(trader, vela: dict) -> None:
         estado.df_idx = (estado.df_idx + 1) % MAX_BUFFER_VELAS
     # invalidar cache de indicadores porque los datos cambiaron
     clear_cache(estado.df)
+    actualizar_rsi_incremental(estado)
 
     if len(estado.df) < MAX_BUFFER_VELAS:
         df = estado.df.drop(columns=['estrategias_activas'], errors='ignore')

@@ -74,6 +74,7 @@ class EstadoSimbolo:
     df: pd.DataFrame = field(default_factory=pd.DataFrame)
     df_idx: int = 0
     contador_tendencia: int = 0
+    indicadores_cache: dict = field(default_factory=dict)
 
 
 class Trader:
