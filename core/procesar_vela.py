@@ -70,18 +70,22 @@ async def procesar_vela(trader, vela: dict) -> None:
         estado.df.loc[estado.df_idx] = vela
         estado.df_idx = (estado.df_idx + 1) % MAX_BUFFER_VELAS
     # invalidar cache de indicadores porque los datos cambiaron
-    clear_cache(estado.df)
-    actualizar_rsi_incremental(estado)
+    await asyncio.to_thread(clear_cache, estado.df)
+    await asyncio.to_thread(actualizar_rsi_incremental, estado)
 
     if len(estado.df) < MAX_BUFFER_VELAS:
-        df = estado.df.drop(columns=['estrategias_activas'], errors='ignore')
+        df = await asyncio.to_thread(
+            lambda: estado.df.drop(columns=['estrategias_activas'], errors='ignore')
+        )
     else:
         idx = estado.df_idx
         orden = np.r_[idx:MAX_BUFFER_VELAS, 0:idx]
-        df = (
-            estado.df.iloc[orden]
-            .reset_index(drop=True)
-            .drop(columns=['estrategias_activas'], errors='ignore')
+        df = await asyncio.to_thread(
+            lambda: (
+                estado.df.iloc[orden]
+                .reset_index(drop=True)
+                .drop(columns=['estrategias_activas'], errors='ignore')
+            )
         )
     if df.empty or 'close' not in df.columns:
         log.error(f"❌ DataFrame inválido para {symbol}: {df}")
@@ -89,7 +93,9 @@ async def procesar_vela(trader, vela: dict) -> None:
     # calcular tendencia solo cada ``frecuencia_tendencia`` velas
     if getattr(estado, 'contador_tendencia', 0) == 0:
         t_trend = time.time()
-        estado.tendencia_detectada, _ = detectar_tendencia(symbol, df)
+        estado.tendencia_detectada, _ = await asyncio.to_thread(
+            detectar_tendencia, symbol, df
+        )
         trader.estado_tendencia[symbol] = estado.tendencia_detectada
         log.debug(
             f'detectar_tendencia tardó {time.time() - t_trend:.2f}s para {symbol}'
