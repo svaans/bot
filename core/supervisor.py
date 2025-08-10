@@ -38,6 +38,19 @@ data_feed_reconnector: Callable[[str], Awaitable[None]] | None = None
 main_loop: asyncio.AbstractEventLoop | None = None
 
 
+def exception_handler(loop: asyncio.AbstractEventLoop, context: dict) -> None:
+    """Manejador de excepciones no controladas del loop principal."""
+    exc = context.get("exception")
+    if exc:
+        # Evitar recursión al registrar errores de recursión profunda
+        if isinstance(exc, RecursionError):
+            log.critical("Excepcion no controlada en loop: %s", exc)
+        else:
+            log.critical("Excepcion no controlada en loop: %s", exc, exc_info=exc)
+    else:
+        log.critical("Error en loop: %s", context.get("message"))
+
+
 def tick(name: str) -> None:
     """Actualiza la función y marca latido para ``name``."""
     global last_alive, last_function
@@ -167,16 +180,6 @@ def start_supervision() -> None:
     global main_loop
     main_loop = loop
 
-    def exception_handler(loop: asyncio.AbstractEventLoop, context: dict) -> None:
-        exc = context.get("exception")
-        if exc:
-            # Evitar recursión al registrar errores de recursión profunda
-            if isinstance(exc, RecursionError):
-                log.critical("Excepcion no controlada en loop: %s", exc)
-            else:
-                log.critical("Excepcion no controlada en loop: %s", exc, exc_info=exc)
-        else:
-            log.critical("Error en loop: %s", context.get("message"))
     loop.set_exception_handler(exception_handler)
 
     threading.Thread(target=heartbeat, daemon=True).start()
