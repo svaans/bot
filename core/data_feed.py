@@ -165,6 +165,16 @@ class DataFeed:
                     raise
                 await asyncio.sleep(5)
 
+
+    async def iniciar(self) -> None:
+        """Inicia el DataFeed usando la configuración almacenada."""
+        if not self._symbols or not self._handler_actual:
+            log.warning(
+                "No se puede iniciar DataFeed: faltan símbolos o handler previo"
+            )
+            return
+        await self.escuchar(self._symbols, self._handler_actual, self._cliente)
+
     
     async def _reconectar_por_supervisor(self, symbol: str) -> None:
         """Reinicia completamente el DataFeed ante falta global de datos."""
@@ -176,7 +186,18 @@ class DataFeed:
         )
         self.reinicios_forzados_total += 1
         try:
+            symbols_previos = list(self._symbols)
+            handler_prev = self._handler_actual
+            cliente_prev = self._cliente
             await self.detener()
+            if symbols_previos and handler_prev:
+                self._symbols = symbols_previos
+                self._handler_actual = handler_prev
+                self._cliente = cliente_prev
+                supervised_task(self.iniciar, "data_feed", max_restarts=0)
+                log.info(
+                    "✅ DataFeed reconectado con símbolos: %s", symbols_previos
+                )
         finally:
             self._reiniciando = False
                 
