@@ -7,7 +7,7 @@ from collections import deque
 import numpy as np
 import pandas as pd
 from core.utils.utils import configurar_logger, obtener_uso_recursos
-from core.strategies.tendencia import detectar_tendencia
+from core.indicadores.tendencia import obtener_tendencia
 from indicators.helpers import clear_cache
 from indicators.incremental import actualizar_rsi_incremental
 
@@ -107,12 +107,12 @@ async def procesar_vela(trader, vela: dict) -> None:
     # calcular tendencia solo cada ``frecuencia_tendencia`` velas
     if getattr(estado, 'contador_tendencia', 0) == 0:
         t_trend = time.time()
-        estado.tendencia_detectada, _ = await asyncio.to_thread(
-            detectar_tendencia, symbol, df
+        estado.tendencia_detectada = await asyncio.to_thread(
+            obtener_tendencia, symbol, df
         )
         trader.estado_tendencia[symbol] = estado.tendencia_detectada
         log.debug(
-            f'detectar_tendencia tardó {time.time() - t_trend:.2f}s para {symbol}'
+            f'obtener_tendencia tardó {time.time() - t_trend:.2f}s para {symbol}'
         )
     estado.contador_tendencia = (
         getattr(estado, 'contador_tendencia', 0) + 1
