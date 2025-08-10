@@ -77,6 +77,8 @@ class StrategyEngine:
             sinergia = min(resultado.get("sinergia", 0.0), 0.5)
             score_total = score_base * (1 + sinergia)
             rsi_val = get_rsi(df)
+            if isinstance(rsi_val, pd.Series):
+                rsi_val = rsi_val.iloc[-1]
             slope_val = get_slope(df)
             mom_val = get_momentum(df)
             ventana_vol = min(20, len(df))
@@ -101,7 +103,9 @@ class StrategyEngine:
                 )
             validaciones_fallidas = [k for k, v in validaciones.items() if not v]
             contradiccion = hay_contradicciones(estrategias_activas)
-            rsi_contra = rsi_val > 70 or rsi_val < 30
+            rsi_contra = (
+                rsi_val is not None and (rsi_val > 70 or rsi_val < 30)
+            )
             contradiccion = contradiccion or rsi_contra
             bloquear_contradicciones = (config or {}).get(
                 "contradicciones_bloquean_entrada", True
