@@ -361,55 +361,34 @@ class DataFeed:
         self._consumer_tasks.clear()
         self._queues.clear()
         self._running = False
-    async def detener(self) ->None:
+    async def detener(self) -> None:
         log.info('➡️ Entrando en detener()')
         """Cancela todos los streams en ejecución."""
-        if self._monitor_global_task and not self._monitor_global_task.done():
-            self._monitor_global_task.cancel()
-            try:
-                await asyncio.wait_for(
-                    self._monitor_global_task,
-                    timeout=self.cancel_timeout,
-                )
-            except asyncio.TimeoutError:
-                log.warning("🧟 Timeout cancelando monitor global (tarea zombie)")
-            except Exception:
-                pass
-        self._monitor_global_task = None
+        tasks: list[asyncio.Task] = []
+        if self._monitor_global_task:
+            tasks.append(self._monitor_global_task)
+        tasks.extend(self._tasks.values())
+        tasks.extend(self._consumer_tasks.values())
 
-        for task in self._tasks.values():
+        for task in tasks:
             task.cancel()
-        for nombre, task in list(self._tasks.items()):
-            if task.done():
-                continue
+
+        if tasks:
             try:
                 await asyncio.wait_for(
-                    task,
+                    asyncio.gather(*tasks, return_exceptions=True),
                     timeout=self.cancel_timeout,
                 )
             except asyncio.TimeoutError:
-                log.warning(
-                    f"🧟 Timeout cancelando stream {nombre} (tarea zombie)"
-                )
+                log.warning("🧟 Timeout cancelando tareas (tarea zombie)")
             except Exception:
                 pass
+            tasks.clear()
+
+        self._monitor_global_task = None
         self._tasks.clear()
         for task in self._consumer_tasks.values():
             task.cancel()
-        for nombre, task in list(self._consumer_tasks.items()):
-            if task.done():
-                continue
-            try:
-                await asyncio.wait_for(
-                    task,
-                    timeout=self.cancel_timeout,
-                )
-            except asyncio.TimeoutError:
-                log.warning(
-                    f"🧟 Timeout cancelando consumer {nombre} (tarea zombie)"
-                )
-            except Exception:
-                pass
         self._consumer_tasks.clear()
         self._queues.clear()
         self._last.clear()
