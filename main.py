@@ -64,10 +64,24 @@ async def main():
 
     pending = set()
     try:
-        _, pending = await asyncio.wait(
-            [tarea_bot, tarea_stop],
-            return_when=asyncio.FIRST_COMPLETED,
-        )
+        while True:
+            done, pending = await asyncio.wait(
+                [tarea_bot, tarea_stop],
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            if tarea_bot in done and tarea_bot.done():
+                exc = tarea_bot.exception()
+                if exc:
+                    print(f'❌ Error en la tarea del bot: {exc}')
+                    traceback.print_exception(type(exc), exc, exc.__traceback__)
+                    print('🔄 Reiniciando bot...')
+                    tarea_bot = asyncio.create_task(bot.ejecutar())
+                    continue
+                else:
+                    print('✅ Bot finalizado sin errores.')
+                break
+            if tarea_stop in done:
+                break
     except asyncio.CancelledError:
         print('🛑 Cancelación detectada.')
     except KeyboardInterrupt:
