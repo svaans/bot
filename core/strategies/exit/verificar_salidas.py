@@ -326,30 +326,54 @@ async def verificar_salidas(trader, symbol: str, df: pd.DataFrame) -> None:
     orden.duracion_en_velas = getattr(orden, 'duracion_en_velas', 0) + 1
     await trader._piramidar(symbol, orden, df)
 
-    t = time.time()
-    if await _chequear_contexto_macro(trader, orden, df):
-        log.debug(f'_chequear_contexto_macro tardó {time.time() - t:.2f}s para {symbol}')
+    timeout = trader.config_por_simbolo[symbol].get('timeout_validaciones', 5)
+
+    tareas_principales = [
+        _chequear_contexto_macro(trader, orden, df),
+        _manejar_stop_loss(trader, orden, df),
+        _procesar_take_profit(trader, orden, df),
+    ]
+
+    try:
+        resultados = await asyncio.wait_for(
+            asyncio.gather(*tareas_principales, return_exceptions=True),
+            timeout=timeout,
+        )
+    except asyncio.TimeoutError:
+        log.warning(f'Timeout en verificaciones principales para {symbol}')
         return
-    t = time.time()
-    if await _manejar_stop_loss(trader, orden, df):
-        log.debug(f'_manejar_stop_loss tardó {time.time() - t:.2f}s para {symbol}')
-        return
-    t = time.time()
-    if await _procesar_take_profit(trader, orden, df):
-        log.debug(f'_procesar_take_profit tardó {time.time() - t:.2f}s para {symbol}')
-        return
+    
+    for resultado in resultados:
+        if isinstance(resultado, Exception):
+            log.error(f'Error en verificación principal para {symbol}: {resultado}')
+        elif resultado:
+            log.debug(f'Validación principal activó cierre para {symbol}')
+            return
+        
     if orden.cantidad_abierta <= 0:
-        log.debug(f'_procesar_take_profit dejó posición vacía en {symbol} tras {time.time() - inicio_total:.2f}s')
+        log.debug(
+            f'Posición cerrada tras verificaciones principales en {symbol} en {time.time() - inicio_total:.2f}s'
+        )
         return
-    t = time.time()
-    if await _manejar_trailing_stop(trader, orden, df):
-        log.debug(f'_manejar_trailing_stop tardó {time.time() - t:.2f}s para {symbol}')
+    tareas_secundarias = [
+        _manejar_trailing_stop(trader, orden, df),
+        _manejar_cambio_tendencia(trader, orden, df),
+        _aplicar_salidas_adicionales(trader, orden, df),
+    ]
+
+    try:
+        resultados = await asyncio.wait_for(
+            asyncio.gather(*tareas_secundarias, return_exceptions=True),
+            timeout=timeout,
+        )
+    except asyncio.TimeoutError:
+        log.warning(f'Timeout en verificaciones secundarias para {symbol}')
         return
-    t = time.time()
-    if await _manejar_cambio_tendencia(trader, orden, df):
-        log.debug(f'_manejar_cambio_tendencia tardó {time.time() - t:.2f}s para {symbol}')
-        return
-    t = time.time()
-    await _aplicar_salidas_adicionales(trader, orden, df)
-    log.debug(f'_aplicar_salidas_adicionales tardó {time.time() - t:.2f}s para {symbol}')
+    
+    for resultado in resultados:
+        if isinstance(resultado, Exception):
+            log.error(f'Error en verificación secundaria para {symbol}: {resultado}')
+        elif resultado:
+            log.debug(f'Validación secundaria activó cierre para {symbol}')
+            return
     log.debug(f'verificar_salidas total {time.time() - inicio_total:.2f}s para {symbol}')
