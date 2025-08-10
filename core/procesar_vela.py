@@ -11,7 +11,18 @@ from core.strategies.tendencia import detectar_tendencia
 from indicators.helpers import clear_cache
 from indicators.incremental import actualizar_rsi_incremental
 
+"""Procesa una vela de mercado y actualiza indicadores.
+
+Las funciones ``clear_cache`` y ``actualizar_rsi_incremental`` modifican un
+estado compartido de indicadores, por lo que se utiliza un ``asyncio.Lock``
+para evitar condiciones de carrera cuando múltiples velas se procesan en
+paralelo.
+"""
+
 log = configurar_logger('procesar_vela')
+
+# Protege el acceso a funciones de indicadores que no son thread-safe
+_indicadores_lock = asyncio.Lock()
 
 MAX_BUFFER_VELAS = 120
 MAX_ESTRATEGIAS_BUFFER = MAX_BUFFER_VELAS
@@ -70,8 +81,11 @@ async def procesar_vela(trader, vela: dict) -> None:
         estado.df.loc[estado.df_idx] = vela
         estado.df_idx = (estado.df_idx + 1) % MAX_BUFFER_VELAS
     # invalidar cache de indicadores porque los datos cambiaron
-    await asyncio.to_thread(clear_cache, estado.df)
-    await asyncio.to_thread(actualizar_rsi_incremental, estado)
+    # Estas funciones modifican estado compartido, por lo que se requiere
+    # exclusión mutua para evitar condiciones de carrera.
+    async with _indicadores_lock:
+        await asyncio.to_thread(clear_cache, estado.df)
+        await asyncio.to_thread(actualizar_rsi_incremental, estado)
 
     if len(estado.df) < MAX_BUFFER_VELAS:
         df = await asyncio.to_thread(
