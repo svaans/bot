@@ -163,8 +163,9 @@ def watchdog(timeout: int = 120, check_interval: int = 10) -> None:
 
 def start_supervision() -> None:
     """Lanza hilos de heartbeat y watchdog y configura manejo de excepciones."""
-    threading.Thread(target=heartbeat, daemon=True).start()
-    threading.Thread(target=watchdog, daemon=True).start()
+    loop = asyncio.get_running_loop()
+    global main_loop
+    main_loop = loop
 
     def exception_handler(loop: asyncio.AbstractEventLoop, context: dict) -> None:
         exc = context.get("exception")
@@ -176,10 +177,10 @@ def start_supervision() -> None:
                 log.critical("Excepcion no controlada en loop: %s", exc, exc_info=exc)
         else:
             log.critical("Error en loop: %s", context.get("message"))
-        global main_loop
-        loop = asyncio.get_event_loop()
-        loop.set_exception_handler(exception_handler)
-        main_loop = loop
+    loop.set_exception_handler(exception_handler)
+
+    threading.Thread(target=heartbeat, daemon=True).start()
+    threading.Thread(target=watchdog, daemon=True).start()
 
     def thread_excepthook(args: threading.ExceptHookArgs) -> None:
         log.critical(
