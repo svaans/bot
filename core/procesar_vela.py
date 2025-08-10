@@ -9,14 +9,14 @@ import pandas as pd
 from core.utils.utils import configurar_logger, obtener_uso_recursos
 from indicadores.tendencia import obtener_tendencia
 from indicators.helpers import clear_cache
-from indicators.incremental import actualizar_rsi_incremental
+from core.indicadores import get_rsi, get_momentum, get_atr
 
 """Procesa una vela de mercado y actualiza indicadores.
 
-Las funciones ``clear_cache`` y ``actualizar_rsi_incremental`` modifican un
-estado compartido de indicadores, por lo que se utiliza un ``asyncio.Lock``
-para evitar condiciones de carrera cuando múltiples velas se procesan en
-paralelo.
+Las funciones ``clear_cache`` y las actualizaciones incrementales de
+indicadores modifican un estado compartido, por lo que se utiliza un
+``asyncio.Lock`` para evitar condiciones de carrera cuando múltiples velas se
+procesan en paralelo.
 """
 
 log = configurar_logger('procesar_vela')
@@ -85,7 +85,9 @@ async def procesar_vela(trader, vela: dict) -> None:
     # exclusión mutua para evitar condiciones de carrera.
     async with _indicadores_lock:
         await asyncio.to_thread(clear_cache, estado.df)
-        await asyncio.to_thread(actualizar_rsi_incremental, estado)
+        await asyncio.to_thread(get_rsi, estado)
+        await asyncio.to_thread(get_momentum, estado)
+        await asyncio.to_thread(get_atr, estado)
 
     if len(estado.df) < MAX_BUFFER_VELAS:
         df = await asyncio.to_thread(
