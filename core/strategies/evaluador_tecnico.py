@@ -1,5 +1,6 @@
 import json
 import os
+import asyncio
 import pandas as pd
 from indicators.helpers import get_rsi
 from core.utils.utils import configurar_logger
@@ -141,7 +142,7 @@ def calcular_umbral_adaptativo(score_maximo_esperado: float, tendencia: str,
     return round(base, 2)
 
 
-def actualizar_pesos_tecnicos(symbol: str, detalles: dict, retorno: float,
+async def actualizar_pesos_tecnicos(symbol: str, detalles: dict, retorno: float,
     factor: float=0.05) ->None:
     log.info('➡️ Entrando en actualizar_pesos_tecnicos()')
     """Ajusta pesos del JSON según rendimiento de la operación."""
@@ -163,9 +164,11 @@ def actualizar_pesos_tecnicos(symbol: str, detalles: dict, retorno: float,
         modificados = True
     if modificados:
         _pesos_cache[symbol] = pesos
-        try:
+        def _escribir_pesos() ->None:
             with open(RUTA_PESOS, 'w', encoding='utf-8') as fh:
                 json.dump(_pesos_cache, fh, indent=2)
+        try:
+            await asyncio.to_thread(_escribir_pesos)
             log.info(f'[{symbol}] Pesos tecnicos actualizados')
         except Exception as e:
             log.warning(f'[{symbol}] Error guardando pesos: {e}')

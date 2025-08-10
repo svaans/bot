@@ -346,7 +346,7 @@ class Trader:
         await loop.run_in_executor(None, registrar_resultado_trade, orden.symbol, info, retorno_total)
         try:
             if orden.detalles_tecnicos:
-                actualizar_pesos_tecnicos(orden.symbol, orden.
+                await actualizar_pesos_tecnicos(orden.symbol, orden.
                     detalles_tecnicos, retorno_total)
         except Exception as e:
             log.debug(f'No se pudo actualizar pesos tecnicos: {e}')
