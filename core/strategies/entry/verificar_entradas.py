@@ -199,7 +199,7 @@ async def verificar_entrada(trader, symbol: str, df: pd.DataFrame, estado) ->(
     # evitamos duplicar esta comprobación aquí. Solo calculamos ATR una vez
     # para posibles ajustes posteriores.
     atr = get_atr(df)
-    eval_tecnica = evaluar_puntaje_tecnico(symbol, df, precio, sl, tp)
+    eval_tecnica = await evaluar_puntaje_tecnico(symbol, df, precio, sl, tp)
     score_total = eval_tecnica['score_total']
     score_normalizado = eval_tecnica.get('score_normalizado')
     if 'volume' in df.columns:
@@ -212,7 +212,7 @@ async def verificar_entrada(trader, symbol: str, df: pd.DataFrame, estado) ->(
     # afectan al score técnico, por lo que aquí solo calculamos la relación para
     # ajustar el umbral dinámico.
     volatilidad = df['close'].pct_change().tail(20).std()
-    pesos_simbolo = cargar_pesos_tecnicos(symbol)
+    pesos_simbolo = await cargar_pesos_tecnicos(symbol)
     score_max = sum(pesos_simbolo.values())
     if score_normalizado is None:
         score_normalizado = score_total / score_max if score_max else score_total

@@ -23,14 +23,16 @@ PESOS_DEFECTO = {
     'distancia_extremos': 0.6  # Alejado de los máximos y mínimos del día.
 }
 _pesos_cache: dict | None = None
+_pesos_lock = asyncio.Lock()
 
 
 def _cargar_pesos(symbol: str) ->dict:
     log.info('➡️ Entrando en _cargar_pesos()')
     """Devuelve los pesos técnicos para ``symbol``.
 
-    Si ``symbol`` no está presente en el archivo JSON se devuelven los valores
-    por defecto. Además, se rellenan claves faltantes con ``PESOS_DEFECTO``.
+    Debe ejecutarse con ``_pesos_lock`` adquirido por el llamador. Si ``symbol``
+    no está presente en el archivo JSON se devuelven los valores por defecto.
+    Además, se rellenan claves faltantes con ``PESOS_DEFECTO``.
     """
     global _pesos_cache
     if _pesos_cache is None:
@@ -53,17 +55,24 @@ def _cargar_pesos(symbol: str) ->dict:
     return pesos
 
 
-def cargar_pesos_tecnicos(symbol: str) ->dict:
+async def cargar_pesos_tecnicos(symbol: str) -> dict:
     log.info('➡️ Entrando en cargar_pesos_tecnicos()')
-    """Interfaz pública para obtener los pesos de un símbolo."""
-    return _cargar_pesos(symbol)
+    """Interfaz pública para obtener los pesos de un símbolo.
 
+    Usa un ``asyncio.Lock`` para proteger el acceso concurrente al cache de
+    pesos.
+    """
+    async with _pesos_lock:
+        return _cargar_pesos(symbol)
 
-def evaluar_puntaje_tecnico(symbol: str, df: pd.DataFrame, precio: float,
-    sl: float, tp: float) ->dict:
+async def evaluar_puntaje_tecnico(symbol: str, df: pd.DataFrame, precio: float,
+    sl: float, tp: float) -> dict:
     log.info('➡️ Entrando en evaluar_puntaje_tecnico()')
-    """Evalúa condiciones técnicas y retorna un puntaje acumulado."""
-    pesos = _cargar_pesos(symbol)
+    """Evalúa condiciones técnicas y retorna un puntaje acumulado.
+
+    La obtención de pesos está protegida mediante ``_pesos_lock``.
+    """
+    pesos = await cargar_pesos_tecnicos(symbol)
     if df is None or len(df) < 30:
         log.warning(f'[{symbol}] datos insuficientes para score tecnico')
         return {'score_total': 0.0, 'detalles': {}}
@@ -143,32 +152,37 @@ def calcular_umbral_adaptativo(score_maximo_esperado: float, tendencia: str,
 
 
 async def actualizar_pesos_tecnicos(symbol: str, detalles: dict, retorno: float,
-    factor: float=0.05) ->None:
+    factor: float = 0.05) -> None:
     log.info('➡️ Entrando en actualizar_pesos_tecnicos()')
-    """Ajusta pesos del JSON según rendimiento de la operación."""
+    """Ajusta pesos del JSON según rendimiento de la operación.
+
+    El acceso a ``_pesos_cache`` está protegido por ``_pesos_lock`` para evitar
+    condiciones de carrera.
+    """
     if not detalles:
         return
-    pesos = _cargar_pesos(symbol)
-    modificados = False
-    for clave, puntaje in detalles.items():
-        peso_actual = pesos.get(clave, PESOS_DEFECTO.get(clave, 0.0))
-        if peso_actual <= 0:
-            continue
-        if retorno > 0 and puntaje > 0:
-            nuevo = peso_actual * (1 + factor)
-        elif retorno < 0 and puntaje > 0:
-            nuevo = peso_actual * (1 - factor)
-        else:
-            continue
-        pesos[clave] = max(0.1, round(nuevo, 3))
-        modificados = True
-    if modificados:
-        _pesos_cache[symbol] = pesos
-        def _escribir_pesos() ->None:
-            with open(RUTA_PESOS, 'w', encoding='utf-8') as fh:
-                json.dump(_pesos_cache, fh, indent=2)
-        try:
-            await asyncio.to_thread(_escribir_pesos)
-            log.info(f'[{symbol}] Pesos tecnicos actualizados')
-        except Exception as e:
-            log.warning(f'[{symbol}] Error guardando pesos: {e}')
+    async with _pesos_lock:
+        pesos = _cargar_pesos(symbol)
+        modificados = False
+        for clave, puntaje in detalles.items():
+            peso_actual = pesos.get(clave, PESOS_DEFECTO.get(clave, 0.0))
+            if peso_actual <= 0:
+                continue
+            if retorno > 0 and puntaje > 0:
+                nuevo = peso_actual * (1 + factor)
+            elif retorno < 0 and puntaje > 0:
+                nuevo = peso_actual * (1 - factor)
+            else:
+                continue
+            pesos[clave] = max(0.1, round(nuevo, 3))
+            modificados = True
+        if modificados:
+            _pesos_cache[symbol] = pesos
+            def _escribir_pesos() -> None:
+                with open(RUTA_PESOS, 'w', encoding='utf-8') as fh:
+                    json.dump(_pesos_cache, fh, indent=2)
+            try:
+                await asyncio.to_thread(_escribir_pesos)
+                log.info(f'[{symbol}] Pesos tecnicos actualizados')
+            except Exception as e:
+                log.warning(f'[{symbol}] Error guardando pesos: {e}')
