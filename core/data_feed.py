@@ -76,16 +76,29 @@ class DataFeed:
             self._last[symbol] = datetime.utcnow()
             log.info(f'[{symbol}] Recibida vela: timestamp={candle.get("timestamp")}')
             tick_data(symbol)
+            queue = self._queues[symbol]
+            qsize = queue.qsize()
+            if queue.maxsize and qsize > queue.maxsize * 0.8:
+                log.warning(
+                    f"Queue {symbol} cerca del límite: {qsize}/{queue.maxsize}"
+                )
             try:
-                self._queues[symbol].put_nowait(candle)
-            except asyncio.QueueFull:
-                self._handler_timeouts[symbol] = (
-                    self._handler_timeouts.get(symbol, 0) + 1
+                await asyncio.wait_for(
+                    queue.put(candle), timeout=self.handler_timeout
                 )
+            except asyncio.TimeoutError:
                 log.error(
-                    f"Queue de {symbol} llena; omitiendo vela"
-                    f" (total {self._handler_timeouts[symbol]})"
+                    f"Timeout en cola de {symbol}; reiniciando stream"
                 )
+                try:
+                    await self.notificador.enviar_async(
+                        f'⚠️ Timeout en cola de {symbol}; reiniciando stream',
+                        'WARN',
+                    )
+                except Exception:
+                    tick('data_feed')
+                    pass
+                await self._reiniciar_stream(symbol)
 
         await self._relanzar_stream(symbol, wrapper)
 
@@ -200,6 +213,28 @@ class DataFeed:
                 )
         finally:
             self._reiniciando = False
+
+
+    async def _reiniciar_stream(self, symbol: str) -> None:
+        """Reinicia el stream de ``symbol`` tras problemas en la cola."""
+        task = self._tasks.get(symbol)
+        if not task or not self._running:
+            return
+        if not task.done():
+            task.cancel()
+            try:
+                await asyncio.wait_for(task, timeout=self.cancel_timeout)
+            except asyncio.TimeoutError:
+                log.warning(f"⏱️ Timeout cancelando stream {symbol}")
+            except Exception:
+                pass
+        self._tasks[symbol] = supervised_task(
+            lambda sym=symbol: self.stream(sym, self._handler_actual),
+            f"stream_{symbol}",
+            max_restarts=0,
+        )
+        log.info(f"📡 stream reiniciado para {symbol} por timeout de cola")
+        tick_data(symbol, reinicio=True)
                 
 
     async def _monitor_global_inactividad(self) -> None:
