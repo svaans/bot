@@ -5,7 +5,7 @@ import pandas as pd
 from core.utils import configurar_logger
 from core.contexto_externo import obtener_puntaje_contexto
 from indicators.helpers import get_rsi, get_momentum, get_atr
-from core.strategies.tendencia import detectar_tendencia
+from core.strategies.tendencia import obtener_tendencia
 from .salida_stoploss import verificar_salida_stoploss
 from .salida_trailing_stop import verificar_trailing_stop
 from .salida_por_tendencia import verificar_reversion_tendencia
@@ -225,10 +225,7 @@ async def _manejar_cambio_tendencia(trader, orden, df) -> bool:
 
     max_velas = config_actual.get('max_velas_reversion_tendencia', 0)
     if max_velas and orden.reversion_tendencia_contador >= max_velas:
-        nueva_tendencia = trader.estado_tendencia.get(symbol)
-        if not nueva_tendencia:
-            nueva_tendencia, _ = detectar_tendencia(symbol, df)
-            trader.estado_tendencia[symbol] = nueva_tendencia
+        nueva_tendencia = obtener_tendencia(trader, symbol, df)
         precio_cierre = float(df['close'].iloc[-1])
         if not permitir_cierre_tecnico(symbol, df, precio_cierre, orden.to_dict()):
             log.info(f'🛡️ Cierre evitado por análisis técnico: {symbol}')
@@ -251,10 +248,7 @@ async def _manejar_cambio_tendencia(trader, orden, df) -> bool:
     if not await verificar_filtro_tecnico(
         symbol, df, orden.estrategias_activas, pesos_symbol, config=config_actual
     ):
-        nueva_tendencia = trader.estado_tendencia.get(symbol)
-        if not nueva_tendencia:
-            nueva_tendencia, _ = detectar_tendencia(symbol, df)
-            trader.estado_tendencia[symbol] = nueva_tendencia
+        nueva_tendencia = obtener_tendencia(trader, symbol, df)
         precio_cierre = float(df['close'].iloc[-1])
         if not permitir_cierre_tecnico(symbol, df, precio_cierre, orden.to_dict()):
             log.info(f'🛡️ Cierre evitado por análisis técnico: {symbol}')
@@ -274,10 +268,7 @@ async def _aplicar_salidas_adicionales(trader, orden, df) -> bool:
     config_actual = trader.config_por_simbolo.get(symbol, load_exit_config(symbol))
     atr = get_atr(df)
     volatilidad_rel = atr / precio_cierre if atr and precio_cierre else 1.0
-    tendencia_detectada = trader.estado_tendencia.get(symbol)
-    if not tendencia_detectada:
-        tendencia_detectada, _ = detectar_tendencia(symbol, df)
-        trader.estado_tendencia[symbol] = tendencia_detectada
+    tendencia_detectada = obtener_tendencia(trader, symbol, df)
     contexto = {'volatilidad': volatilidad_rel, 'tendencia': tendencia_detectada}
     try:
         resultado = await evaluar_salidas(
@@ -298,10 +289,7 @@ async def _aplicar_salidas_adicionales(trader, orden, df) -> bool:
         log.info(f'🟡 Break-Even activado para {symbol} → SL movido a entrada: {nuevo_sl}')
     if resultado.get('cerrar', False):
         razon = resultado.get('razon', 'Estrategia desconocida')
-        tendencia_actual = trader.estado_tendencia.get(symbol)
-        if not tendencia_actual:
-            tendencia_actual, _ = detectar_tendencia(symbol, df)
-            trader.estado_tendencia[symbol] = tendencia_actual
+        tendencia_actual = obtener_tendencia(trader, symbol, df)
         evaluacion = await trader.engine.evaluar_entrada(
             symbol,
             df,

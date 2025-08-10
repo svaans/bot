@@ -6,7 +6,7 @@ from core.adaptador_dinamico import calcular_umbral_adaptativo, calcular_tp_sl_a
 from core.config_manager.dinamica import adaptar_configuracion
 from core.data import coincidencia_parcial
 from core.estrategias import filtrar_por_direccion
-from core.strategies.tendencia import detectar_tendencia
+from core.strategies.tendencia import obtener_tendencia
 from core.strategies.evaluador_tecnico import evaluar_puntaje_tecnico, calcular_umbral_adaptativo as calc_umbral_tecnico, cargar_pesos_tecnicos
 from indicators.helpers import get_rsi, get_momentum, get_atr
 from core.utils.utils import distancia_minima_valida, verificar_integridad_datos
@@ -28,10 +28,7 @@ async def verificar_entrada(trader, symbol: str, df: pd.DataFrame, estado) ->(
         return None
     config = adaptar_configuracion(symbol, df, trader.config_por_simbolo.get(symbol, {}))
     trader.config_por_simbolo[symbol] = config
-    tendencia = trader.estado_tendencia.get(symbol)
-    if not tendencia:
-        tendencia, _ = detectar_tendencia(symbol, df)
-        trader.estado_tendencia[symbol] = tendencia
+    tendencia = obtener_tendencia(trader, symbol, df)
     log.debug(f'[{symbol}] Tendencia: {tendencia}')
     engine_eval = await trader.engine.evaluar_entrada(
         symbol,
@@ -179,7 +176,7 @@ async def verificar_entrada(trader, symbol: str, df: pd.DataFrame, estado) ->(
     try:
         df_htf = df.set_index(pd.to_datetime(df['timestamp'])).resample('5min').last()
         if len(df_htf) >= 60:
-            tendencia_htf, _ = detectar_tendencia(symbol, df_htf)
+            tendencia_htf = obtener_tendencia(trader, symbol, df_htf, clave=f"{symbol}_htf")
             if tendencia_htf != tendencia:
                 ajuste = 0.8
                 if direccion == 'long':

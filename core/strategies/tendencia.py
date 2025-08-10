@@ -68,6 +68,21 @@ def detectar_tendencia(symbol: str, df: pd.DataFrame) -> tuple[str, dict[str, bo
     return tendencia, estrategias_activas
 
 
+def obtener_tendencia(trader, symbol: str, df: pd.DataFrame, clave: str | None = None) -> str:
+    log.info("➡️ Entrando en obtener_tendencia()")
+    """Obtiene la tendencia usando cache en ``trader.estado_tendencia``.
+
+    Si no existe una tendencia guardada para la clave indicada, la detecta
+    y la almacena para reutilizaciones futuras.
+    """
+    key = clave or symbol
+    tendencia = trader.estado_tendencia.get(key)
+    if not tendencia:
+        tendencia, _ = detectar_tendencia(symbol, df)
+        trader.estado_tendencia[key] = tendencia
+    return tendencia
+
+
 def obtener_parametros_persistencia(
     tendencia: str, volatilidad: float
 ) -> tuple[float, int]:
