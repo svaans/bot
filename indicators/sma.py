@@ -1,9 +1,15 @@
 import pandas as pd
 
 
-def calcular_cruce_sma(df: pd.DataFrame, rapida=20, lenta=50) ->bool:
-    if 'close' not in df or len(df) < lenta:
+def calcular_cruce_sma(data, rapida: int = 20, lenta: int = 50) -> bool:
+    """Determina si existe cruce alcista de medias móviles.
+
+    Acepta un ``DataFrame`` con la columna ``close`` o directamente una ``Series``
+    de precios de cierre.
+    """
+    serie = data['close'] if isinstance(data, pd.DataFrame) else data
+    if serie is None or len(serie) < lenta:
         return False
-    sma_rapida = df['close'].rolling(window=rapida).mean()
-    sma_lenta = df['close'].rolling(window=lenta).mean()
+    sma_rapida = serie.rolling(window=rapida).mean()
+    sma_lenta = serie.rolling(window=lenta).mean()
     return sma_rapida.iloc[-1] > sma_lenta.iloc[-1]

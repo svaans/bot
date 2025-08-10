@@ -4,7 +4,7 @@ import asyncio
 import time
 from dataclasses import dataclass, replace, field
 from typing import Dict, Callable, Awaitable, Any
-from collections import OrderedDict, deque
+from collections import OrderedDict, deque, defaultdict
 from datetime import datetime, timedelta, date
 import json
 import os
@@ -55,6 +55,7 @@ from core.procesar_vela import (
     MAX_BUFFER_VELAS,
     MAX_ESTRATEGIAS_BUFFER,
 )
+from indicators.rsi import calcular_rsi
 from core.scoring import calcular_score_tecnico, PESOS_SCORE_TECNICO
 from binance_api.cliente import fetch_ticker_async
 log = configurar_logger('trader')
@@ -138,6 +139,7 @@ class Trader:
         self.fraccion_kelly = calcular_fraccion_kelly()
         factor_kelly = self.risk.multiplicador_kelly()
         self.fraccion_kelly *= factor_kelly
+        self.series_precio: dict[str, deque] = defaultdict(lambda: deque(maxlen=MAX_BUFFER_VELAS))
         factor_vol = 1.0
         try:
             factores = []
@@ -1547,6 +1549,12 @@ class Trader:
         symbol = vela.get('symbol')
         if not self._validar_config(symbol):
             return
+        serie = self.series_precio[symbol]
+        serie.append(vela.get('close'))
+        serie_pd = pd.Series(serie)
+        # Cálculos rolling sobre la serie
+        vela['sma_20'] = serie_pd.rolling(window=20).mean().iloc[-1]
+        vela['rsi'] = calcular_rsi(serie_pd, 14)
         await procesar_vela(self, vela)
         return
 

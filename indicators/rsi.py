@@ -44,16 +44,17 @@ def _rsi_numba(close: np.ndarray, periodo: int) ->np.ndarray:
     return rsi
 
 
-def calcular_rsi(df: pd.DataFrame, periodo: int=14, serie_completa: bool=False
-    ) ->(float | pd.Series):
+def calcular_rsi(data, periodo: int = 14, serie_completa: bool = False) -> (float | pd.Series):
     """Calcula el RSI usando el método de Wilder (EMA).
 
-    Si ``serie_completa`` es ``True`` devuelve la serie completa del RSI.
-    En caso contrario se retorna solo el último valor.
+    Acepta un ``DataFrame`` con la columna ``close`` o directamente una ``Series`` de
+    cierres. Si ``serie_completa`` es ``True`` devuelve la serie completa del RSI; en
+    caso contrario se retorna solo el último valor.
     """
-    if 'close' not in df or len(df) < periodo + 1:
+    serie = data['close'] if isinstance(data, pd.DataFrame) else data
+    if serie is None or len(serie) < periodo + 1:
         return None
-    delta = df['close'].diff()
+    delta = serie.diff()
     ganancia = delta.clip(lower=0)
     perdida = -delta.clip(upper=0)
     avg_gain = ganancia.ewm(alpha=1 / periodo, adjust=False, min_periods=

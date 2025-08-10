@@ -17,11 +17,12 @@ def clear_cache(df: pd.DataFrame) -> None:
     df.attrs.pop('_indicators_cache', None)
 
 
-def get_rsi(df: pd.DataFrame, periodo: int = 14, serie_completa: bool = False):
-    """Obtiene el RSI utilizando cache por DataFrame."""
+def get_rsi(data, periodo: int = 14, serie_completa: bool = False):
+    """Obtiene el RSI con soporte para ``DataFrame`` o ``Series``."""
+    if isinstance(data, pd.Series):
+        return calcular_rsi(data, periodo, serie_completa)
     key = ('rsi', periodo, serie_completa)
-    return _cached_value(df, key, lambda d: calcular_rsi(d, periodo, serie_completa))
-
+    return _cached_value(data, key, lambda d: calcular_rsi(d, periodo, serie_completa))
 
 def get_momentum(df: pd.DataFrame, periodo: int = 10):
     """Obtiene el momentum con cache simple."""
