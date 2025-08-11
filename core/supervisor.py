@@ -164,9 +164,31 @@ def watchdog(timeout: int = 120, check_interval: int = 10) -> None:
                             log.warning(
                                 "Solicitando reinicio de DataFeed para %s", sym
                             )
-                            asyncio.run_coroutine_threadsafe(
+                            future = asyncio.run_coroutine_threadsafe(
                                 data_feed_reconnector(sym), main_loop
                             )
+                            try:
+                                future.result()
+                            except Exception as e:
+                                log.error(
+                                    "No se pudo solicitar reinicio de DataFeed para %s: %s",
+                                    sym,
+                                    e,
+                                )
+                                log.info(
+                                    "Reintentando reinicio de DataFeed para %s", sym
+                                )
+                                retry_future = asyncio.run_coroutine_threadsafe(
+                                    data_feed_reconnector(sym), main_loop
+                                )
+                                try:
+                                    retry_future.result()
+                                except Exception as e2:
+                                    log.error(
+                                        "Reintento de reinicio de DataFeed para %s falló: %s",
+                                        sym,
+                                        e2,
+                                    )
                         except Exception as e:
                             log.error(
                                 "No se pudo solicitar reinicio de DataFeed para %s: %s",
