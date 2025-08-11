@@ -13,6 +13,7 @@ import logging
 import asyncio
 import os
 import time
+from threading import Event
 import traceback
 from datetime import datetime
 from typing import Awaitable, Callable, Dict
@@ -105,8 +106,20 @@ def heartbeat(interval: int = 60) -> None:
         time.sleep(interval)
 
 
+_watchdog_interval_event = Event()
+_watchdog_interval = 10
+
+
+def set_watchdog_interval(interval: int) -> None:
+    """Actualiza el intervalo de verificación del watchdog."""
+    global _watchdog_interval
+    _watchdog_interval = interval
+    _watchdog_interval_event.set()
+
 def watchdog(timeout: int = 120, check_interval: int = 10) -> None:
     """Valida que el proceso siga activo e imprime trazas si se congela."""
+    global _watchdog_interval
+    _watchdog_interval = check_interval
     while True:
         delta = (datetime.utcnow() - last_alive).total_seconds()
         if delta > timeout:
@@ -171,7 +184,8 @@ def watchdog(timeout: int = 120, check_interval: int = 10) -> None:
                             log.debug(
                                 "No se pudo cancelar stream %s: %s", sym, e
                             )
-        time.sleep(check_interval)
+        _watchdog_interval_event.wait(_watchdog_interval)
+        _watchdog_interval_event.clear()
 
 
 def start_supervision() -> None:
