@@ -28,6 +28,7 @@ RECONNECT_WINDOW = 300  # 5 minutos
 RECONNECT_THRESHOLD = 250
 _reconnect_history: deque[datetime] = deque()
 MAX_BACKOFF = 60
+MAX_BACKFILL_CANDLES = 100  # límite para backfill para evitar saturación
 
 
 def _registrar_reconexion() -> None:
@@ -169,7 +170,7 @@ async def escuchar_velas(
                         try:
                             ahora = int(datetime.utcnow().timestamp() * 1000)
                             faltan = max(1, (ahora - ultimo_timestamp) // intervalo_ms)
-                            limite = min(faltan, 15)
+                            limite = min(faltan, MAX_BACKFILL_CANDLES)
                             ohlcv = await asyncio.wait_for(
                                 fetch_ohlcv_async(
                                     cliente,
@@ -216,7 +217,7 @@ async def escuchar_velas(
                             await asyncio.sleep(espera)
                             espera *= 2
 
-                backfill_task = asyncio.create_task(_backfill())
+                backfill_task = asyncio.create_task(_backfill())  # ejecútalo en paralelo
             try:
                 while True:
                     try:
@@ -442,7 +443,7 @@ async def escuchar_velas_combinado(
                             try:
                                 ahora = int(datetime.utcnow().timestamp() * 1000)
                                 faltan = max(1, (ahora - ts) // intervalo_ms)
-                                limite = min(faltan, 15)
+                                limite = min(faltan, MAX_BACKFILL_CANDLES)
                                 ohlcv = await asyncio.wait_for(
                                     fetch_ohlcv_async(
                                         cliente,
@@ -490,7 +491,7 @@ async def escuchar_velas_combinado(
                                 await asyncio.sleep(espera)
                                 espera *= 2
 
-                    backfill_tasks.append(asyncio.create_task(_backfill_symbol()))
+                    backfill_tasks.append(asyncio.create_task(_backfill_symbol()))  # paralelo
             try:
                 while True:
                     try:
