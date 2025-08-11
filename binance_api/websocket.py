@@ -27,6 +27,7 @@ log = configurar_logger('websocket')
 RECONNECT_WINDOW = 300  # 5 minutos
 RECONNECT_THRESHOLD = 250
 _reconnect_history: deque[datetime] = deque()
+MAX_BACKOFF = 60
 
 
 def _registrar_reconexion() -> None:
@@ -342,13 +343,14 @@ async def escuchar_velas(
             _registrar_reconexion()
             tick('data_feed')
             await asyncio.sleep(backoff)
-            if fallos_consecutivos >= 5:
-                backoff = min(300, backoff * 2)
+            previo = backoff
+            backoff = min(MAX_BACKOFF, backoff * 2)
+            if backoff == MAX_BACKOFF and previo < MAX_BACKOFF:
+                log.warning(f'⚠️ Backoff máximo alcanzado: {MAX_BACKOFF}s')
+            elif fallos_consecutivos >= 5:
                 log.warning(
                     f'⏳ {fallos_consecutivos} fallos consecutivos. Nuevo backoff: {backoff}s'
                 )
-            else:
-                backoff = min(60, backoff * 2)
 
 
 async def escuchar_velas_combinado(
@@ -629,13 +631,14 @@ async def escuchar_velas_combinado(
             _registrar_reconexion()
             tick('data_feed')
             await asyncio.sleep(backoff)
-            if fallos_consecutivos >= 5:
-                backoff = min(300, backoff * 2)
+            previo = backoff
+            backoff = min(MAX_BACKOFF, backoff * 2)
+            if backoff == MAX_BACKOFF and previo < MAX_BACKOFF:
+                log.warning(f'⚠️ Backoff máximo alcanzado: {MAX_BACKOFF}s')
+            elif fallos_consecutivos >= 5:
                 log.warning(
                     f'⏳ {fallos_consecutivos} fallos consecutivos. Nuevo backoff: {backoff}s'
                 )
-            else:
-                backoff = min(60, backoff * 2)
 
 
 async def _watchdog(
