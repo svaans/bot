@@ -33,7 +33,7 @@ def calcular_persistencia_minima(symbol: str, df: pd.DataFrame, tendencia:
     try:
         rsi = RSIIndicator(close=df['close'], window=14).rsi().iloc[-1]
     except Exception as e:
-        log.debug(f'⚠️ [{symbol}] Error calculando RSI: {e}')
+        log.warning(f'⚠️ [{symbol}] Error calculando RSI: {e}')
         rsi = 50
     minimo = base_minimo * (1 + volatilidad * 0.5) * (1 + (vol_factor - 1) *
         0.5)

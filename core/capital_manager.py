@@ -9,7 +9,7 @@ from core.utils.logger import configurar_logger
 from core.risk import RiskManager
 from core.event_bus import EventBus
 from core.contexto_externo import obtener_puntaje_contexto
-log = configurar_logger('capital_manager', modo_silencioso=True)
+log = configurar_logger('capital_manager', modo_silencioso=False)
 
 
 class CapitalManager:
@@ -88,12 +88,11 @@ class CapitalManager:
             if self._markets is None:
                 self._markets = await load_markets_async(self.cliente)
             info = self._markets.get(symbol.replace('/', ''))
-            minimo = info.get('limits', {}).get('cost', {}).get('min'
-                ) if info else None
+            minimo = info.get('limits', {}).get('cost', {}).get('min') if info else None
             return float(minimo) if minimo else None
         except Exception as e:
-            log.debug(f'No se pudo obtener mínimo para {symbol}: {e}')
-            return None
+            log.warning(f'No se pudo obtener mínimo para {symbol}: {e}')
+        return None
 
     async def calcular_cantidad_async(
         self,
@@ -109,7 +108,7 @@ class CapitalManager:
         else:
             capital_total = self.capital_por_simbolo.get(symbol, 0)
         if capital_total <= 0:
-            log.debug(f'Saldo insuficiente en {self.capital_currency}')
+            log.warning(f'Saldo insuficiente en {self.capital_currency}')
             return 0.0
         capital_symbol = self.capital_por_simbolo.get(symbol, capital_total / max(
             len(self.capital_por_simbolo), 1))

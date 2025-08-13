@@ -14,7 +14,7 @@ from core.supervisor import (
     registrar_reconexion_datafeed,
 )
 from core.notificador import crear_notificador_desde_env
-log = configurar_logger('datafeed', modo_silencioso=True)
+log = configurar_logger('datafeed', modo_silencioso=False)
 
 
 class DataFeed:
@@ -264,7 +264,7 @@ class DataFeed:
                         )
                         if not task.done():
                             task.cancel()
-                            log.debug(f"Stream {sym} cancelado; se reiniciará")
+                            log.warning(f"Stream {sym} cancelado; se reiniciará")
                             try:
                                 await asyncio.wait_for(
                                     task,

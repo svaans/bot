@@ -328,7 +328,7 @@ async def escuchar_velas(
                     await ws.close()
                     await ws.wait_closed()
                 except Exception as e:
-                    log.debug(f'Error al cerrar WebSocket de {symbol}: {e}')
+                    log.warning(f'Error al cerrar WebSocket de {symbol}: {e}')
                     tick('data_feed')
         except asyncio.CancelledError:
             log.info(f'🛑 Conexión WebSocket de {symbol} cancelada.')
@@ -536,12 +536,12 @@ async def escuchar_velas_combinado(
                     stream = data.get('stream')
                     payload = data.get('data', {})
                     if not stream or payload.get('e') != 'kline':
-                        log.debug(f"⚠️ Evento no esperado: {data}")
+                        log.warning(f"⚠️ Evento no esperado: {data}")
                         continue
                     sym_norm = stream.split('@')[0]
                     symbol = normalizados.get(sym_norm)
                     if not symbol:
-                        log.debug(f'⚠️ Símbolo desconocido en stream {stream}')
+                        log.warning(f'⚠️ Símbolo desconocido en stream {stream}')
                         continue
                     last_message[symbol] = datetime.utcnow()
                     try:
@@ -673,7 +673,7 @@ async def _watchdog(
     except asyncio.CancelledError:
         raise
     except Exception as e:
-        log.debug(f'Excepción inesperada en watchdog de {symbol}: {e}')
+        log.warning(f'Excepción inesperada en watchdog de {symbol}: {e}')
         tick('data_feed')
         tick_data(symbol)
 
@@ -709,5 +709,5 @@ def _habilitar_tcp_keepalive(ws):
         if hasattr(socket, 'TCP_KEEPCNT'):
             sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPCNT, 4)
     except Exception as e:
-        log.debug(f'No se pudo configurar TCP keep-alive: {e}')
+        log.warning(f'No se pudo configurar TCP keep-alive: {e}')
         tick('data_feed')
