@@ -1,8 +1,12 @@
 import os
 import json
+import time
 from datetime import datetime, timedelta
 import pandas as pd
 from core.utils.utils import leer_csv_seguro
+from core.utils.logger import configurar_logger
+
+log = configurar_logger(__name__)
 
 
 class MetricasTracker:
@@ -29,10 +33,18 @@ class MetricasTracker:
             except Exception:
                 pass
 
-    def _guardar(self) -> None:
+    def _guardar(self, intentos: int = 3) -> None:
         os.makedirs(os.path.dirname(self.archivo), exist_ok=True)
-        with open(self.archivo, "w") as f:
-            json.dump(self.data, f)
+        for intento in range(1, intentos + 1):
+            try:
+                with open(self.archivo, "w") as f:
+                    json.dump(self.data, f)
+                break
+            except Exception as e:
+                if intento == intentos:
+                    log.warning(f'⚠️ No se pudo guardar métricas tras {intentos} intentos: {e}')
+                else:
+                    time.sleep(1)
 
     def registrar_filtro(self, tipo: str) -> None:
         """Incrementa el contador para el ``tipo`` de filtro dado."""

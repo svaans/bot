@@ -68,7 +68,7 @@ def is_valid_number(value) ->bool:
         return False
 
 
-def guardar_operacion_en_csv(symbol, info, ruta=ORDENES_DIR):
+def guardar_operacion_en_csv(symbol, info, ruta=ORDENES_DIR, intentos: int = 3):
     log.info('➡️ Entrando en guardar_operacion_en_csv()')
     os.makedirs(ruta, exist_ok=True)
     archivo = os.path.join(ruta,
@@ -93,10 +93,18 @@ def guardar_operacion_en_csv(symbol, info, ruta=ORDENES_DIR):
             info['retorno_total'] = 0.0
     fila = {col: info.get(col, '') for col in columnas_orden}
     df = pd.DataFrame([fila])
-    if os.path.exists(archivo):
-        df.to_csv(archivo, mode='a', header=False, index=False)
-    else:
-        df.to_csv(archivo, mode='w', header=True, index=False)
+    for intento in range(1, intentos + 1):
+        try:
+            if os.path.exists(archivo):
+                df.to_csv(archivo, mode='a', header=False, index=False)
+            else:
+                df.to_csv(archivo, mode='w', header=True, index=False)
+            break
+        except Exception as e:
+            if intento == intentos:
+                log.warning(f'⚠️ No se pudo guardar operación tras {intentos} intentos: {e}')
+            else:
+                time.sleep(1)
 
 
 def validar_dataframe(df, columnas):
