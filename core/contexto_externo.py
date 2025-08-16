@@ -2,13 +2,16 @@
 from __future__ import annotations
 import asyncio
 import json
-from datetime import datetime, UTC
+from datetime import datetime, timezone
 from typing import Awaitable, Callable, Dict, Iterable
 import time
 import websockets
 from binance_api.websocket import _keepalive
 from core.utils.utils import configurar_logger
 from core.supervisor import supervised_task, tick
+
+UTC = timezone.utc
+
 log = configurar_logger('contexto_externo')
 _PUNTAJES: Dict[str, float] = {}
 CONTEXT_WS_URL = 'wss://stream.binance.com:9443/ws/{symbol}@kline_1m'
