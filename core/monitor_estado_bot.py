@@ -31,13 +31,9 @@ def obtener_orden_abierta():
     return None
 
 
-def estimar_estado_emocional(_ultima_orden=None):
-    log.info('➡️ Entrando en estimar_estado_emocional()')
-    """Determina el estado emocional actual del bot basado en el desempeño."""
-    operaciones: list[dict] = []
-    for ops in reporter_diario.ultimas_operaciones.values():
-        operaciones.extend(ops)
-    operaciones.sort(key=lambda o: o.get('fecha_cierre', ''))
+def _contar_rachas(operaciones: list[dict]) -> tuple[int, int]:
+    log.info('➡️ Entrando en _contar_rachas()')
+    """Calcula las rachas consecutivas de ganancias y pérdidas."""
     ganancias = 0
     perdidas = 0
     for op in reversed(operaciones):
@@ -48,6 +44,17 @@ def estimar_estado_emocional(_ultima_orden=None):
             perdidas += 1
         else:
             break
+    return ganancias, perdidas
+
+
+def estimar_estado_emocional(_ultima_orden=None):
+    log.info('➡️ Entrando en estimar_estado_emocional()')
+    """Determina el estado emocional actual del bot basado en el desempeño."""
+    operaciones: list[dict] = []
+    for ops in reporter_diario.ultimas_operaciones.values():
+        operaciones.extend(ops)
+    operaciones.sort(key=lambda o: o.get('fecha_cierre', ''))
+    ganancias, perdidas = _contar_rachas(operaciones)
     riesgo = cargar_estado_riesgo().get('perdida_acumulada', 0.0)
     if ganancias >= 3:
         return '😎 Determinado'
@@ -65,16 +72,7 @@ def resumen_emocional() ->str:
     for ops in reporter_diario.ultimas_operaciones.values():
         operaciones.extend(ops)
     operaciones.sort(key=lambda o: o.get('fecha_cierre', ''))
-    ganancias = 0
-    perdidas = 0
-    for op in reversed(operaciones):
-        retorno = op.get('retorno_total', 0)
-        if retorno > 0 and perdidas == 0:
-            ganancias += 1
-        elif retorno < 0 and ganancias == 0:
-            perdidas += 1
-        else:
-            break
+    ganancias, perdidas = _contar_rachas(operaciones)
     riesgo = cargar_estado_riesgo().get('perdida_acumulada', 0.0)
     return (
         f'{ganancias} ganancias consecutivas, {perdidas} pérdidas consecutivas, riesgo acumulado {riesgo:.2f}%'
