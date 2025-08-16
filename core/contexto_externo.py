@@ -2,8 +2,9 @@
 from __future__ import annotations
 import asyncio
 import json
-from datetime import datetime
+from datetime import datetime, UTC
 from typing import Awaitable, Callable, Dict, Iterable
+import time
 import websockets
 from binance_api.websocket import _keepalive
 from core.utils.utils import configurar_logger
@@ -14,7 +15,7 @@ CONTEXT_WS_URL = 'wss://stream.binance.com:9443/ws/{symbol}@kline_1m'
 
 
 def obtener_puntaje_contexto(symbol: str) ->float:
-    log.info('➡️ Entrando en obtener_puntaje_contexto()')
+    log.debug('➡️ Entrando en obtener_puntaje_contexto()')
     """Devuelve el último puntaje conocido para ``symbol``."""
     valor = _PUNTAJES.get(symbol)
     try:
@@ -24,7 +25,7 @@ def obtener_puntaje_contexto(symbol: str) ->float:
 
 
 def obtener_todos_puntajes() ->dict:
-    log.info('➡️ Entrando en obtener_todos_puntajes()')
+    log.debug('➡️ Entrando en obtener_todos_puntajes()')
     """Devuelve todos los puntajes actuales almacenados."""
     return dict(_PUNTAJES)
 
@@ -39,13 +40,14 @@ class StreamContexto:
         inactivity_timeout: int = 300,
         cancel_timeout: float = 5,
     ) -> None:
-        log.info('➡️ Entrando en __init__()')
+        log.debug('➡️ Entrando en __init__()')
         self.url_template = url_template or CONTEXT_WS_URL
         self.monitor_interval = max(1, monitor_interval)
         self.inactivity_timeout = inactivity_timeout
         self.cancel_timeout = cancel_timeout
         self._tasks: Dict[str, asyncio.Task] = {}
         self._last: Dict[str, datetime] = {}
+        self._last_monotonic: Dict[str, float] = {}
         self._monitor_task: asyncio.Task | None = None
         self._handler_actual: Callable[[str, float], Awaitable[None]] | None = None
         self._running = False
@@ -54,7 +56,7 @@ class StreamContexto:
     async def _stream(
         self, symbol: str, handler: Callable[[str, float], Awaitable[None]]
     ) -> None:
-        log.info('➡️ Entrando en _stream()')
+        log.debug('➡️ Entrando en _stream()')
         symbol_norm = symbol.replace('/', '').lower()
         url = self.url_template.format(symbol=symbol_norm)
         try:
@@ -62,12 +64,14 @@ class StreamContexto:
                 url, ping_interval=None, ping_timeout=None
             ) as ws:
                 log.info(f'🔌 Contexto conectado para {symbol}')
-                self._last[symbol] = datetime.utcnow()
+                self._last[symbol] = datetime.now(UTC)
+                self._last_monotonic[symbol] = time.monotonic()
                 keeper = asyncio.create_task(_keepalive(ws, symbol, 20))
                 try:
                     async for msg in ws:
                         try:
-                            self._last[symbol] = datetime.utcnow()
+                            self._last[symbol] = datetime.now(UTC)
+                            self._last_monotonic[symbol] = time.monotonic()
                             data = json.loads(msg)
                             vela = data.get('k')
                             if vela is None:
@@ -120,9 +124,9 @@ class StreamContexto:
                 await asyncio.sleep(self.monitor_interval)
                 if not self._running:
                     break
-                ahora = datetime.utcnow()
+                ahora = time.monotonic()
                 for sym, task in list(self._tasks.items()):
-                    ultimo = self._last.get(sym)
+                    ultimo = self._last_monotonic.get(sym)
                     if task.done():
                         log.warning(
                             f'🔄 Stream contexto {sym} finalizado; reiniciando'
@@ -132,12 +136,13 @@ class StreamContexto:
                             name=f"context_stream_{sym}",
                         )
                         continue
-                    if ultimo and (ahora - ultimo).total_seconds() > self.inactivity_timeout:
+                    if ultimo is not None and (ahora - ultimo) > self.inactivity_timeout:
                         if sym not in _PUNTAJES:
                             log.debug(
                                 f'⏳ Contexto {sym} sin datos recientes; omitiendo reinicio'
                             )
-                            self._last[sym] = ahora
+                            self._last[sym] = datetime.now(UTC)
+                            self._last_monotonic[sym] = ahora
                             continue
                         log.warning(
                             f'🔄 Stream contexto {sym} inactivo; reiniciando'
@@ -155,7 +160,7 @@ class StreamContexto:
             pass
 
     async def escuchar(self, symbols: Iterable[str], handler: Callable[[str, float], Awaitable[None]]) -> None:
-        log.info('➡️ Entrando en escuchar()')
+        log.debug('➡️ Entrando en escuchar()')
         """Inicia un stream supervisado por cada símbolo."""
         await self.detener()
         self._handler_actual = handler
@@ -178,7 +183,7 @@ class StreamContexto:
             self._running = False
 
     async def detener(self) -> None:
-        log.info('➡️ Entrando en detener()')
+        log.debug('➡️ Entrando en detener()')
         """Cancela todos los streams en ejecución."""
         if self._monitor_task and not self._monitor_task.done():
             self._monitor_task.cancel()

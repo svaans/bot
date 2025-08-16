@@ -2,7 +2,8 @@
 from __future__ import annotations
 import asyncio
 from typing import Awaitable, Callable, Dict, Iterable, Any
-from datetime import datetime
+from datetime import datetime, UTC
+import time
 from binance_api.websocket import escuchar_velas
 from core.utils.logger import configurar_logger
 from core.utils import intervalo_a_segundos
@@ -28,8 +29,9 @@ class DataFeed:
         inactivity_intervals: int = 3,
         handler_timeout: float = 5,
         cancel_timeout: float = 5,
+        queue_put_timeout: float = 2,
     ) -> None:
-        log.info('➡️ Entrando en __init__()')
+        log.debug('➡️ Entrando en __init__()')
         self.intervalo = intervalo
         self.intervalo_segundos = intervalo_a_segundos(intervalo)
         self.inactivity_intervals = inactivity_intervals
@@ -42,6 +44,7 @@ class DataFeed:
         self.max_stream_restarts = max_restarts
         self._tasks: Dict[str, asyncio.Task] = {}
         self._last: Dict[str, datetime] = {}
+        self._last_monotonic: Dict[str, float] = {}
         self._monitor_global_task: asyncio.Task | None = None
         self._handler_actual: Callable[[dict], Awaitable[None]] | None = None
         self._running = False
@@ -52,13 +55,17 @@ class DataFeed:
         self.handler_timeout = handler_timeout
         self._reiniciando = False
         self._handler_timeouts: Dict[str, int] = {}
+        self._mensajes_recibidos: Dict[str, int] = {}
+        self._queue_discards: Dict[str, int] = {}
+        self._reinicios_inactividad: Dict[str, int] = {}
         self._queues: Dict[str, asyncio.Queue] = {}
         self._consumer_tasks: Dict[str, asyncio.Task] = {}
+        self.queue_put_timeout = queue_put_timeout
         registrar_reconexion_datafeed(self._reconectar_por_supervisor)
 
     @property
     def activos(self) ->list[str]:
-        log.info('➡️ Entrando en activos()')
+        log.debug('➡️ Entrando en activos()')
         """Lista de símbolos con streams activos."""
         return list(self._symbols)
     
@@ -69,12 +76,17 @@ class DataFeed:
     
 
     async def stream(self, symbol: str, handler: Callable[[dict], Awaitable[None]]) -> None:
-        log.info('➡️ Entrando en stream()')
+        log.debug('➡️ Entrando en stream()')
         """Escucha las velas de ``symbol`` y reintenta ante fallos de conexión."""
 
         async def wrapper(candle: dict) -> None:
-            self._last[symbol] = datetime.utcnow()
-            log.info(f'[{symbol}] Recibida vela: timestamp={candle.get("timestamp")}')
+            self._last[symbol] = datetime.now(UTC)
+            self._last_monotonic[symbol] = time.monotonic()
+            self._mensajes_recibidos[symbol] = (
+                self._mensajes_recibidos.get(symbol, 0) + 1
+            )
+            log.debug(
+                f'[{symbol}] Recibida vela: timestamp={candle.get("timestamp")}')
             tick_data(symbol)
             queue = self._queues[symbol]
             qsize = queue.qsize()
@@ -84,21 +96,35 @@ class DataFeed:
                 )
             try:
                 await asyncio.wait_for(
-                    queue.put(candle), timeout=self.handler_timeout
+                    queue.put(candle), timeout=self.queue_put_timeout
                 )
             except asyncio.TimeoutError:
-                log.error(
-                    f"Timeout en cola de {symbol}; reiniciando stream"
+                log.warning("Queue bloqueada; descartando 1")
+                self._queue_discards[symbol] = (
+                    self._queue_discards.get(symbol, 0) + 1
                 )
                 try:
-                    await self.notificador.enviar_async(
-                        f'⚠️ Timeout en cola de {symbol}; reiniciando stream',
-                        'WARN',
-                    )
-                except Exception:
-                    tick('data_feed')
+                    queue.get_nowait()
+                    queue.task_done()
+                except asyncio.QueueEmpty:
                     pass
-                await self._reiniciar_stream(symbol)
+                try:
+                    await asyncio.wait_for(
+                        queue.put(candle), timeout=self.queue_put_timeout
+                    )
+                except asyncio.TimeoutError:
+                    log.error(
+                        f"Timeout en cola de {symbol}; reiniciando stream"
+                    )
+                    try:
+                        await self.notificador.enviar_async(
+                            f'⚠️ Timeout en cola de {symbol}; reiniciando stream',
+                            'WARN',
+                        )
+                    except Exception:
+                        tick('data_feed')
+                        pass
+                    await self._reiniciar_stream(symbol)
 
         await self._relanzar_stream(symbol, wrapper)
 
@@ -247,13 +273,13 @@ class DataFeed:
                     break
                 if not self._tasks:
                     continue
-                ahora = datetime.utcnow()
+                ahora = time.monotonic()
 
                 for sym, task in list(self._tasks.items()):
-                    ultimo = self._last.get(sym)
+                    ultimo = self._last_monotonic.get(sym)
                     inactivo = (
-                        ultimo
-                        and (ahora - ultimo).total_seconds() > self.tiempo_inactividad
+                        ultimo is not None
+                        and (ahora - ultimo) > self.tiempo_inactividad
                     )
                     if task.done() or inactivo:
                         log.warning(
@@ -270,12 +296,12 @@ class DataFeed:
                                     task,
                                     timeout=self.cancel_timeout,
                                 )
-                            except Exception:
-                                pass
                             except asyncio.TimeoutError:
                                 log.warning(
                                     f"⏱️ Timeout cancelando stream {sym}"
                                 )
+                            except Exception:
+                                pass
                         self._tasks[sym] = supervised_task(
                             lambda sym=sym: self.stream(sym, self._handler_actual),
                             f"stream_{sym}",
@@ -288,6 +314,9 @@ class DataFeed:
                         tick_data(sym, reinicio=True)
                         if inactivo:
                             registrar_reinicio_inactividad(sym)
+                            self._reinicios_inactividad[sym] = (
+                                self._reinicios_inactividad.get(sym, 0) + 1
+                            )
         
         except asyncio.CancelledError:
             tick('data_feed')
@@ -304,7 +333,7 @@ class DataFeed:
         handler: Callable[[dict], Awaitable[None]],
         cliente: Any | None = None,
     ) -> None:
-        log.info('➡️ Entrando en escuchar()')
+        log.debug('➡️ Entrando en escuchar()')
         """Inicia un stream independiente por símbolo y espera a que finalicen.
 
         Si ``cliente`` se proporciona, se usará para recuperar velas perdidas tras
@@ -362,7 +391,7 @@ class DataFeed:
         self._queues.clear()
         self._running = False
     async def detener(self) -> None:
-        log.info('➡️ Entrando en detener()')
+        log.debug('➡️ Entrando en detener()')
         """Cancela todos los streams en ejecución."""
         tasks: list[asyncio.Task] = []
         if self._monitor_global_task:
@@ -387,10 +416,26 @@ class DataFeed:
 
         self._monitor_global_task = None
         self._tasks.clear()
-        for task in self._consumer_tasks.values():
-            task.cancel()
+        for sym in set(
+            list(self._mensajes_recibidos.keys())
+            + list(self._handler_timeouts.keys())
+            + list(self._queue_discards.keys())
+            + list(self._reinicios_inactividad.keys())
+        ):
+            log.info(
+                "📊 %s: mensajes=%d, timeouts=%d, descartes=%d, reinicios_inactividad=%d",
+                sym,
+                self._mensajes_recibidos.get(sym, 0),
+                self._handler_timeouts.get(sym, 0),
+                self._queue_discards.get(sym, 0),
+                self._reinicios_inactividad.get(sym, 0),
+            )
         self._consumer_tasks.clear()
         self._queues.clear()
         self._last.clear()
+        self._last_monotonic.clear()
+        self._mensajes_recibidos.clear()
+        self._queue_discards.clear()
+        self._reinicios_inactividad.clear()
         self._symbols = []
         self._running = False

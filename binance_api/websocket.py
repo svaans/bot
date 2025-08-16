@@ -49,8 +49,8 @@ def _registrar_reconexion() -> None:
 
 def obtener_tasa_reconexion() -> int:
     """Devuelve la cantidad de reconexiones registradas en la ventana actual."""
-    ahora = datetime.utcnow()
-    while _reconnect_history and (ahora - _reconnect_history[0]).total_seconds() > RECONNECT_WINDOW:
+    ahora = time.monotonic()
+    while _reconnect_history and (ahora - _reconnect_history[0]) > RECONNECT_WINDOW:
         _reconnect_history.popleft()
     return len(_reconnect_history)
 
