@@ -1,7 +1,7 @@
 from __future__ import annotations
 import asyncio
 from collections import Counter
-from datetime import datetime, UTC
+from datetime import datetime, timezone
 from typing import Dict
 from config.config_manager import Config
 from binance_api.cliente import fetch_balance_async, load_markets_async
@@ -9,6 +9,8 @@ from core.utils.logger import configurar_logger
 from core.risk import RiskManager
 from core.event_bus import EventBus
 from core.contexto_externo import obtener_puntaje_contexto
+
+UTC = timezone.utc
 log = configurar_logger('capital_manager', modo_silencioso=False)
 
 

@@ -1,7 +1,7 @@
 import asyncio
 import json
 import random
-from datetime import datetime, UTC
+from datetime import datetime, timezone
 from collections import deque
 import socket
 import time
@@ -9,6 +9,8 @@ from typing import Awaitable, Callable
 
 import websockets
 from websockets.exceptions import ConnectionClosed
+
+UTC = timezone.utc
 
 from core.utils.utils import configurar_logger, intervalo_a_segundos
 # Si en el futuro se escuchan streams de profundidad (@depthUpdate),

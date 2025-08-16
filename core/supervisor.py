@@ -15,8 +15,10 @@ import os
 import time
 from threading import Event
 import traceback
-from datetime import datetime, UTC
+from datetime import datetime, timezone
 from typing import Awaitable, Callable, Dict
+
+UTC = timezone.utc
 
 from core.utils.logger import configurar_logger
 from core.utils.utils import intervalo_a_segundos

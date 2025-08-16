@@ -2,12 +2,14 @@ import os
 import json
 import atexit
 from concurrent.futures import ProcessPoolExecutor
-from datetime import datetime, UTC
+from datetime import datetime, timezone
 import pandas as pd
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_pdf import PdfPages
 from core.utils.utils import configurar_logger
 from core.utils.utils import leer_csv_seguro
+
+UTC = timezone.utc
 
 log = configurar_logger('reporte_diario')
 
