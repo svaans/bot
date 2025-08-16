@@ -151,6 +151,8 @@ async def _gestionar_ws(
                 _keepalive(ws, 'combined' if len(handlers) > 1 else next(iter(handlers)), ping_interval)
             )
 
+            handlers_by_norm = {normalizar_symbolo(s): s for s in handlers}
+
             backfill_tasks = []
             if cliente:
                 for s, h in handlers.items():
@@ -241,7 +243,7 @@ async def _gestionar_ws(
                     if 'stream' in data:
                         stream = data['stream']
                         norm = stream.split('@')[0]
-                        symbol = next((s for s in handlers if normalizar_symbolo(s) == norm), None)
+                        symbol = handlers_by_norm.get(norm)
                         if not symbol:
                             continue
                         payload = data.get('data', {})
