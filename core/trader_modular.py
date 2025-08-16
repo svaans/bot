@@ -5,7 +5,7 @@ import time
 from dataclasses import dataclass, replace, field
 from typing import Dict, Callable, Awaitable, Any
 from collections import OrderedDict, deque, defaultdict
-from datetime import datetime, timedelta, date
+from datetime import datetime, timedelta, date, timezone
 import json
 import os
 import numpy as np
@@ -939,7 +939,7 @@ class Trader:
         log.info('➡️ Entrando en _vigilancia_tareas()')
         while not self._cerrado:
             activos = 0
-            ahora = datetime.utcnow()
+            ahora = datetime.now(timezone.utc)
             for nombre, task in list(self._tareas.items()):
                 if task.done():
                     if task.cancelled():
