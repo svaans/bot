@@ -260,6 +260,22 @@ class Trader:
         except OSError as e:
             log.warning(f'⚠️ Error guardando {path}: {e}')
 
+    def _registrar_rechazo(self, symbol: str, motivo: str, **datos: Any) -> None:
+        log.info('➡️ Entrando en _registrar_rechazo()')
+        """Registrar rechazos con campos comunes.
+
+        Envuelve :meth:`RejectionHandler.registrar` asegurando que todos los
+        registros incluyan la información de ``capital`` y ``config`` del
+        símbolo.  Parámetros adicionales se pasan directamente al handler.
+        """
+
+        datos_comunes = {
+            'capital': self.capital_por_simbolo.get(symbol, 0.0),
+            'config': self.config_por_simbolo.get(symbol, {}),
+        }
+        datos_comunes.update(datos)
+        self.rejection_handler.registrar(symbol, motivo, **datos_comunes)
+
     def _log_impacto_sl(self, orden, precio: float) ->None:
         log.info('➡️ Entrando en _log_impacto_sl()')
         """Registra el impacto de evitar el stop loss."""
@@ -1050,12 +1066,10 @@ class Trader:
                 peso_min_total *= 0.7
         if diversidad < diversidad_min or peso_total < peso_min_total:
             if not modo_agresivo:
-                self.rejection_handler.registrar(
+                self._registrar_rechazo(
                     symbol,
                     f'Diversidad {diversidad} < {diversidad_min} o peso {peso_total:.2f} < {peso_min_total:.2f}',
                     peso_total=peso_total,
-                    capital=self.capital_por_simbolo.get(symbol, 0.0),
-                    config=self.config_por_simbolo.get(symbol, {}),
                 )
                 metricas_tracker.registrar_filtro('diversidad')
                 return False
@@ -1100,24 +1114,20 @@ class Trader:
             f'Persistencia detectada {repetidas:.2f} | Mínimo requerido {minimo:.2f}'
             )
         if repetidas < minimo:
-            self.rejection_handler.registrar(
+            self._registrar_rechazo(
                 symbol,
                 f'Persistencia {repetidas:.2f} < {minimo}',
                 puntaje=puntaje,
                 estrategias=list(estrategias.keys()),
-                capital=self.capital_por_simbolo.get(symbol, 0.0),
-                config=self.config_por_simbolo.get(symbol, {}),
             )
             metricas_tracker.registrar_filtro('persistencia')
             return False, repetidas, minimo
         if repetidas < 1 and puntaje < 1.2 * umbral:
-            self.rejection_handler.registrar(
+            self._registrar_rechazo(
                 symbol,
                 f'{repetidas:.2f} coincidencia y puntaje débil ({puntaje:.2f})',
                 puntaje=puntaje,
                 estrategias=list(estrategias.keys()),
-                capital=self.capital_por_simbolo.get(symbol, 0.0),
-                config=self.config_por_simbolo.get(symbol, {}),
             )
             return False, repetidas, minimo
         elif repetidas < 1:
@@ -1318,12 +1328,10 @@ class Trader:
             )
         except asyncio.TimeoutError:
             log.warning(f'⚠️ Timeout en evaluar_entrada para {symbol}')
-            self.rejection_handler.registrar(
+            self._registrar_rechazo(
                 symbol,
                 'timeout_engine',
                 estrategias=[],
-                capital=self.capital_por_simbolo.get(symbol, 0.0),
-                config=self.config_por_simbolo.get(symbol, {}),
             )
             return
         estrategias = resultado.get('estrategias_activas', {})
@@ -1340,24 +1348,20 @@ class Trader:
                 self.rejection_handler.registrar_tecnico(symbol, score, puntos,
                     tendencia_actual, precio_actual, resultado.get(
                     'motivo_rechazo', 'desconocido'), estrategias)
-            self.rejection_handler.registrar(
+            self._registrar_rechazo(
                 symbol,
                 resultado.get('motivo_rechazo', 'desconocido'),
                 puntaje=resultado.get('score_total'),
                 estrategias=list(estrategias.keys()),
-                capital=self.capital_por_simbolo.get(symbol, 0.0),
-                config=self.config_por_simbolo.get(symbol, {}),
             )
             return
         info = await self.evaluar_condiciones_de_entrada(symbol, df, estado)
         if not info:
-            self.rejection_handler.registrar(
+            self._registrar_rechazo(
                 symbol,
                 'filtros_post_engine',
                 puntaje=resultado.get('score_total'),
                 estrategias=list(estrategias.keys()),
-                capital=self.capital_por_simbolo.get(symbol, 0.0),
-                config=self.config_por_simbolo.get(symbol, {}),
             )
             return
         await self._abrir_operacion_real(**info)
@@ -1424,24 +1428,20 @@ class Trader:
                 estrategias}
         try:
             if not self._validar_sl_tp(symbol, precio, sl, tp):
-                self.rejection_handler.registrar(
+                self._registrar_rechazo(
                     symbol,
                     'sl_tp_invalidos',
                     puntaje=puntaje,
                     estrategias=list(estrategias_dict.keys()),
-                    capital=self.capital_por_simbolo.get(symbol, 0.0),
-                    config=self.config_por_simbolo.get(symbol, {}),
                 )
                 return
         except Exception as e:
             log.error(f'❌ Error validando SL/TP para {symbol}: {e}')
-            self.rejection_handler.registrar(
+            self._registrar_rechazo(
                 symbol,
                 'error_validacion_sl_tp',
                 puntaje=puntaje,
                 estrategias=list(estrategias_dict.keys()),
-                capital=self.capital_por_simbolo.get(symbol, 0.0),
-                config=self.config_por_simbolo.get(symbol, {}),
             )
             if self.notificador:
                 try:
