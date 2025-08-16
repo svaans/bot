@@ -99,7 +99,7 @@ async def _rellenar_gaps(
 async def _gestionar_ws(
     url: str,
     handlers: dict,
-    last_message: dict[str, datetime],
+    last_message: dict[str, float],
     tiempo_maximo: int,
     ping_interval: int,
     mensaje_timeout: int | None,
@@ -142,7 +142,7 @@ async def _gestionar_ws(
             fallos_consecutivos = 0
             backoff = 5
             for s in handlers:
-                last_message[s] = datetime.utcnow()
+                last_message[s] = time.monotonic()
             watchdogs = [
                 asyncio.create_task(_watchdog(ws, s, last_message, tiempo_maximo))
                 for s in handlers
@@ -265,7 +265,7 @@ async def _gestionar_ws(
                     await h['callback'](vela)
                     h['ultimo_timestamp'] = vela['timestamp']
                     h['ultimo_cierre'] = vela['close']
-                    last_message[symbol] = datetime.utcnow()
+                    last_message[symbol] = time.monotonic()
                     tick('data_feed')
             finally:
                 log.info(
@@ -324,7 +324,7 @@ async def escuchar_velas(
     symbol: str,
     intervalo: str,
     callback,
-    last_message: dict[str, datetime] | None = None,
+    last_message: dict[str, float] | None = None,
     tiempo_maximo: int | None = None,
     ping_interval: int | None = None,
     cliente=None,
@@ -388,7 +388,7 @@ async def escuchar_velas_combinado(
     symbols: list[str],
     intervalo: str,
     handlers: dict[str, Callable[[dict], Awaitable[None]]],
-    last_message: dict[str, datetime] | None = None,
+    last_message: dict[str, float] | None = None,
     tiempo_maximo: int | None = None,
     ping_interval: int | None = None,
     cliente=None,
@@ -459,7 +459,7 @@ async def escuchar_velas_combinado(
 async def _watchdog(
     ws,
     symbol: str,
-    last_message: dict[str, datetime],
+    last_message: dict[str, float],
     tiempo_maximo: int,
 ):
     """Cierra ``ws`` si no se reciben datos por ``tiempo_maximo`` segundos."""
@@ -468,13 +468,14 @@ async def _watchdog(
     Si no llega ninguna vela en tiempo_maximo (segundos), cierra el websocket para reiniciar.
     """
     try:
+        intervalo = min(5, max(1, tiempo_maximo / 5))
         while True:
-            await asyncio.sleep(tiempo_maximo)
+            await asyncio.sleep(intervalo)
             ultimo = last_message.get(symbol)
-            if not ultimo:
-                last_message[symbol] = datetime.utcnow()
+            if ultimo is None:
+                last_message[symbol] = time.monotonic()
                 continue
-            if (datetime.utcnow() - ultimo).total_seconds() > tiempo_maximo:
+            if time.monotonic() - ultimo > tiempo_maximo:
                 log.warning(
                     f'⚠️ No se recibieron velas en {tiempo_maximo}s para {symbol}, forzando reconexión.'
                 )
@@ -485,6 +486,8 @@ async def _watchdog(
                     f'Sin velas en {tiempo_maximo}s para {symbol}'
                 )
     except asyncio.CancelledError:
+        raise
+    except InactividadTimeoutError:
         raise
     except Exception as e:
         log.warning(f'Excepción inesperada en watchdog de {symbol}: {e}')

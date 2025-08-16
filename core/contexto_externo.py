@@ -5,6 +5,7 @@ import json
 from datetime import datetime
 from typing import Awaitable, Callable, Dict, Iterable
 import websockets
+from binance_api.websocket import _keepalive
 from core.utils.utils import configurar_logger
 from core.supervisor import supervised_task, tick
 log = configurar_logger('contexto_externo')
@@ -57,40 +58,51 @@ class StreamContexto:
         symbol_norm = symbol.replace('/', '').lower()
         url = self.url_template.format(symbol=symbol_norm)
         try:
-            async with websockets.connect(url, ping_interval=20, ping_timeout=20) as ws:
+            async with websockets.connect(
+                url, ping_interval=None, ping_timeout=None
+            ) as ws:
                 log.info(f'🔌 Contexto conectado para {symbol}')
                 self._last[symbol] = datetime.utcnow()
-                async for msg in ws:
-                    try:
-                        self._last[symbol] = datetime.utcnow()
-                        data = json.loads(msg)
-                        vela = data.get('k')
-                        if vela is None:
-                            continue
-                        close = float(vela.get('c', 0.0))
-                        open_ = float(vela.get('o', 0.0))
-                        vol = float(vela.get('v', 0.0))
-                        if open_ == 0 or vol < 1e-08:
-                            continue
-                        variacion_pct = (close - open_) / open_
-                        puntaje = variacion_pct * vol
-                        _PUNTAJES[symbol] = puntaje
+                keeper = asyncio.create_task(_keepalive(ws, symbol, 20))
+                try:
+                    async for msg in ws:
                         try:
-                            await handler(symbol, puntaje)
-                            tick('context_stream')
+                            self._last[symbol] = datetime.utcnow()
+                            data = json.loads(msg)
+                            vela = data.get('k')
+                            if vela is None:
+                                continue
+                            close = float(vela.get('c', 0.0))
+                            open_ = float(vela.get('o', 0.0))
+                            vol = float(vela.get('v', 0.0))
+                            if open_ == 0 or vol < 1e-08:
+                                continue
+                            variacion_pct = (close - open_) / open_
+                            puntaje = variacion_pct * vol
+                            _PUNTAJES[symbol] = puntaje
+                            try:
+                                await handler(symbol, puntaje)
+                                tick('context_stream')
+                            except Exception as e:
+                                log.warning(
+                                    f'⚠️ Handler contexto {symbol} falló: {e}'
+                                )
+                        except asyncio.CancelledError:
+                            log.info(
+                                f'🛑 Stream contexto {symbol} cancelado (mensaje).'
+                            )
+                            raise
                         except Exception as e:
                             log.warning(
-                                f'⚠️ Handler contexto {symbol} falló: {e}'
+                                f'⚠️ Error procesando contexto de {symbol}: {e}'
                             )
-                    except asyncio.CancelledError:
-                        log.info(
-                            f'🛑 Stream contexto {symbol} cancelado (mensaje).'
-                        )
-                        raise
+                finally:
+                    keeper.cancel()
+                    try:
+                        await keeper
                     except Exception as e:
-                        log.warning(
-                            f'⚠️ Error procesando contexto de {symbol}: {e}'
-                        )
+                        log.debug(f'Error al esperar keepalive cancelado: {e}')
+                    log.debug(f'Tareas activas tras cierre: {len(asyncio.all_tasks())}')
         except asyncio.CancelledError:
             log.info(f'🛑 Stream contexto {symbol} cancelado')
             raise
