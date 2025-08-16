@@ -93,6 +93,21 @@ class CapitalManager:
         except Exception as e:
             log.warning(f'No se pudo obtener mínimo para {symbol}: {e}')
         return None
+    
+    def _validar_minimos(self, capital_necesario: float,
+                         minimo_dinamico: float,
+                         minimo_binance: float | None) -> tuple[bool, str | None]:
+        if capital_necesario < minimo_dinamico:
+            return False, (
+                f'Orden mínima {minimo_dinamico:.2f}{self.capital_currency}, '
+                f'intento {capital_necesario:.2f}{self.capital_currency}'
+            )
+        if minimo_binance and capital_necesario < minimo_binance:
+            return False, (
+                f'⛔ Orden para {{symbol}} por {capital_necesario:.2f}{self.capital_currency} '
+                f'inferior al mínimo Binance {minimo_binance:.2f}{self.capital_currency}'
+            )
+        return True, None
 
     async def calcular_cantidad_async(
         self,
@@ -139,15 +154,14 @@ class CapitalManager:
             capital_necesario = riesgo_permitido
             cantidad = capital_necesario / precio
             riesgo_final = capital_necesario
-            if capital_necesario < minimo_dinamico:
-                log.debug(
-                    f'Orden mínima {minimo_dinamico:.2f}{self.capital_currency}, intento {capital_necesario:.2f}{self.capital_currency}'
-                )
-                return 0.0
-            if minimo_binance and capital_necesario < minimo_binance:
-                log.warning(
-                    f'⛔ Orden para {symbol} por {capital_necesario:.2f}{self.capital_currency} inferior al mínimo Binance {minimo_binance:.2f}{self.capital_currency}'
-                )
+            valido, error = self._validar_minimos(
+                capital_necesario, minimo_dinamico, minimo_binance
+            )
+            if not valido:
+                if error and error.startswith('⛔'):
+                    log.warning(error.format(symbol=symbol))
+                else:
+                    log.debug(error)
                 return 0.0
         else:
             cantidad = riesgo_permitido / distancia_sl
@@ -156,15 +170,14 @@ class CapitalManager:
                 cantidad = capital_total / precio
                 capital_necesario = capital_total
             riesgo_final = cantidad * distancia_sl
-            if capital_necesario < minimo_dinamico:
-                log.debug(
-                    f'Orden mínima {minimo_dinamico:.2f}{self.capital_currency}, intento {capital_necesario:.2f}{self.capital_currency}'
-                )
-                return 0.0
-            if minimo_binance and capital_necesario < minimo_binance:
-                log.warning(
-                    f'⛔ Orden para {symbol} por {capital_necesario:.2f}{self.capital_currency} inferior al mínimo Binance {minimo_binance:.2f}{self.capital_currency}'
-                )
+            valido, error = self._validar_minimos(
+                capital_necesario, minimo_dinamico, minimo_binance
+            )
+            if not valido:
+                if error and error.startswith('⛔'):
+                    log.warning(error.format(symbol=symbol))
+                else:
+                    log.debug(error)
                 return 0.0
         log.info(
             '⚖️ Kelly ajustada: %.4f | Riesgo teórico: %.2f%s | Mínimo dinámico: %.2f%s | Riesgo final: %.2f%s',
