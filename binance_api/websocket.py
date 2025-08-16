@@ -4,6 +4,7 @@ import traceback
 from datetime import datetime
 from collections import deque
 import socket
+from typing import Awaitable, Callable
 
 import websockets
 from websockets.exceptions import ConnectionClosed
@@ -42,6 +43,13 @@ def _registrar_reconexion() -> None:
             f'⚠️ Tasa de reconexión alta: {len(_reconnect_history)} en {RECONNECT_WINDOW // 60} min'
         )
 
+
+def obtener_tasa_reconexion() -> int:
+    """Devuelve la cantidad de reconexiones registradas en la ventana actual."""
+    ahora = datetime.utcnow()
+    while _reconnect_history and (ahora - _reconnect_history[0]).total_seconds() > RECONNECT_WINDOW:
+        _reconnect_history.popleft()
+    return len(_reconnect_history)
 
 
 def normalizar_symbolo(symbol: str) ->str:
@@ -377,7 +385,7 @@ async def escuchar_velas(
 async def escuchar_velas_combinado(
     symbols: list[str],
     intervalo: str,
-    handlers: dict[str, callable],
+    handlers: dict[str, Callable[[dict], Awaitable[None]]],
     last_message: dict[str, datetime] | None = None,
     tiempo_maximo: int | None = None,
     ping_interval: int | None = None,
