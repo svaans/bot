@@ -4,6 +4,7 @@ import traceback
 from datetime import datetime
 from collections import deque
 import socket
+import time
 from typing import Awaitable, Callable
 
 import websockets
@@ -128,8 +129,8 @@ async def _gestionar_ws(
                     url,
                     open_timeout=10,
                     close_timeout=10,
-                    ping_interval=20,
-                    ping_timeout=20,
+                    ping_interval=None,
+                    ping_timeout=None,
                     max_size=2 ** 20,
                 ),
                 timeout=15,
@@ -288,6 +289,7 @@ async def _gestionar_ws(
                             f'Error al esperar tarea cancelada: {e}'
                         )
                         tick('data_feed')
+                log.debug(f'Tareas activas tras cierre: {len(asyncio.all_tasks())}')
                 try:
                     await ws.close()
                     await ws.wait_closed()
@@ -489,16 +491,22 @@ async def _watchdog(
         tick('data_feed')
         tick_data(symbol)
 
-async def _keepalive(ws, symbol, intervalo=30):
+async def _keepalive(ws, symbol, intervalo=30, log_interval=10):
     """Envía ping periódicamente para mantener viva la conexión."""
+    contador = 0
     try:
         while True:
             await asyncio.sleep(intervalo)
             try:
+                contador += 1
                 log.debug(f'🏓 Enviando ping a {symbol}')
-                pong = await ws.ping()
-                await asyncio.wait_for(pong, timeout=10)
-                log.debug(f'🏓 Pong recibido de {symbol}')
+                inicio = time.perf_counter()
+                pong_waiter = await ws.ping()
+                await asyncio.wait_for(pong_waiter, timeout=10)
+                rtt = (time.perf_counter() - inicio) * 1000
+                log.debug(f'🏓 Pong recibido de {symbol} ({rtt:.1f} ms)')
+                if contador % log_interval == 0:
+                    log.info(f'📡 RTT ping {symbol}: {rtt:.1f} ms')
             except Exception as e:
                 log.warning(f'❌ Ping falló para {symbol}: {e}')
                 await ws.close()
