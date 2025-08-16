@@ -15,7 +15,7 @@ import os
 import time
 from threading import Event
 import traceback
-from datetime import datetime
+from datetime import datetime, UTC
 from typing import Awaitable, Callable, Dict
 
 from core.utils.logger import configurar_logger
@@ -25,7 +25,7 @@ from core.notificador import crear_notificador_desde_env
 
 log = configurar_logger('supervisor')
 
-last_alive = datetime.utcnow()
+last_alive = datetime.now(UTC)
 last_function = 'init'
 tasks: Dict[str, asyncio.Task] = {}
 task_heartbeat: Dict[str, datetime] = {}
@@ -56,7 +56,7 @@ def tick(name: str) -> None:
     """Actualiza la función y marca latido para ``name``."""
     global last_alive, last_function
     last_function = name
-    last_alive = datetime.utcnow()
+    last_alive = datetime.now(UTC)
     task_heartbeat[name] = last_alive
 
 def tick_data(symbol: str, reinicio: bool = False) -> None:
@@ -70,7 +70,7 @@ def tick_data(symbol: str, reinicio: bool = False) -> None:
         Cuando ``True`` indica que el stream se reinició y todavía no se han
         recibido datos. Se registra para facilitar la depuración.
     """
-    ahora = datetime.utcnow()
+    ahora = datetime.now(UTC)
     data_heartbeat[symbol] = ahora
     if reinicio:
         log.info("🔄 Reinicio exitoso del stream %s, esperando datos...", symbol)
@@ -102,7 +102,7 @@ def heartbeat(interval: int = 60) -> None:
     global last_alive
     while True:
         log.info("bot alive | last=%s", last_function)
-        last_alive = datetime.utcnow()
+        last_alive = datetime.now(UTC)
         time.sleep(interval)
 
 
@@ -121,7 +121,7 @@ def watchdog(timeout: int = 120, check_interval: int = 10) -> None:
     global _watchdog_interval
     _watchdog_interval = check_interval
     while True:
-        delta = (datetime.utcnow() - last_alive).total_seconds()
+        delta = (datetime.now(UTC) - last_alive).total_seconds()
         if delta > timeout:
             log.critical(
                 "\u26a0\ufe0f BOT INACTIVO desde hace %.1f segundos. Ultima funcion: %s",
@@ -135,14 +135,14 @@ def watchdog(timeout: int = 120, check_interval: int = 10) -> None:
                 except Exception:
                     pass
         for sym, ts in data_heartbeat.items():
-            sin_datos = (datetime.utcnow() - ts).total_seconds()
+            sin_datos = (datetime.now(UTC) - ts).total_seconds()
             log.debug(
                 "Verificando datos de %s: %.1f segundos desde la última vela",
                 sym,
                 sin_datos,
             )
             if sin_datos > TIMEOUT_SIN_DATOS:
-                ahora = datetime.utcnow()
+                ahora = datetime.now(UTC)
                 ultima = last_data_alert.get(sym)
                 if not ultima or (ahora - ultima).total_seconds() > ALERTA_SIN_DATOS_INTERVALO:
                     log.critical(

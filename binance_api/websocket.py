@@ -1,7 +1,7 @@
 import asyncio
 import json
-import traceback
-from datetime import datetime
+import random
+from datetime import datetime, UTC
 from collections import deque
 import socket
 import time
@@ -28,16 +28,18 @@ log = configurar_logger('websocket')
 
 RECONNECT_WINDOW = 300  # 5 minutos
 RECONNECT_THRESHOLD = 250
-_reconnect_history: deque[datetime] = deque()
+_reconnect_history: deque[float] = deque()
 MAX_BACKOFF = 60
 MAX_BACKFILL_CANDLES = 100  # límite para backfill para evitar saturación
+BACKFILL_CONCURRENCY = 3
+_backfill_semaphore = asyncio.Semaphore(BACKFILL_CONCURRENCY)
 
 
 def _registrar_reconexion() -> None:
     """Registra un intento de reconexión y alerta si la tasa es elevada."""
-    ahora = datetime.utcnow()
+    ahora = time.monotonic()
     _reconnect_history.append(ahora)
-    while _reconnect_history and (ahora - _reconnect_history[0]).total_seconds() > RECONNECT_WINDOW:
+    while _reconnect_history and (ahora - _reconnect_history[0]) > RECONNECT_WINDOW:
         _reconnect_history.popleft()
     if len(_reconnect_history) > RECONNECT_THRESHOLD:
         log.warning(
@@ -53,8 +55,8 @@ def obtener_tasa_reconexion() -> int:
     return len(_reconnect_history)
 
 
-def normalizar_symbolo(symbol: str) ->str:
-    log.info('➡️ Entrando en normalizar_symbolo()')
+def normalizar_symbolo(symbol: str) -> str:
+    log.debug('➡️ Entrando en normalizar_symbolo()')
     return symbol.replace('/', '').lower()
 
 
@@ -136,7 +138,7 @@ async def _gestionar_ws(
                 timeout=15,
             )
             log.info(
-                f"🔌 WebSocket conectado a {url} a las {datetime.utcnow().isoformat()}"
+                f"🔌 WebSocket conectado a {url} a las {datetime.now(UTC).isoformat()}"
             )
             _habilitar_tcp_keepalive(ws)
             fallos_consecutivos = 0
@@ -165,19 +167,20 @@ async def _gestionar_ws(
                         espera = 1
                         while True:
                             try:
-                                ahora = int(datetime.utcnow().timestamp() * 1000)
+                                ahora = int(datetime.now(UTC).timestamp() * 1000)
                                 faltan = max(1, (ahora - h['ultimo_timestamp']) // h['intervalo_ms'])
                                 limite = min(faltan, MAX_BACKFILL_CANDLES)
-                                ohlcv = await asyncio.wait_for(
-                                    fetch_ohlcv_async(
-                                        cliente,
-                                        symbol=symbol,
-                                        timeframe=h['intervalo'],
-                                        since=h['ultimo_timestamp'] + 1,
-                                        limit=limite,
-                                    ),
-                                    timeout=10,
-                                )
+                                async with _backfill_semaphore:
+                                    ohlcv = await asyncio.wait_for(
+                                        fetch_ohlcv_async(
+                                            cliente,
+                                            symbol=symbol,
+                                            timeframe=h['intervalo'],
+                                            since=h['ultimo_timestamp'] + 1,
+                                            limit=limite,
+                                        ),
+                                        timeout=10,
+                                    )
                                 for o in ohlcv:
                                     tss = o[0]
                                     if tss > h['ultimo_timestamp']:
@@ -211,7 +214,7 @@ async def _gestionar_ws(
                                     )
                                     tick('data_feed')
                                     break
-                                await asyncio.sleep(espera)
+                                await asyncio.sleep(espera + random.random())
                                 espera *= 2
 
                     backfill_tasks.append(asyncio.create_task(_backfill_symbol()))
@@ -271,7 +274,7 @@ async def _gestionar_ws(
                     tick('data_feed')
             finally:
                 log.info(
-                    f"🔻 WebSocket desconectado de {url} a las {datetime.utcnow().isoformat()}"
+                    f"🔻 WebSocket desconectado de {url} a las {datetime.now(UTC).isoformat()}"
                 )
                 for t in backfill_tasks:
                     try:
@@ -301,11 +304,10 @@ async def _gestionar_ws(
         except asyncio.CancelledError:
             log.info('🛑 Conexión WebSocket cancelada.')
             break
-        except Exception as e:
+        except Exception:
             fallos_consecutivos += 1
             total_reintentos += 1
-            log.warning(f'❌ Error en WebSocket: {e}')
-            traceback.print_exc()
+            log.exception('❌ Error en WebSocket')
             log.info(
                 f'🔁 Reintentando conexión en {backoff} segundos... (total reintentos: {total_reintentos})'
             )

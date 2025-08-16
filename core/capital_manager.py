@@ -1,7 +1,7 @@
 from __future__ import annotations
 import asyncio
 from collections import Counter
-from datetime import datetime
+from datetime import datetime, UTC
 from typing import Dict
 from config.config_manager import Config
 from binance_api.cliente import fetch_balance_async, load_markets_async
@@ -43,7 +43,7 @@ class CapitalManager:
         self.capital_por_simbolo: Dict[str, float] = {s: inicial for s in config.symbols}
         self.capital_inicial_diario = self.capital_por_simbolo.copy()
         self.reservas_piramide: Dict[str, float] = {s: 0.0 for s in config.symbols}
-        self.fecha_actual = datetime.utcnow().date()
+        self.fecha_actual = datetime.now(UTC).date()
         if bus:
             self.subscribe(bus)
 
