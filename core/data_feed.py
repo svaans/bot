@@ -2,7 +2,7 @@
 from __future__ import annotations
 import asyncio
 from typing import Awaitable, Callable, Dict, Iterable, Any
-from datetime import datetime, UTC
+from datetime import datetime, timezone
 import time
 from binance_api.websocket import escuchar_velas
 from core.utils.logger import configurar_logger
@@ -15,6 +15,8 @@ from core.supervisor import (
     registrar_reconexion_datafeed,
 )
 from core.notificador import crear_notificador_desde_env
+
+UTC = timezone.utc
 log = configurar_logger('datafeed', modo_silencioso=False)
 
 
