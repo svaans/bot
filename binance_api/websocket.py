@@ -87,54 +87,32 @@ async def _rellenar_gaps(
     return ultimo_ts
 
 
-async def escuchar_velas(
-    symbol: str,
-    intervalo: str,
-    callback,
-    last_message: dict[str, datetime] | None = None,
-    tiempo_maximo: int | None = None,
-    ping_interval: int | None = None,
+async def _gestionar_ws(
+    url: str,
+    handlers: dict,
+    last_message: dict[str, datetime],
+    tiempo_maximo: int,
+    ping_interval: int,
+    mensaje_timeout: int | None,
     cliente=None,
-    mensaje_timeout: int | None = None,
 ):
-    """Escucha velas cerradas de ``symbol`` en ``intervalo``.
+    """Gestiona un WebSocket genérico con reconexión y backfill.
 
-    Si ``cliente`` se proporciona, al reconectar se intentará recuperar
-    posibles velas perdidas usando :func:`fetch_ohlcv_async`.
-    """
-    log.debug('➡️ Entrando en escuchar_velas()')
-    """
-    Conecta al websocket de Binance para recibir velas cerradas y
-    llamar al callback con los datos normalizados.
+    Cada elemento de ``handlers`` debe contener:
+    ``callback`` -- función async que recibe la vela normalizada.
 
-    :param symbol: str, ejemplo "BTC/USDT"
-    :param intervalo: str, ejemplo "1m"
-    :param callback: función async para procesar la vela
-    :param mensaje_timeout: segundos máximos a esperar cada mensaje
-        antes de forzar reconexión. Si ``None`` se espera indefinidamente.
+    ``parser`` -- función que recibe el mensaje crudo y devuelve la vela
+    normalizada o ``None``.
+
+    ``ultimo_timestamp`` y ``ultimo_cierre`` -- utilizados para generar
+    velas sintéticas y backfillear en reconexiones.
+
+    ``intervalo`` e ``intervalo_ms`` -- necesarios para el backfill vía
+    :func:`fetch_ohlcv_async`.
     """
-    if not isinstance(symbol, str) or '/' not in symbol:
-        raise ValueError(f'Símbolo inválido: {symbol}')
-    if intervalo not in INTERVALOS_VALIDOS:
-        raise ValueError(f'Intervalo inválido: {intervalo}')
-    url = (
-        f'wss://stream.binance.com:9443/ws/{normalizar_symbolo(symbol)}@kline_{intervalo}'
-        )
-    if last_message is None:
-        last_message = {}
-    if tiempo_maximo is None:
-        # Margen amplio: esperamos ~4 intervalos antes de forzar reconexión
-        tiempo_maximo = max(intervalo_a_segundos(intervalo) * 4, 60)
-    if ping_interval is None:
-        ping_interval = 30  # ping manual para detectar antes conexiones muertas
-    if mensaje_timeout is None:
-        mensaje_timeout = tiempo_maximo
     fallos_consecutivos = 0
     total_reintentos = 0
     backoff = 5
-    ultimo_timestamp: int | None = None
-    ultimo_cierre: float | None = None
-    intervalo_ms = intervalo_a_segundos(intervalo) * 1000
     while True:
         try:
             ws = await asyncio.wait_for(
@@ -149,75 +127,83 @@ async def escuchar_velas(
                 timeout=15,
             )
             log.info(
-                f"🔌 WebSocket conectado para {symbol} ({intervalo}) a las {datetime.utcnow().isoformat()}"
+                f"🔌 WebSocket conectado a {url} a las {datetime.utcnow().isoformat()}"
             )
             _habilitar_tcp_keepalive(ws)
             fallos_consecutivos = 0
             backoff = 5
-            last_message[symbol] = datetime.utcnow()
-            watchdog = asyncio.create_task(
-                _watchdog(ws, symbol, last_message, tiempo_maximo)
+            for s in handlers:
+                last_message[s] = datetime.utcnow()
+            watchdogs = [
+                asyncio.create_task(_watchdog(ws, s, last_message, tiempo_maximo))
+                for s in handlers
+            ]
+            keeper = asyncio.create_task(
+                _keepalive(ws, 'combined' if len(handlers) > 1 else next(iter(handlers)), ping_interval)
             )
-            keeper = asyncio.create_task(_keepalive(ws, symbol, ping_interval))
 
-            backfill_task = None
-            if cliente and ultimo_timestamp is not None:
-                async def _backfill():
-                    nonlocal ultimo_timestamp, ultimo_cierre
-                    intentos = 0
-                    espera = 1
-                    while True:
-                        try:
-                            ahora = int(datetime.utcnow().timestamp() * 1000)
-                            faltan = max(1, (ahora - ultimo_timestamp) // intervalo_ms)
-                            limite = min(faltan, MAX_BACKFILL_CANDLES)
-                            ohlcv = await asyncio.wait_for(
-                                fetch_ohlcv_async(
-                                    cliente,
-                                    symbol=symbol,
-                                    timeframe=intervalo,
-                                    since=ultimo_timestamp + 1,
-                                    limit=limite,
-                                ),
-                                timeout=10,
-                            )
-                            for o in ohlcv:
-                                ts = o[0]
-                                if ts > ultimo_timestamp:
-                                    ultimo_timestamp = await _rellenar_gaps(
-                                        callback,
-                                        symbol,
-                                        ultimo_timestamp,
-                                        ultimo_cierre,
-                                        ts,
-                                        intervalo_ms,
-                                    )
-                                    await callback(
-                                        {
-                                            'symbol': symbol,
-                                            'timestamp': ts,
-                                            'open': float(o[1]),
-                                            'high': float(o[2]),
-                                            'low': float(o[3]),
-                                            'close': float(o[4]),
-                                            'volume': float(o[5]),
-                                        }
-                                    )
-                                    ultimo_timestamp = ts
-                                    ultimo_cierre = float(o[4])
-                            break
-                        except Exception as e:
-                            intentos += 1
-                            if intentos >= 3:
-                                log.warning(
-                                    f'❌ Error al backfillear {symbol} tras {intentos} intentos: {e}'
+            backfill_tasks = []
+            if cliente:
+                for s, h in handlers.items():
+                    ts = h.get('ultimo_timestamp')
+                    if ts is None:
+                        continue
+
+                    async def _backfill_symbol(symbol=s, h=h):
+                        intentos = 0
+                        espera = 1
+                        while True:
+                            try:
+                                ahora = int(datetime.utcnow().timestamp() * 1000)
+                                faltan = max(1, (ahora - h['ultimo_timestamp']) // h['intervalo_ms'])
+                                limite = min(faltan, MAX_BACKFILL_CANDLES)
+                                ohlcv = await asyncio.wait_for(
+                                    fetch_ohlcv_async(
+                                        cliente,
+                                        symbol=symbol,
+                                        timeframe=h['intervalo'],
+                                        since=h['ultimo_timestamp'] + 1,
+                                        limit=limite,
+                                    ),
+                                    timeout=10,
                                 )
-                                tick('data_feed')
+                                for o in ohlcv:
+                                    tss = o[0]
+                                    if tss > h['ultimo_timestamp']:
+                                        h['ultimo_timestamp'] = await _rellenar_gaps(
+                                            h['callback'],
+                                            symbol,
+                                            h['ultimo_timestamp'],
+                                            h['ultimo_cierre'],
+                                            tss,
+                                            h['intervalo_ms'],
+                                        )
+                                        await h['callback'](
+                                            {
+                                                'symbol': symbol,
+                                                'timestamp': tss,
+                                                'open': float(o[1]),
+                                                'high': float(o[2]),
+                                                'low': float(o[3]),
+                                                'close': float(o[4]),
+                                                'volume': float(o[5]),
+                                            }
+                                        )
+                                        h['ultimo_timestamp'] = tss
+                                        h['ultimo_cierre'] = float(o[4])
                                 break
-                            await asyncio.sleep(espera)
-                            espera *= 2
+                            except Exception as e:
+                                intentos += 1
+                                if intentos >= 3:
+                                    log.warning(
+                                        f'❌ Error al backfillear {symbol} tras {intentos} intentos: {e}'
+                                    )
+                                    tick('data_feed')
+                                    break
+                                await asyncio.sleep(espera)
+                                espera *= 2
 
-                backfill_task = asyncio.create_task(_backfill())  # ejecútalo en paralelo
+                    backfill_tasks.append(asyncio.create_task(_backfill_symbol()))
             try:
                 while True:
                     try:
@@ -225,118 +211,88 @@ async def escuchar_velas(
                             msg = await asyncio.wait_for(ws.recv(), timeout=mensaje_timeout)
                         else:
                             msg = await ws.recv()
-                        last_message[symbol] = datetime.utcnow()
+                        data = json.loads(msg)
                     except asyncio.TimeoutError:
                         log.warning(
-                            f'⏰ Sin datos de {symbol} en {mensaje_timeout}s, forzando reconexión'
+                            f'⏰ Sin datos en {mensaje_timeout}s, forzando reconexión'
                         )
                         await ws.close()
                         break
                     except ConnectionClosed as e:
                         log.warning(
-                            f"🚪 WebSocket cerrado en {symbol} — Código: {e.code}, Motivo: {e.reason}"
+                            f"🚪 WebSocket cerrado — Código: {e.code}, Motivo: {e.reason}"
                         )
                         await ws.close()
                         break
-                    except (ConnectionError, asyncio.TimeoutError) as e:
-                        log.warning(f'❌ Conexión perdida en {symbol}: {e}')
+                    except Exception as e:
+                        log.warning(f'❌ Error recibiendo datos: {e}')
                         await ws.close()
                         break
-                    except Exception as e:
-                        log.warning(f'❌ Error recibiendo datos de {symbol}: {e}')
-                        await ws.close()
-                        tick('data_feed')
-                        raise
-                    try:
-                        data = json.loads(msg)
-                    except json.JSONDecodeError as e:
-                        log.warning(
-                            f'❌ Error al decodificar JSON en {symbol}: {e}')
+
+                    if 'stream' in data:
+                        stream = data['stream']
+                        norm = stream.split('@')[0]
+                        symbol = next((s for s in handlers if normalizar_symbolo(s) == norm), None)
+                        if not symbol:
+                            continue
+                        payload = data.get('data', {})
+                    else:
+                        symbol = next(iter(handlers))
+                        payload = data
+
+                    h = handlers[symbol]
+                    vela = h['parser'](payload)
+                    if not vela:
                         continue
-                    except Exception as e:
-                        log.warning(
-                            f'❌ Error procesando mensaje dentro del bucle {symbol}: {e}'
-                            )
-                        tick('data_feed')
-                        continue
-                    if data.get('e') != 'kline':
-                        log.debug(
-                            f"⚠️ Evento no esperado en {symbol}: {data.get('e')}"
-                            )
-                        continue
-                    try:
-                        vela = data['k']
-                        if vela['x']:
-                            log.info(
-                                f"✅ Vela cerrada {symbol} — Close: {vela['c']}, Vol: {vela['v']}"
-                            )
-                            latencia = datetime.utcnow().timestamp() * 1000 - vela['t']
-                            log.debug(
-                                f"⏱️ Latencia de vela {symbol}: {latencia:.0f} ms"
-                            )
-                            ultimo_timestamp = await _rellenar_gaps(
-                                callback,
-                                symbol,
-                                ultimo_timestamp,
-                                ultimo_cierre,
-                                vela['t'],
-                                intervalo_ms,
-                            )
-                            await callback(
-                                {
-                                    'symbol': symbol,
-                                    'timestamp': vela['t'],
-                                    'open': float(vela['o']),
-                                    'high': float(vela['h']),
-                                    'low': float(vela['l']),
-                                    'close': float(vela['c']),
-                                    'volume': float(vela['v']),
-                                }
-                            )
-                            ultimo_timestamp = vela['t']
-                            ultimo_cierre = float(vela['c'])
-                            tick('data_feed')
-                    except Exception as e:
-                        log.warning(f'❌ Error en callback de {symbol}: {e}')
-                        tick('data_feed')
-                        traceback.print_exc()
+
+                    h['ultimo_timestamp'] = await _rellenar_gaps(
+                        h['callback'],
+                        symbol,
+                        h.get('ultimo_timestamp'),
+                        h.get('ultimo_cierre'),
+                        vela['timestamp'],
+                        h['intervalo_ms'],
+                    )
+                    await h['callback'](vela)
+                    h['ultimo_timestamp'] = vela['timestamp']
+                    h['ultimo_cierre'] = vela['close']
+                    last_message[symbol] = datetime.utcnow()
+                    tick('data_feed')
             finally:
                 log.info(
-                    f"🔻 WebSocket desconectado para {symbol} a las {datetime.utcnow().isoformat()}"
+                    f"🔻 WebSocket desconectado de {url} a las {datetime.utcnow().isoformat()}"
                 )
-                if backfill_task:
+                for t in backfill_tasks:
                     try:
-                        await backfill_task
+                        await t
                     except Exception as e:
-                        log.debug(
-                            f'Error en backfill de {symbol}: {e}'
-                        )
+                        log.debug(f'Error en backfill: {e}')
                         tick('data_feed')
-                for t in (watchdog, keeper):
+                for t in watchdogs + [keeper]:
                     t.cancel()
-                for t in (watchdog, keeper):
+                for t in watchdogs + [keeper]:
                     try:
                         await t
                     except InactividadTimeoutError:
                         raise
                     except Exception as e:
                         log.debug(
-                            f'Error al esperar tarea cancelada de {symbol}: {e}'
+                            f'Error al esperar tarea cancelada: {e}'
                         )
                         tick('data_feed')
                 try:
                     await ws.close()
                     await ws.wait_closed()
                 except Exception as e:
-                    log.warning(f'Error al cerrar WebSocket de {symbol}: {e}')
+                    log.debug(f'Error al cerrar WebSocket: {e}')
                     tick('data_feed')
         except asyncio.CancelledError:
-            log.info(f'🛑 Conexión WebSocket de {symbol} cancelada.')
+            log.info('🛑 Conexión WebSocket cancelada.')
             break
         except Exception as e:
             fallos_consecutivos += 1
             total_reintentos += 1
-            log.warning(f'❌ Error en WebSocket de {symbol}: {e}')
+            log.warning(f'❌ Error en WebSocket: {e}')
             traceback.print_exc()
             log.info(
                 f'🔁 Reintentando conexión en {backoff} segundos... (total reintentos: {total_reintentos})'
@@ -354,6 +310,70 @@ async def escuchar_velas(
                 )
 
 
+async def escuchar_velas(
+    symbol: str,
+    intervalo: str,
+    callback,
+    last_message: dict[str, datetime] | None = None,
+    tiempo_maximo: int | None = None,
+    ping_interval: int | None = None,
+    cliente=None,
+    mensaje_timeout: int | None = None,
+):
+    """Escucha velas cerradas de ``symbol`` delegando la gestión al helper."""
+    if not isinstance(symbol, str) or '/' not in symbol:
+        raise ValueError(f'Símbolo inválido: {symbol}')
+    if intervalo not in INTERVALOS_VALIDOS:
+        raise ValueError(f'Intervalo inválido: {intervalo}')
+    url = f'wss://stream.binance.com:9443/ws/{normalizar_symbolo(symbol)}@kline_{intervalo}'
+    if last_message is None:
+        last_message = {}
+    if tiempo_maximo is None:
+        tiempo_maximo = max(intervalo_a_segundos(intervalo) * 4, 60)
+    if ping_interval is None:
+        ping_interval = 30
+    if mensaje_timeout is None:
+        mensaje_timeout = tiempo_maximo
+    intervalo_ms = intervalo_a_segundos(intervalo) * 1000
+
+    def parser(data):
+        if data.get('e') != 'kline':
+            return None
+        k = data['k']
+        if not k['x']:
+            return None
+        return {
+            'symbol': symbol,
+            'timestamp': k['t'],
+            'open': float(k['o']),
+            'high': float(k['h']),
+            'low': float(k['l']),
+            'close': float(k['c']),
+            'volume': float(k['v']),
+        }
+
+    handlers = {
+        symbol: {
+            'callback': callback,
+            'parser': parser,
+            'ultimo_timestamp': None,
+            'ultimo_cierre': None,
+            'intervalo': intervalo,
+            'intervalo_ms': intervalo_ms,
+        }
+    }
+
+    await _gestionar_ws(
+        url,
+        handlers,
+        last_message,
+        tiempo_maximo,
+        ping_interval,
+        mensaje_timeout,
+        cliente,
+    )
+
+
 async def escuchar_velas_combinado(
     symbols: list[str],
     intervalo: str,
@@ -364,12 +384,7 @@ async def escuchar_velas_combinado(
     cliente=None,
     mensaje_timeout: int | None = None,
 ):
-    """Escucha velas cerradas de múltiples símbolos usando un stream combinado.
-
-    Cada símbolo debe contar con un handler asociado en ``handlers``. El payload
-    recibido se despachará al handler según el campo ``stream`` del mensaje.
-    """
-    log.debug('➡️ Entrando en escuchar_velas_combinado()')
+    """Escucha velas de múltiples símbolos usando un stream combinado."""
     if not symbols:
         raise ValueError('Debe proporcionarse al menos un símbolo')
     if intervalo not in INTERVALOS_VALIDOS:
@@ -390,256 +405,45 @@ async def escuchar_velas_combinado(
         ping_interval = 30
     if mensaje_timeout is None:
         mensaje_timeout = tiempo_maximo
-    fallos_consecutivos = 0
-    total_reintentos = 0
-    backoff = 5
-    ultimo_timestamp: dict[str, int | None] = {s: None for s in symbols}
-    ultimo_cierre: dict[str, float | None] = {s: None for s in symbols}
     intervalo_ms = intervalo_a_segundos(intervalo) * 1000
-    while True:
-        try:
-            ws = await asyncio.wait_for(
-                websockets.connect(
-                    url,
-                    open_timeout=10,
-                    close_timeout=10,
-                    ping_interval=20,
-                    ping_timeout=20,
-                    max_size=2 ** 20,
-                ),
-                timeout=15,
-            )
-            log.info(
-                f"🔌 WebSocket combinado conectado para {symbols} ({intervalo}) a las {datetime.utcnow().isoformat()}"
-            )
-            _habilitar_tcp_keepalive(ws)
-            fallos_consecutivos = 0
-            backoff = 5
-            for s in symbols:
-                last_message[s] = datetime.utcnow()
-            # Cada símbolo posee su propio watchdog. Si uno de ellos detecta
-            # inactividad forzará el cierre del WebSocket compartido para
-            # reconectar el stream completo. Esta lógica simplifica la
-            # reconexión, pero implica que la pérdida de datos de un par
-            # provoca un reinicio global afectando temporalmente a los demás.
-            watchdogs = [
-                asyncio.create_task(_watchdog(ws, s, last_message, tiempo_maximo))
-                for s in symbols
-            ]
-            keeper = asyncio.create_task(
-                _keepalive(ws, 'combined', ping_interval)
-            )
+    ws_handlers = {}
+    for s in symbols:
+        def make_parser(sym):
+            def parser(data):
+                if data.get('e') != 'kline':
+                    return None
+                k = data['k']
+                if not k['x']:
+                    return None
+                return {
+                    'symbol': sym,
+                    'timestamp': k['t'],
+                    'open': float(k['o']),
+                    'high': float(k['h']),
+                    'low': float(k['l']),
+                    'close': float(k['c']),
+                    'volume': float(k['v']),
+                }
+            return parser
 
-            backfill_tasks = []
-            if cliente:
-                for s in symbols:
-                    ts = ultimo_timestamp.get(s)
-                    if ts is None:
-                        continue
-                    async def _backfill_symbol(symbol=s, ts=ts):
-                        intentos = 0
-                        espera = 1
-                        while True:
-                            try:
-                                ahora = int(datetime.utcnow().timestamp() * 1000)
-                                faltan = max(1, (ahora - ts) // intervalo_ms)
-                                limite = min(faltan, MAX_BACKFILL_CANDLES)
-                                ohlcv = await asyncio.wait_for(
-                                    fetch_ohlcv_async(
-                                        cliente,
-                                        symbol=symbol,
-                                        timeframe=intervalo,
-                                        since=ts + 1,
-                                        limit=limite,
-                                    ),
-                                    timeout=10,
-                                )
-                                for o in ohlcv:
-                                    tss = o[0]
-                                    if tss > ts:
-                                        uc = ultimo_cierre.get(symbol)
-                                        ts = await _rellenar_gaps(
-                                            handlers[symbol],
-                                            symbol,
-                                            ts,
-                                            uc,
-                                            tss,
-                                            intervalo_ms,
-                                        )
-                                        await handlers[symbol](
-                                            {
-                                                'symbol': symbol,
-                                                'timestamp': tss,
-                                                'open': float(o[1]),
-                                                'high': float(o[2]),
-                                                'low': float(o[3]),
-                                                'close': float(o[4]),
-                                                'volume': float(o[5]),
-                                            }
-                                        )
-                                        ultimo_timestamp[symbol] = tss
-                                        ultimo_cierre[symbol] = float(o[4])
-                                break
-                            except Exception as e:
-                                intentos += 1
-                                if intentos >= 3:
-                                    log.warning(
-                                        f'❌ Error al backfillear {symbol} tras {intentos} intentos: {e}'
-                                    )
-                                    tick('data_feed')
-                                    break
-                                await asyncio.sleep(espera)
-                                espera *= 2
+        ws_handlers[s] = {
+            'callback': handlers[s],
+            'parser': make_parser(s),
+            'ultimo_timestamp': None,
+            'ultimo_cierre': None,
+            'intervalo': intervalo,
+            'intervalo_ms': intervalo_ms,
+        }
 
-                    backfill_tasks.append(asyncio.create_task(_backfill_symbol()))  # paralelo
-            try:
-                while True:
-                    try:
-                        if mensaje_timeout:
-                            msg = await asyncio.wait_for(
-                                ws.recv(), timeout=mensaje_timeout
-                            )
-                        else:
-                            msg = await ws.recv()
-                    except asyncio.TimeoutError:
-                        log.warning(
-                            f'⏰ Sin datos en {mensaje_timeout}s, forzando reconexión'
-                        )
-                        await ws.close()
-                        break
-                    except ConnectionClosed as e:
-                        log.warning(
-                            f"🚪 WebSocket cerrado — Código: {e.code}, Motivo: {e.reason}"
-                        )
-                        await ws.close()
-                        break
-                    except (ConnectionError, asyncio.TimeoutError) as e:
-                        log.warning(f'❌ Conexión perdida: {e}')
-                        await ws.close()
-                        break
-                    except Exception as e:
-                        log.warning(f'❌ Error recibiendo datos: {e}')
-                        await ws.close()
-                        tick('data_feed')
-                        raise
-                    try:
-                        data = json.loads(msg)
-                    except json.JSONDecodeError as e:
-                        log.warning(f'❌ Error al decodificar JSON: {e}')
-                        continue
-                    except Exception as e:
-                        log.warning(
-                            f'❌ Error procesando mensaje dentro del bucle combinado: {e}'
-                        )
-                        tick('data_feed')
-                        continue
-                    stream = data.get('stream')
-                    payload = data.get('data', {})
-                    if not stream or payload.get('e') != 'kline':
-                        log.warning(f"⚠️ Evento no esperado: {data}")
-                        continue
-                    sym_norm = stream.split('@')[0]
-                    symbol = normalizados.get(sym_norm)
-                    if not symbol:
-                        log.warning(f'⚠️ Símbolo desconocido en stream {stream}')
-                        continue
-                    last_message[symbol] = datetime.utcnow()
-                    try:
-                        vela = payload['k']
-                        if vela['x']:
-                            log.info(
-                                f"✅ Vela cerrada {symbol} — Close: {vela['c']}, Vol: {vela['v']}"
-                            )
-                            latencia = (
-                                datetime.utcnow().timestamp() * 1000 - vela['t']
-                            )
-                            log.debug(
-                                f"⏱️ Latencia de vela {symbol}: {latencia:.0f} ms"
-                            )
-                            ts_prev = ultimo_timestamp.get(symbol)
-                            uc = ultimo_cierre.get(symbol)
-                            ts_prev = await _rellenar_gaps(
-                                handlers[symbol],
-                                symbol,
-                                ts_prev,
-                                uc,
-                                vela['t'],
-                                intervalo_ms,
-                            )
-                            if ts_prev is not None:
-                                ultimo_timestamp[symbol] = ts_prev
-                            await handlers[symbol](
-                                {
-                                    'symbol': symbol,
-                                    'timestamp': vela['t'],
-                                    'open': float(vela['o']),
-                                    'high': float(vela['h']),
-                                    'low': float(vela['l']),
-                                    'close': float(vela['c']),
-                                    'volume': float(vela['v']),
-                                }
-                            )
-                            ultimo_timestamp[symbol] = vela['t']
-                            ultimo_cierre[symbol] = float(vela['c'])
-                            tick('data_feed')
-                    except Exception as e:
-                        log.warning(f'❌ Error en callback de {symbol}: {e}')
-                        tick('data_feed')
-                        traceback.print_exc()
-            finally:
-                log.info(
-                    f"🔻 WebSocket combinado desconectado para {symbols} a las {datetime.utcnow().isoformat()}"
-                )
-                for t in backfill_tasks:
-                    try:
-                        await t
-                    except Exception as e:
-                        log.debug(
-                            f'Error en backfill del stream combinado: {e}'
-                        )
-                        tick('data_feed')
-                for t in watchdogs + [keeper]:
-                    t.cancel()
-                for t in watchdogs + [keeper]:
-                    try:
-                        await t
-                    except InactividadTimeoutError:
-                        raise
-                    except Exception as e:
-                        log.debug(
-                            f'Error al esperar tarea cancelada del stream combinado: {e}'
-                        )
-                        tick('data_feed')
-                try:
-                    await ws.close()
-                    await ws.wait_closed()
-                except Exception as e:
-                    log.debug(
-                        f'Error al cerrar WebSocket del stream combinado: {e}'
-                    )
-                    tick('data_feed')
-        except asyncio.CancelledError:
-            log.info('🛑 Conexión WebSocket combinada cancelada.')
-            break
-        except Exception as e:
-            fallos_consecutivos += 1
-            total_reintentos += 1
-            log.warning(f'❌ Error en WebSocket combinado: {e}')
-            traceback.print_exc()
-            log.info(
-                f'🔁 Reintentando conexión en {backoff} segundos... (total reintentos: {total_reintentos})'
-            )
-            _registrar_reconexion()
-            tick('data_feed')
-            await asyncio.sleep(backoff)
-            previo = backoff
-            backoff = min(MAX_BACKOFF, backoff * 2)
-            if backoff == MAX_BACKOFF and previo < MAX_BACKOFF:
-                log.warning(f'⚠️ Backoff máximo alcanzado: {MAX_BACKOFF}s')
-            elif fallos_consecutivos >= 5:
-                log.warning(
-                    f'⏳ {fallos_consecutivos} fallos consecutivos. Nuevo backoff: {backoff}s'
-                )
+    await _gestionar_ws(
+        url,
+        ws_handlers,
+        last_message,
+        tiempo_maximo,
+        ping_interval,
+        mensaje_timeout,
+        cliente,
+    )
 
 
 async def _watchdog(
