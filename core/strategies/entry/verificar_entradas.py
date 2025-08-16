@@ -6,8 +6,12 @@ from core.adaptador_dinamico import calcular_umbral_adaptativo, calcular_tp_sl_a
 from core.config_manager.dinamica import adaptar_configuracion
 from core.data import coincidencia_parcial
 from core.estrategias import filtrar_por_direccion
-from indicadores.tendencia import obtener_tendencia
-from core.strategies.evaluador_tecnico import evaluar_puntaje_tecnico, calcular_umbral_adaptativo as calc_umbral_tecnico, cargar_pesos_tecnicos
+from core.strategies.tendencia import obtener_tendencia
+from core.strategies.evaluador_tecnico import (
+    evaluar_puntaje_tecnico,
+    calcular_umbral_adaptativo as calc_umbral_tecnico,
+    cargar_pesos_tecnicos,
+)
 from indicators.helpers import get_rsi, get_momentum, get_atr
 from core.utils.utils import distancia_minima_valida, verificar_integridad_datos
 from core.contexto_externo import obtener_puntaje_contexto

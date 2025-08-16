@@ -7,7 +7,7 @@ from collections import deque
 import numpy as np
 import pandas as pd
 from core.utils.utils import configurar_logger, obtener_uso_recursos
-from indicadores.tendencia import obtener_tendencia
+from core.strategies.tendencia import obtener_tendencia
 from indicators.helpers import clear_cache
 from core.indicadores import get_rsi, get_momentum, get_atr
 

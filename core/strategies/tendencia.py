@@ -9,12 +9,10 @@ from core.utils.utils import configurar_logger
 log = configurar_logger("tendencia")
 
 
-def detectar_tendencia(symbol: str, df: pd.DataFrame) -> tuple[str, dict[str, bool]]:
-    log.info("➡️ Entrando en detectar_tendencia()")
-    """Evalúa la tendencia del mercado de forma simétrica para alza y baja."""
-    if df is None or df.empty or "close" not in df.columns or len(df) < 60:
-        log.warning(f"⚠️ Datos insuficientes para detectar tendencia en {symbol}")
-        return "lateral", {}
+def _calcular_tendencia_base(
+    df: pd.DataFrame,
+) -> tuple[float, float, float | None, float | None, int, int]:
+    """Calcula métricas básicas de tendencia a partir de ``df``."""
     df = df.copy()
     df["ema_fast"] = df["close"].ewm(span=10, adjust=False).mean()
     df["ema_slow"] = df["close"].ewm(span=30, adjust=False).mean()
@@ -42,6 +40,24 @@ def detectar_tendencia(symbol: str, df: pd.DataFrame) -> tuple[str, dict[str, bo
     if adx > 20:
         puntos_alcista += 1
         puntos_bajista += 1
+
+    return delta, slope, rsi, adx, puntos_alcista, puntos_bajista
+
+
+def detectar_tendencia(symbol: str, df: pd.DataFrame) -> tuple[str, dict[str, bool]]:
+    log.info("➡️ Entrando en detectar_tendencia()")
+    """Evalúa la tendencia del mercado de forma simétrica para alza y baja."""
+    if df is None or df.empty or "close" not in df.columns or len(df) < 60:
+        log.warning(f"⚠️ Datos insuficientes para detectar tendencia en {symbol}")
+        return "lateral", {}
+    (
+        delta,
+        slope,
+        rsi,
+        adx,
+        puntos_alcista,
+        puntos_bajista,
+    ) = _calcular_tendencia_base(df)
     if puntos_alcista >= 2 and puntos_alcista > puntos_bajista:
         tendencia = "alcista"
     elif puntos_bajista >= 2 and puntos_bajista > puntos_alcista:
@@ -68,18 +84,11 @@ def detectar_tendencia(symbol: str, df: pd.DataFrame) -> tuple[str, dict[str, bo
     return tendencia, estrategias_activas
 
 
-def obtener_tendencia(trader, symbol: str, df: pd.DataFrame, clave: str | None = None) -> str:
+def obtener_tendencia(symbol: str, df: pd.DataFrame) -> str:
     log.info("➡️ Entrando en obtener_tendencia()")
-    """Obtiene la tendencia usando cache en ``trader.estado_tendencia``.
+    """Envuelve :func:`detectar_tendencia` y devuelve solo la tendencia."""
 
-    Si no existe una tendencia guardada para la clave indicada, la detecta
-    y la almacena para reutilizaciones futuras.
-    """
-    key = clave or symbol
-    tendencia = trader.estado_tendencia.get(key)
-    if not tendencia:
-        tendencia, _ = detectar_tendencia(symbol, df)
-        trader.estado_tendencia[key] = tendencia
+    tendencia, _ = detectar_tendencia(symbol, df)
     return tendencia
 
 

@@ -5,7 +5,7 @@ import pandas as pd
 from core.utils import configurar_logger
 from core.contexto_externo import obtener_puntaje_contexto
 from indicators.helpers import get_rsi, get_momentum, get_atr
-from indicadores.tendencia import obtener_tendencia
+from core.strategies.tendencia import obtener_tendencia
 from .salida_stoploss import verificar_salida_stoploss
 from .salida_trailing_stop import verificar_trailing_stop
 from .salida_por_tendencia import verificar_reversion_tendencia
