@@ -14,22 +14,71 @@ UTC = timezone.utc
 from .loader_salidas import cargar_estrategias_salida
 
 
+
+# Mapa de prioridades para políticas de salida.
+# Un número mayor implica mayor prioridad de ejecución.
+PRIORIDADES = {
+    "Kill Switch": 5,
+    "Trailing/Break-even": 4,
+    "Take-Profit": 3,
+    "Stop-Loss": 2,
+    "Cierre por tiempo": 1,
+}
+
+
+def _clasificar_politica(evento: str, resultado: dict) -> str | None:
+    """Devuelve la política asociada a un evento de salida."""
+    e = (evento or "").lower()
+    if "kill" in e or resultado.get("kill_switch"):
+        return "Kill Switch"
+    if "trailing" in e:
+        return "Trailing/Break-even"
+    if "break" in e and "even" in e or resultado.get("break_even"):
+        return "Trailing/Break-even"
+    if "take" in e and "profit" in e or "tp" in e:
+        return "Take-Profit"
+    if "stop" in e and "loss" in e or "sl" in e:
+        return "Stop-Loss"
+    if "tiempo" in e or "t_max" in e or "perdida" in e and "tiempo" in e:
+        return "Cierre por tiempo"
+    return None
+
+
 async def evaluar_salidas(orden: dict, df, config=None, contexto=None):
     log.info('➡️ Entrando en evaluar_salidas()')
     symbol = orden.get('symbol', 'SYM')
     if not validar_dataframe(df, ['close', 'high', 'low', 'volume']):
         log.warning(f'[{symbol}] DataFrame inválido para gestor de salidas')
         return {'cerrar': False, 'razon': 'Datos insuficientes'}
+    
     cfg = config or {}
     now = datetime.now(UTC)
+    acciones_prioritarias = []
+
+    # Kill switch global
+    if cfg.get('kill_switch') or orden.get('kill_switch'):
+        acciones_prioritarias.append(
+            {
+                'evento': 'Kill Switch',
+                'resultado': {'cerrar': True, 'razon': 'Kill Switch'},
+                'prioridad': PRIORIDADES['Kill Switch'],
+            }
+        )
+
+    # Cierre por tiempo de vida de la orden
     t_max = cfg.get('t_max')
     timestamp = orden.get('timestamp')
     if t_max and timestamp:
         try:
             abierto = datetime.fromisoformat(str(timestamp))
             if (now - abierto).total_seconds() >= t_max:
-                log.info(f'[{symbol}] Cierre por t_max alcanzado')
-                return {'cerrar': True, 'razon': 'Expiración t_max'}
+                acciones_prioritarias.append(
+                    {
+                        'evento': 'Expiración t_max',
+                        'resultado': {'cerrar': True, 'razon': 'Cierre por tiempo'},
+                        'prioridad': PRIORIDADES['Cierre por tiempo'],
+                    }
+                )
         except Exception as e:
             log.warning(f'[{symbol}] Error evaluando t_max: {e}')
     t_max_loss = cfg.get('t_max_loss')
@@ -37,8 +86,11 @@ async def evaluar_salidas(orden: dict, df, config=None, contexto=None):
         precio_actual = float(df['close'].iloc[-1])
         precio_entrada = orden.get('precio_entrada', precio_actual)
         direccion = orden.get('direccion', 'long')
-        en_perdida = (direccion in ('long', 'compra') and precio_actual < precio_entrada) or (
-            direccion in ('short', 'venta') and precio_actual > precio_entrada)
+        en_perdida = (
+            direccion in ('long', 'compra') and precio_actual < precio_entrada
+        ) or (
+            direccion in ('short', 'venta') and precio_actual > precio_entrada
+        )
         if en_perdida:
             inicio = orden.get('t_inicio_perdida')
             if not inicio:
@@ -47,15 +99,20 @@ async def evaluar_salidas(orden: dict, df, config=None, contexto=None):
                 try:
                     t_inicio = datetime.fromisoformat(str(inicio))
                     if (now - t_inicio).total_seconds() >= t_max_loss:
-                        log.info(f'[{symbol}] Cierre por permanencia en pérdida')
-                        return {'cerrar': True, 'razon': 'Tiempo en pérdida excedido'}
+                        acciones_prioritarias.append(
+                            {
+                                'evento': 'Tiempo en pérdida excedido',
+                                'resultado': {'cerrar': True, 'razon': 'Cierre por tiempo'},
+                                'prioridad': PRIORIDADES['Cierre por tiempo'],
+                            }
+                        )
                 except Exception:
                     orden['t_inicio_perdida'] = now.isoformat()
         else:
             orden.pop('t_inicio_perdida', None)
     funciones = cargar_estrategias_salida()
-    resultados = []
-    PRIORIDAD_ABSOLUTA = {'Stop Loss', 'Estrategia: Cambio de tendencia'}
+    señales = []
+
     for f in funciones:
         if not callable(f):
             continue
@@ -99,31 +156,52 @@ async def evaluar_salidas(orden: dict, df, config=None, contexto=None):
                 return {'cerrar': True, 'razon': 'Targets completados'}
             continue
 
-        if resultado.get('cerrar', False):
-            evento = resultado.get('evento', resultado.get('razon', 'Sin motivo'))
-            razon = resultado.get('razon', 'Sin motivo')
-            if evento in PRIORIDAD_ABSOLUTA:
-                log.info(f'[{symbol}] Cierre prioritario por {evento}')
-                return {'cerrar': True, 'razon': evento}
-            resultados.append(evento)
-    peso_total = sum(obtener_peso_salida(razon, symbol) for razon in resultados
-        )
+        evento = resultado.get('evento') or resultado.get('razon') or resultado.get('motivo')
+        politica = None
+        if resultado.get('cerrar') or resultado.get('break_even') or resultado.get('kill_switch'):
+            politica = _clasificar_politica(evento, resultado)
+
+        if politica:
+            acciones_prioritarias.append(
+                {
+                    'evento': evento or politica,
+                    'resultado': resultado,
+                    'prioridad': PRIORIDADES.get(politica, 0),
+                }
+            )
+            continue
+
+        if resultado.get('cerrar'):
+            señales.append(evento or 'Sin motivo')
+
+    if acciones_prioritarias:
+        accion = max(acciones_prioritarias, key=lambda x: x['prioridad'])
+        res = accion['resultado']
+        res.setdefault('razon', accion['evento'])
+        return res
+    
+    peso_total = sum(obtener_peso_salida(razon, symbol) for razon in señales)
     umbral = calcular_umbral_salida_adaptativo(symbol, config or {}, contexto)
     min_conf = (config or {}).get('min_confirmaciones_salida', 1)
     log.info(
-        f'[SALIDA] {symbol} | Score: {peso_total:.2f} | Umbral: {umbral:.2f} | Señales: {resultados}'
-        )
-    cerrar = peso_total >= umbral and len(resultados) >= min_conf
+        f'[SALIDA] {symbol} | Score: {peso_total:.2f} | Umbral: {umbral:.2f} | Señales: {señales}'
+    )
+    cerrar = peso_total >= umbral and len(señales) >= min_conf
     if cerrar:
-        razon = (
-            f'Score {peso_total:.2f} ≥ {umbral:.2f} con {len(resultados)} señales'
-            )
+        razon = f'Score {peso_total:.2f} ≥ {umbral:.2f} con {len(señales)} señales'
     else:
-        razon = (f'Score insuficiente {peso_total:.2f} < {umbral:.2f}' if 
-            len(resultados) >= min_conf else
-            f'Señales insuficientes: {len(resultados)}/{min_conf}')
-    return {'cerrar': cerrar, 'razon': razon, 'detalles': resultados,
-        'score': peso_total, 'umbral': umbral}
+        razon = (
+            f'Score insuficiente {peso_total:.2f} < {umbral:.2f}'
+            if len(señales) >= min_conf
+            else f'Señales insuficientes: {len(señales)}/{min_conf}'
+        )
+    return {
+        'cerrar': cerrar,
+        'razon': razon,
+        'detalles': señales,
+        'score': peso_total,
+        'umbral': umbral,
+    }
 
 
 async def verificar_filtro_tecnico(symbol, df, estrategias_activas, pesos_symbol,
