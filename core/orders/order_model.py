@@ -1,6 +1,17 @@
 from dataclasses import dataclass, asdict
 from typing import Dict, Any, Optional
 import json
+import math
+
+
+def ajustar_tick_size(precio: float, tick_size: float, direccion: str = 'long') -> float:
+    """Ajusta un precio al múltiplo de ``tick_size`` según la dirección."""
+    if tick_size <= 0:
+        return precio
+    factor = precio / tick_size
+    if direccion in ('short', 'venta'):
+        return math.ceil(factor) * tick_size
+    return math.floor(factor) * tick_size
 
 
 @dataclass

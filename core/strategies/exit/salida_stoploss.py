@@ -11,8 +11,28 @@ from indicators.helpers import get_rsi, get_momentum, get_slope
 from indicators.vwap import calcular_vwap
 from core.scoring import calcular_score_tecnico
 from config.exit_defaults import load_exit_config
+from core.orders.order_model import ajustar_tick_size
 log = configurar_logger('salida_stoploss')
 pesos = gestor_pesos.pesos
+
+
+def stoploss_pct(precio_entrada: float, pct_sl: float, tick_size: float, direccion: str='long') -> float:
+    """Calcula el stop loss basado en un porcentaje."""
+    factor = 1 - pct_sl / 100 if direccion in ('long', 'compra') else 1 + pct_sl / 100
+    sl = precio_entrada * factor
+    return ajustar_tick_size(sl, tick_size, direccion)
+
+
+def stoploss_price(precio_entrada: float, distancia: float, tick_size: float, direccion: str='long') -> float:
+    """Calcula el stop loss a una distancia fija en precio."""
+    sl = precio_entrada - distancia if direccion in ('long', 'compra') else precio_entrada + distancia
+    return ajustar_tick_size(sl, tick_size, direccion)
+
+
+def stoploss_atr(precio_entrada: float, atr: float, mult_atr: float, tick_size: float, direccion: str='long') -> float:
+    """Calcula el stop loss usando múltiplos del ATR."""
+    sl = precio_entrada - atr * mult_atr if direccion in ('long', 'compra') else precio_entrada + atr * mult_atr
+    return ajustar_tick_size(sl, tick_size, direccion)
 
 
 def validar_sl_tecnico(df: pd.DataFrame, direccion: str='long') ->bool:
