@@ -39,22 +39,43 @@ def salida_trailing_stop(orden: dict, df: pd.DataFrame, config: dict=None
             return resultado_salida('Trailing Stop', False, 'ATR no disponible'
                 )
         pct = cfg['trailing_pct']
+        activacion = cfg.get('trailing_activacion', 0.0)
+        entrada = orden.get('precio_entrada', precio_actual)
+        nivel_activacion = entrada + activacion if direccion in ('long', 'compra') else entrada - activacion
+        if not orden.get('trailing_activo'):
+            if (direccion in ('long', 'compra') and precio_actual >= nivel_activacion) or (
+                direccion in ('venta', 'short') and precio_actual <= nivel_activacion
+            ):
+                orden['trailing_activo'] = True
+                orden['max_precio'] = precio_actual
+            else:
+                return resultado_salida('Trailing Stop', False, 'Activación no alcanzada')
         trailing_dist = max(atr * atr_mult, precio_actual * pct)
         if 'max_precio' not in orden:
-            orden['max_precio'] = orden['precio_entrada']
+            orden['max_precio'] = entrada
         if direccion in ['compra', 'long']:
             if precio_actual > orden['max_precio']:
                 orden['max_precio'] = precio_actual
-            elif precio_actual < orden['max_precio'] - trailing_dist:
+            sl_nuevo = orden['max_precio'] - trailing_dist
+            sl_actual = orden.get('sl_trailing')
+            tick = orden.get('tickSize', orden.get('tick_size', 0)) or 0
+            if sl_actual is None or (sl_nuevo - sl_actual >= 2 * tick and sl_nuevo > sl_actual):
+                orden['sl_trailing'] = sl_nuevo
+            if precio_actual <= orden.get('sl_trailing', sl_nuevo):
                 return resultado_salida('Trailing Stop', True,
-                    f"Trailing Stop activado (long) → Max: {orden['max_precio']:.2f}, Precio actual: {precio_actual:.2f}"
+                    f"Trailing Stop activado (long) → Max: {orden['max_precio']:.2f}, SL: {orden['sl_trailing']:.2f}, Precio actual: {precio_actual:.2f}"
                     , logger=log)
-        elif direccion in ['venta', 'short']:
+        else:
             if precio_actual < orden['max_precio']:
                 orden['max_precio'] = precio_actual
-            elif precio_actual > orden['max_precio'] + trailing_dist:
+            sl_nuevo = orden['max_precio'] + trailing_dist
+            sl_actual = orden.get('sl_trailing')
+            tick = orden.get('tickSize', orden.get('tick_size', 0)) or 0
+            if sl_actual is None or (sl_actual - sl_nuevo >= 2 * tick and sl_nuevo < sl_actual):
+                orden['sl_trailing'] = sl_nuevo
+            if precio_actual >= orden.get('sl_trailing', sl_nuevo):
                 return resultado_salida('Trailing Stop', True,
-                    f"Trailing Stop activado (short) → Min: {orden['max_precio']:.2f}, Precio actual: {precio_actual:.2f}"
+                    f"Trailing Stop activado (short) → Min: {orden['max_precio']:.2f}, SL: {orden['sl_trailing']:.2f}, Precio actual: {precio_actual:.2f}"
                     , logger=log)
         return resultado_salida('Trailing Stop', False, 'Trailing no activado')
     except (KeyError, ValueError, TypeError) as e:
@@ -93,33 +114,47 @@ def verificar_trailing_stop(info: dict, precio_actual: float, df: (pd.DataFrame 
     trailing_start_ratio = cfg['trailing_start_ratio']
     atr_mult = cfg['atr_multiplicador']
     usar_atr = cfg['trailing_por_atr']
+    activacion = cfg.get('trailing_activacion', 0.0)
     atr = get_atr(df) if df is not None else None
     if atr is None:
         return False, 'ATR no disponible'
-    trailing_trigger = entrada * trailing_start_ratio
-    if max_price >= trailing_trigger:
+    direccion = info.get('direccion', 'long')
+    if activacion:
+        trigger_price = entrada + activacion if direccion in ('long', 'compra') else entrada - activacion
+    else:
+        trigger_price = entrada * trailing_start_ratio
+    if max_price >= trigger_price:
         if usar_atr:
-            trailing_stop = max_price - atr * atr_mult
+            trailing_stop = max_price - atr * atr_mult if direccion in ('long', 'compra') else max_price + atr * atr_mult
         else:
             distancia_ratio = cfg['trailing_distance_ratio'] if config is None else config.get('trailing_distance_ratio', cfg['trailing_distance_ratio'])
-            trailing_stop = max_price * (1 - distancia_ratio)
+            trailing_stop = max_price * (1 - distancia_ratio) if direccion in ('long', 'compra') else max_price * (1 + distancia_ratio)
         if cfg['uso_trailing_technico'] and df is not None and len(df) >= 5:
             soporte = df['low'].rolling(window=5).min().iloc[-1]
             resistencia = df['high'].rolling(window=5).max().iloc[-1]
-            if info.get('direccion', 'long') in ('long', 'compra'):
+            if direccion in ('long', 'compra'):
                 trailing_stop = max(trailing_stop, soporte)
             else:
                 trailing_stop = min(trailing_stop, resistencia)
-        if info.get('direccion', 'long') in ('long', 'compra'):
-            if precio_actual <= trailing_stop:
+        tick = info.get('tickSize', info.get('tick_size', 0)) or 0
+        sl_actual = info.get('sl_trailing')
+        if sl_actual is None:
+            info['sl_trailing'] = trailing_stop
+        else:
+            movimiento = trailing_stop - sl_actual if direccion in ('long', 'compra') else sl_actual - trailing_stop
+            if movimiento >= 2 * tick and ((direccion in ('long', 'compra') and trailing_stop > sl_actual) or (direccion not in ('long', 'compra') and trailing_stop < sl_actual)):
+                info['sl_trailing'] = trailing_stop
+        sl_usar = info.get('sl_trailing', trailing_stop)
+        if direccion in ('long', 'compra'):
+            if precio_actual <= sl_usar:
                 return (True,
-                    f'Trailing Stop activado — Máximo: {max_price:.2f}, Límite: {trailing_stop:.2f}, Precio actual: {precio_actual:.2f}'
+                    f'Trailing Stop activado — Máximo: {max_price:.2f}, Límite: {sl_usar:.2f}, Precio actual: {precio_actual:.2f}'
                     )
-        elif precio_actual >= trailing_stop:
+        elif precio_actual >= sl_usar:
             return (True,
-                f'Trailing Stop activado — Mínimo: {max_price:.2f}, Límite: {trailing_stop:.2f}, Precio actual: {precio_actual:.2f}'
+                f'Trailing Stop activado — Mínimo: {max_price:.2f}, Límite: {sl_usar:.2f}, Precio actual: {precio_actual:.2f}'
                 )
         return (False,
-            f'Trailing supervisando — Máx {max_price:.2f}, Límite {trailing_stop:.2f}'
+            f'Trailing supervisando — Máx {max_price:.2f}, Límite {sl_usar:.2f}'
             )
     return False, ''

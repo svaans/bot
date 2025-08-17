@@ -27,14 +27,15 @@ def salida_break_even(orden: dict, df: pd.DataFrame, config: (dict | None)=None
             return {'cerrar': False}
         multiplicador = cfg['break_even_atr_mult']
         umbral = atr * multiplicador
+        tp1_alcanzado = orden.get('parcial_cerrado', False)
         if direccion in ('long', 'compra'):
-            if precio_actual >= entrada + umbral:
+            if tp1_alcanzado or precio_actual >= entrada + umbral:
                 log.info(
                     f"🟡 Break-Even activado para {orden.get('symbol', 'SYM')} → SL movido a entrada: {entrada}"
                     )
                 return {'cerrar': False, 'break_even': True, 'nuevo_sl':
                     entrada}
-        elif precio_actual <= entrada - umbral:
+        elif tp1_alcanzado or precio_actual <= entrada - umbral:
             log.info(
                 f"🟡 Break-Even activado para {orden.get('symbol', 'SYM')} → SL movido a entrada: {entrada}"
                 )

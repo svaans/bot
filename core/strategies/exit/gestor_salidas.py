@@ -49,9 +49,23 @@ async def evaluar_salidas(orden: dict, df, config=None, contexto=None):
                 f'❌ Error ejecutando estrategia de salida {getattr(f, "__name__", f)} en {symbol}: {e}'
             )
             raise
+
+        # Manejo de escalado: reducir posición cuando se llenan targets
+        if resultado.get('targets_hit'):
+            cantidad_abierta = orden.get('cantidad_abierta', orden.get('cantidad', 0.0))
+            for t in resultado['targets_hit']:
+                cantidad_abierta -= t.get('qty', 0.0)
+            orden['cantidad_abierta'] = max(cantidad_abierta, 0.0)
+            restantes = [t for t in resultado.get('targets', []) if t not in resultado['targets_hit']]
+            if restantes:
+                orden['targets'] = restantes
+            else:
+                log.info(f'[{symbol}] Todos los targets alcanzados. Posición cerrada')
+                return {'cerrar': True, 'razon': 'Targets completados'}
+            continue
+
         if resultado.get('cerrar', False):
-            evento = resultado.get('evento', resultado.get('razon',
-                'Sin motivo'))
+            evento = resultado.get('evento', resultado.get('razon', 'Sin motivo'))
             razon = resultado.get('razon', 'Sin motivo')
             if evento in PRIORIDAD_ABSOLUTA:
                 log.info(f'[{symbol}] Cierre prioritario por {evento}')
