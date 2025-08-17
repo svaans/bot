@@ -1,5 +1,5 @@
 from __future__ import annotations
-from datetime import datetime
+from datetime import datetime, timezone
 import pandas as pd
 from core.utils import configurar_logger
 from core.adaptador_dinamico import calcular_umbral_adaptativo, calcular_tp_sl_adaptativos
@@ -17,11 +17,12 @@ from core.utils.utils import distancia_minima_valida, verificar_integridad_datos
 from core.contexto_externo import obtener_puntaje_contexto
 from core.metricas_semanales import metricas_tracker
 log = configurar_logger('verificar_entrada')
+UTC = timezone.utc
 
 
 async def verificar_entrada(trader, symbol: str, df: pd.DataFrame, estado) ->(
     dict | None):
-    log.info('➡️ Entrando en verificar_entrada()')
+    log.debug('➡️ Entrando en verificar_entrada()')
     """
     Evalúa condiciones de entrada y devuelve info de operación
     si cumple todos los filtros, de lo contrario None.
@@ -53,7 +54,8 @@ async def verificar_entrada(trader, symbol: str, df: pd.DataFrame, estado) ->(
         metricas_tracker.registrar_filtro('sin_estrategias')
         return None
     log.debug(f'[{symbol}] Estrategias activas: {list(estrategias.keys())}')
-    estado.estrategias_buffer[-1] = estrategias
+    if estado.estrategias_buffer:
+        estado.estrategias_buffer[-1] = estrategias
     trader.persistencia.actualizar(symbol, estrategias)
     buffer_len = len(estado.buffer)
     historico_estrategias = list(estado.estrategias_buffer)[-100:]
@@ -95,7 +97,7 @@ async def verificar_entrada(trader, symbol: str, df: pd.DataFrame, estado) ->(
                 metricas_tracker.registrar_filtro('reentrada_tendencia')
                 return None
             trader.historial_cierres.pop(symbol, None)
-    hoy = datetime.utcnow().date().isoformat()
+    hoy = datetime.now(UTC).date().isoformat()
     limite_base = getattr(trader.config, 'max_perdidas_diarias', 6)
     try:
         ultimo = pd.to_datetime(df['timestamp'].iloc[-1])

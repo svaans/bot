@@ -60,6 +60,23 @@ from core.scoring import calcular_score_tecnico, PESOS_SCORE_TECNICO
 from binance_api.cliente import fetch_ticker_async
 log = configurar_logger('trader')
 LOG_DIR = os.getenv('LOG_DIR', 'logs')
+UTC = timezone.utc
+
+
+def _ts_ms(v: object) -> int:
+    """Convertir cualquier marca de tiempo a milisegundos UTC."""
+    if isinstance(v, (int, float)):
+        return int(v)
+    return int(pd.to_datetime(v, utc=True).view('int64') // 1_000_000)
+
+
+async def safe_notify(coro: Awaitable, timeout: int = 3):
+    """Ejecuta el envío de notificaciones con timeout y captura de errores."""
+    try:
+        return await asyncio.wait_for(coro, timeout=timeout)
+    except Exception as e:
+        log.error(f'❌ Error enviando notificación: {e}')
+        return None
 
 
 @dataclass
@@ -86,7 +103,7 @@ class Trader:
     """Orquesta el flujo de datos y las operaciones de trading."""
 
     def __init__(self, config: Config) ->None:
-        log.info('➡️ Entrando en __init__()')
+        log.debug('➡️ Entrando en __init__()')
         activos, inactivos = filtrar_simbolos_activos(config.symbols, config)
         for sym in inactivos:
             log.warning(
@@ -206,6 +223,8 @@ class Trader:
         self.historial_cierres: Dict[str, dict] = {}
         self.capital_inicial_orden: Dict[str, float] = {}
         self._tareas: dict[str, asyncio.Task] = {}
+        self._restart_stats: defaultdict[str, deque] = defaultdict(deque)
+        self._sin_datos_alertado: set[str] = set()
         self._factories: dict[str, Callable[[], Awaitable]] = {}
         self._stop_event = asyncio.Event()
         self._limite_riesgo_notificado = False
@@ -231,12 +250,16 @@ class Trader:
                 '⚠️ Órdenes abiertas encontradas al iniciar. Serán monitoreadas.'
                 )
         if 'PYTEST_CURRENT_TEST' not in os.environ:
-            self._cargar_estado_persistente()
+            try:
+                asyncio.run(self._cargar_estado_persistente())
+            except RuntimeError:
+                loop = asyncio.get_event_loop()
+                loop.create_task(self._cargar_estado_persistente())
         else:
             log.debug('🔍 Modo prueba: se omite carga de estado persistente')
 
     def _load_json_file(self, path: str) ->dict[str, Any]:
-        log.info('➡️ Entrando en _load_json_file()')
+        log.debug('➡️ Entrando en _load_json_file()')
         """Return file content as dict or empty dict on error."""
         if not os.path.exists(path):
             return {}
@@ -256,7 +279,7 @@ class Trader:
         return data if isinstance(data, dict) else {}
 
     def _save_json_file(self, path: str, data: Any) ->None:
-        log.info('➡️ Entrando en _save_json_file()')
+        log.debug('➡️ Entrando en _save_json_file()')
         """Guardar ``data`` en ``path`` silenciosamente."""
         try:
             with open(path, 'w') as f:
@@ -265,7 +288,7 @@ class Trader:
             log.warning(f'⚠️ Error guardando {path}: {e}')
 
     def _registrar_rechazo(self, symbol: str, motivo: str, **datos: Any) -> None:
-        log.info('➡️ Entrando en _registrar_rechazo()')
+        log.debug('➡️ Entrando en _registrar_rechazo()')
         """Registrar rechazos con campos comunes.
 
         Envuelve :meth:`RejectionHandler.registrar` asegurando que todos los
@@ -281,7 +304,7 @@ class Trader:
         self.rejection_handler.registrar(symbol, motivo, **datos_comunes)
 
     def _log_impacto_sl(self, orden, precio: float) ->None:
-        log.info('➡️ Entrando en _log_impacto_sl()')
+        log.debug('➡️ Entrando en _log_impacto_sl()')
         """Registra el impacto de evitar el stop loss."""
         os.makedirs('logs', exist_ok=True)
         for ev in orden.sl_evitar_info:
@@ -300,7 +323,7 @@ class Trader:
 
     async def cerrar_operacion(self, symbol: str, precio: float, motivo: str
         ) ->None:
-        log.info('➡️ Entrando en cerrar_operacion()')
+        log.debug('➡️ Entrando en cerrar_operacion()')
         """Cierra una orden y actualiza los pesos si corresponden."""
         fut = asyncio.get_running_loop().create_future()
         await self.bus.publish('cerrar_orden', {'symbol': symbol, 'precio': precio, 'motivo': motivo, 'future': fut})
@@ -326,7 +349,7 @@ class Trader:
 
     async def _cerrar_y_reportar(self, orden, precio: float, motivo: str,
         tendencia: (str | None)=None, df: (pd.DataFrame | None)=None) ->None:
-        log.info('➡️ Entrando en _cerrar_y_reportar()')
+        log.debug('➡️ Entrando en _cerrar_y_reportar()')
         """Cierra ``orden`` y registra la operación para el reporte diario."""
         retorno_unitario = (precio - orden.precio_entrada
             ) / orden.precio_entrada if orden.precio_entrada else 0.0
@@ -336,9 +359,13 @@ class Trader:
         capital_base = self.capital_inicial_orden.get(orden.symbol,
             self.capital_por_simbolo.get(orden.symbol, 0.0))
         info = orden.to_dict()
-        info.update({'precio_cierre': precio, 'fecha_cierre': datetime.
-            utcnow().isoformat(), 'motivo_cierre': motivo, 'retorno_total':
-            retorno_total, 'capital_inicial': capital_base})
+        info.update({
+            'precio_cierre': precio,
+            'fecha_cierre': datetime.now(UTC).isoformat(),
+            'motivo_cierre': motivo,
+            'retorno_total': retorno_total,
+            'capital_inicial': capital_base,
+        })
         fut = asyncio.get_running_loop().create_future()
         await self.bus.publish('cerrar_orden', {'symbol': orden.symbol, 'precio': precio, 'motivo': motivo, 'future': fut})
         try:
@@ -379,16 +406,21 @@ class Trader:
         duracion = 0.0
         try:
             apertura = datetime.fromisoformat(orden.timestamp)
-            duracion = (datetime.utcnow() - apertura).total_seconds() / 60
+            duracion = (datetime.now(UTC) - apertura).total_seconds() / 60
         except Exception:
             pass
         prev = self.historial_cierres.get(orden.symbol, {})
-        self.historial_cierres[orden.symbol] = {'timestamp': datetime.
-            utcnow().isoformat(), 'motivo': motivo.lower().strip(), 'velas':
-            0, 'precio': precio, 'tendencia': tendencia, 'duracion':
-            duracion, 'retorno_total': retorno_total}
+        self.historial_cierres[orden.symbol] = {
+                'timestamp': datetime.now(UTC).isoformat(),
+                'motivo': motivo.lower().strip(),
+                'velas': 0,
+                'precio': precio,
+                'tendencia': tendencia,
+                'duracion': duracion,
+                'retorno_total': retorno_total,
+            }
         if retorno_total < 0:
-            fecha_hoy = datetime.utcnow().date().isoformat()
+            fecha_hoy = datetime.now(UTC).date().isoformat()
             if prev.get('fecha_perdidas') != fecha_hoy:
                 perdidas = 0
             else:
@@ -409,15 +441,18 @@ class Trader:
         score_val, _ = self._calcular_score_tecnico(
             df, rsi_val, mom_val, tendencia or '', orden.direccion
         ) if df is not None else (0.0, {})
-        self._registrar_salida_profesional(orden.symbol, {
-            'tipo_salida': motivo,
-            'estrategias_activas': orden.estrategias_activas,
-            'score_tecnico_al_cierre': score_val,
-            'capital_final': capital_final,
-            'configuracion_usada': self.config_por_simbolo.get(orden.symbol, {}),
-            'tiempo_operacion': duracion,
-            'beneficio_relativo': retorno_total,
-        })
+        await self._registrar_salida_profesional(
+            orden.symbol,
+            {
+                'tipo_salida': motivo,
+                'estrategias_activas': orden.estrategias_activas,
+                'score_tecnico_al_cierre': score_val,
+                'capital_final': capital_final,
+                'configuracion_usada': self.config_por_simbolo.get(orden.symbol, {}),
+                'tiempo_operacion': duracion,
+                'beneficio_relativo': retorno_total,
+            },
+        )
         metricas = self._metricas_recientes()
         await self.bus.publish('ajustar_riesgo', metricas)
         try:
@@ -437,28 +472,27 @@ class Trader:
         self.capital_inicial_orden.pop(orden.symbol, None)
         return True
 
-    def _registrar_salida_profesional(self, symbol: str, info: dict) ->None:
-        log.info('➡️ Entrando en _registrar_salida_profesional()')
+    async def _registrar_salida_profesional(self, symbol: str, info: dict) -> None:
+        log.debug('➡️ Entrando en _registrar_salida_profesional()')
         archivo = 'reportes_diarios/registro_salidas.parquet'
         os.makedirs(os.path.dirname(archivo), exist_ok=True)
         data = info.copy()
         data['symbol'] = symbol
-        data['timestamp'] = datetime.utcnow().isoformat()
+        data['timestamp'] = datetime.now(UTC).isoformat()
         if isinstance(data.get('estrategias_activas'), dict):
-            data['estrategias_activas'] = json.dumps(data[
-                'estrategias_activas'])
+            data['estrategias_activas'] = json.dumps(data['estrategias_activas'])
         try:
             if os.path.exists(archivo):
-                df = pd.read_parquet(archivo)
+                df = await asyncio.to_thread(pd.read_parquet, archivo)
                 df = pd.concat([df, pd.DataFrame([data])], ignore_index=True)
             else:
                 df = pd.DataFrame([data])
-            df.to_parquet(archivo, index=False)
+            await asyncio.to_thread(df.to_parquet, archivo, index=False)
         except Exception as e:
             log.warning(f'⚠️ Error registrando salida en {archivo}: {e}')
 
     async def _cerrar_posiciones_por_riesgo(self) ->None:
-        log.info('➡️ Entrando en _cerrar_posiciones_por_riesgo()')
+        log.debug('➡️ Entrando en _cerrar_posiciones_por_riesgo()')
         """Cierra todas las posiciones abiertas cuando se supera el riesgo."""
         ordenes = list(self.orders.ordenes.items())
         for symbol, orden in ordenes:
@@ -477,9 +511,15 @@ class Trader:
             except Exception as e:
                 log.error(f'❌ Error cerrando {symbol} por riesgo: {e}')
 
-    async def _cerrar_parcial_y_reportar(self, orden, cantidad: float,
-        precio: float, motivo: str, df: (pd.DataFrame | None)=None) ->bool:
-        log.info('➡️ Entrando en _cerrar_parcial_y_reportar()')
+    async def _cerrar_parcial_y_reportar(
+        self,
+        orden,
+        cantidad: float,
+        precio: float,
+        motivo: str,
+        df: (pd.DataFrame | None) = None,
+    ) -> bool:
+        log.debug('➡️ Entrando en _cerrar_parcial_y_reportar()')
         """Cierre parcial de ``orden`` y registro en el reporte."""
         fut = asyncio.get_running_loop().create_future()
         await self.bus.publish('cerrar_parcial', {'symbol': orden.symbol, 'cantidad': cantidad, 'precio': precio, 'motivo': motivo, 'future': fut})
@@ -503,16 +543,31 @@ class Trader:
         capital_base = self.capital_inicial_orden.get(orden.symbol,
             self.capital_por_simbolo.get(orden.symbol, 0.0))
         info = orden.to_dict()
-        info.update({'precio_cierre': precio, 'fecha_cierre': datetime.
-            utcnow().isoformat(), 'motivo_cierre': motivo, 'retorno_total':
-            retorno_total, 'cantidad_cerrada': cantidad, 'capital_inicial':
-            capital_base})
+        info.update(
+            {
+                'precio_cierre': precio,
+                'fecha_cierre': datetime.now(UTC).isoformat(),
+                'motivo_cierre': motivo,
+                'retorno_total': retorno_total,
+                'cantidad_cerrada': cantidad,
+                'capital_inicial': capital_base,
+            }
+        )
         loop = asyncio.get_running_loop()
-        await loop.run_in_executor(None, reporter_diario.registrar_operacion, info)
-        await loop.run_in_executor(None, registrar_resultado_trade, orden.symbol, info, retorno_total)
+        tareas = [
+            loop.run_in_executor(None, reporter_diario.registrar_operacion, info),
+            loop.run_in_executor(
+                None, registrar_resultado_trade, orden.symbol, info, retorno_total
+            ),
+        ]
+        resultados = await asyncio.gather(*tareas, return_exceptions=True)
+        for res, nombre in zip(resultados, ['reporte', 'historico']):
+            if isinstance(res, Exception):
+                log.warning(f'⚠️ Error registrando {nombre}: {res}')
         ganancia = capital_base * retorno_total
-        self.capital_por_simbolo[orden.symbol] = (self.capital_por_simbolo.get(
-            orden.symbol, 0.0) + ganancia)
+        self.capital_por_simbolo[orden.symbol] = self.capital_por_simbolo.get(
+            orden.symbol, 0.0
+        ) + ganancia
         capital_final = self.capital_por_simbolo[orden.symbol]
         info['capital_final'] = capital_final
         log.info(
@@ -524,14 +579,17 @@ class Trader:
         score_val, _ = self._calcular_score_tecnico(
             df, rsi_val, mom_val, orden.tendencia, orden.direccion
         ) if df is not None else (0.0, {})
-        self._registrar_salida_profesional(orden.symbol, {
-            'tipo_salida': 'parcial',
-            'estrategias_activas': orden.estrategias_activas,
-            'score_tecnico_al_cierre': score_val,
-            'configuracion_usada': self.config_por_simbolo.get(orden.symbol, {}),
-            'tiempo_operacion': 0.0,
-            'beneficio_relativo': retorno_total,
-        })
+        await self._registrar_salida_profesional(
+            orden.symbol,
+            {
+                'tipo_salida': 'parcial',
+                'estrategias_activas': orden.estrategias_activas,
+                'score_tecnico_al_cierre': score_val,
+                'configuracion_usada': self.config_por_simbolo.get(orden.symbol, {}),
+                'tiempo_operacion': 0.0,
+                'beneficio_relativo': retorno_total,
+            },
+        )
         try:
             registrar_auditoria(
                 symbol=orden.symbol,
@@ -550,7 +608,7 @@ class Trader:
 
     async def es_salida_parcial_valida(self, orden, precio_tp: float, config:
         dict, df: pd.DataFrame) ->bool:
-        log.info('➡️ Entrando en es_salida_parcial_valida()')
+        log.debug('➡️ Entrando en es_salida_parcial_valida()')
         """Determina si aplicar TP parcial tiene sentido económico."""
         if not config.get('usar_cierre_parcial', False):
             return False
@@ -571,7 +629,7 @@ class Trader:
         return True
 
     async def _piramidar(self, symbol: str, orden, df: pd.DataFrame) ->None:
-        log.info('➡️ Entrando en _piramidar()')
+        log.debug('➡️ Entrando en _piramidar()')
         """Añade posiciones si el precio avanza a favor."""
         if orden.fracciones_restantes <= 0:
             return
@@ -596,22 +654,24 @@ class Trader:
 
     @property
     def ordenes_abiertas(self):
-        log.info('➡️ Entrando en ordenes_abiertas()')
+        log.debug('➡️ Entrando en ordenes_abiertas()')
         """Compatibilidad con ``monitorear_estado_periodicamente``."""
         return self.orders.ordenes
 
     def ajustar_capital_diario(self, factor: float=0.2, limite: float=0.3,
         penalizacion_corr: float=0.2, umbral_corr: float=0.8, fecha: (
         datetime.date | None)=None) ->None:
-        log.info('➡️ Entrando en ajustar_capital_diario()')
+        log.debug('➡️ Entrando en ajustar_capital_diario()')
         """Redistribuye el capital según múltiples métricas adaptativas."""
         if self._limite_riesgo_notificado:
             if self.notificador:
                 try:
                     asyncio.create_task(
-                        self.notificador.enviar_async(
-                            '✅ Riesgo diario restablecido. Bot reanudado.',
-                            'INFO',
+                        safe_notify(
+                            self.notificador.enviar_async(
+                                '✅ Riesgo diario restablecido. Bot reanudado.',
+                                'INFO',
+                            )
                         )
                     )
                 except Exception as e:
@@ -688,11 +748,11 @@ class Trader:
             self.capital_por_simbolo[symbol] -= reserva
             self.reservas_piramide[symbol] = round(reserva, 2)
         self.capital_inicial_diario = self.capital_por_simbolo.copy()
-        self.fecha_actual = fecha or datetime.utcnow().date()
+        self.fecha_actual = fecha or datetime.now(UTC).date()
         log.info(f'💰 Capital redistribuido: {self.capital_por_simbolo}')
 
     async def _precargar_historico(self, velas: int=12) ->None:
-        log.info('➡️ Entrando en _precargar_historico()')
+        log.debug('➡️ Entrando en _precargar_historico()')
         """Carga datos recientes para todos los símbolos antes de iniciar."""
         cliente_temp = None
         cliente = self.cliente
@@ -765,7 +825,7 @@ class Trader:
         log.info('📈 Histórico inicial cargado')
 
     async def _ciclo_aprendizaje(self, intervalo: int = 86400, max_fallos: int = 5) -> None:
-        log.info('➡️ Entrando en _ciclo_aprendizaje()')
+        log.debug('➡️ Entrando en _ciclo_aprendizaje()')
         """Ejecuta el proceso de aprendizaje continuo periódicamente.
         max_fallos: detiene el ciclo tras N errores consecutivos
         """
@@ -805,7 +865,7 @@ class Trader:
 
     async def _calcular_cantidad_async(self, symbol: str, precio: float, stop_loss: float
         ) -> float:
-        log.info('➡️ Entrando en _calcular_cantidad_async()')
+        log.debug('➡️ Entrando en _calcular_cantidad_async()')
         """Solicita la cantidad al servicio de capital mediante eventos."""
         exposicion = sum(
             o.cantidad_abierta * o.precio_entrada for o in self.orders.ordenes.values()
@@ -830,14 +890,14 @@ class Trader:
             return 0.0
 
     def _metricas_recientes(self, dias: int=7) ->dict:
-        log.info('➡️ Entrando en _metricas_recientes()')
+        log.debug('➡️ Entrando en _metricas_recientes()')
         """Calcula ganancia acumulada y drawdown de los últimos ``dias``."""
         carpeta = reporter_diario.carpeta
         if not os.path.isdir(carpeta):
             return {'ganancia_semana': 0.0, 'drawdown': 0.0, 'winrate': 0.0,
                 'capital_actual': sum(self.capital_por_simbolo.values()),
                 'capital_inicial': sum(self.capital_inicial_diario.values())}
-        fecha_limite = datetime.utcnow().date() - timedelta(days=dias)
+        fecha_limite = datetime.now(UTC).date() - timedelta(days=dias)
         retornos: list[float] = []
         archivos = sorted([f for f in os.listdir(carpeta) if f.endswith(
             '.csv')], reverse=True)[:20]
@@ -865,19 +925,21 @@ class Trader:
         return {'ganancia_semana': ganancia, 'drawdown': drawdown}
 
     def _contar_senales(self, symbol: str, minutos: int=60) ->int:
-        log.info('➡️ Entrando en _contar_senales()')
+        log.debug('➡️ Entrando en _contar_senales()')
         """Cuenta señales válidas recientes para ``symbol``."""
         estado = self.estado.get(symbol)
         if not estado:
             return 0
-        limite = datetime.utcnow().timestamp() * 1000 - minutos * 60 * 1000
-        return sum(1 for v in estado.buffer if pd.to_datetime(v.get(
-            'timestamp')).timestamp() * 1000 >= limite and v.get(
-            'estrategias_activas'))
+        limite = datetime.now(UTC).timestamp() * 1000 - minutos * 60 * 1000
+        return sum(
+            1
+            for v in estado.buffer
+            if _ts_ms(v.get('timestamp')) >= limite and v.get('estrategias_activas')
+        )
 
     def _obtener_historico(self, symbol: str,
         max_rows: int | None=None) ->(pd.DataFrame | None):
-        log.info('➡️ Entrando en _obtener_historico()')
+        log.debug('➡️ Entrando en _obtener_historico()')
         """Devuelve el DataFrame de histórico para ``symbol`` usando caché.
 
         ``max_rows`` limita el número de filas conservadas en memoria.
@@ -902,7 +964,7 @@ class Trader:
         return df
 
     def _calcular_correlaciones(self, periodos: int = 1440, symbols: list[str] | None = None) -> pd.DataFrame:
-        log.info('➡️ Entrando en _calcular_correlaciones()')
+        log.debug('➡️ Entrando en _calcular_correlaciones()')
         """Calcula correlación histórica de cierres entre símbolos.
 
         Usa una caché para evitar recalcular en cada señal y permite
@@ -933,21 +995,21 @@ class Trader:
 
     def _iniciar_tarea(self, nombre: str, factory: Callable[[], Awaitable]
         ) ->None:
-        log.info('➡️ Entrando en _iniciar_tarea()')
+        log.debug('➡️ Entrando en _iniciar_tarea()')
         """Crea una tarea a partir de ``factory`` y la registra."""
         self._factories[nombre] = factory
         self._tareas[nombre] = supervised_task(factory, nombre)
         log.info(f'🚀 Tarea {nombre} iniciada')
 
-    async def _vigilancia_tareas(self, intervalo: int=60) ->None:
-        log.info('➡️ Entrando en _vigilancia_tareas()')
+    async def _vigilancia_tareas(self, intervalo: int = 60) -> None:
+        log.debug('➡️ Entrando en _vigilancia_tareas()')
         while not self._cerrado:
             activos = 0
-            ahora = datetime.now(timezone.utc)
+            ahora = datetime.now(UTC)
             for nombre, task in list(self._tareas.items()):
                 if task.done():
                     if task.cancelled():
-                        log.info(
+                        log.debug(
                             f'🟡 Heartbeat: tarea {nombre} fue cancelada manualmente'
                         )
                     else:
@@ -966,17 +1028,26 @@ class Trader:
                         )
                         log.error(mensaje)
                         if self.notificador:
-                            try:
-                                await self.notificador.enviar_async(mensaje, 'CRITICAL')
-                            except Exception:
-                                pass
+                            await safe_notify(
+                                self.notificador.enviar_async(mensaje, 'CRITICAL')
+                            )
                         del self._tareas[nombre]
                         continue
+                    stats = self._restart_stats[nombre]
+                    ts_now = time.time()
+                    stats.append(ts_now)
+                    while stats and ts_now - stats[0] > 300:
+                        stats.popleft()
+                    if len(stats) > 5 and ts_now - stats[0] < 60:
+                        log.error(f'🚨 Circuit breaker: demasiados reinicios para {nombre}')
+                        continue
+                    backoff = min(60, 2 ** (len(stats) - 1))
+                    await asyncio.sleep(backoff)
                     otra_activa = any(
                         t.get_name() == nombre for t in asyncio.all_tasks()
                     )
                     self._iniciar_tarea(nombre, self._factories[nombre])
-                    log.info(
+                    log.debug(
                         f'🔄 Tarea {nombre} reiniciada tras finalizar (otra instancia activa: {otra_activa})'
                     )
                     if nombre == 'data_feed':
@@ -993,11 +1064,23 @@ class Trader:
                             await task
                         except Exception:
                             pass
+                        stats = self._restart_stats[nombre]
+                        ts_now = time.time()
+                        stats.append(ts_now)
+                        while stats and ts_now - stats[0] > 300:
+                            stats.popleft()
+                        if len(stats) > 5 and ts_now - stats[0] < 60:
+                            log.error(
+                                f'🚨 Circuit breaker: demasiados reinicios para {nombre}'
+                            )
+                            continue
+                        backoff = min(60, 2 ** (len(stats) - 1))
+                        await asyncio.sleep(backoff)
                         otra_activa = any(
                             t.get_name() == nombre for t in asyncio.all_tasks()
                         )
                         self._iniciar_tarea(nombre, self._factories[nombre])
-                        log.info(
+                        log.debug(
                             f'🔄 Tarea {nombre} reiniciada por inactividad (otra instancia activa: {otra_activa})'
                         )
                     else:
@@ -1005,14 +1088,27 @@ class Trader:
             for sym, ts in data_heartbeat.items():
                 sin_datos = (ahora - ts).total_seconds()
                 registro_metrico.registrar('sin_datos', {'symbol': sym, 'tiempo_s': sin_datos})
-            log.info(
-                f'🟢 Heartbeat: tareas activas {activos}/{len(self._tareas)}')
+                if sin_datos > intervalo * 3:
+                    if sym not in self._sin_datos_alertado and self.notificador:
+                        asyncio.create_task(
+                            safe_notify(
+                                self.notificador.enviar_async(
+                                    f'⚠️ Sin datos recientes para {sym}', 'WARNING'
+                                )
+                            )
+                        )
+                        self._sin_datos_alertado.add(sym)
+                elif sym in self._sin_datos_alertado:
+                    self._sin_datos_alertado.remove(sym)
+            log.debug(
+                f'🟢 Heartbeat: tareas activas {activos}/{len(self._tareas)}'
+            )
             tick('heartbeat')
             await asyncio.sleep(intervalo)
 
     def _validar_puntaje(self, symbol: str, puntaje: float, umbral: float,
         modo_agresivo: bool=False) -> bool:
-        log.info('➡️ Entrando en _validar_puntaje()')
+        log.debug('➡️ Entrando en _validar_puntaje()')
         """Comprueba si ``puntaje`` supera ``umbral``.
 
         Si ``modo_agresivo`` es ``True`` permite continuar incluso cuando el
@@ -1035,7 +1131,7 @@ class Trader:
         peso_min_total: float, estrategias_activas: Dict[str, float],
         diversidad_min: int, estrategias_disponibles: dict, df: pd.DataFrame,
         modo_agresivo: bool=False) -> bool:
-        log.info('➡️ Entrando en _validar_diversidad()')
+        log.debug('➡️ Entrando en _validar_diversidad()')
         """Verifica que la diversidad y el peso total sean suficientes.
 
         Cuando ``modo_agresivo`` es ``True`` tolera valores por debajo del
@@ -1084,7 +1180,7 @@ class Trader:
 
     def _validar_estrategia(self, symbol: str, df: pd.DataFrame,
         estrategias: Dict, config: Dict | None=None) ->bool:
-        log.info('➡️ Entrando en _validar_estrategia()')
+        log.debug('➡️ Entrando en _validar_estrategia()')
         """Aplica el filtro estratégico de entradas respetando la configuración."""
         config = config or {}
         min_div = config.get('diversidad_minima', 2)
@@ -1102,7 +1198,7 @@ class Trader:
         pd.DataFrame, pesos_symbol: Dict[str, float], tendencia_actual: str,
         puntaje: float, umbral: float, estrategias: Dict[str, bool]) ->tuple[
         bool, float, float]:
-        log.info('➡️ Entrando en _evaluar_persistencia()')
+        log.debug('➡️ Entrando en _evaluar_persistencia()')
         """Evalúa si las señales persistentes son suficientes para entrar."""
         ventana_close = df['close'].tail(10)
         media_close = np.mean(ventana_close)
@@ -1143,7 +1239,7 @@ class Trader:
 
     def _tendencia_persistente(self, symbol: str, df: pd.DataFrame,
         tendencia: str, velas: int=3) ->bool:
-        log.info('➡️ Entrando en _tendencia_persistente()')
+        log.debug('➡️ Entrando en _tendencia_persistente()')
         if len(df) < 30 + velas:
             return False
         for i in range(velas):
@@ -1155,7 +1251,7 @@ class Trader:
 
     def _validar_reentrada_tendencia(self, symbol: str, df: pd.DataFrame,
         cierre: dict, precio: float) ->bool:
-        log.info('➡️ Entrando en _validar_reentrada_tendencia()')
+        log.debug('➡️ Entrando en _tendencia_persistente()')
         if cierre.get('motivo') != 'cambio de tendencia':
             return True
         tendencia = cierre.get('tendencia')
@@ -1192,7 +1288,7 @@ class Trader:
     
     def _validar_sl_tp(self, symbol: str, precio: float, sl: float,
         tp: float) ->bool:
-        log.info('➡️ Entrando en _validar_sl_tp()')
+        log.debug('➡️ Entrando en _validar_sl_tp()')
         try:
             df = self._obtener_historico(symbol)
         except Exception as e:
@@ -1221,7 +1317,7 @@ class Trader:
     def _calcular_score_tecnico(self, df: pd.DataFrame, rsi: (float | None),
         momentum: (float | None), tendencia: str, direccion: str) ->tuple[
         float, dict]:
-        log.info('➡️ Entrando en _calcular_score_tecnico()')
+        log.debug('➡️ Entrando en _calcular_score_tecnico()')
         """Calcula un puntaje técnico simple a partir de varios indicadores."""
         slope = get_slope(df)
         score_indicadores = calcular_score_tecnico(df, rsi, momentum, slope,
@@ -1260,7 +1356,7 @@ class Trader:
 
     def _hay_contradicciones(self, df: pd.DataFrame, rsi: (float | None),
         momentum: (float | None), direccion: str, score: float) ->bool:
-        log.info('➡️ Entrando en _hay_contradicciones()')
+        log.debug('➡️ Entrando en _hay_contradicciones()')
         """Detecta si existen contradicciones fuertes en las señales."""
         if direccion == 'long':
             if rsi is not None and rsi > 70:
@@ -1281,7 +1377,7 @@ class Trader:
         return False
 
     def _validar_temporalidad(self, df: pd.DataFrame, direccion: str) ->bool:
-        log.info('➡️ Entrando en _validar_temporalidad()')
+        log.debug('➡️ Entrando en _validar_temporalidad()')
         """Verifica que las señales no estén perdiendo fuerza."""
         rsi_series = get_rsi(df, serie_completa=True)
         if rsi_series is None or len(rsi_series) < 3:
@@ -1302,7 +1398,7 @@ class Trader:
 
     async def evaluar_condiciones_entrada(self, symbol: str, df: pd.DataFrame
         ) ->None:
-        log.info('➡️ Entrando en evaluar_condiciones_entrada()')
+        log.debug('➡️ Entrando en evaluar_condiciones_entrada()')
         """
         Evalúa y ejecuta una entrada si todas las condiciones se cumplen,
         con protección de timeout sobre el motor sincrónico.
@@ -1339,7 +1435,8 @@ class Trader:
             )
             return
         estrategias = resultado.get('estrategias_activas', {})
-        estado.estrategias_buffer[-1] = estrategias
+        if estado.estrategias_buffer:
+            estado.estrategias_buffer[-1] = estrategias
         self.persistencia.actualizar(symbol, estrategias)
         precio_actual = float(df['close'].iloc[-1])
         if not resultado.get('permitido'):
@@ -1373,11 +1470,21 @@ class Trader:
             timeout=self.config.timeout_abrir_operacion,
         )
 
-    async def _abrir_operacion_real(self, symbol: str, precio: float, sl:
-        float, tp: float, estrategias: (Dict | List), tendencia: str,
-        direccion: str, puntaje: float=0.0, umbral: float=0.0,
-        detalles_tecnicos: (dict | None)=None, **kwargs) ->None:
-        log.info('➡️ Entrando en _abrir_operacion_real()')
+    async def _abrir_operacion_real(
+        self,
+        symbol: str,
+        precio: float,
+        sl: float,
+        tp: float,
+        estrategias: Dict[str, float] | List[str],
+        tendencia: str,
+        direccion: str,
+        puntaje: float = 0.0,
+        umbral: float = 0.0,
+        detalles_tecnicos: dict | None = None,
+        **kwargs,
+    ) -> None:
+        log.debug('➡️ Entrando en _abrir_operacion_real()')
         capital_total = sum(
             getattr(self, "capital_inicial_diario", self.capital_manager.capital_por_simbolo).values()
         )
@@ -1386,13 +1493,12 @@ class Trader:
                 f'⛔ No se abre posición en {symbol}: límite de riesgo diario superado.'
             )
             if not self._limite_riesgo_notificado and self.notificador:
-                try:
-                    await self.notificador.enviar_async(
+                await safe_notify(
+                    self.notificador.enviar_async(
                         '🚨 Límite de riesgo diario superado. Bot pausado.',
                         'CRITICAL',
                     )
-                except Exception as e:
-                    log.error(f'❌ Error enviando notificación: {e}')
+                )
                 self._limite_riesgo_notificado = True
                 await self._cerrar_posiciones_por_riesgo()
             self._stop_event.set()
@@ -1405,19 +1511,21 @@ class Trader:
                 f'⛔ No se abre posición en {symbol} por capital insuficiente. '
                 f'Disponible: {capital_disp:.2f}€')
             if self.notificador:
-                try:
-                    await self.notificador.enviar_async(
+                await safe_notify(
+                    self.notificador.enviar_async(
                         f'⚠️ No se abre posición en {symbol}: capital insuficiente ('
                         f'{capital_disp:.2f}€ disponible)'
                     )
-                except Exception as e:
-                    log.error(f'❌ Error enviando notificación: {e}')
+                )
             return
         fracciones = self.piramide_fracciones
         cantidad = cantidad_total / fracciones
         if self.capital_manager.cliente:
             try:
-                ticker = await fetch_ticker_async(self.capital_manager.cliente, symbol)
+                ticker = await asyncio.wait_for(
+                    fetch_ticker_async(self.capital_manager.cliente, symbol),
+                    timeout=3,
+                )
                 precio_actual = float(ticker.get('last') or ticker.get('close') or precio)
                 spread = abs(precio_actual - precio) / precio if precio else 0.0
                 if spread > self.config.max_spread_ratio:
@@ -1451,12 +1559,11 @@ class Trader:
                 estrategias=list(estrategias_dict.keys()),
             )
             if self.notificador:
-                try:
-                    await self.notificador.enviar_async(
+                await safe_notify(
+                    self.notificador.enviar_async(
                         f'⚠️ Error validando SL/TP para {symbol}: {e}'
                     )
-                except Exception as e_notif:
-                    log.error(f'❌ Error enviando notificación: {e_notif}')
+                )
             return
         await self.orders.abrir_async(
             symbol,
@@ -1491,23 +1598,22 @@ class Trader:
             log.debug(f'No se pudo registrar auditoría de entrada: {e}')
 
     async def _verificar_salidas(self, symbol: str, df: pd.DataFrame) ->None:
-        log.info('➡️ Entrando en _verificar_salidas()')
+        log.debug('➡️ Entrando en _verificar_salidas()')
         await verificar_salidas(self, symbol, df)
 
     async def evaluar_condiciones_de_entrada(self, symbol: str, df: pd.
         DataFrame, estado: EstadoSimbolo) ->(dict | None):
-        log.info('➡️ Entrando en evaluar_condiciones_de_entrada()')
+        log.debug('➡️ Entrando en evaluar_condiciones_de_entrada()')
         capital_total = sum(self.capital_inicial_diario.values())
         if self.risk.riesgo_superado(capital_total):
             log.warning('⛔ Límite de riesgo diario superado. Bloqueando nuevas entradas.')
             if not self._limite_riesgo_notificado and self.notificador:
-                try:
-                    await self.notificador.enviar_async(
+                await safe_notify(
+                    self.notificador.enviar_async(
                         '🚨 Límite de riesgo diario superado. Bot pausado.',
                         'CRITICAL',
                     )
-                except Exception as e:
-                    log.error(f'❌ Error enviando notificación: {e}')
+                )
                 self._limite_riesgo_notificado = True
                 await self._cerrar_posiciones_por_riesgo()
             self._stop_event.set()
@@ -1517,11 +1623,11 @@ class Trader:
         return await verificar_entrada(self, symbol, df, estado)
 
     async def ejecutar(self) ->None:
-        log.info('➡️ Entrando en ejecutar()')
+        log.debug('➡️ Entrando en ejecutar()')
         """Inicia el procesamiento de todos los símbolos."""
 
         async def handle(candle: dict) ->None:
-            log.info('➡️ Entrando en handle()')
+            log.debug('➡️ Entrando en handle()')
             await self._procesar_vela(candle)
 
         async def handle_context(symbol: str, score: float) -> None:
@@ -1552,7 +1658,7 @@ class Trader:
         await self._stop_event.wait()
 
     async def _procesar_vela(self, vela: dict) ->None:
-        log.info('➡️ Entrando en _procesar_vela()')
+        log.debug('➡️ Entrando en _procesar_vela()')
         symbol = vela.get('symbol')
         if not self._validar_config(symbol):
             return
@@ -1566,7 +1672,7 @@ class Trader:
         return
 
     async def cerrar(self) ->None:
-        log.info('➡️ Entrando en cerrar()')
+        log.debug('➡️ Entrando en cerrar()')
         self._cerrado = True
         self._stop_event.set()
         for nombre, tarea in list(self._tareas.items()):
@@ -1580,34 +1686,39 @@ class Trader:
         real_orders.flush_operaciones()
         self.rejection_handler.flush()
         registro_metrico.exportar()
-        self._guardar_estado_persistente()
+        await self._guardar_estado_persistente()
 
-    def _guardar_estado_persistente(self) ->None:
-        log.info('➡️ Entrando en _guardar_estado_persistente()')
+    async def _guardar_estado_persistente(self) -> None:
+        log.debug('➡️ Entrando en _guardar_estado_persistente()')
         """Guarda historial de cierres y capital en ``ESTADO_DIR``."""
         try:
             os.makedirs(ESTADO_DIR, exist_ok=True)
-            self._save_json_file(
+            await asyncio.to_thread(
+                self._save_json_file,
                 os.path.join(ESTADO_DIR, 'historial_cierres.json'),
                 self.historial_cierres,
             )
-            self._save_json_file(
+            await asyncio.to_thread(
+                self._save_json_file,
                 os.path.join(ESTADO_DIR, 'capital.json'),
                 self.capital_por_simbolo,
             )
         except Exception as e:
             log.warning(f'⚠️ Error guardando estado persistente: {e}')
 
-    def _cargar_estado_persistente(self) ->None:
-        log.info('➡️ Entrando en _cargar_estado_persistente()')
+    async def _cargar_estado_persistente(self) -> None:
+        log.debug('➡️ Entrando en _cargar_estado_persistente()')
         """Carga el estado previo de ``ESTADO_DIR`` si existe."""
         try:
-            data = self._load_json_file(
-                os.path.join(ESTADO_DIR, 'historial_cierres.json')
+            data = await asyncio.to_thread(
+                self._load_json_file,
+                os.path.join(ESTADO_DIR, 'historial_cierres.json'),
             )
             if data:
                 self.historial_cierres.update(data)
-            data = self._load_json_file(os.path.join(ESTADO_DIR, 'capital.json'))
+            data = await asyncio.to_thread(
+                self._load_json_file, os.path.join(ESTADO_DIR, 'capital.json')
+            )
             if data:
                 self.capital_por_simbolo.update(
                     {k: float(v) for k, v in data.items()}
@@ -1616,7 +1727,7 @@ class Trader:
             log.warning(f'⚠️ Error cargando estado persistente: {e}')
 
     def _puede_evaluar_entradas(self) -> bool:
-        log.info('➡️ Entrando en _puede_evaluar_entradas()')
+        log.debug('➡️ Entrando en _puede_evaluar_entradas()')
         """Determina si existen condiciones para evaluar nuevas compras."""
         hay_capital = any(c > 0 for c in self.capital_por_simbolo.values())
         if not hay_capital:
@@ -1627,7 +1738,7 @@ class Trader:
         return hay_libre
 
     def _validar_config(self, symbol: str) ->bool:
-        log.info('➡️ Entrando en _validar_config()')
+        log.debug('➡️ Entrando en _validar_config()')
         """Valida que exista configuración para ``symbol``."""
         cfg = self.config_por_simbolo.get(symbol)
         if not isinstance(cfg, dict):

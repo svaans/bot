@@ -20,6 +20,7 @@ procesan en paralelo.
 """
 
 log = configurar_logger('procesar_vela')
+UTC = timezone.utc
 
 # Protege el acceso a funciones de indicadores que no son thread-safe por símbolo
 _indicadores_locks: defaultdict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
@@ -57,7 +58,7 @@ async def procesar_vela(trader, vela: dict) -> None:
     inicio = time.perf_counter()  # ⏱️ para medir cuánto tarda
 
     # Ajustar capital diario si es nuevo día (UTC)
-    if datetime.now(timezone.utc).date() != trader.fecha_actual:
+    if datetime.now(UTC).date() != trader.fecha_actual:
         trader.ajustar_capital_diario()
 
     # Ignorar vela duplicada antes de agregarla al buffer
