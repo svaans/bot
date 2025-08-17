@@ -68,6 +68,7 @@ _USE_PROCESS_POOL = os.getenv('USE_PROCESS_POOL', '0').lower() in {'1', 'true', 
 _FLUSH_FUTURE: asyncio.Future | None = None
 _FLUSH_BATCH_SIZE = int(os.getenv('FLUSH_BATCH_SIZE', '100') or 100)
 """Número máximo de operaciones a persistir por lote."""
+_METRICAS_OPERACION: dict[str, dict[str, float]] = {}
 
 
 def _connect_db() -> sqlite3.Connection:
@@ -105,6 +106,33 @@ def esperar_balance(cliente, symbol: str, cantidad_esperada: float,
         f'⏱️ Tiempo de espera agotado para obtener balance suficiente en {symbol}. Disponible: {disponible}, requerido: {cantidad_esperada}'
         )
     return disponible
+
+
+def _acumular_metricas(operation_id: str, response: dict) -> dict[str, float]:
+    """Acumula comisiones y PnL por ``operation_id`` a partir de la respuesta."""
+    metricas = _METRICAS_OPERACION.setdefault(operation_id, {'fee': 0.0, 'pnl': 0.0})
+    for fee in response.get('fees', []) or []:
+        try:
+            metricas['fee'] += float(fee.get('cost') or 0)
+        except Exception:
+            continue
+    for trade in response.get('trades', []) or []:
+        try:
+            f = trade.get('fee') or {}
+            metricas['fee'] += float(f.get('cost') or 0)
+        except Exception:
+            pass
+        pnl = (
+            trade.get('info', {}).get('realizedPnl')
+            if isinstance(trade.get('info'), dict)
+            else trade.get('realizedPnl')
+        )
+        try:
+            if pnl is not None:
+                metricas['pnl'] += float(pnl)
+        except Exception:
+            continue
+    return metricas
 
 
 def _init_db() ->None:
@@ -364,13 +392,12 @@ def registrar_operacion(data: (dict | Order)) ->None:
         _ULTIMO_FLUSH = ahora
 
 
-def ejecutar_orden_market(symbol: str, cantidad: float) ->float:
+def ejecutar_orden_market(symbol: str, cantidad: float, operation_id: str | None = None) -> dict:
     log.info('➡️ Entrando en ejecutar_orden_market()')
-    """Ejecuta una compra de mercado y devuelve la cantidad realmente comprada."""
+    """Ejecuta una compra de mercado y devuelve detalles de la ejecución."""
     if cantidad <= 0:
-        log.warning(f'⚠️ Cantidad inválida para compra en {symbol}: {cantidad}'
-            )
-        return 0.0
+        log.warning(f'⚠️ Cantidad inválida para compra en {symbol}: {cantidad}')
+        return {'ejecutado': 0.0, 'restante': 0.0, 'status': 'FILLED', 'min_qty': 0.0, 'fee': 0.0, 'pnl': 0.0}
     try:
         cliente = obtener_cliente()
         markets = cliente.load_markets()
@@ -381,7 +408,7 @@ def ejecutar_orden_market(symbol: str, cantidad: float) ->float:
         if cantidad <= 0:
             log.error(f'⛔ Cantidad ajustada inválida para {symbol}: {cantidad}'
                 )
-            return 0.0
+            return {'ejecutado': 0.0, 'restante': 0.0, 'status': 'FILLED', 'min_qty': 0.0, 'fee': 0.0, 'pnl': 0.0}
         min_amount = float(market_info.get('limits', {}).get('amount', {}).
             get('min') or 0)
         min_cost = float(market_info.get('limits', {}).get('cost', {}).get(
@@ -406,7 +433,7 @@ def ejecutar_orden_market(symbol: str, cantidad: float) ->float:
                         )
                     except Exception:
                         pass
-                    return 0.0
+                    return {'ejecutado': 0.0, 'restante': 0.0, 'status': 'FILLED', 'min_qty': min_amount, 'fee': 0.0, 'pnl': 0.0}
                 log.warning(
                     f'⚠️ Cantidad ajustada por saldo insuficiente en {symbol}. Requerido: {costo:.2f} {quote}, disponible: {disponible_quote:.2f}, nueva cantidad: {cantidad_ajustada}'
                 )
@@ -421,31 +448,46 @@ def ejecutar_orden_market(symbol: str, cantidad: float) ->float:
                 )
             except Exception:
                 pass
-            return 0.0
+            return {'ejecutado': 0.0, 'restante': 0.0, 'status': 'FILLED', 'min_qty': min_amount, 'fee': 0.0, 'pnl': 0.0}
         log.debug(
             f'📤 Enviando orden de compra para {symbol} | Cantidad: {cantidad} | Precio estimado: {precio:.4f}'
             )
-        response = cliente.create_market_buy_order(symbol.replace('/', ''),
-            cantidad)
-        ejecutado = float(response.get('amount') or response.get('filled') or 0
-            )
+        params = {}
+        if operation_id:
+            params['newClientOrderId'] = operation_id
+        response = cliente.create_market_buy_order(symbol.replace('/', ''), cantidad, params)
+        ejecutado = float(response.get('amount') or response.get('filled') or 0)
         if ejecutado <= 0:
             ejecutado = cantidad
+        restante = max(cantidad - ejecutado, 0.0)
+        status = 'FILLED'
+        if restante > 1e-8:
+            status = 'PARTIAL'
+        metricas = {'fee': 0.0, 'pnl': 0.0}
+        if operation_id:
+            metricas = _acumular_metricas(operation_id, response)
         log.info(f'🟢 Order real ejecutada: {symbol}, cantidad: {ejecutado}')
-        return ejecutado
+        return {
+            'ejecutado': ejecutado,
+            'restante': restante,
+            'status': status,
+            'min_qty': min_amount,
+            'fee': metricas['fee'],
+            'pnl': metricas['pnl'],
+        }
     except Exception as e:
         log.error(f'❌ Error en Binance al ejecutar compra en {symbol}: {e}')
         raise
 
 
-def ejecutar_orden_market_sell(symbol: str, cantidad: float) ->float:
+def ejecutar_orden_market_sell(symbol: str, cantidad: float, operation_id: str | None = None) -> dict:
     log.info('➡️ Entrando en ejecutar_orden_market_sell()')
-    """Ejecuta una venta de mercado validando saldo, límites y precision exacto."""
+    """Ejecuta una venta de mercado validando saldo y devuelve detalles."""
     if symbol in _VENTAS_FALLIDAS:
         log.warning(
             f'⏭️ Venta omitida para {symbol} por intento previo fallido de saldo.'
             )
-        return 0.0
+        return {'ejecutado': 0.0, 'restante': cantidad, 'status': 'FILLED', 'min_qty': 0.0, 'fee': 0.0, 'pnl': 0.0}
     try:
         cliente = obtener_cliente()
         balance = cliente.fetch_balance()
@@ -481,20 +523,35 @@ def ejecutar_orden_market_sell(symbol: str, cantidad: float) ->float:
                 )
             except Exception:
                 pass
-            return 0.0
+            return {'ejecutado': 0.0, 'restante': cantidad_vender, 'status': 'FILLED', 'min_qty': min_amount, 'fee': 0.0, 'pnl': 0.0}
         log.info(
             f'💱 Ejecutando venta real en {symbol}: {cantidad_vender:.8f} unidades (precio estimado: {precio:.2f})'
             )
-        response = cliente.create_market_sell_order(symbol.replace('/', ''),
-            cantidad_vender)
-        ejecutado = float(response.get('amount') or response.get('filled') or 0
-            )
+        params = {}
+        if operation_id:
+            params['newClientOrderId'] = operation_id
+        response = cliente.create_market_sell_order(symbol.replace('/', ''), cantidad_vender, params)
+        ejecutado = float(response.get('amount') or response.get('filled') or 0)
         if ejecutado <= 0:
             ejecutado = cantidad_vender
+        restante = max(cantidad_vender - ejecutado, 0.0)
+        status = 'FILLED'
+        if restante > 1e-8:
+            status = 'PARTIAL'
+        metricas = {'fee': 0.0, 'pnl': 0.0}
+        if operation_id:
+            metricas = _acumular_metricas(operation_id, response)
         log.info(
             f'🔴 Order de venta ejecutada: {symbol}, cantidad: {ejecutado:.8f}')
         _VENTAS_FALLIDAS.discard(symbol)
-        return ejecutado
+        return {
+            'ejecutado': ejecutado,
+            'restante': restante,
+            'status': status,
+            'min_qty': min_amount,
+            'fee': metricas['fee'],
+            'pnl': metricas['pnl'],
+        }
     except InsufficientFunds as e:
         log.error(f'❌ Venta rechazada por saldo insuficiente en {symbol}: {e}')
         _VENTAS_FALLIDAS.add(symbol)
@@ -505,7 +562,7 @@ def ejecutar_orden_market_sell(symbol: str, cantidad: float) ->float:
             )
         except Exception:
             pass
-        return 0.0
+        return {'ejecutado': 0.0, 'restante': cantidad, 'status': 'FILLED', 'min_qty': 0.0, 'fee': 0.0, 'pnl': 0.0}
     except Exception as e:
         log.error(f'❌ Error en intercambio al vender {symbol}: {e}')
         raise

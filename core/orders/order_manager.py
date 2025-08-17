@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from typing import Dict, Optional
 from datetime import datetime
+import os
 from core.orders.order_model import Order
 from core.utils.logger import configurar_logger
 from core.orders import real_orders
@@ -30,6 +31,31 @@ class OrderManager:
         self.max_historial = max_historial
         if bus:
             self.subscribe(bus)
+
+    def _generar_operation_id(self, symbol: str) -> str:
+        """Genera un identificador único para agrupar fills de una operación."""
+        nonce = os.urandom(2).hex()
+        ts = int(datetime.utcnow().timestamp() * 1000)
+        return f"{symbol.replace('/', '')}-{ts}-{nonce}"
+
+    async def _ejecutar_market_retry(self, side: str, symbol: str, cantidad: float) -> float:
+        """Envía una orden de mercado reintentando en caso de fills parciales."""
+        operation_id = self._generar_operation_id(symbol)
+        restante = cantidad
+        total = 0.0
+        while restante > 0:
+            func = (
+                real_orders.ejecutar_orden_market
+                if side == 'buy'
+                else real_orders.ejecutar_orden_market_sell
+            )
+            resp = await asyncio.to_thread(func, symbol, restante, operation_id)
+            ejecutado = float(resp.get('ejecutado', 0.0))
+            total += ejecutado
+            restante = float(resp.get('restante', 0.0))
+            if resp.get('status') != 'PARTIAL' or restante < resp.get('min_qty', 0):
+                break
+        return total
 
     def subscribe(self, bus: EventBus) -> None:
         bus.subscribe('abrir_orden', self._on_abrir)
@@ -81,9 +107,7 @@ class OrderManager:
             duracion_en_velas=0)
         try:
             if self.modo_real and is_valid_number(cantidad) and cantidad > 0:
-                cantidad = await asyncio.to_thread(
-                    real_orders.ejecutar_orden_market, symbol, cantidad
-                )
+                cantidad = await self._ejecutar_market_retry('buy', symbol, cantidad)
                 try:
                     cantidad = float(cantidad)
                 except Exception:
@@ -144,8 +168,7 @@ class OrderManager:
         if self.modo_real:
             try:
                 if cantidad > 0:
-                    await asyncio.to_thread(real_orders.
-                        ejecutar_orden_market, symbol, cantidad)
+                    cantidad = await self._ejecutar_market_retry('buy', symbol, cantidad)
             except Exception as e:
                 log.error(
                     f'❌ No se pudo agregar posición real para {symbol}: {e}')
@@ -185,9 +208,7 @@ class OrderManager:
             cantidad = orden.cantidad if is_valid_number(orden.cantidad) else 0.0
             if cantidad > 1e-08:
                 try:
-                    ejecutado = await asyncio.to_thread(
-                        real_orders.ejecutar_orden_market_sell, symbol, cantidad
-                    )
+                    ejecutado = await self._ejecutar_market_retry('sell', symbol, cantidad)
                     if ejecutado and ejecutado > 0:
                         venta_exitosa = True
                     else:
@@ -254,7 +275,7 @@ class OrderManager:
             return False
         if self.modo_real:
             try:
-                await asyncio.to_thread(real_orders.ejecutar_orden_market_sell, symbol, cantidad)
+                cantidad = await self._ejecutar_market_retry('sell', symbol, cantidad)
             except Exception as e:
                 log.error(f'❌ Error en venta parcial de {symbol}: {e}')
                 if self.bus:
