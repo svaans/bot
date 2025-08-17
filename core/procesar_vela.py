@@ -160,6 +160,9 @@ async def procesar_vela(trader, vela: dict) -> None:
                     estado.timeouts_salidas = 0
                 return
             return
+        
+        if not trader._puede_evaluar_entradas():
+            return
 
         # ⚠️ Validar condiciones de entrada con timeout
         try:
