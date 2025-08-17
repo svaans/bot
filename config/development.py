@@ -29,6 +29,8 @@ class DevelopmentConfig:
     diversidad_minima: int = 2
     timeout_verificar_salidas: int = 20
     timeout_evaluar_condiciones: int = 15
+    timeout_cerrar_operacion: int = 20
+    timeout_abrir_operacion: int = 20
     timeout_bus_eventos: int = 10
     max_timeouts_salidas: int = 3
     heartbeat_interval: int = 60

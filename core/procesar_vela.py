@@ -2,8 +2,8 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from datetime import datetime
-from collections import deque
+from datetime import datetime, timezone
+from collections import deque, defaultdict
 import numpy as np
 import pandas as pd
 from core.utils.utils import configurar_logger, obtener_uso_recursos
@@ -21,8 +21,8 @@ procesan en paralelo.
 
 log = configurar_logger('procesar_vela')
 
-# Protege el acceso a funciones de indicadores que no son thread-safe
-_indicadores_lock = asyncio.Lock()
+# Protege el acceso a funciones de indicadores que no son thread-safe por símbolo
+_indicadores_locks: defaultdict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
 
 MAX_BUFFER_VELAS = 120
 MAX_ESTRATEGIAS_BUFFER = MAX_BUFFER_VELAS
@@ -54,10 +54,10 @@ async def procesar_vela(trader, vela: dict) -> None:
     if not isinstance(estado.estrategias_buffer, deque):
         estado.estrategias_buffer = deque(maxlen=MAX_ESTRATEGIAS_BUFFER)
 
-    inicio = time.time()  # ⏱️ para medir cuánto tarda
+    inicio = time.perf_counter()  # ⏱️ para medir cuánto tarda
 
-    # Ajustar capital diario si es nuevo día
-    if datetime.utcnow().date() != trader.fecha_actual:
+    # Ajustar capital diario si es nuevo día (UTC)
+    if datetime.now(timezone.utc).date() != trader.fecha_actual:
         trader.ajustar_capital_diario()
 
     # Ignorar vela duplicada antes de agregarla al buffer
@@ -83,7 +83,11 @@ async def procesar_vela(trader, vela: dict) -> None:
     # invalidar cache de indicadores porque los datos cambiaron
     # Estas funciones modifican estado compartido, por lo que se requiere
     # exclusión mutua para evitar condiciones de carrera.
-    async with _indicadores_lock:
+    lock = _indicadores_locks[symbol]
+    espera = time.perf_counter()
+    async with lock:
+        estado.indicadores_wait_ms += (time.perf_counter() - espera) * 1000
+        estado.indicadores_calls += 1
         await asyncio.to_thread(clear_cache, estado.df)
         await asyncio.to_thread(get_rsi, estado)
         await asyncio.to_thread(get_momentum, estado)
@@ -108,13 +112,13 @@ async def procesar_vela(trader, vela: dict) -> None:
         return
     # calcular tendencia solo cada ``frecuencia_tendencia`` velas
     if getattr(estado, 'contador_tendencia', 0) == 0:
-        t_trend = time.time()
+        t_trend = time.perf_counter()
         estado.tendencia_detectada = await asyncio.to_thread(
             obtener_tendencia, symbol, df
         )
         trader.estado_tendencia[symbol] = estado.tendencia_detectada
         log.debug(
-            f'obtener_tendencia tardó {time.time() - t_trend:.2f}s para {symbol}'
+            f'obtener_tendencia tardó {time.perf_counter() - t_trend:.2f}s para {symbol}'
         )
     estado.contador_tendencia = (
         getattr(estado, 'contador_tendencia', 0) + 1
@@ -127,13 +131,13 @@ async def procesar_vela(trader, vela: dict) -> None:
         if orden_existente is not None:
             # ⚠️ Validar salidas activas con timeout
             try:
-                t_salidas = time.time()
+                t_salidas = time.perf_counter()
                 await asyncio.wait_for(
                     trader._verificar_salidas(symbol, df),
                     timeout=trader.config.timeout_verificar_salidas,
                 )
                 log.debug(
-                    f'_verificar_salidas tardó {time.time() - t_salidas:.2f}s para {symbol}'
+                    f'_verificar_salidas tardó {time.perf_counter() - t_salidas:.2f}s para {symbol}'
                 )
                 estado.timeouts_salidas = 0
             except asyncio.TimeoutError:
@@ -152,9 +156,22 @@ async def procesar_vela(trader, vela: dict) -> None:
                     )
                     precio_cierre = float(df['close'].iloc[-1])
                     try:
-                        await trader.cerrar_operacion(
-                            symbol, precio_cierre, 'timeout_salidas'
+                        await asyncio.wait_for(
+                            trader.cerrar_operacion(
+                                symbol, precio_cierre, 'timeout_salidas'
+                            ),
+                            timeout=trader.config.timeout_cerrar_operacion,
                         )
+                    except asyncio.TimeoutError:
+                        estado.cierres_timeouts += 1
+                        log.error(f'⏰ Timeout cerrando operación de {symbol}')
+                        if trader.notificador:
+                            try:
+                                await trader.notificador.enviar_async(
+                                    f'⚠️ Timeout cerrando operación de {symbol}'
+                                )
+                            except Exception as e:
+                                log.error(f'❌ Error enviando notificación: {e}')
                     except Exception as e:
                         log.error(f'❌ Error forzando cierre de {symbol}: {e}')
                     estado.timeouts_salidas = 0
@@ -166,16 +183,30 @@ async def procesar_vela(trader, vela: dict) -> None:
 
         # ⚠️ Validar condiciones de entrada con timeout
         try:
-            t_entrada = time.time()
+            t_entrada = time.perf_counter()
             info = await asyncio.wait_for(
                 trader.evaluar_condiciones_de_entrada(symbol, df, estado),
                 timeout=trader.config.timeout_evaluar_condiciones,
             )
             log.debug(
-                f'evaluar_condiciones_de_entrada tardó {time.time() - t_entrada:.2f}s para {symbol}'
+                f'evaluar_condiciones_de_entrada tardó {time.perf_counter() - t_entrada:.2f}s para {symbol}'
             )
             if isinstance(info, dict) and info:
-                await trader._abrir_operacion_real(**info)
+                try:
+                    await asyncio.wait_for(
+                        trader._abrir_operacion_real(**info),
+                        timeout=trader.config.timeout_abrir_operacion,
+                    )
+                except asyncio.TimeoutError:
+                    estado.entradas_timeouts += 1
+                    log.error(f'⏰ Timeout abriendo operación de {symbol}')
+                    if trader.notificador:
+                        try:
+                            await trader.notificador.enviar_async(
+                                f'⚠️ Timeout abriendo operación de {symbol}'
+                            )
+                        except Exception as e:
+                            log.error(f'❌ Error enviando notificación: {e}')
             elif info is not None:
                 log.warning(
                     f'⚠️ Resultado inesperado al evaluar entrada para {symbol}: {type(info)}'
@@ -184,6 +215,7 @@ async def procesar_vela(trader, vela: dict) -> None:
             log.error(
                 f'⏰ Timeout en evaluar_condiciones_de_entrada para {symbol}'
             )
+            estado.entradas_timeouts += 1
             if trader.notificador:
                 try:
                     await trader.notificador.enviar_async(
@@ -201,9 +233,11 @@ async def procesar_vela(trader, vela: dict) -> None:
             except Exception as e2:
                 log.error(f'❌ Error enviando notificación: {e2}')
     finally:
-        duracion = time.time() - inicio
-        ahora = time.time()
-        if ahora - getattr(trader, '_recursos_ts', 0) >= getattr(trader, 'frecuencia_recursos', 60):
+        duracion = time.perf_counter() - inicio
+        ahora = time.perf_counter()
+        if ahora - getattr(trader, '_recursos_ts', 0) >= getattr(
+            trader, 'frecuencia_recursos', 60
+        ):
             cpu, mem = obtener_uso_recursos()
             trader._recursos_ts = ahora
             trader._ultimo_cpu = cpu

@@ -1,5 +1,4 @@
 from __future__ import annotations
-import asyncio
 from collections import Counter
 from datetime import datetime, timezone
 from typing import Dict
@@ -19,27 +18,19 @@ class CapitalManager:
 
     def __init__(self, config: Config, cliente, risk: RiskManager,
         fraccion_kelly: float, bus: EventBus | None = None) -> None:
-        log.info('➡️ Entrando en __init__()')
         self.config = config
         self.cliente = cliente
         self.risk = risk
         self.fraccion_kelly = fraccion_kelly
         self.modo_real = getattr(config, 'modo_real', False)
         self.modo_capital_bajo = config.modo_capital_bajo
-        self.riesgo_maximo_diario = 1.0
+        self.riesgo_maximo_diario = getattr(config, 'riesgo_maximo_diario', 1.0)
         self._markets = None
+        self._minimos_cache: Dict[str, float] = {}
         self.capital_currency = getattr(config, 'capital_currency', None)
         if not self.capital_currency:
             self.capital_currency = self._detectar_divisa_principal(config.symbols)
-        capital_total = 0.0
-        if self.modo_real and self.cliente:
-            try:
-                balance = self.cliente.fetch_balance()
-                capital_total = balance['total'].get(self.capital_currency, 0)
-            except Exception as e:
-                log.error(f'❌ Error al obtener balance: {e}')
-        else:
-            capital_total = 1000.0
+        capital_total = 1000.0
         inicial = capital_total / max(len(config.symbols), 1)
         inicial = max(inicial, 20.0)
         self.capital_por_simbolo: Dict[str, float] = {s: inicial for s in config.symbols}
@@ -48,6 +39,20 @@ class CapitalManager:
         self.fecha_actual = datetime.now(UTC).date()
         if bus:
             self.subscribe(bus)
+
+    async def inicializar_capital_async(self) -> None:
+        """Obtiene el capital actual de manera asíncrona."""
+        capital_total = 1000.0
+        if self.modo_real and self.cliente:
+            try:
+                balance = await fetch_balance_async(self.cliente)
+                capital_total = balance['total'].get(self.capital_currency, 0)
+            except Exception as e:
+                log.error(f'❌ Error al obtener balance: {e}')
+        inicial = capital_total / max(len(self.config.symbols), 1)
+        inicial = max(inicial, 20.0)
+        self.capital_por_simbolo = {s: inicial for s in self.config.symbols}
+        self.capital_inicial_diario = self.capital_por_simbolo.copy()
 
     @staticmethod
     def _detectar_divisa_principal(symbols: list[str]) -> str:
@@ -66,7 +71,7 @@ class CapitalManager:
         precio = data.get('precio')
         exposicion = data.get('exposicion_total', 0.0)
         stop_loss = data.get('stop_loss')
-        if fut:
+        if fut and not fut.done():
             cantidad = await self.calcular_cantidad_async(
                 symbol,
                 precio,
@@ -79,19 +84,28 @@ class CapitalManager:
         fut = data.get('future')
         symbol = data.get('symbol')
         retorno = data.get('retorno_total', 0.0)
-        if fut:
+        if fut and not fut.done():
             fut.set_result(self.actualizar_capital(symbol, retorno))
 
-    async def _obtener_minimo_binance(self, symbol: str) ->(float | None):
-        log.info('➡️ Entrando en _obtener_minimo_binance()')
+    async def _obtener_minimo_binance(self, symbol: str) -> (float | None):
+        if symbol in self._minimos_cache:
+            return self._minimos_cache[symbol]
         if not self.modo_real or not self.cliente:
             return None
         try:
             if self._markets is None:
                 self._markets = await load_markets_async(self.cliente)
-            info = self._markets.get(symbol.replace('/', ''))
+            key_base = symbol.replace('/', '')
+            info = self._markets.get(symbol) or self._markets.get(key_base)
+            if not info:
+                for k, v in self._markets.items():
+                    if k.replace('/', '') == key_base:
+                        info = v
+                        break
             minimo = info.get('limits', {}).get('cost', {}).get('min') if info else None
-            return float(minimo) if minimo else None
+            if minimo:
+                self._minimos_cache[symbol] = float(minimo)
+                return self._minimos_cache[symbol]
         except Exception as e:
             log.warning(f'No se pudo obtener mínimo para {symbol}: {e}')
         return None
@@ -118,7 +132,6 @@ class CapitalManager:
         exposicion_total: float = 0.0,
         stop_loss: float | None = None,
     ) -> float:
-        log.info('➡️ Entrando en calcular_cantidad_async()')
         if self.modo_real and self.cliente:
             balance = await fetch_balance_async(self.cliente)
             capital_total = balance['total'].get(self.capital_currency, 0)
@@ -145,7 +158,6 @@ class CapitalManager:
         minimo_dinamico = max(10.0, capital_total * 0.02)
         riesgo_permitido = max(riesgo_teorico, minimo_dinamico)
         riesgo_permitido = min(riesgo_permitido, capital_total * self.riesgo_maximo_diario)
-        riesgo_permitido = min(riesgo_permitido, capital_total)
         minimo_binance = await self._obtener_minimo_binance(symbol)
         cantidad = 0.0
         distancia_sl = abs(precio - stop_loss) if isinstance(stop_loss, (int, float)) else None
@@ -202,8 +214,7 @@ class CapitalManager:
         )
         return round(cantidad, 6)
 
-    def actualizar_capital(self, symbol: str, retorno_total: float) ->float:
-        log.info('➡️ Entrando en actualizar_capital()')
+    def actualizar_capital(self, symbol: str, retorno_total: float) -> float:
         capital_inicial = self.capital_por_simbolo.get(symbol, 0.0)
         ganancia = capital_inicial * retorno_total
         capital_final = capital_inicial + ganancia

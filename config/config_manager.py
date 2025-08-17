@@ -60,6 +60,8 @@ class Config:
     max_spread_ratio: float = 0.003
     timeout_verificar_salidas: int = 20
     timeout_evaluar_condiciones: int = 15
+    timeout_cerrar_operacion: int = 20
+    timeout_abrir_operacion: int = 20
     timeout_bus_eventos: int = 10
     max_timeouts_salidas: int = 3
     heartbeat_interval: int = 60
@@ -133,6 +135,8 @@ class ConfigManager:
             max_spread_ratio=_cargar_float('MAX_SPREAD_RATIO', defaults.max_spread_ratio),
             timeout_verificar_salidas=_cargar_int('TIMEOUT_VERIFICAR_SALIDAS', defaults.timeout_verificar_salidas),
             timeout_evaluar_condiciones=_cargar_int('TIMEOUT_EVALUAR_CONDICIONES', defaults.timeout_evaluar_condiciones),
+            timeout_cerrar_operacion=_cargar_int('TIMEOUT_CERRAR_OPERACION', defaults.timeout_cerrar_operacion),
+            timeout_abrir_operacion=_cargar_int('TIMEOUT_ABRIR_OPERACION', defaults.timeout_abrir_operacion),
             timeout_bus_eventos=_cargar_int('TIMEOUT_BUS_EVENTOS', defaults.timeout_bus_eventos),
             max_timeouts_salidas=_cargar_int('MAX_TIMEOUTS_SALIDAS', defaults.max_timeouts_salidas),
             heartbeat_interval=_cargar_int('HEARTBEAT_INTERVAL', defaults.heartbeat_interval),

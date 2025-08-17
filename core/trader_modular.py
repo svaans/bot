@@ -76,6 +76,10 @@ class EstadoSimbolo:
     df_idx: int = 0
     contador_tendencia: int = 0
     indicadores_cache: dict = field(default_factory=dict)
+    indicadores_calls: int = 0
+    indicadores_wait_ms: float = 0.0
+    entradas_timeouts: int = 0
+    cierres_timeouts: int = 0
 
 
 class Trader:
@@ -1364,7 +1368,10 @@ class Trader:
                 estrategias=list(estrategias.keys()),
             )
             return
-        await self._abrir_operacion_real(**info)
+        await asyncio.wait_for(
+            self._abrir_operacion_real(**info),
+            timeout=self.config.timeout_abrir_operacion,
+        )
 
     async def _abrir_operacion_real(self, symbol: str, precio: float, sl:
         float, tp: float, estrategias: (Dict | List), tendencia: str,
