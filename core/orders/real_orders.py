@@ -32,7 +32,7 @@ from typing import Any
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from datetime import datetime
 from binance_api.cliente import obtener_cliente
-from .order_model import Order
+from .order_model import Order, normalizar_precio_cantidad
 from core.utils.utils import configurar_logger
 from core.supervisor import tick
 from . import real_orders
@@ -69,6 +69,12 @@ _FLUSH_FUTURE: asyncio.Future | None = None
 _FLUSH_BATCH_SIZE = int(os.getenv('FLUSH_BATCH_SIZE', '100') or 100)
 """Número máximo de operaciones a persistir por lote."""
 _METRICAS_OPERACION: dict[str, dict[str, float]] = {}
+
+_MAX_SLIPPAGE_PCT = float(os.getenv('MAX_SLIPPAGE_PCT', '0.05') or 0.05)
+_LIMIT_TIMEOUT = float(os.getenv('LIMIT_ORDER_TIMEOUT', '10') or 10)
+_OFFSET_REPRICE = float(os.getenv('OFFSET_REPRICE', '0.001') or 0.001)
+_LIMIT_MAX_RETRY = int(os.getenv('LIMIT_ORDER_MAX_RETRY', '3') or 3)
+
 
 
 def _connect_db() -> sqlite3.Connection:
@@ -404,17 +410,16 @@ def ejecutar_orden_market(symbol: str, cantidad: float, operation_id: str | None
         market_info = markets.get(symbol.replace('/', ''), {})
         precision = market_info.get('precision', {}).get('amount', 8)
         step_size = 10 ** -precision
-        cantidad = math.floor(cantidad / step_size) * step_size
-        if cantidad <= 0:
-            log.error(f'⛔ Cantidad ajustada inválida para {symbol}: {cantidad}'
-                )
-            return {'ejecutado': 0.0, 'restante': 0.0, 'status': 'FILLED', 'min_qty': 0.0, 'fee': 0.0, 'pnl': 0.0}
-        min_amount = float(market_info.get('limits', {}).get('amount', {}).
-            get('min') or 0)
         min_cost = float(market_info.get('limits', {}).get('cost', {}).get(
             'min') or 0)
         ticker = cliente.fetch_ticker(symbol.replace('/', ''))
         precio = float(ticker.get('last') or ticker.get('close') or 0)
+        precio, cantidad = normalizar_precio_cantidad(market_info, precio, cantidad, 'compra')
+        if cantidad <= 0:
+            log.error(f'⛔ Cantidad ajustada inválida para {symbol}: {cantidad}')
+            return {'ejecutado': 0.0, 'restante': 0.0, 'status': 'FILLED', 'min_qty': 0.0, 'fee': 0.0, 'pnl': 0.0}
+        min_amount = float(market_info.get('limits', {}).get('amount', {}).get('min') or 0)
+        min_cost = float(market_info.get('limits', {}).get('cost', {}).get('min') or 0)
         quote = symbol.split('/')[1]
         balance = cliente.fetch_balance()
         disponible_quote = balance.get('free', {}).get(quote, 0)
@@ -422,6 +427,7 @@ def ejecutar_orden_market(symbol: str, cantidad: float, operation_id: str | None
             costo = cantidad * precio
             if costo > disponible_quote:
                 cantidad_ajustada = math.floor((disponible_quote / precio) / step_size) * step_size
+                cantidad_ajustada = normalizar_precio_cantidad(market_info, precio, cantidad_ajustada, 'compra')[1]
                 if cantidad_ajustada <= 0:
                     log.error(
                         f'⛔ Compra cancelada por saldo insuficiente en {symbol}. Requerido: {costo:.2f} {quote}, disponible: {disponible_quote:.2f}'
@@ -466,6 +472,18 @@ def ejecutar_orden_market(symbol: str, cantidad: float, operation_id: str | None
         metricas = {'fee': 0.0, 'pnl': 0.0}
         if operation_id:
             metricas = _acumular_metricas(operation_id, response)
+        precio_fill = float(response.get('price') or response.get('average') or precio)
+        slippage = abs(precio_fill - precio) / precio if precio else 0.0
+        if slippage > _MAX_SLIPPAGE_PCT:
+            log.warning(
+                f'⚠️ Slippage alto en {symbol}: {slippage:.2%} (máx {_MAX_SLIPPAGE_PCT:.2%})'
+            )
+            try:
+                notificador.enviar(
+                    f'Slippage alto en {symbol}: {slippage:.2%}', 'WARNING'
+                )
+            except Exception:
+                pass
         log.info(f'🟢 Order real ejecutada: {symbol}, cantidad: {ejecutado}')
         return {
             'ejecutado': ejecutado,
@@ -474,6 +492,7 @@ def ejecutar_orden_market(symbol: str, cantidad: float, operation_id: str | None
             'min_qty': min_amount,
             'fee': metricas['fee'],
             'pnl': metricas['pnl'],
+            'slippage': slippage,
         }
     except Exception as e:
         log.error(f'❌ Error en Binance al ejecutar compra en {symbol}: {e}')
@@ -505,14 +524,12 @@ def ejecutar_orden_market_sell(symbol: str, cantidad: float, operation_id: str |
             raise ValueError(
                 f'Cantidad inválida ({cantidad_vender}) para vender en {symbol}'
                 )
-        min_amount = float(info.get('limits', {}).get('amount', {}).get(
-            'min') or 0)
-        min_cost = float(info.get('limits', {}).get('cost', {}).get('min') or 0
-            )
+        min_amount = float(info.get('limits', {}).get('amount', {}).get('min') or 0)
+        min_cost = float(info.get('limits', {}).get('cost', {}).get('min') or 0)
         ticker = cliente.fetch_ticker(symbol.replace('/', ''))
         precio = float(ticker.get('last') or ticker.get('close') or 0)
-        if (cantidad_vender < min_amount or precio and cantidad_vender *
-            precio < min_cost):
+        precio, cantidad_vender = normalizar_precio_cantidad(info, precio, cantidad_vender, 'venta')
+        if (cantidad_vender < min_amount or precio and cantidad_vender * precio < min_cost):
             log.error(
                 f'⛔ Venta rechazada por mínimos: {symbol} → cantidad: {cantidad_vender:.8f}, mínimos: amount={min_amount}, notional={min_cost}'
                 )
@@ -541,6 +558,18 @@ def ejecutar_orden_market_sell(symbol: str, cantidad: float, operation_id: str |
         metricas = {'fee': 0.0, 'pnl': 0.0}
         if operation_id:
             metricas = _acumular_metricas(operation_id, response)
+        precio_fill = float(response.get('price') or response.get('average') or precio)
+        slippage = abs(precio_fill - precio) / precio if precio else 0.0
+        if slippage > _MAX_SLIPPAGE_PCT:
+            log.warning(
+                f'⚠️ Slippage alto en {symbol}: {slippage:.2%} (máx {_MAX_SLIPPAGE_PCT:.2%})'
+            )
+            try:
+                notificador.enviar(
+                    f'Slippage alto en {symbol}: {slippage:.2%}', 'WARNING'
+                )
+            except Exception:
+                pass
         log.info(
             f'🔴 Order de venta ejecutada: {symbol}, cantidad: {ejecutado:.8f}')
         _VENTAS_FALLIDAS.discard(symbol)
@@ -551,6 +580,7 @@ def ejecutar_orden_market_sell(symbol: str, cantidad: float, operation_id: str |
             'min_qty': min_amount,
             'fee': metricas['fee'],
             'pnl': metricas['pnl'],
+            'slippage': slippage,
         }
     except InsufficientFunds as e:
         log.error(f'❌ Venta rechazada por saldo insuficiente en {symbol}: {e}')
@@ -566,6 +596,107 @@ def ejecutar_orden_market_sell(symbol: str, cantidad: float, operation_id: str |
     except Exception as e:
         log.error(f'❌ Error en intercambio al vender {symbol}: {e}')
         raise
+
+
+def ejecutar_orden_limit(
+    symbol: str,
+    side: str,
+    precio: float,
+    cantidad: float,
+    operation_id: str | None = None,
+    timeout: float | None = None,
+    offset_reprice: float | None = None,
+    max_reintentos: int | None = None,
+) -> dict:
+    """Ejecuta una orden ``limit`` con re-precio y *fallback* a market.
+
+    Si la orden no se completa dentro de ``timeout`` segundos se cancela y se
+    re-precia usando ``offset_reprice``. Tras ``max_reintentos`` intentos
+    fallidos, la función envía una orden de mercado.
+    """
+    if side not in {'buy', 'sell'}:
+        raise ValueError('side debe ser "buy" o "sell"')
+    timeout = timeout or _LIMIT_TIMEOUT
+    offset_reprice = offset_reprice or _OFFSET_REPRICE
+    max_reintentos = max_reintentos or _LIMIT_MAX_RETRY
+    cliente = obtener_cliente()
+    markets = cliente.load_markets()
+    info = markets.get(symbol.replace('/', ''), {})
+    params_base = {}
+    if operation_id:
+        params_base['newClientOrderId'] = operation_id
+
+    for intento in range(1, max_reintentos + 1):
+        precio, cantidad = normalizar_precio_cantidad(
+            info, precio, cantidad, 'compra' if side == 'buy' else 'venta'
+        )
+        params = params_base.copy()
+        if operation_id:
+            params['newClientOrderId'] = f"{operation_id}-{intento}"
+        if side == 'buy':
+            orden = cliente.create_limit_buy_order(
+                symbol.replace('/', ''), cantidad, precio, params
+            )
+        else:
+            orden = cliente.create_limit_sell_order(
+                symbol.replace('/', ''), cantidad, precio, params
+            )
+        order_id = orden.get('id')
+        inicio = time.time()
+        estado = orden
+        while time.time() - inicio < timeout:
+            estado = cliente.fetch_order(order_id, symbol.replace('/', ''))
+            filled = float(estado.get('filled') or 0)
+            if estado.get('status') in {'closed', 'canceled'} or filled >= cantidad:
+                break
+            time.sleep(1)
+        else:
+            try:
+                cliente.cancel_order(order_id, symbol.replace('/', ''))
+            except Exception as e:
+                log.warning(f'⚠️ No se pudo cancelar orden {order_id}: {e}')
+            if intento >= max_reintentos:
+                break
+            if side == 'buy':
+                precio *= 1 + offset_reprice
+            else:
+                precio *= 1 - offset_reprice
+            continue
+
+        ejecutado = float(estado.get('filled') or 0)
+        restante = max(cantidad - ejecutado, 0.0)
+        status = 'FILLED'
+        if restante > 1e-8:
+            status = 'PARTIAL'
+        precio_fill = float(estado.get('price') or estado.get('average') or precio)
+        slippage = abs(precio_fill - precio) / precio if precio else 0.0
+        if slippage > _MAX_SLIPPAGE_PCT:
+            log.warning(
+                f'⚠️ Slippage alto en {symbol}: {slippage:.2%} (máx {_MAX_SLIPPAGE_PCT:.2%})'
+            )
+            try:
+                notificador.enviar(
+                    f'Slippage alto en {symbol}: {slippage:.2%}', 'WARNING'
+                )
+            except Exception:
+                pass
+        metricas = {'fee': 0.0, 'pnl': 0.0}
+        if operation_id:
+            metricas = _acumular_metricas(operation_id, estado)
+        return {
+            'ejecutado': ejecutado,
+            'restante': restante,
+            'status': status,
+            'min_qty': float(info.get('limits', {}).get('amount', {}).get('min') or 0),
+            'fee': metricas['fee'],
+            'pnl': metricas['pnl'],
+            'slippage': slippage,
+        }
+
+    log.warning(f'⚠️ Fallback a orden de mercado en {symbol} tras {max_reintentos} intentos limit fallidos')
+    if side == 'buy':
+        return ejecutar_orden_market(symbol, cantidad, operation_id)
+    return ejecutar_orden_market_sell(symbol, cantidad, operation_id)
 
 
 def _persistir_operaciones(operaciones: list[dict]) -> tuple[int, int, list[dict]]:

@@ -4,6 +4,48 @@ import json
 import math
 
 
+def normalizar_precio_cantidad(market_info: dict, precio: float, cantidad: float,
+                               direccion: str = 'long') -> tuple[float, float]:
+    """Ajusta ``precio`` y ``cantidad`` a las restricciones del mercado.
+
+    Se aplican ``tickSize``, ``stepSize`` y ``minNotional`` tomando los datos
+    de ``market_info``. El redondeo de ``precio`` respeta la ``direccion`` de la
+    orden para evitar que una operación de venta quede por debajo del valor
+    deseado.
+
+    Parameters
+    ----------
+    market_info:
+        Información del mercado tal y como la expone CCXT.
+    precio:
+        Precio objetivo de la orden.
+    cantidad:
+        Cantidad de la orden.
+    direccion:
+        ``'long'``/``'compra'`` o ``'short'``/``'venta'`` para determinar si el
+        redondeo del precio debe realizarse hacia arriba o hacia abajo.
+
+    Returns
+    -------
+    tuple[float, float]
+        Precio y cantidad ajustados.
+    """
+    precision_price = market_info.get('precision', {}).get('price', 8)
+    precision_amount = market_info.get('precision', {}).get('amount', 8)
+    tick_size = 10 ** -precision_price
+    step_size = 10 ** -precision_amount
+    min_notional = float(market_info.get('limits', {}).get('cost', {}).get('min') or 0)
+
+    precio = ajustar_tick_size(precio, tick_size, direccion)
+    if step_size > 0:
+        cantidad = math.floor(cantidad / step_size) * step_size
+
+    if min_notional and precio and precio * cantidad < min_notional and step_size > 0:
+        cantidad = math.ceil(min_notional / precio / step_size) * step_size
+
+    return precio, cantidad
+
+
 def ajustar_tick_size(precio: float, tick_size: float, direccion: str = 'long') -> float:
     """Ajusta un precio al múltiplo de ``tick_size`` según la dirección."""
     if tick_size <= 0:
