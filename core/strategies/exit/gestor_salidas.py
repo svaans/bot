@@ -1,6 +1,7 @@
 import pandas as pd
 import asyncio
 import inspect
+from datetime import datetime, timezone
 from core.utils.utils import validar_dataframe
 from core.strategies.tendencia import detectar_tendencia
 from core.strategies.entry.gestor_entradas import evaluar_estrategias
@@ -9,6 +10,7 @@ from core.adaptador_umbral import calcular_umbral_salida_adaptativo
 from core.strategies.pesos import obtener_peso_salida
 from core.utils import configurar_logger
 log = configurar_logger('gestor_salidas')
+UTC = timezone.utc
 from .loader_salidas import cargar_estrategias_salida
 
 
@@ -18,6 +20,39 @@ async def evaluar_salidas(orden: dict, df, config=None, contexto=None):
     if not validar_dataframe(df, ['close', 'high', 'low', 'volume']):
         log.warning(f'[{symbol}] DataFrame inválido para gestor de salidas')
         return {'cerrar': False, 'razon': 'Datos insuficientes'}
+    cfg = config or {}
+    now = datetime.now(UTC)
+    t_max = cfg.get('t_max')
+    timestamp = orden.get('timestamp')
+    if t_max and timestamp:
+        try:
+            abierto = datetime.fromisoformat(str(timestamp))
+            if (now - abierto).total_seconds() >= t_max:
+                log.info(f'[{symbol}] Cierre por t_max alcanzado')
+                return {'cerrar': True, 'razon': 'Expiración t_max'}
+        except Exception as e:
+            log.warning(f'[{symbol}] Error evaluando t_max: {e}')
+    t_max_loss = cfg.get('t_max_loss')
+    if t_max_loss:
+        precio_actual = float(df['close'].iloc[-1])
+        precio_entrada = orden.get('precio_entrada', precio_actual)
+        direccion = orden.get('direccion', 'long')
+        en_perdida = (direccion in ('long', 'compra') and precio_actual < precio_entrada) or (
+            direccion in ('short', 'venta') and precio_actual > precio_entrada)
+        if en_perdida:
+            inicio = orden.get('t_inicio_perdida')
+            if not inicio:
+                orden['t_inicio_perdida'] = now.isoformat()
+            else:
+                try:
+                    t_inicio = datetime.fromisoformat(str(inicio))
+                    if (now - t_inicio).total_seconds() >= t_max_loss:
+                        log.info(f'[{symbol}] Cierre por permanencia en pérdida')
+                        return {'cerrar': True, 'razon': 'Tiempo en pérdida excedido'}
+                except Exception:
+                    orden['t_inicio_perdida'] = now.isoformat()
+        else:
+            orden.pop('t_inicio_perdida', None)
     funciones = cargar_estrategias_salida()
     resultados = []
     PRIORIDAD_ABSOLUTA = {'Stop Loss', 'Estrategia: Cambio de tendencia'}

@@ -16,6 +16,7 @@ class RiskManager:
         log.info('➡️ Entrando en __init__()')
         self.umbral = umbral
         self._factor_kelly_prev = None
+        self.bus = bus
         if bus:
             self.subscribe(bus)
 
@@ -155,3 +156,31 @@ class RiskManager:
             f'🌪️ Volatilidad excesiva, aplicando factor de reducción: {factor}'
             )
         return factor
+    
+    async def kill_switch(
+        self,
+        order_manager: Any,
+        drawdown_diario: float,
+        limite_drawdown: float,
+        perdidas_consecutivas: int,
+        max_perdidas: int,
+    ) -> bool:
+        log.info('➡️ Entrando en kill_switch()')
+        """Cancela órdenes y cierra posiciones ante pérdidas excesivas."""
+        if drawdown_diario < limite_drawdown and perdidas_consecutivas < max_perdidas:
+            return False
+        log.warning('🛑 Kill switch activado. Cerrando posiciones abiertas.')
+        try:
+            for symbol, orden in list(getattr(order_manager, 'ordenes', {}).items()):
+                precio = getattr(orden, 'precio_entrada', 0.0)
+                try:
+                    await order_manager.cerrar_async(symbol, precio, 'Kill Switch')
+                except Exception as e:
+                    log.error(f'❌ Error cerrando {symbol} en kill switch: {e}')
+        finally:
+            if self.bus:
+                await self.bus.publish('notify', {
+                    'mensaje': '🛑 Kill switch activado: posiciones cerradas',
+                    'tipo': 'CRITICAL',
+                })
+        return True
