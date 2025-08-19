@@ -10,7 +10,6 @@ log = configurar_logger('kelly')
 
 def calcular_fraccion_kelly(dias_historia: int=30, fallback: float=0.2
     ) ->float:
-    log.info('➡️ Entrando en calcular_fraccion_kelly()')
     """Calcula la fracción de capital a arriesgar usando el Criterio de Kelly.
 
     Se basa en los reportes diarios generados por ``ReporterDiario``. Si no
