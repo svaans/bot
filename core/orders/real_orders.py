@@ -189,12 +189,16 @@ def cargar_ordenes() ->dict[str, Order]:
     try:
         with _connect_db() as conn:
             conn.row_factory = sqlite3.Row
-            filas = conn.execute('SELECT * FROM ordenes').fetchall()
+            filas = conn.execute(
+                "SELECT * FROM ordenes WHERE fecha_cierre IS NULL OR fecha_cierre = ''"
+            ).fetchall()
             for row in filas:
                 data = dict(row)
                 orden = Order.from_dict(data)
                 ordenes[orden.symbol] = orden
-        log.info(f'📥 {len(ordenes)} órdenes cargadas desde la base de datos.')
+        log.info(
+            f'📥 {len(ordenes)} órdenes abiertas cargadas desde la base de datos.'
+        )
     except sqlite3.Error as e:
         log.error(f'❌ Error al cargar órdenes desde SQLite: {e}')
         return {}

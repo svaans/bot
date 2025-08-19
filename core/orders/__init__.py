@@ -10,7 +10,6 @@ __all__ = [
     'obtener_orden',
     'obtener_todas_las_ordenes',
     'sincronizar_ordenes_binance',
-    'reconciliar_trades_binance',
 ]
 
 
