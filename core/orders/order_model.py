@@ -44,12 +44,19 @@ def normalizar_precio_cantidad(market_info: dict, precio: float, cantidad: float
     if step_size > 0:
         cantidad = math.floor(cantidad / step_size) * step_size
 
-    if min_amount and cantidad < min_amount and step_size > 0:
+    if min_amount and step_size > 0 and cantidad < min_amount:
         cantidad = math.ceil(min_amount / step_size) * step_size
 
-    if min_notional and precio and precio * cantidad < min_notional and step_size > 0:
+    if (
+        min_notional
+        and precio
+        and step_size > 0
+        and precio * cantidad < min_notional
+    ):
         cantidad = math.ceil(min_notional / precio / step_size) * step_size
 
+    if step_size > 0:
+        cantidad = math.floor(cantidad / step_size) * step_size
     return precio, cantidad
 
 
@@ -94,6 +101,8 @@ class Order:
     intentos_cierre: int = 0
     sl_emergencia: float | None = None
     cerrando: bool = False
+    fee_total: float = 0.0
+    pnl_operaciones: float = 0.0
 
     @staticmethod
     def from_dict(data: Dict[str, Any]) ->'Order':
@@ -125,6 +134,8 @@ class Order:
         data.setdefault('intentos_cierre', 0)
         data.setdefault('sl_emergencia', None)
         data.setdefault('cerrando', False)
+        data.setdefault('fee_total', 0.0)
+        data.setdefault('pnl_operaciones', 0.0)
         return Order(**data)
 
     def to_dict(self) ->Dict[str, Any]:

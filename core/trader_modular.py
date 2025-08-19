@@ -888,6 +888,8 @@ class Trader:
             o.cantidad_abierta * o.precio_entrada for o in self.orders.ordenes.values()
         )
         fut = asyncio.get_running_loop().create_future()
+        fee_pct = getattr(self.config, 'fee_pct', 0.0)
+        slippage_pct = getattr(self.config, 'slippage_pct', 0.0)
         await self.bus.publish(
             'calcular_cantidad',
             {
@@ -895,6 +897,8 @@ class Trader:
                 'precio': precio,
                 'stop_loss': stop_loss,
                 'exposicion_total': exposicion,
+                'fee_pct': fee_pct,
+                'slippage_pct': slippage_pct,
                 'future': fut,
             },
         )

@@ -38,11 +38,15 @@ class OrderManager:
         ts = int(datetime.utcnow().timestamp() * 1000)
         return f"{symbol.replace('/', '')}-{ts}-{nonce}"
 
-    async def _ejecutar_market_retry(self, side: str, symbol: str, cantidad: float) -> float:
-        """Envía una orden de mercado reintentando en caso de fills parciales."""
+    async def _ejecutar_market_retry(self, side: str, symbol: str, cantidad: float) -> tuple[float, float, float]:
+        """Envía una orden de mercado reintentando en caso de fills parciales.
+
+        Retorna una tupla ``(ejecutado, fee, pnl)`` acumulando los valores de
+        cada intento.
+        """
         operation_id = self._generar_operation_id(symbol)
         restante = cantidad
-        total = 0.0
+        total = total_fee = total_pnl = 0.0
         while restante > 0:
             func = (
                 real_orders.ejecutar_orden_market
@@ -53,9 +57,11 @@ class OrderManager:
             ejecutado = float(resp.get('ejecutado', 0.0))
             total += ejecutado
             restante = float(resp.get('restante', 0.0))
+            total_fee += float(resp.get('fee', 0.0))
+            total_pnl += float(resp.get('pnl', 0.0))
             if resp.get('status') != 'PARTIAL' or restante < resp.get('min_qty', 0):
                 break
-        return total
+        return total, total_fee, total_pnl
 
     def subscribe(self, bus: EventBus) -> None:
         bus.subscribe('abrir_orden', self._on_abrir)
@@ -107,15 +113,17 @@ class OrderManager:
             duracion_en_velas=0)
         try:
             if self.modo_real and is_valid_number(cantidad) and cantidad > 0:
-                cantidad = await self._ejecutar_market_retry('buy', symbol, cantidad)
+                ejecutado, fee, pnl = await self._ejecutar_market_retry('buy', symbol, cantidad)
                 try:
-                    cantidad = float(cantidad)
+                    cantidad = float(ejecutado)
                 except Exception:
                     cantidad = (
                         float(orden.cantidad_abierta)
                         if is_valid_number(orden.cantidad_abierta)
                         else 0.0
                     )
+                orden.fee_total = fee
+                orden.pnl_operaciones = pnl
                 if cantidad <= 0 and self.bus:
                     await self.bus.publish(
                         'notify',
@@ -125,6 +133,9 @@ class OrderManager:
                         },
                     )
                     return
+            else:
+                # modo simulado: registramos el costo inicial
+                orden.pnl_operaciones = -precio * cantidad
             if cantidad > 0:
                 await asyncio.to_thread(
                     real_orders.registrar_orden,
@@ -168,7 +179,10 @@ class OrderManager:
         if self.modo_real:
             try:
                 if cantidad > 0:
-                    cantidad = await self._ejecutar_market_retry('buy', symbol, cantidad)
+                    ejecutado, fee, pnl = await self._ejecutar_market_retry('buy', symbol, cantidad)
+                    cantidad = ejecutado
+                    orden.fee_total += fee
+                    orden.pnl_operaciones += pnl
             except Exception as e:
                 log.error(
                     f'❌ No se pudo agregar posición real para {symbol}: {e}')
@@ -179,8 +193,10 @@ class OrderManager:
                             'mensaje': f'❌ Error al agregar posición en {symbol}: {e}',
                             'tipo': 'CRITICAL',
                         },
-                    )
+                )
                 return False
+        else:
+            orden.pnl_operaciones -= precio * cantidad
         total_prev = orden.cantidad_abierta + 0.0
         orden.cantidad_abierta += cantidad
         orden.cantidad += cantidad
@@ -212,9 +228,11 @@ class OrderManager:
             cantidad = orden.cantidad if is_valid_number(orden.cantidad) else 0.0
             if cantidad > 1e-08:
                 try:
-                    ejecutado = await self._ejecutar_market_retry('sell', symbol, cantidad)
+                    ejecutado, fee, pnl = await self._ejecutar_market_retry('sell', symbol, cantidad)
                     if ejecutado and ejecutado > 0:
                         venta_exitosa = True
+                        orden.fee_total += fee
+                        orden.pnl_operaciones += pnl
                     else:
                         log.error(
                             f'❌ Venta no ejecutada o cantidad 0 para {symbol}'
@@ -232,6 +250,12 @@ class OrderManager:
                         )
             else:
                 venta_exitosa = True
+        else:
+            # en modo simulado calculamos PnL con el precio indicado
+            diff = (precio - orden.precio_entrada) * orden.cantidad
+            if orden.direccion in ('short', 'venta'):
+                diff = -diff
+            orden.pnl_operaciones += diff
         if not venta_exitosa:
             if self.bus and self.modo_real:
                 await self.bus.publish(
@@ -249,8 +273,8 @@ class OrderManager:
         orden.precio_cierre = precio
         orden.fecha_cierre = datetime.utcnow().isoformat()
         orden.motivo_cierre = motivo
-        retorno = (precio - orden.precio_entrada
-            ) / orden.precio_entrada if orden.precio_entrada else 0.0
+        base = orden.precio_entrada * orden.cantidad if orden.cantidad else 0.0
+        retorno = orden.pnl_operaciones / base if base else 0.0
         orden.retorno_total = retorno
         self.historial.setdefault(symbol, []).append(orden.to_dict())
         if len(self.historial[symbol]) > self.max_historial:
@@ -279,12 +303,20 @@ class OrderManager:
             return False
         if self.modo_real:
             try:
-                cantidad = await self._ejecutar_market_retry('sell', symbol, cantidad)
+                ejecutado, fee, pnl = await self._ejecutar_market_retry('sell', symbol, cantidad)
+                cantidad = ejecutado
+                orden.fee_total += fee
+                orden.pnl_operaciones += pnl
             except Exception as e:
                 log.error(f'❌ Error en venta parcial de {symbol}: {e}')
                 if self.bus:
                     await self.bus.publish('notify', {'mensaje': f'❌ Venta parcial fallida en {symbol}: {e}'})
                 return False
+        else:
+            diff = (precio - orden.precio_entrada) * cantidad
+            if orden.direccion in ('short', 'venta'):
+                diff = -diff
+            orden.pnl_operaciones += diff
         orden.cantidad_abierta -= cantidad
         retorno_unitario = (precio - orden.precio_entrada
             ) / orden.precio_entrada if orden.precio_entrada else 0.0

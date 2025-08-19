@@ -118,29 +118,59 @@ def esperar_balance(cliente, symbol: str, cantidad_esperada: float,
 
 
 def _acumular_metricas(operation_id: str, response: dict) -> dict[str, float]:
-    """Acumula comisiones y PnL por ``operation_id`` a partir de la respuesta."""
-    metricas = _METRICAS_OPERACION.setdefault(operation_id, {'fee': 0.0, 'pnl': 0.0})
-    for fee in response.get('fees', []) or []:
+    """Acumula comisiones y PnL por ``operation_id`` a partir de la respuesta.
+
+    Para cada trade se calcula el PnL con el signo correcto según ``side`` y se
+    deduce la comisión de forma proporcional a la base correspondiente
+    (notional o cantidad) dependiendo de la moneda en la que se cobra la fee.
+    """
+
+    metricas = _METRICAS_OPERACION.setdefault(
+        operation_id, {"fee": 0.0, "pnl": 0.0}
+    )
+
+    symbol = (
+        response.get("symbol")
+        or response.get("info", {}).get("symbol")
+        or ""
+    )
+    base, quote = (symbol.split("/") if "/" in symbol else ("", ""))
+
+    trades = response.get("trades") or []
+    for trade in trades:
+        side = trade.get("side") or ""
+        price = float(trade.get("price") or 0.0)
+        amount = float(trade.get("amount") or 0.0)
+        cost = float(trade.get("cost") or price * amount)
+
+        # Fees
+        fee_info = trade.get("fee") or {}
+        fee_cost = fee_info.get("cost")
+        if fee_cost is None:
+            rate = fee_info.get("rate")
+            currency = fee_info.get("currency")
+            if rate is not None:
+                if currency == base:
+                    fee_cost = float(rate) * amount
+                else:
+                    fee_cost = float(rate) * cost
+        fee_cost = float(fee_cost or 0.0)
+        metricas["fee"] += fee_cost
+
+        # PnL sign: buys are negative cash flow, sells positive
+        pnl = cost if side == "sell" else -cost
+        pnl -= fee_cost
+        metricas["pnl"] += pnl
+
+    # Some responses include aggregated fees outside of ``trades``
+    for fee in response.get("fees", []) or []:
         try:
-            metricas['fee'] += float(fee.get('cost') or 0)
+            costo = float(fee.get("cost") or 0.0)
         except Exception:
             continue
-    for trade in response.get('trades', []) or []:
-        try:
-            f = trade.get('fee') or {}
-            metricas['fee'] += float(f.get('cost') or 0)
-        except Exception:
-            pass
-        pnl = (
-            trade.get('info', {}).get('realizedPnl')
-            if isinstance(trade.get('info'), dict)
-            else trade.get('realizedPnl')
-        )
-        try:
-            if pnl is not None:
-                metricas['pnl'] += float(pnl)
-        except Exception:
-            continue
+        metricas["fee"] += costo
+        metricas["pnl"] -= costo
+        
     return metricas
 
 
