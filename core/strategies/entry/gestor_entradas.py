@@ -90,6 +90,10 @@ def _validar_score(symbol: str, potencia: float, umbral: float) ->bool:
         log.info(
             f'🚫 [{symbol}] Rechazo por score {potencia:.2f} < {umbral:.2f}')
         return False
+    if potencia == umbral:
+        log.info(
+            f'🚫 [{symbol}] Empate en score {potencia:.2f} == {umbral:.2f}')
+        return False
     return True
 
 
