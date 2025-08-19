@@ -20,6 +20,10 @@ class PositionManager:
     def obtener(self, symbol):
         return self._manager.obtener(symbol)
 
+    def tiene_posicion(self, symbol) -> bool:
+        """Indica si existe una posición abierta para ``symbol``."""
+        return self.obtener(symbol) is not None
+    
     async def abrir_async(self, *args, **kwargs):
         return await self._manager.abrir_async(*args, **kwargs)
 

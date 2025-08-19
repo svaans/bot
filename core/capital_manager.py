@@ -65,6 +65,10 @@ class CapitalManager:
         bus.subscribe('calcular_cantidad', self._on_calcular_cantidad)
         bus.subscribe('actualizar_capital', self._on_actualizar_capital)
 
+    def tiene_capital(self, symbol: str) -> bool:
+        """Devuelve ``True`` si hay capital asignado a ``symbol``."""
+        return self.capital_por_simbolo.get(symbol, 0.0) > 0
+    
     async def _on_calcular_cantidad(self, data: dict) -> None:
         fut = data.get('future')
         symbol = data.get('symbol')

@@ -1726,12 +1726,15 @@ class Trader:
         except Exception as e:
             log.warning(f'⚠️ Error cargando estado persistente: {e}')
 
-    def _puede_evaluar_entradas(self) -> bool:
+    def _puede_evaluar_entradas(self, symbol: str) -> bool:
         log.debug('➡️ Entrando en _puede_evaluar_entradas()')
         """Determina si existen condiciones para evaluar nuevas compras."""
-        hay_capital = any(c > 0 for c in self.capital_por_simbolo.values())
-        if not hay_capital:
+        
+        if not self.capital_manager.tiene_capital(symbol):
             return False
+        if self.orders.tiene_posicion(symbol):
+            return False
+        return True
         hay_libre = any(
             self.orders.obtener(sym) is None for sym in self.estado.keys()
         )
