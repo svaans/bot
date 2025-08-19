@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections import deque
 
+from math import isclose
 import pandas as pd
 
 from indicators.atr import calcular_atr
@@ -36,7 +37,7 @@ def actualizar_rsi_incremental(estado, periodo: int = 14) -> float | None:
             .mean()
             .iloc[-1]
         )
-        if avg_loss == 0:
+        if isclose(avg_loss, 0.0, rel_tol=1e-12, abs_tol=1e-12):
             rsi = 100.0
         else:
             rs = avg_gain / avg_loss
@@ -48,7 +49,7 @@ def actualizar_rsi_incremental(estado, periodo: int = 14) -> float | None:
         loss = max(-delta, 0.0)
         avg_gain = (datos_rsi["avg_gain"] * (periodo - 1) + gain) / periodo
         avg_loss = (datos_rsi["avg_loss"] * (periodo - 1) + loss) / periodo
-        if avg_loss == 0:
+        if isclose(avg_loss, 0.0, rel_tol=1e-12, abs_tol=1e-12):
             rsi = 100.0
         else:
             rs = avg_gain / avg_loss

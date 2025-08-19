@@ -16,6 +16,7 @@ import os
 import json
 import numpy as np
 import pandas as pd
+from math import isclose
 from scipy.stats import linregress
 from ta.momentum import RSIIndicator
 from core.utils.utils import configurar_logger
@@ -150,7 +151,7 @@ def calcular_umbral_adaptativo(symbol: str, df: pd.DataFrame,
         rango_medio = np.mean(ventana_high - ventana_low) / media_close
     volumen_promedio = ventana_vol.mean()
     volumen_max = ventana_vol.max()
-    volumen_relativo = 0.5 if volumen_max == 0 or np.isnan(volumen_max
+    volumen_relativo = 0.5 if isclose(volumen_max, 0.0, rel_tol=1e-12, abs_tol=1e-12) or np.isnan(volumen_max
         ) else volumen_promedio / volumen_max
     momentum_std = df['close'].pct_change().tail(5).std()
     try:

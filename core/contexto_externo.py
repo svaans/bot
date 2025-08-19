@@ -5,6 +5,7 @@ import json
 from datetime import datetime, timezone
 from typing import Awaitable, Callable, Dict, Iterable
 import time
+from math import isclose
 import websockets
 from binance_api.websocket import _keepalive
 from core.utils.utils import configurar_logger
@@ -82,7 +83,7 @@ class StreamContexto:
                             close = float(vela.get('c', 0.0))
                             open_ = float(vela.get('o', 0.0))
                             vol = float(vela.get('v', 0.0))
-                            if open_ == 0 or vol < 1e-08:
+                            if isclose(open_, 0.0, rel_tol=1e-12, abs_tol=1e-12) or vol < 1e-08:
                                 continue
                             variacion_pct = (close - open_) / open_
                             puntaje = variacion_pct * vol

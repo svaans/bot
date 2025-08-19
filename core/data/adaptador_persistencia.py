@@ -1,4 +1,5 @@
 import numpy as np
+from math import isclose
 import pandas as pd
 from ta.momentum import RSIIndicator
 from core.utils.utils import configurar_logger
@@ -17,7 +18,7 @@ def calcular_persistencia_minima(symbol: str, df: pd.DataFrame, tendencia:
         return base_minimo
     ventana = df['close'].tail(10)
     media = np.mean(ventana)
-    if np.isnan(media) or media == 0:
+    if np.isnan(media) or isclose(media, 0.0, rel_tol=1e-12, abs_tol=1e-12):
         log.debug(
             f'⚠️ [{symbol}] Media de cierre inválida. Usando mínimo base {base_minimo}'
             )

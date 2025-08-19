@@ -1,13 +1,15 @@
 """Validadores de condiciones técnicas para entradas."""
 from __future__ import annotations
+from math import isclose
 import pandas as pd
 from indicators.bollinger import calcular_bollinger
 from indicators.helpers import get_rsi, get_slope
+from core.utils.utils import round_decimal
 
 
 def _distancia_relativa(valor_actual: float, extremo: float) ->float:
     """Devuelve la distancia relativa entre ``valor_actual`` y ``extremo``."""
-    if extremo == 0:
+    if isclose(extremo, 0.0, rel_tol=1e-12, abs_tol=1e-12):
         return 0.0
     return abs(valor_actual - extremo) / extremo
 
@@ -16,9 +18,9 @@ def validar_volumen(df: pd.DataFrame) ->bool:
     """Valida que el volumen actual sea suficiente."""
     if df is None or len(df) < 30:
         return True
-    vol_act = float(df['volume'].iloc[-1])
-    vol_med = float(df['volume'].rolling(30).mean().iloc[-1])
-    if vol_med == 0:
+    vol_act = float(round_decimal(df['volume'].iloc[-1], 8))
+    vol_med = float(round_decimal(df['volume'].rolling(30).mean().iloc[-1], 8))
+    if isclose(vol_med, 0.0, rel_tol=1e-12, abs_tol=1e-12):
         return True
     return vol_act / vol_med >= 0.9
 
@@ -70,9 +72,9 @@ def validar_volumen_real(df: pd.DataFrame, factor: float=1.0, ventana: int=30
     """Comprueba que el volumen sea alto respecto a su media."""
     if df is None or len(df) < ventana:
         return True
-    vol_act = float(df['volume'].iloc[-1])
-    vol_med = float(df['volume'].tail(ventana).mean())
-    if vol_med == 0:
+    vol_act = float(round_decimal(df['volume'].iloc[-1], 8))
+    vol_med = float(round_decimal(df['volume'].tail(ventana).mean(), 8))
+    if isclose(vol_med, 0.0, rel_tol=1e-12, abs_tol=1e-12):
         return True
     return vol_act >= vol_med * factor
 
@@ -83,8 +85,8 @@ def validar_spread(df: pd.DataFrame, max_spread: float=0.002) ->bool:
         return True
     alto = float(df['high'].iloc[-1])
     bajo = float(df['low'].iloc[-1])
-    cierre = float(df['close'].iloc[-1])
-    if cierre == 0:
+    cierre = float(round_decimal(df['close'].iloc[-1], 8))
+    if isclose(cierre, 0.0, rel_tol=1e-12, abs_tol=1e-12):
         return True
     spread = (alto - bajo) / cierre
     return spread <= max_spread

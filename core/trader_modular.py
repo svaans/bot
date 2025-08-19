@@ -9,6 +9,7 @@ from datetime import datetime, timedelta, timezone
 import json
 import os
 import math
+from math import isclose
 import numpy as np
 import pandas as pd
 from config.config_manager import Config
@@ -31,6 +32,7 @@ from core.utils.utils import (
     DATOS_DIR,
     ESTADO_DIR,
     intervalo_a_segundos,
+    round_decimal,
 )
 from core.strategies import cargar_pesos_estrategias
 from core.risk import calcular_fraccion_kelly
@@ -748,8 +750,8 @@ class Trader:
             pesos[symbol] = peso
         suma = sum(pesos.values()) or 1
         for symbol in self.capital_por_simbolo:
-            self.capital_por_simbolo[symbol] = round(total * pesos[symbol] /
-                suma, 2)
+            self.capital_por_simbolo[symbol] = float(round_decimal(total * pesos[symbol] /
+                suma, 2))
         for symbol in self.capital_por_simbolo:
             orden = self.orders.obtener(symbol)
             reserva = 0.0
@@ -760,8 +762,9 @@ class Trader:
                 if precio_actual > orden.precio_entrada:
                     reserva = self.capital_por_simbolo[symbol
                         ] * self.reserva_piramide
+            reserva = float(round_decimal(reserva, 2))
             self.capital_por_simbolo[symbol] -= reserva
-            self.reservas_piramide[symbol] = round(reserva, 2)
+            self.reservas_piramide[symbol] = reserva
         self.capital_inicial_diario = self.capital_por_simbolo.copy()
         self.fecha_actual = fecha or datetime.now(UTC).date()
         log.info(f'💰 Capital redistribuido: {self.capital_por_simbolo}')
@@ -1218,7 +1221,7 @@ class Trader:
         media_close = np.mean(ventana_close)
         minimo = calcular_persistencia_minima(symbol, df, tendencia_actual,
             base_minimo=self.persistencia.minimo)
-        if np.isnan(media_close) or media_close == 0:
+        if np.isnan(media_close) or isclose(media_close, 0.0, rel_tol=1e-12, abs_tol=1e-12):
             log.debug(
                 f'⚠️ {symbol}: Media de cierre inválida para persistencia')
             return False, 0.0, minimo

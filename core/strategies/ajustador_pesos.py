@@ -1,4 +1,5 @@
 import json
+from math import isclose
 import numpy as np
 from core.utils.utils import configurar_logger
 log = configurar_logger('ajustador_pesos')
@@ -23,7 +24,7 @@ def ajustar_pesos_por_desempeno(resultados_backtest: dict, ruta_salida: str
         valores_stable = valores - np.max(valores)
         exp_vals = np.exp(valores_stable)
         suma_exp = exp_vals.sum()
-        if suma_exp == 0:
+        if isclose(suma_exp, 0.0, rel_tol=1e-12, abs_tol=1e-12):
             log.warning(
                 f'⚠️ Softmax colapsó para {symbol}. Asignando pesos iguales.')
             pesos_normalizados = {k: round(10.0 / len(valores_validos), 2) for

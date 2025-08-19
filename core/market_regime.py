@@ -1,4 +1,5 @@
 import pandas as pd
+from math import isclose
 from indicators.helpers import get_atr, get_slope
 
 
@@ -8,7 +9,7 @@ def medir_volatilidad(df: pd.DataFrame, periodo: int=14) ->float:
     if atr is None:
         return 0.0
     cierre = float(df['close'].iloc[-1]) if 'close' in df else 0.0
-    if cierre == 0:
+    if isclose(cierre, 0.0, rel_tol=1e-12, abs_tol=1e-12):
         return 0.0
     return float(atr) / cierre
 
@@ -22,7 +23,7 @@ def pendiente_medias(df: pd.DataFrame, ventana: int=30) ->float:
         return 0.0
     slope = get_slope(pd.DataFrame({'close': sma}))
     base = sma.iloc[-1]
-    if base == 0:
+    if isclose(base, 0.0, rel_tol=1e-12, abs_tol=1e-12):
         return 0.0
     return slope / base
 

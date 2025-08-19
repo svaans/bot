@@ -12,7 +12,14 @@ from .logger import configurar_logger
 from core.modo import MODO_REAL
 if TYPE_CHECKING:
     from core.order_model import Order
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal, InvalidOperation, ROUND_HALF_EVEN
+
+ROUNDING_POLICY = ROUND_HALF_EVEN
+
+def round_decimal(value: float | Decimal, places: int = 8) -> Decimal:
+    """Redondea ``value`` usando la política global de redondeo."""
+    cuantizador = Decimal('1').scaleb(-places)
+    return Decimal(str(value)).quantize(cuantizador, rounding=ROUNDING_POLICY)
 
 DATOS_DIR = os.getenv('DATOS_DIR', 'datos')
 ESTADO_DIR = os.getenv('ESTADO_DIR', 'estado')
@@ -357,7 +364,7 @@ def guardar_orden_real(symbol: str, orden: (dict | Order)):
         try:
             valor = data.get(campo)
             if valor is not None:
-                data[campo] = float(round(Decimal(str(valor)), 8))
+                data[campo] = float(round_decimal(valor, 8))
         except (InvalidOperation, TypeError):
             log.warning(
                 f'⚠️ Valor inválido en campo {campo}: {valor}. Se asignará 0.0'

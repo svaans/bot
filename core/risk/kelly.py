@@ -1,6 +1,7 @@
 import os
 import re
 from datetime import datetime, timedelta
+from math import isclose
 import pandas as pd
 from core.utils.utils import configurar_logger
 from core.utils.utils import leer_csv_seguro
@@ -48,7 +49,7 @@ def calcular_fraccion_kelly(dias_historia: int=30, fallback: float=0.2
     winrate = len(ganadoras) / len(retornos)
     avg_profit = sum(ganadoras) / len(ganadoras)
     avg_loss = -sum(perdedoras) / len(perdedoras)
-    if avg_loss == 0:
+    if isclose(avg_loss, 0.0, rel_tol=1e-12, abs_tol=1e-12):
         return fallback
     payoff = avg_profit / avg_loss
     f = winrate - (1 - winrate) / payoff

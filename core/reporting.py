@@ -3,6 +3,7 @@ import json
 import atexit
 from concurrent.futures import ProcessPoolExecutor
 from datetime import datetime, timezone
+from math import isclose
 import pandas as pd
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_pdf import PdfPages
@@ -88,7 +89,7 @@ class ReporterDiario:
         self.estadisticas.loc[idx, 'max_equity'] = max_eq
         self.estadisticas.loc[idx, 'drawdown'] = min(self.estadisticas.loc[
             idx, 'drawdown'], acum - max_eq)
-        if self.estadisticas.loc[idx, 'buy_hold_start'] == 0:
+        if isclose(self.estadisticas.loc[idx, 'buy_hold_start'], 0.0, rel_tol=1e-12, abs_tol=1e-12):
             self.estadisticas.loc[idx, 'buy_hold_start'
                 ] = entrada if entrada else cierre
         self.estadisticas.loc[idx, 'last_price'] = cierre

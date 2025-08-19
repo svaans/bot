@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 from typing import Dict, Optional
 import pandas as pd
 from collections import defaultdict
+from math import isclose
 from core.utils.utils import configurar_logger
 log = configurar_logger('pesos')
 
@@ -19,7 +20,7 @@ def normalizar_pesos(pesos_actuales: Dict[str, float], total: float=100,
     pesos_min = {estrategia: max(valor, peso_min) for estrategia, valor in
         pesos_temporales.items()}
     suma_actual = sum(pesos_min.values())
-    if suma_actual == 0:
+    if isclose(suma_actual, 0.0, rel_tol=1e-12, abs_tol=1e-12):
         return {estrategia: (0.0) for estrategia in pesos_min}
     factor = total / suma_actual
     return {estrategia: round(valor * factor, 4) for estrategia, valor in

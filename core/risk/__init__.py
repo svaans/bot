@@ -9,7 +9,7 @@ from .riesgo import (
     riesgo_superado,
 )
 from .sizing import MarketInfo, size_order
-from .risks import trade_risk, total_exposure, within_limits
+from .risk import trade_risk, total_exposure, within_limits
 
 __all__ = [
     "RiskManager",
