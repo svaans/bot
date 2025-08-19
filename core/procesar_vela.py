@@ -2,6 +2,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+import os
 from datetime import datetime, timezone
 from collections import deque, defaultdict
 import numpy as np
@@ -25,7 +26,7 @@ UTC = timezone.utc
 # Protege el acceso a funciones de indicadores que no son thread-safe por símbolo
 _indicadores_locks: defaultdict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
 
-MAX_BUFFER_VELAS = 120
+MAX_BUFFER_VELAS = int(os.getenv('MAX_BUFFER_VELAS', 360))
 MAX_ESTRATEGIAS_BUFFER = MAX_BUFFER_VELAS
 
 

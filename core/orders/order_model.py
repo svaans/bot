@@ -34,11 +34,18 @@ def normalizar_precio_cantidad(market_info: dict, precio: float, cantidad: float
     precision_amount = market_info.get('precision', {}).get('amount', 8)
     tick_size = 10 ** -precision_price
     step_size = 10 ** -precision_amount
-    min_notional = float(market_info.get('limits', {}).get('cost', {}).get('min') or 0)
-
+    min_notional = float(
+        market_info.get('limits', {}).get('cost', {}).get('min') or 0
+    )
+    min_amount = float(
+        market_info.get('limits', {}).get('amount', {}).get('min') or 0
+    )
     precio = ajustar_tick_size(precio, tick_size, direccion)
     if step_size > 0:
         cantidad = math.floor(cantidad / step_size) * step_size
+
+    if min_amount and cantidad < min_amount and step_size > 0:
+        cantidad = math.ceil(min_amount / step_size) * step_size
 
     if min_notional and precio and precio * cantidad < min_notional and step_size > 0:
         cantidad = math.ceil(min_notional / precio / step_size) * step_size

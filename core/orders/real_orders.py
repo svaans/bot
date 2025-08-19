@@ -291,6 +291,40 @@ def sincronizar_ordenes_binance(simbolos: (list[str] | None)=None) ->dict[
     return cargar_ordenes()
 
 
+def reconciliar_trades_binance(simbolos: list[str] | None = None, limit: int = 50) -> None:
+    log.info('➡️ Entrando en reconciliar_trades_binance()')
+    try:
+        cliente = obtener_cliente()
+        if simbolos is None:
+            markets = cliente.load_markets()
+            simbolos = list(markets.keys())
+        for s in simbolos:
+            try:
+                trades = cliente.fetch_my_trades(s.replace('/', ''), limit=limit)
+            except Exception:
+                continue
+            for t in trades:
+                data = {
+                    'symbol': s,
+                    'precio_entrada': float(t.get('price') or 0),
+                    'cantidad': float(t.get('amount') or 0),
+                    'timestamp': datetime.utcfromtimestamp(
+                        t.get('timestamp', 0) / 1000
+                    ).isoformat(),
+                    'stop_loss': 0.0,
+                    'take_profit': 0.0,
+                    'estrategias_activas': {},
+                    'tendencia': '',
+                    'max_price': float(t.get('price') or 0),
+                    'direccion': 'long'
+                    if t.get('side', 'buy').lower() == 'buy'
+                    else 'short',
+                }
+                guardar_orden_real(s, data)
+    except Exception as e:
+        log.error(f'❌ Error al reconciliar trades: {e}')
+
+
 def actualizar_orden(symbol: str, data: (Order | dict)) ->None:
     log.info('➡️ Entrando en actualizar_orden()')
     ordenes = cargar_ordenes()
@@ -496,6 +530,38 @@ def ejecutar_orden_market(symbol: str, cantidad: float, operation_id: str | None
         }
     except Exception as e:
         log.error(f'❌ Error en Binance al ejecutar compra en {symbol}: {e}')
+
+        try:
+            trades = cliente.fetch_my_trades(symbol.replace('/', ''), limit=1)
+            trade = trades[-1] if trades else None
+            ejecutado = float(trade.get('amount') or trade.get('qty') or 0) if trade else 0
+            if ejecutado > 0:
+                log.warning(
+                    f'⚠️ Operación detectada tras error: {ejecutado} {symbol}'
+                )
+                try:
+                    notificador.enviar(
+                        f'Orden ejecutada tras error en {symbol}', 'WARNING'
+                    )
+                except Exception:
+                    pass
+                try:
+                    guardar_orden_real(symbol, {
+                        'symbol': symbol,
+                        'precio_entrada': float(trade.get('price') or 0) if trade else 0,
+                        'cantidad': ejecutado,
+                        'timestamp': datetime.utcnow().isoformat(),
+                        'stop_loss': 0.0,
+                        'take_profit': 0.0,
+                        'estrategias_activas': {},
+                        'tendencia': '',
+                        'max_price': float(trade.get('price') or 0) if trade else 0,
+                        'direccion': 'long',
+                    })
+                except Exception as e_reg:
+                    log.error(f'❌ No se pudo registrar orden tras error: {e_reg}')
+        except Exception as ver_err:
+            log.error(f'❌ Error verificando trades tras fallo: {ver_err}')
         raise
 
 
@@ -595,7 +661,7 @@ def ejecutar_orden_market_sell(symbol: str, cantidad: float, operation_id: str |
         return {'ejecutado': 0.0, 'restante': cantidad, 'status': 'FILLED', 'min_qty': 0.0, 'fee': 0.0, 'pnl': 0.0}
     except Exception as e:
         log.error(f'❌ Error en intercambio al vender {symbol}: {e}')
-        raise
+    raise
 
 
 def ejecutar_orden_limit(

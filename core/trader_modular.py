@@ -26,7 +26,12 @@ from binance_api.cliente import (
     fetch_ohlcv_async,
     filtrar_simbolos_activos,
 )
-from core.utils.utils import leer_reporte_seguro, DATOS_DIR, ESTADO_DIR
+from core.utils.utils import (
+    leer_reporte_seguro,
+    DATOS_DIR,
+    ESTADO_DIR,
+    intervalo_a_segundos,
+)
 from core.strategies import cargar_pesos_estrategias
 from core.risk import calcular_fraccion_kelly
 from core.data import PersistenciaTecnica, coincidencia_parcial, calcular_persistencia_minima
@@ -1662,7 +1667,11 @@ class Trader:
             self.puntajes_contexto[symbol] = score
             log.debug(f'🔁 Contexto actualizado {symbol}: {score:.2f}')
         symbols = list(self.estado.keys())
-        await self._precargar_historico(velas=60)
+        base_segundos = intervalo_a_segundos(self.config.intervalo_velas)
+        velas_precarga = math.ceil(
+            60 * intervalo_a_segundos('5m') / base_segundos
+        )
+        await self._precargar_historico(velas=velas_precarga)
         tareas: dict[str, Callable[[], Awaitable]] = {
             'data_feed': lambda: self.data_feed.escuchar(
                 symbols,
