@@ -270,6 +270,7 @@ def sincronizar_ordenes_binance(simbolos: (list[str] | None)=None) ->dict[
     """
     try:
         cliente = obtener_cliente()
+        markets = cliente.load_markets()
         ordenes_api = []
         if simbolos:
             for s in simbolos:
@@ -283,8 +284,14 @@ def sincronizar_ordenes_binance(simbolos: (list[str] | None)=None) ->dict[
         symbol = o.get('symbol')
         if not symbol:
             continue
+        market = markets.get(symbol, {})
+        limits = market.get('limits', {}) if market else {}
+        min_amount = (limits.get('amount') or {}).get('min') or 0.0
+        min_cost = (limits.get('cost') or {}).get('min') or 0.0
         price = float(o.get('price') or o.get('average') or 0)
         amount = float(o.get('amount') or o.get('remaining') or 0)
+        if amount < min_amount or price * amount < min_cost:
+            continue
         side = o.get('side', 'buy').lower()
         direccion = 'long' if side == 'buy' else 'short'
         registrar_orden(symbol, price, amount, 0.0, 0.0, {}, '', direccion)
@@ -295,15 +302,25 @@ def reconciliar_trades_binance(simbolos: list[str] | None = None, limit: int = 5
     log.info('➡️ Entrando en reconciliar_trades_binance()')
     try:
         cliente = obtener_cliente()
+        markets = cliente.load_markets()
         if simbolos is None:
-            markets = cliente.load_markets()
             simbolos = list(markets.keys())
         for s in simbolos:
+            market = markets.get(s, {})
+            limits = market.get('limits', {}) if market else {}
+            min_amount = (limits.get('amount') or {}).get('min') or 0.0
+            min_cost = (limits.get('cost') or {}).get('min') or 0.0
             try:
                 trades = cliente.fetch_my_trades(s.replace('/', ''), limit=limit)
             except Exception:
                 continue
             for t in trades:
+                rice = float(t.get('price') or 0)
+                amount = float(t.get('amount') or 0)
+                cost = price * amount
+                if amount < min_amount or cost < min_cost:
+                    continue
+                side = t.get('side', 'buy').lower()
                 price = float(t.get('price') or 0)
                 amount = float(t.get('amount') or 0)
                 side = t.get('side', 'buy').lower()
