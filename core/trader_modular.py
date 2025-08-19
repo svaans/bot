@@ -1729,16 +1729,12 @@ class Trader:
     def _puede_evaluar_entradas(self, symbol: str) -> bool:
         log.debug('➡️ Entrando en _puede_evaluar_entradas()')
         """Determina si existen condiciones para evaluar nuevas compras."""
-        
         if not self.capital_manager.tiene_capital(symbol):
             return False
         if self.orders.tiene_posicion(symbol):
             return False
         return True
-        hay_libre = any(
-            self.orders.obtener(sym) is None for sym in self.estado.keys()
-        )
-        return hay_libre
+        
 
     def _validar_config(self, symbol: str) ->bool:
         log.debug('➡️ Entrando en _validar_config()')
