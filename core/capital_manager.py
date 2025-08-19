@@ -131,6 +131,8 @@ class CapitalManager:
         precio: float,
         exposicion_total: float = 0.0,
         stop_loss: float | None = None,
+        slippage_pct: float = 0.0,
+        fee_pct: float = 0.0,
     ) -> float:
         if self.modo_real and self.cliente:
             balance = await fetch_balance_async(self.cliente)
@@ -161,13 +163,14 @@ class CapitalManager:
         minimo_binance = await self._obtener_minimo_binance(symbol)
         cantidad = 0.0
         distancia_sl = abs(precio - stop_loss) if isinstance(stop_loss, (int, float)) else None
+        costo_pct = max(slippage_pct, 0.0) + max(fee_pct, 0.0)
         if not distancia_sl or distancia_sl <= 0:
             log.warning(
                 f'⚠️ Stop Loss no especificado para {symbol}. Limitando la posición a una fracción del capital disponible.'
             )
-            capital_necesario = riesgo_permitido
+            capital_necesario = riesgo_permitido / (1 + costo_pct)
             cantidad = capital_necesario / precio
-            riesgo_final = capital_necesario
+            riesgo_final = capital_necesario * (1 + costo_pct)
             valido, error = self._validar_minimos(
                 capital_necesario, minimo_dinamico, minimo_binance
             )
@@ -178,12 +181,13 @@ class CapitalManager:
                     log.debug(error)
                 return 0.0
         else:
-            cantidad = riesgo_permitido / distancia_sl
+            costo_unitario = distancia_sl + precio * costo_pct
+            cantidad = riesgo_permitido / costo_unitario
             capital_necesario = cantidad * precio
             if capital_necesario > capital_total:
                 cantidad = capital_total / precio
                 capital_necesario = capital_total
-            riesgo_final = cantidad * distancia_sl
+            riesgo_final = cantidad * costo_unitario
             valido, error = self._validar_minimos(
                 capital_necesario, minimo_dinamico, minimo_binance
             )
