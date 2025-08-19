@@ -325,6 +325,11 @@ class Trader:
         ) ->None:
         log.debug('➡️ Entrando en cerrar_operacion()')
         """Cierra una orden y actualiza los pesos si corresponden."""
+        orden = self.orders.obtener(symbol)
+        if not orden or getattr(orden, 'cerrando', False):
+            log.warning(f'[{symbol}] Cierre ya en progreso o sin orden activa')
+            return
+        orden.cerrando = True
         fut = asyncio.get_running_loop().create_future()
         await self.bus.publish('cerrar_orden', {'symbol': symbol, 'precio': precio, 'motivo': motivo, 'future': fut})
         try:
@@ -351,6 +356,10 @@ class Trader:
         tendencia: (str | None)=None, df: (pd.DataFrame | None)=None) ->None:
         log.debug('➡️ Entrando en _cerrar_y_reportar()')
         """Cierra ``orden`` y registra la operación para el reporte diario."""
+        if getattr(orden, 'cerrando', False):
+            log.warning(f'[{orden.symbol}] Cierre en progreso, se ignora reintento')
+            return False
+        orden.cerrando = True
         retorno_unitario = (precio - orden.precio_entrada
             ) / orden.precio_entrada if orden.precio_entrada else 0.0
         fraccion = orden.cantidad_abierta / orden.cantidad if orden.cantidad else 0.0

@@ -86,6 +86,7 @@ class Order:
     duracion_en_velas: int = 0
     intentos_cierre: int = 0
     sl_emergencia: float | None = None
+    cerrando: bool = False
 
     @staticmethod
     def from_dict(data: Dict[str, Any]) ->'Order':
@@ -116,6 +117,7 @@ class Order:
         data.setdefault('duracion_en_velas', 0)
         data.setdefault('intentos_cierre', 0)
         data.setdefault('sl_emergencia', None)
+        data.setdefault('cerrando', False)
         return Order(**data)
 
     def to_dict(self) ->Dict[str, Any]:

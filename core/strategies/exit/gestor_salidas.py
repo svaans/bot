@@ -19,9 +19,9 @@ from .loader_salidas import cargar_estrategias_salida
 # Un número mayor implica mayor prioridad de ejecución.
 PRIORIDADES = {
     "Kill Switch": 5,
-    "Trailing/Break-even": 4,
+    "Stop-Loss": 4,
     "Take-Profit": 3,
-    "Stop-Loss": 2,
+    "Trailing/Break-even": 2,
     "Cierre por tiempo": 1,
 }
 

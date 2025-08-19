@@ -202,6 +202,10 @@ class OrderManager:
             log.warning(
                 f'⚠️ Se intentó verificar TP/SL sin orden activa en {symbol}')
             return False
+        if getattr(orden, 'cerrando', False):
+            log.warning(f'⚠️ Cierre duplicado ignorado para {symbol}')
+            return False
+        orden.cerrando = True
         venta_exitosa = True
         if self.modo_real:
             venta_exitosa = False
