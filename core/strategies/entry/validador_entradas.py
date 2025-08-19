@@ -30,9 +30,15 @@ def verificar_liquidez_orden(df, cantidad_orden: float, ventana: int=20,
     de las ``ventana`` últimas velas. Si no hay suficientes datos de volumen,
     la función asume que la orden es válida.
     """
-    if 'volume' not in df or len(df) < ventana or cantidad_orden <= 0:
+    if 'volume' not in df or len(df) <= 1 or cantidad_orden <= 0:
         return True
-    volumen_promedio = df['volume'].iloc[-ventana:].mean()
+    if len(df) <= ventana:
+        historico = df['volume'].iloc[:-1]
+    else:
+        historico = df['volume'].iloc[-(ventana + 1):-1]
+    if historico.empty:
+        return True
+    volumen_promedio = historico.mean()
     if volumen_promedio <= 0:
         return True
     return cantidad_orden <= volumen_promedio * factor
