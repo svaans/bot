@@ -120,22 +120,25 @@ class StrategyEngine:
             )
             cumple_div = diversidad >= (config or {}).get("diversidad_minima", 1)
             umbral_score = (config or {}).get("umbral_score_tecnico", 1.0)
+            empate = score_total == umbral or score_tec == umbral_score
             permitido = (
-                score_total >= umbral
-                and score_tec >= umbral_score
+                score_total > umbral
+                and score_tec > umbral_score
                 and cumple_div
                 and not validaciones_fallidas
                 and (not bloquear_contradicciones or not contradiccion)
             )
             motivo = None
             if not permitido:
-                if contradiccion:
+                if empate:
+                    motivo = "empate_umbral"
+                elif contradiccion:
                     motivo = "contradiccion"
                 elif validaciones_fallidas:
                     motivo = "validaciones_fallidas"
-                elif score_tec < umbral_score:
+                elif score_tec <= umbral_score:
                     motivo = "score_tecnico_bajo"
-                elif score_total < umbral:
+                elif score_total <= umbral:
                     motivo = "score_bajo"
                 elif not cumple_div:
                     motivo = "diversidad_baja"
@@ -150,6 +153,7 @@ class StrategyEngine:
                 "sinergia": round(sinergia, 2),
                 "umbral": umbral,
                 "umbral_score_tecnico": umbral_score,
+                "empate": empate,
                 "diversidad": diversidad,
                 "tendencia": tendencia,
                 "rsi": rsi_val,
