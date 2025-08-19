@@ -8,6 +8,7 @@ from collections import OrderedDict, deque, defaultdict
 from datetime import datetime, timedelta, timezone
 import json
 import os
+import math
 import numpy as np
 import pandas as pd
 from config.config_manager import Config
@@ -34,7 +35,7 @@ from learning.entrenador_estrategias import actualizar_pesos_estrategias_symbol
 from core.utils.utils import configurar_logger
 from core.monitor_estado_bot import monitorear_estado_periodicamente
 from core.contexto_externo import StreamContexto
-from core.orders import real_orders
+from core.orders import real_orders, place_order
 from core.config_manager.dinamica import adaptar_configuracion
 from ccxt.base.errors import BaseError
 from core.reporting import reporter_diario
@@ -872,10 +873,9 @@ class Trader:
                 await asyncio.sleep(espera)
                 restante -= espera
 
-    async def _calcular_cantidad_async(self, symbol: str, precio: float, stop_loss: float
-        ) -> float:
+    async def _calcular_cantidad_async(self, symbol: str, precio: float, stop_loss: float) -> tuple[float, float]:
         log.debug('➡️ Entrando en _calcular_cantidad_async()')
-        """Solicita la cantidad al servicio de capital mediante eventos."""
+        """Solicita precio y cantidad al servicio de capital mediante eventos."""
         exposicion = sum(
             o.cantidad_abierta * o.precio_entrada for o in self.orders.ordenes.values()
         )
@@ -896,7 +896,7 @@ class Trader:
             )
         except asyncio.TimeoutError:
             log.error(f'⏰ Timeout calculando cantidad para {symbol}')
-            return 0.0
+            return precio, 0.0
 
     def _metricas_recientes(self, dias: int=7) ->dict:
         log.debug('➡️ Entrando en _metricas_recientes()')
@@ -1138,8 +1138,8 @@ class Trader:
 
     async def _validar_diversidad(self, symbol: str, peso_total: float,
         peso_min_total: float, estrategias_activas: Dict[str, float],
-        diversidad_min: int, estrategias_disponibles: dict, df: pd.DataFrame,
-        modo_agresivo: bool=False) -> bool:
+        diversidad_min: int, df: pd.DataFrame, modo_agresivo: bool=False
+        ) -> bool:
         log.debug('➡️ Entrando en _validar_diversidad()')
         """Verifica que la diversidad y el peso total sean suficientes.
 
@@ -1488,12 +1488,23 @@ class Trader:
         estrategias: Dict[str, float] | List[str],
         tendencia: str,
         direccion: str,
+        candle_close_ts: int,
+        strategy_version: str,
         puntaje: float = 0.0,
         umbral: float = 0.0,
         detalles_tecnicos: dict | None = None,
         **kwargs,
     ) -> None:
         log.debug('➡️ Entrando en _abrir_operacion_real()')
+        res = place_order(
+            symbol,
+            'buy' if direccion == 'long' else 'sell',
+            candle_close_ts,
+            strategy_version,
+        )
+        if res['status'] == 'SKIP_DUPLICATE':
+            log.info(f'⏭️ Orden duplicada para {symbol} ignorada')
+            return
         capital_total = sum(
             getattr(self, "capital_inicial_diario", self.capital_manager.capital_por_simbolo).values()
         )
@@ -1512,7 +1523,7 @@ class Trader:
                 await self._cerrar_posiciones_por_riesgo()
             self._stop_event.set()
             return
-        cantidad_total = await self._calcular_cantidad_async(symbol, precio, sl)
+        precio, cantidad_total = await self._calcular_cantidad_async(symbol, precio, sl)
         if cantidad_total <= 0:
             capital_disp = self.capital_manager.capital_por_simbolo.get(
                 symbol, 0.0)
@@ -1528,7 +1539,15 @@ class Trader:
                 )
             return
         fracciones = self.piramide_fracciones
+        market = await self.capital_manager.info_mercado(symbol)
         cantidad = cantidad_total / fracciones
+        if market.step_size > 0:
+            cantidad = math.floor(cantidad / market.step_size) * market.step_size
+        if market.min_notional and precio * cantidad < market.min_notional:
+            log.warning(
+                f'⛔ Orden fraccionaria para {symbol} inferior al mínimo Binance {market.min_notional}'
+            )
+            return
         if self.capital_manager.cliente:
             try:
                 ticker = await asyncio.wait_for(

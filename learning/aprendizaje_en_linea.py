@@ -58,8 +58,7 @@ def registrar_resultado_trade(symbol: str, orden: dict, ganancia: float):
         actualizar_pesos_dinamicos(symbol, ventana)
 
 
-def actualizar_pesos_dinamicos(symbol: str, historial: list, factor_ajuste=0.05
-    ):
+def actualizar_pesos_dinamicos(symbol: str, historial: list):
     log.info('➡️ Entrando en actualizar_pesos_dinamicos()')
     datos = defaultdict(list)
     pesos_actuales = gestor_pesos.obtener_pesos_symbol(symbol)

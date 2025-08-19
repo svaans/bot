@@ -5,7 +5,7 @@ from typing import Dict
 from config.config_manager import Config
 from binance_api.cliente import fetch_balance_async, load_markets_async
 from core.utils.logger import configurar_logger
-from core.risk import RiskManager
+from core.risk import RiskManager, size_order, MarketInfo
 from core.event_bus import EventBus
 from core.contexto_externo import obtener_puntaje_contexto
 
@@ -26,7 +26,7 @@ class CapitalManager:
         self.modo_capital_bajo = config.modo_capital_bajo
         self.riesgo_maximo_diario = getattr(config, 'riesgo_maximo_diario', 1.0)
         self._markets = None
-        self._minimos_cache: Dict[str, float] = {}
+        self._markets_cache: Dict[str, MarketInfo] = {}
         self.capital_currency = getattr(config, 'capital_currency', None)
         if not self.capital_currency:
             self.capital_currency = self._detectar_divisa_principal(config.symbols)
@@ -76,13 +76,13 @@ class CapitalManager:
         exposicion = data.get('exposicion_total', 0.0)
         stop_loss = data.get('stop_loss')
         if fut and not fut.done():
-            cantidad = await self.calcular_cantidad_async(
+            precio_adj, cantidad = await self.calcular_cantidad_async(
                 symbol,
                 precio,
                 exposicion_total=exposicion,
                 stop_loss=stop_loss,
             )
-            fut.set_result(cantidad)
+            fut.set_result((precio_adj, cantidad))
 
     async def _on_actualizar_capital(self, data: dict) -> None:
         fut = data.get('future')
@@ -91,11 +91,13 @@ class CapitalManager:
         if fut and not fut.done():
             fut.set_result(self.actualizar_capital(symbol, retorno))
 
-    async def _obtener_minimo_binance(self, symbol: str) -> (float | None):
-        if symbol in self._minimos_cache:
-            return self._minimos_cache[symbol]
+    async def _obtener_info_mercado(self, symbol: str) -> MarketInfo:
+        if symbol in self._markets_cache:
+            return self._markets_cache[symbol]
         if not self.modo_real or not self.cliente:
-            return None
+            info = MarketInfo(0.0, 0.0, 0.0)
+            self._markets_cache[symbol] = info
+            return info
         try:
             if self._markets is None:
                 self._markets = await load_markets_async(self.cliente)
@@ -106,13 +108,27 @@ class CapitalManager:
                     if k.replace('/', '') == key_base:
                         info = v
                         break
-            minimo = info.get('limits', {}).get('cost', {}).get('min') if info else None
-            if minimo:
-                self._minimos_cache[symbol] = float(minimo)
-                return self._minimos_cache[symbol]
+            tick = step = min_notional = 0.0
+            if info:
+                filters = {f['filterType']: f for f in info.get('info', {}).get('filters', [])}
+                tick = float(filters.get('PRICE_FILTER', {}).get('tickSize', 0) or 0)
+                step = float(filters.get('LOT_SIZE', {}).get('stepSize', 0) or 0)
+                min_notional = float(
+                    filters.get('MIN_NOTIONAL', {}).get('minNotional', 0)
+                    or info.get('limits', {}).get('cost', {}).get('min', 0)
+                    or 0
+                )
+            market = MarketInfo(tick, step, min_notional)
+            self._markets_cache[symbol] = market
+            return market
         except Exception as e:
-            log.warning(f'No se pudo obtener mínimo para {symbol}: {e}')
-        return None
+            log.warning(f'No se pudo obtener info de mercado para {symbol}: {e}')
+            info = MarketInfo(0.0, 0.0, 0.0)
+            self._markets_cache[symbol] = info
+            return info
+
+    async def info_mercado(self, symbol: str) -> MarketInfo:
+        return await self._obtener_info_mercado(symbol)
     
     def _validar_minimos(self, capital_necesario: float,
                          minimo_dinamico: float,
@@ -137,7 +153,7 @@ class CapitalManager:
         stop_loss: float | None = None,
         slippage_pct: float = 0.0,
         fee_pct: float = 0.0,
-    ) -> float:
+    ) -> tuple[float, float]:
         if self.modo_real and self.cliente:
             balance = await fetch_balance_async(self.cliente)
             capital_total = balance['total'].get(self.capital_currency, 0)
@@ -145,7 +161,7 @@ class CapitalManager:
             capital_total = self.capital_por_simbolo.get(symbol, 0)
         if capital_total <= 0:
             log.warning(f'Saldo insuficiente en {self.capital_currency}')
-            return 0.0
+            return precio, 0.0
         capital_symbol = self.capital_por_simbolo.get(symbol, capital_total / max(
             len(self.capital_por_simbolo), 1))
         fraccion = self.fraccion_kelly
@@ -164,43 +180,39 @@ class CapitalManager:
         minimo_dinamico = max(10.0, capital_total * 0.02)
         riesgo_permitido = max(riesgo_teorico, minimo_dinamico)
         riesgo_permitido = min(riesgo_permitido, capital_total * self.riesgo_maximo_diario)
-        minimo_binance = await self._obtener_minimo_binance(symbol)
-        cantidad = 0.0
-        distancia_sl = abs(precio - stop_loss) if isinstance(stop_loss, (int, float)) else None
+        market = await self._obtener_info_mercado(symbol)
+        distancia_sl = abs(precio - stop_loss) if isinstance(stop_loss, (int, float)) else 0.0
         costo_pct = max(slippage_pct, 0.0) + max(fee_pct, 0.0)
-        if not distancia_sl or distancia_sl <= 0:
+        if distancia_sl <= 0:
             log.warning(
                 f'⚠️ Stop Loss no especificado para {symbol}. Limitando la posición a una fracción del capital disponible.'
             )
-            capital_necesario = riesgo_permitido / (1 + costo_pct)
-            cantidad = capital_necesario / precio
-            riesgo_final = capital_necesario * (1 + costo_pct)
-            valido, error = self._validar_minimos(
-                capital_necesario, minimo_dinamico, minimo_binance
-            )
-            if not valido:
-                if error and error.startswith('⛔'):
-                    log.warning(error.format(symbol=symbol))
-                else:
-                    log.debug(error)
-                return 0.0
+            costo_unitario = precio * (1 + costo_pct)
         else:
             costo_unitario = distancia_sl + precio * costo_pct
-            cantidad = riesgo_permitido / costo_unitario
-            capital_necesario = cantidad * precio
-            if capital_necesario > capital_total:
-                cantidad = capital_total / precio
-                capital_necesario = capital_total
-            riesgo_final = cantidad * costo_unitario
-            valido, error = self._validar_minimos(
-                capital_necesario, minimo_dinamico, minimo_binance
-            )
-            if not valido:
-                if error and error.startswith('⛔'):
-                    log.warning(error.format(symbol=symbol))
-                else:
-                    log.debug(error)
-                return 0.0
+            exposure_limit = capital_total * self.riesgo_maximo_diario
+        precio_adj, cantidad = size_order(
+            price=precio,
+            stop_price=precio - distancia_sl if distancia_sl > 0 else precio,
+            market=market,
+            risk_limit=riesgo_permitido,
+            exposure_limit=exposure_limit,
+            current_exposure=exposicion_total,
+            fee_pct=fee_pct,
+            slippage_pct=slippage_pct,
+        )
+        capital_necesario = precio_adj * cantidad
+        costo_unitario = abs(precio_adj - (precio - distancia_sl if distancia_sl > 0 else precio_adj)) + precio_adj * costo_pct
+        riesgo_final = cantidad * costo_unitario
+        valido, error = self._validar_minimos(
+            capital_necesario, minimo_dinamico, market.min_notional
+        )
+        if not valido:
+            if error and error.startswith('⛔'):
+                log.warning(error.format(symbol=symbol))
+            else:
+                log.debug(error)
+            return precio_adj, 0.0
         log.info(
             '⚖️ Kelly ajustada: %.4f | Riesgo teórico: %.2f%s | Mínimo dinámico: %.2f%s | Riesgo final: %.2f%s',
             fraccion,
@@ -217,10 +229,10 @@ class CapitalManager:
             self.capital_currency,
             capital_necesario,
             self.capital_currency,
-            f'{minimo_binance:.2f}{self.capital_currency}' if minimo_binance else 'desconocido',
+            f'{market.min_notional:.2f}{self.capital_currency}' if market.min_notional else 'desconocido',
             symbol,
         )
-        return round(cantidad, 6)
+        return precio_adj, round(cantidad, 6)
 
     def actualizar_capital(self, symbol: str, retorno_total: float) -> float:
         capital_inicial = self.capital_por_simbolo.get(symbol, 0.0)

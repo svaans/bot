@@ -145,9 +145,8 @@ async def verificar_entrada(trader, symbol: str, df: pd.DataFrame, estado) ->(
         'modo_agresivo', False)):
         razones.append('puntaje')
     diversidad_ok = await trader._validar_diversidad(symbol, peso_total,
-        peso_min_total, estrategias_persistentes, diversidad_min, trader.
-        pesos_por_simbolo.get(symbol, {}), df, config.get('modo_agresivo',
-        False))
+        peso_min_total, estrategias_persistentes, diversidad_min, df,
+        config.get('modo_agresivo', False))
     if not diversidad_ok:
         umbral_peso_unico = config.get('umbral_peso_estrategia_unica',
             peso_min_total * 1.5)
@@ -249,8 +248,20 @@ async def verificar_entrada(trader, symbol: str, df: pd.DataFrame, estado) ->(
     log.info(
         f'✅ [{symbol}] Señal de entrada generada con {len(estrategias_persistentes)} estrategias activas.'
         )
-    return {'symbol': symbol, 'precio': precio, 'sl': sl, 'tp': tp,
-        'estrategias': estrategias_persistentes, 'puntaje': puntaje,
-        'umbral': umbral, 'tendencia': tendencia, 'direccion': direccion,
-        'score_tecnico': score_tecnico, 'detalles_tecnicos': eval_tecnica.
-        get('detalles', {})}
+    candle_ts = int(df['timestamp'].iloc[-1])
+    version = getattr(trader.config, 'version', 'v1')
+    return {
+        'symbol': symbol,
+        'precio': precio,
+        'sl': sl,
+        'tp': tp,
+        'estrategias': estrategias_persistentes,
+        'puntaje': puntaje,
+        'umbral': umbral,
+        'tendencia': tendencia,
+        'direccion': direccion,
+        'candle_close_ts': candle_ts,
+        'strategy_version': version,
+        'score_tecnico': score_tecnico,
+        'detalles_tecnicos': eval_tecnica.get('detalles', {}),
+    }
