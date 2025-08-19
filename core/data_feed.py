@@ -47,6 +47,7 @@ class DataFeed:
         self._tasks: Dict[str, asyncio.Task] = {}
         self._last: Dict[str, datetime] = {}
         self._last_monotonic: Dict[str, float] = {}
+        self._last_close_ts: Dict[str, int] = {}
         self._monitor_global_task: asyncio.Task | None = None
         self._handler_actual: Callable[[dict], Awaitable[None]] | None = None
         self._running = False
@@ -82,6 +83,8 @@ class DataFeed:
         """Escucha las velas de ``symbol`` y reintenta ante fallos de conexión."""
 
         async def wrapper(candle: dict) -> None:
+            if not self._should_enqueue_candle(symbol, candle):
+                return
             self._last[symbol] = datetime.now(UTC)
             self._last_monotonic[symbol] = time.monotonic()
             self._mensajes_recibidos[symbol] = (
@@ -129,6 +132,21 @@ class DataFeed:
                     await self._reiniciar_stream(symbol)
 
         await self._relanzar_stream(symbol, wrapper)
+
+    def _should_enqueue_candle(self, symbol: str, candle: dict) -> bool:
+        """Valida que la vela esté cerrada y no se haya procesado ya."""
+        if not candle.get('is_closed', True):
+            log.debug(f'[{symbol}] Ignorando vela abierta: {candle}')
+            return False
+        ts = candle.get('timestamp')
+        if ts is None:
+            log.debug(f'[{symbol}] Vela sin timestamp: {candle}')
+            return False
+        if self._last_close_ts.get(symbol) == ts:
+            log.debug(f'[{symbol}] Vela duplicada ignorada: {ts}')
+            return False
+        self._last_close_ts[symbol] = ts
+        return True
 
 
     async def _consumer(
