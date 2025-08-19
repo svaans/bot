@@ -1,7 +1,9 @@
 import pandas as pd
+from indicators.helpers import filtrar_cerradas
 
 
 def calcular_macd(df: pd.DataFrame, short=12, long=26, signal=9):
+    df = filtrar_cerradas(df)
     if 'close' not in df or len(df) < long + signal:
         return None, None, None
     df = df.copy()

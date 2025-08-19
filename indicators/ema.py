@@ -1,5 +1,6 @@
 import numpy as np
 import pandas as pd
+from indicators.helpers import filtrar_cerradas
 try:
     from numba import jit
 except Exception:
@@ -22,6 +23,7 @@ def _ema_numba(valores: np.ndarray, periodo: int) ->np.ndarray:
 
 
 def calcular_cruce_ema(df: pd.DataFrame, rapida=12, lenta=26) ->bool:
+    df = filtrar_cerradas(df)
     if len(df) < lenta + 2 or 'close' not in df:
         return False
     ema_fast = df['close'].ewm(span=rapida, adjust=False).mean()
@@ -33,6 +35,7 @@ def calcular_cruce_ema(df: pd.DataFrame, rapida=12, lenta=26) ->bool:
 
 def calcular_cruce_ema_fast(df: pd.DataFrame, rapida=12, lenta=26) ->bool:
     """Versión acelerada de :func:`calcular_cruce_ema` usando numba."""
+    df = filtrar_cerradas(df)
     if len(df) < lenta + 2 or 'close' not in df:
         return False
     close = df['close'].to_numpy(dtype=float)

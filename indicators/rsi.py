@@ -1,5 +1,6 @@
 import pandas as pd
 import numpy as np
+from indicators.helpers import filtrar_cerradas, serie_cierres
 try:
     from numba import jit
 except Exception:
@@ -51,7 +52,7 @@ def calcular_rsi(data, periodo: int = 14, serie_completa: bool = False) -> (floa
     cierres. Si ``serie_completa`` es ``True`` devuelve la serie completa del RSI; en
     caso contrario se retorna solo el último valor.
     """
-    serie = data['close'] if isinstance(data, pd.DataFrame) else data
+    serie = serie_cierres(data)
     if serie is None or len(serie) < periodo + 1:
         return None
     delta = serie.diff()
@@ -71,6 +72,7 @@ def calcular_rsi(data, periodo: int = 14, serie_completa: bool = False) -> (floa
 def calcular_rsi_fast(df: pd.DataFrame, periodo: int=14, serie_completa:
     bool=False) ->(float | pd.Series):
     """Versión acelerada de :func:`calcular_rsi` usando numba si está disponible."""
+    df = filtrar_cerradas(df)
     if 'close' not in df or len(df) < periodo + 1:
         return None
     close = df['close'].to_numpy(dtype=float)

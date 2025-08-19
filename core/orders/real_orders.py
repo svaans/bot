@@ -38,6 +38,9 @@ from core.supervisor import tick
 from . import real_orders
 from core.utils.utils import guardar_orden_real
 from core.notificador import crear_notificador_desde_env
+from core.adaptador_dinamico import calcular_tp_sl_adaptativos
+from config.exit_defaults import load_exit_config
+import pandas as pd
 import math
 try:
     from ccxt.base.errors import InsufficientFunds
@@ -315,24 +318,31 @@ def reconciliar_trades_binance(simbolos: list[str] | None = None, limit: int = 5
             except Exception:
                 continue
             for t in trades:
-                rice = float(t.get('price') or 0)
-                amount = float(t.get('amount') or 0)
+                try:
+                    price = float(t.get('price') or 0)
+                    amount = float(t.get('amount') or 0)
+                except (TypeError, ValueError):
+                    continue
                 cost = price * amount
                 if amount < min_amount or cost < min_cost:
                     continue
                 side = t.get('side', 'buy').lower()
-                price = float(t.get('price') or 0)
-                amount = float(t.get('amount') or 0)
-                side = t.get('side', 'buy').lower()
+                sl = tp = 0.0
+                if side == 'buy':
+                    try:
+                        ohlcv = cliente.fetch_ohlcv(s.replace('/', ''), timeframe='1h', limit=100)
+                        df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+                        cfg = load_exit_config(s)
+                        sl, tp = calcular_tp_sl_adaptativos(s, df, cfg, precio_actual=price)
+                    except Exception as e:
+                        log.debug(f'No se pudieron calcular SL/TP para {s}: {e}')
                 data = {
                     'symbol': s,
                     'precio_entrada': price,
                     'cantidad': amount,
-                    'timestamp': datetime.utcfromtimestamp(
-                        t.get('timestamp', 0) / 1000
-                    ).isoformat(),
-                    'stop_loss': 0.0,
-                    'take_profit': 0.0,
+                    'timestamp': datetime.utcfromtimestamp(t.get('timestamp', 0) / 1000).isoformat(),
+                    'stop_loss': sl,
+                    'take_profit': tp,
                     'estrategias_activas': {},
                     'tendencia': '',
                     'max_price': price,
@@ -422,10 +432,19 @@ def registrar_orden(symbol: str, precio: float, cantidad: float, sl: float,
             f'⚠️ Estrategias activas no en formato dict para {symbol}, se forzará conversión...'
             )
         estrategias = dict(estrategias) if estrategias else {}
-    orden = Order(symbol=symbol, precio_entrada=precio, cantidad=cantidad,
-        stop_loss=sl, take_profit=tp, timestamp=datetime.utcnow().isoformat
-        (), estrategias_activas=estrategias, tendencia=tendencia, max_price
-        =precio, direccion=direccion)
+    orden = Order(
+        symbol=symbol,
+        precio_entrada=precio,
+        cantidad=cantidad,
+        cantidad_abierta=cantidad,
+        stop_loss=sl,
+        take_profit=tp,
+        timestamp=datetime.utcnow().isoformat(),
+        estrategias_activas=estrategias,
+        tendencia=tendencia,
+        max_price=precio,
+        direccion=direccion,
+    )
     actualizar_orden(symbol, orden)
     log.info(
         f'✅ Order registrada para {symbol} — cantidad: {cantidad}, entrada: {precio}'

@@ -1,8 +1,25 @@
 import pandas as pd
-from indicators.rsi import calcular_rsi
 from indicators.momentum import calcular_momentum
 from indicators.atr import calcular_atr
 from indicators.slope import calcular_slope
+
+
+def filtrar_cerradas(df: pd.DataFrame) -> pd.DataFrame:
+    """Devuelve solo las filas con velas cerradas.
+
+    Si la columna ``is_closed`` no está presente, se devuelve el ``DataFrame``
+    original sin modificar.
+    """
+    if 'is_closed' in df.columns:
+        return df[df['is_closed']]
+    return df
+
+
+def serie_cierres(data) -> pd.Series:
+    """Obtiene la serie de cierres usando solo velas cerradas."""
+    if isinstance(data, pd.DataFrame):
+        return filtrar_cerradas(data)['close']
+    return data
 
 
 def _cached_value(df: pd.DataFrame, key: tuple, compute):
@@ -19,6 +36,7 @@ def clear_cache(df: pd.DataFrame) -> None:
 
 def get_rsi(data, periodo: int = 14, serie_completa: bool = False):
     """Obtiene el RSI con soporte para ``DataFrame`` o ``Series``."""
+    from indicators.rsi import calcular_rsi
     if isinstance(data, pd.Series):
         return calcular_rsi(data, periodo, serie_completa)
     key = ('rsi', periodo, serie_completa)
