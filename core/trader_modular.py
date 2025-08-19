@@ -1122,6 +1122,19 @@ class Trader:
             )
             tick('heartbeat')
             await asyncio.sleep(intervalo)
+    
+    async def _reconciliar_trades_periodicamente(self, intervalo: int = 60) -> None:
+        log.debug('➡️ Entrando en _reconciliar_trades_periodicamente()')
+        while not self._cerrado:
+            try:
+                await asyncio.to_thread(
+                    real_orders.reconciliar_trades_binance,
+                    self.config.symbols,
+                )
+                log.debug('🔄 Reconciliación de trades completada')
+            except Exception as e:
+                log.warning(f'⚠️ Error al reconciliar trades: {e}')
+            await asyncio.sleep(intervalo)
 
     def _validar_puntaje(self, symbol: str, puntaje: float, umbral: float,
         modo_agresivo: bool=False) -> bool:
@@ -1690,6 +1703,10 @@ class Trader:
                 self._rechazos_intervalo_flush, self._stop_event
             ),
         }
+        if self.modo_real:
+            tareas['reconciliar_trades'] = (
+                lambda: self._reconciliar_trades_periodicamente()
+            )
         if 'PYTEST_CURRENT_TEST' not in os.environ:
             tareas['aprendizaje'] = lambda : self._ciclo_aprendizaje()
         for nombre, factory in tareas.items():

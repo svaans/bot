@@ -19,6 +19,12 @@ import pandas as pd
 from math import isclose
 from scipy.stats import linregress
 from ta.momentum import RSIIndicator
+from indicators.retornos_volatilidad import (
+    retornos_log,
+    retornos_simples,
+    verificar_consistencia,
+    volatilidad_welford,
+)
 from core.utils.utils import configurar_logger
 from core.contexto_externo import obtener_puntaje_contexto
 from core.market_regime import detectar_regimen
@@ -43,13 +49,18 @@ def _adaptar_configuracion_base(symbol: str, df: pd.DataFrame, base_config: dict
     ) ->dict:
     log.info('➡️ Entrando en _adaptar_configuracion_base()')
     """Ajusta ``base_config`` dinámicamente en función del mercado."""
-    if df is None or len(df) < 10 or 'close' not in df.columns:
+    if df is None or len(df) < 11 or 'close' not in df.columns:
         log.warning(
             f'[{symbol}] ❌ Datos insuficientes para adaptar configuración.')
         return base_config
     config = base_config.copy()
-    cambios = df['close'].pct_change().dropna().tail(10)
-    volatilidad = cambios.std() if not cambios.empty else 0
+    precios = df['close'].tail(11)
+    simples = retornos_simples(precios)
+    logs = retornos_log(precios)
+    if verificar_consistencia(simples, logs):
+        volatilidad = volatilidad_welford(simples.tail(10))
+    else:
+        volatilidad = 0
     cierre_reciente = df['close'].tail(10)
     try:
         slope = linregress(range(len(cierre_reciente)), cierre_reciente).slope
@@ -138,22 +149,33 @@ def calcular_umbral_adaptativo(symbol: str, df: pd.DataFrame,
             f'❌ [{symbol}] Faltan columnas clave en el DataFrame: {columnas_necesarias}'
             )
         return UMBRAL_POR_DEFECTO
-    ventana_close = df['close'].tail(10)
+    ventana_close = df['close'].tail(11)
     ventana_high = df['high'].tail(10)
     ventana_low = df['low'].tail(10)
     ventana_vol = df['volume'].tail(30)
-    media_close = np.mean(ventana_close)
+    media_close = np.mean(ventana_close.tail(10))
     if media_close == 0 or np.isnan(media_close):
         volatilidad = 0
         rango_medio = 0
     else:
-        volatilidad = np.std(ventana_close) / media_close
+        simples = retornos_simples(ventana_close)
+        logs = retornos_log(ventana_close)
+        if verificar_consistencia(simples, logs):
+            volatilidad = volatilidad_welford(simples.tail(10))
+        else:
+            volatilidad = 0
         rango_medio = np.mean(ventana_high - ventana_low) / media_close
     volumen_promedio = ventana_vol.mean()
     volumen_max = ventana_vol.max()
     volumen_relativo = 0.5 if isclose(volumen_max, 0.0, rel_tol=1e-12, abs_tol=1e-12) or np.isnan(volumen_max
         ) else volumen_promedio / volumen_max
-    momentum_std = df['close'].pct_change().tail(5).std()
+    precios_momentum = df['close'].tail(6)
+    ret_momentum = retornos_simples(precios_momentum)
+    log_momentum = retornos_log(precios_momentum)
+    if verificar_consistencia(ret_momentum, log_momentum):
+        momentum_std = volatilidad_welford(ret_momentum.tail(5))
+    else:
+        momentum_std = 0.0
     try:
         slope = linregress(range(len(ventana_close)), ventana_close).slope
     except ValueError as e:

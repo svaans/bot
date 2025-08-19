@@ -304,10 +304,13 @@ def reconciliar_trades_binance(simbolos: list[str] | None = None, limit: int = 5
             except Exception:
                 continue
             for t in trades:
+                price = float(t.get('price') or 0)
+                amount = float(t.get('amount') or 0)
+                side = t.get('side', 'buy').lower()
                 data = {
                     'symbol': s,
-                    'precio_entrada': float(t.get('price') or 0),
-                    'cantidad': float(t.get('amount') or 0),
+                    'precio_entrada': price,
+                    'cantidad': amount,
                     'timestamp': datetime.utcfromtimestamp(
                         t.get('timestamp', 0) / 1000
                     ).isoformat(),
@@ -315,12 +318,15 @@ def reconciliar_trades_binance(simbolos: list[str] | None = None, limit: int = 5
                     'take_profit': 0.0,
                     'estrategias_activas': {},
                     'tendencia': '',
-                    'max_price': float(t.get('price') or 0),
-                    'direccion': 'long'
-                    if t.get('side', 'buy').lower() == 'buy'
-                    else 'short',
+                    'max_price': price,
+                    'direccion': 'long' if side == 'buy' else 'short',
                 }
                 guardar_orden_real(s, data)
+                if side == 'buy' and amount > 0 and not obtener_orden(s):
+                    try:
+                        registrar_orden(s, price, amount, 0.0, 0.0, {}, '', 'long')
+                    except Exception as e:
+                        log.warning(f'⚠️ No se pudo registrar orden reconciliada para {s}: {e}')
     except Exception as e:
         log.error(f'❌ Error al reconciliar trades: {e}')
 

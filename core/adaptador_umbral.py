@@ -11,6 +11,12 @@ from pathlib import Path
 from typing import Dict, Optional
 import pandas as pd
 from indicators import rsi as indicador_rsi, slope as indicador_slope
+from indicators.retornos_volatilidad import (
+    retornos_log,
+    retornos_simples,
+    verificar_consistencia,
+    volatilidad_welford,
+)
 from core.utils.utils import configurar_logger
 log = configurar_logger("adaptador_umbral")
 RUTA_CONFIG = Path("config/configuraciones_optimas.json")
@@ -52,10 +58,14 @@ def calcular_umbral_adaptativo(
     factor = config.get("factor_umbral", 1.0)
 
     def _factor_volatilidad() -> float:
-        if df is None or len(df) < 20:
+        if df is None or len(df) < 21 or "close" not in df:
             return 1.0
-        cambios = df["close"].pct_change().dropna().tail(20)
-        vol = cambios.std() if not cambios.empty else 0.0
+        precios = df["close"].tail(21)
+        simples = retornos_simples(precios)
+        logs = retornos_log(precios)
+        if not verificar_consistencia(simples, logs):
+            return 1.0
+        vol = volatilidad_welford(simples.tail(20))
         return 1 + vol * 10
 
     def _factor_slope(valor: float | None) -> float:
