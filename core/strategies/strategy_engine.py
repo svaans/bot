@@ -107,9 +107,8 @@ class StrategyEngine:
                 rsi_val is not None and (rsi_val > 70 or rsi_val < 30)
             )
             contradiccion = contradiccion or rsi_contra
-            bloquear_contradicciones = (config or {}).get(
-                "contradicciones_bloquean_entrada", True
-            )
+            if contradiccion:
+                log.warning(f"[{symbol}] Señales BUY y SELL simultáneas detectadas")
             score_tec = calcular_score_tecnico(
                 df,
                 rsi_val,
@@ -126,7 +125,7 @@ class StrategyEngine:
                 and score_tec > umbral_score
                 and cumple_div
                 and not validaciones_fallidas
-                and (not bloquear_contradicciones or not contradiccion)
+                and not contradiccion
             )
             motivo = None
             if not permitido:
