@@ -158,12 +158,13 @@ class CapitalManager:
             balance = await fetch_balance_async(self.cliente)
             capital_total = balance['total'].get(self.capital_currency, 0)
         else:
-            capital_total = self.capital_por_simbolo.get(symbol, 0)
-        if capital_total <= 0:
+            capital_total = sum(self.capital_por_simbolo.values())
+        capital_symbol = self.capital_por_simbolo.get(
+            symbol, capital_total / max(len(self.capital_por_simbolo), 1)
+        )
+        if capital_total <= 0 or capital_symbol <= 0:
             log.warning(f'Saldo insuficiente en {self.capital_currency}')
             return precio, 0.0
-        capital_symbol = self.capital_por_simbolo.get(symbol, capital_total / max(
-            len(self.capital_por_simbolo), 1))
         fraccion = self.fraccion_kelly
         puntaje_macro = obtener_puntaje_contexto(symbol)
         umbral_macro = getattr(self.config, 'umbral_puntaje_macro', 6)
@@ -179,7 +180,12 @@ class CapitalManager:
             riesgo_teorico *= ajuste
         minimo_dinamico = max(10.0, capital_total * 0.02)
         riesgo_permitido = max(riesgo_teorico, minimo_dinamico)
-        riesgo_permitido = min(riesgo_permitido, capital_total * self.riesgo_maximo_diario)
+        riesgo_permitido = min(
+            riesgo_permitido, capital_total * self.riesgo_maximo_diario
+        )
+        exposure_limit_global = capital_total * self.riesgo_maximo_diario
+        disponible_global = max(0.0, exposure_limit_global - exposicion_total)
+        exposure_disponible = min(disponible_global, capital_symbol)
         market = await self._obtener_info_mercado(symbol)
         distancia_sl = abs(precio - stop_loss) if isinstance(stop_loss, (int, float)) else 0.0
         costo_pct = max(slippage_pct, 0.0) + max(fee_pct, 0.0)
