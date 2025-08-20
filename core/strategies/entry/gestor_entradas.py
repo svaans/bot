@@ -151,4 +151,5 @@ def entrada_permitida(symbol: str, potencia: float, umbral: float,
     if not _validar_capital(symbol, capital_disponible):
         return False
     if not _validar_sinergia(symbol, sinergia, umbral_sinergia):
+        return False
     return True
