@@ -108,17 +108,37 @@ def _validar_volumen(symbol: str, df: pd.DataFrame, cantidad: float) ->bool:
     return True
 
 
+def _validar_capital(symbol: str, capital: float) ->bool:
+    log.info('➡️ Entrando en _validar_capital()')
+    if capital <= 0:
+        log.info(f'🚫 [{symbol}] Rechazo por capital insuficiente')
+        return False
+    return True
+
+
+def _validar_sinergia(symbol: str, sinergia: float, umbral: float) ->bool:
+    log.info('➡️ Entrando en _validar_sinergia()')
+    if sinergia < umbral:
+        log.info(
+            f'🚫 [{symbol}] Rechazo por sinergia {sinergia:.2f} < {umbral:.2f}'
+            )
+        return False
+    return True
+
+
 def entrada_permitida(symbol: str, potencia: float, umbral: float,
     estrategias_activas: dict, rsi: float, slope: float, momentum: float,
     df=None, direccion: str='long', cantidad: float=0.0, df_referencia=None,
     umbral_correlacion: float=0.9, tendencia: (str | None)=None, score: (
-    float | None)=None, persistencia: float=0.0, persistencia_minima: float=0.0
+    float | None)=None, persistencia: float=0.0, persistencia_minima: float=0.0,
+    capital_disponible: float=0.0, sinergia: float=1.0, umbral_sinergia: float=0.5
     ) ->bool:
     log.info('➡️ Entrando en entrada_permitida()')
     """Versión simplificada usada en las pruebas unitarias."""
     score_tecnico = score if score is not None else calcular_score_tecnico(
         df if df is not None else pd.DataFrame(), rsi, momentum, slope,
         tendencia or 'lateral', direccion)
+    assert 0.0 <= sinergia <= 1.0, 'sinergia fuera de rango'
     potencia_ajustada = potencia * (1 + score_tecnico / 3)
     if not _validar_correlacion(symbol, df, df_referencia, umbral_correlacion):
         return False
@@ -128,4 +148,7 @@ def entrada_permitida(symbol: str, potencia: float, umbral: float,
         return False
     if not _validar_volumen(symbol, df, cantidad):
         return False
+    if not _validar_capital(symbol, capital_disponible):
+        return False
+    if not _validar_sinergia(symbol, sinergia, umbral_sinergia):
     return True
