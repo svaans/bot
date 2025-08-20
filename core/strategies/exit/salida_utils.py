@@ -1,8 +1,9 @@
 from __future__ import annotations
 from core.utils.utils import configurar_logger
+from core.strategies.exit.gestor_salidas import (
+    PRIORIDADES as PRIORIDAD_EVENTOS,
+)
 log = configurar_logger('salida_utils')
-PRIORIDAD_EVENTOS = {'Stop Loss': 3, 'Take Profit': 2, 'Trailing Stop': 1,
-    'Tecnico': 0}
 
 
 def resultado_salida(evento: str, cerrar: bool, razon: str, logger=None, **

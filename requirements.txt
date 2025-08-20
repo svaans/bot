@@ -44,6 +44,10 @@ filelock==3.15.1              # Bloqueo de archivos entre procesos
 watchdog==3.0.0               # Observador de cambios en archivos
 psutil==5.9.8                 # Monitorización de recursos del sistema
 
+# ───────── MONITORIZACIÓN ─────────
+prometheus-client==0.22.1     # Métricas Prometheus
+
+
 # ───────── LOGGING Y FORMATO DE SALIDA ─────────
 colorama==0.4.6               # Colores en terminal (Windows compatible)
 colorlog==6.9.0               # Logging con colores

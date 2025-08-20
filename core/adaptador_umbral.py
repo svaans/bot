@@ -7,9 +7,11 @@ para facilitar la auditoría del proceso.
 """
 from __future__ import annotations
 import json
+import math
 from pathlib import Path
 from typing import Dict, Optional
 import pandas as pd
+from prometheus_client import Counter, Gauge
 from indicators import rsi as indicador_rsi, slope as indicador_slope
 from indicators.retornos_volatilidad import (
     retornos_log,
@@ -23,6 +25,18 @@ RUTA_CONFIG = Path("config/configuraciones_optimas.json")
 _CONFIG_CACHE: Dict[str, dict] | None = None
 _UMBRAL_SUAVIZADO: Dict[str, float] = {}
 ALPHA = 0.3
+HISTERESIS = 0.05
+
+UMBRAL_ADAPTATIVO_ACTUAL = Gauge(
+    "umbral_adaptativo_actual",
+    "Valor actual del umbral adaptativo",
+    ["symbol"],
+)
+UMBRAL_HISTERESIS_SKIPS = Counter(
+    "umbral_histeresis_skips_total",
+    "Actualizaciones omitidas por la banda de histéresis",
+    ["symbol"],
+)
 
 
 def _cargar_config() -> Dict[str, dict]:
@@ -82,12 +96,22 @@ def calcular_umbral_adaptativo(
     umbral *= _factor_slope(slope_val)
     umbral *= _factor_rsi(rsi_val)
     umbral = max(1.0, umbral)
+    if pd.isna(umbral) or not math.isfinite(umbral):
+        return 1.0
     previo = _UMBRAL_SUAVIZADO.get(symbol)
     if previo is None:
         suavizado = umbral
     else:
         suavizado = previo + ALPHA * (umbral - previo)
+    if pd.isna(suavizado) or not math.isfinite(suavizado):
+        return 1.0
+
+    if previo is not None and abs(suavizado - previo) < HISTERESIS:
+        UMBRAL_HISTERESIS_SKIPS.labels(symbol=symbol).inc()
+        UMBRAL_ADAPTATIVO_ACTUAL.labels(symbol=symbol).set(previo)
+        return round(previo, 2)
     _UMBRAL_SUAVIZADO[symbol] = suavizado
+    UMBRAL_ADAPTATIVO_ACTUAL.labels(symbol=symbol).set(suavizado)
     return round(suavizado, 2)
 
 
