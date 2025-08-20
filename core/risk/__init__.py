@@ -9,7 +9,11 @@ from .riesgo import (
     riesgo_superado,
 )
 from .sizing import MarketInfo, size_order
+<<<<<<< HEAD
 from .risk import trade_risk, total_exposure, within_limits
+=======
+from .risks import trade_risk, total_exposure, within_limits
+>>>>>>> d3a45e9 (rebase)
 
 __all__ = [
     "RiskManager",
@@ -25,4 +29,8 @@ __all__ = [
     "trade_risk",
     "total_exposure",
     "within_limits",
+<<<<<<< HEAD
 ]
+=======
+]
+>>>>>>> d3a45e9 (rebase)
