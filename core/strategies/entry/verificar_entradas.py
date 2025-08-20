@@ -182,7 +182,8 @@ async def verificar_entrada(trader, symbol: str, df: pd.DataFrame, estado) ->(
         trader.capital_por_simbolo.get(symbol, 0), precio)
     try:
         df_htf = (
-            df.set_index(pd.to_datetime(df['timestamp']))
+            df.sort_values('timestamp')
+            .set_index(pd.to_datetime(df['timestamp'], unit='ms'))
             .resample('5min')
             .last()
             .dropna()

@@ -69,5 +69,5 @@ def size_order(
     risk = qty * cost_per_unit
     exposure = current_exposure + notional
     if risk > risk_limit + 1e-9 or exposure > exposure_limit + 1e-9:
-        raise ValueError("Limits exceeded after rounding")
+        return price, 0.0
     return price, qty
