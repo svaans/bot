@@ -28,7 +28,7 @@ import time
 import atexit
 import threading
 import asyncio
-from typing import Any
+from typing import Any, Mapping
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from datetime import datetime
 from binance_api.cliente import obtener_cliente
@@ -89,6 +89,20 @@ def _connect_db() -> sqlite3.Connection:
     except sqlite3.Error as e:
         log.warning(f'⚠️ No se pudieron aplicar PRAGMA en SQLite: {e}')
     return conn
+
+
+def _validar_datos_orden(data: Mapping[str, Any]) -> dict:
+    """Valida campos mínimos requeridos para persistir una orden."""
+    d = data.to_dict() if isinstance(data, Order) else dict(data)
+    symbol = d.get('symbol')
+    if not isinstance(symbol, str) or not symbol:
+        raise ValueError("Orden inválida: 'symbol' es obligatorio")
+    for campo in ('precio_entrada', 'cantidad'):
+        try:
+            d[campo] = float(d[campo])
+        except (TypeError, ValueError, KeyError):
+            raise ValueError(f"Orden inválida: '{campo}' debe ser numérico")
+    return d
 
 
 def esperar_balance(cliente, symbol: str, cantidad_esperada: float,
@@ -251,33 +265,44 @@ def guardar_ordenes(ordenes: dict[str, Order]) ->None:
     _init_db()
     try:
         with _connect_db() as conn:
-            for orden in ordenes.values():
-                data = orden.to_dict() if isinstance(orden, Order) else orden
-                if isinstance(data.get('estrategias_activas'), dict):
-                    data['estrategias_activas'] = json.dumps(data[
-                        'estrategias_activas'])
-                conn.execute(
-                    """
-                    INSERT OR REPLACE INTO ordenes (
-                        symbol, precio_entrada, cantidad, stop_loss, take_profit,
-                        timestamp, estrategias_activas, tendencia, max_price,
-                        direccion, precio_cierre, fecha_cierre, motivo_cierre,
-                        retorno_total
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """
-                    , (data.get('symbol'), data.get('precio_entrada'), data
-                    .get('cantidad'), data.get('stop_loss'), data.get(
-                    'take_profit'), data.get('timestamp'), data.get(
-                    'estrategias_activas'), data.get('tendencia'), data.get
-                    ('max_price'), data.get('direccion'), data.get(
-                    'precio_cierre'), data.get('fecha_cierre'), data.get(
-                    'motivo_cierre'), data.get('retorno_total')))
-            conn.commit()
+            with conn:
+                for orden in ordenes.values():
+                    data = _validar_datos_orden(orden)
+                    if isinstance(data.get('estrategias_activas'), dict):
+                        data['estrategias_activas'] = json.dumps(
+                            data['estrategias_activas']
+                        )
+                    conn.execute(
+                        """
+                        INSERT OR REPLACE INTO ordenes (
+                            symbol, precio_entrada, cantidad, stop_loss, take_profit,
+                            timestamp, estrategias_activas, tendencia, max_price,
+                            direccion, precio_cierre, fecha_cierre, motivo_cierre,
+                            retorno_total
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            data.get('symbol'),
+                            data.get('precio_entrada'),
+                            data.get('cantidad'),
+                            data.get('stop_loss'),
+                            data.get('take_profit'),
+                            data.get('timestamp'),
+                            data.get('estrategias_activas'),
+                            data.get('tendencia'),
+                            data.get('max_price'),
+                            data.get('direccion'),
+                            data.get('precio_cierre'),
+                            data.get('fecha_cierre'),
+                            data.get('motivo_cierre'),
+                            data.get('retorno_total'),
+                        ),
+                    )
         _CACHE_ORDENES = ordenes
         log.info(
             f'💾 {len(ordenes)} órdenes guardadas correctamente en la base de datos.'
-            )
-    except sqlite3.Error as e:
+        )
+    except (sqlite3.Error, ValueError) as e:
         log.error(f'❌ Error al guardar órdenes en SQLite: {e}')
         raise
 
@@ -398,29 +423,39 @@ def actualizar_orden(symbol: str, data: (Order | dict)) ->None:
     if ordenes.get(symbol) == data:
         return
     try:
-        d = data.to_dict() if isinstance(data, Order) else data.copy()
+        d = _validar_datos_orden(data)
         if isinstance(d.get('estrategias_activas'), dict):
             d['estrategias_activas'] = json.dumps(d['estrategias_activas'])
         _init_db()
         with _connect_db() as conn:
-            conn.execute(
-                """
-                INSERT OR REPLACE INTO ordenes (
-                    symbol, precio_entrada, cantidad, stop_loss, take_profit,
-                    timestamp, estrategias_activas, tendencia, max_price,
-                    direccion, precio_cierre, fecha_cierre, motivo_cierre,
-                    retorno_total
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """
-                , (d.get('symbol'), d.get('precio_entrada'), d.get(
-                'cantidad'), d.get('stop_loss'), d.get('take_profit'), d.
-                get('timestamp'), d.get('estrategias_activas'), d.get(
-                'tendencia'), d.get('max_price'), d.get('direccion'), d.get
-                ('precio_cierre'), d.get('fecha_cierre'), d.get(
-                'motivo_cierre'), d.get('retorno_total')))
-            conn.commit()
-        ordenes[symbol] = data if isinstance(data, Order) else Order.from_dict(
-            d)
+            with conn:
+                conn.execute(
+                    """
+                    INSERT OR REPLACE INTO ordenes (
+                        symbol, precio_entrada, cantidad, stop_loss, take_profit,
+                        timestamp, estrategias_activas, tendencia, max_price,
+                        direccion, precio_cierre, fecha_cierre, motivo_cierre,
+                        retorno_total
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        d.get('symbol'),
+                        d.get('precio_entrada'),
+                        d.get('cantidad'),
+                        d.get('stop_loss'),
+                        d.get('take_profit'),
+                        d.get('timestamp'),
+                        d.get('estrategias_activas'),
+                        d.get('tendencia'),
+                        d.get('max_price'),
+                        d.get('direccion'),
+                        d.get('precio_cierre'),
+                        d.get('fecha_cierre'),
+                        d.get('motivo_cierre'),
+                        d.get('retorno_total'),
+                    ),
+                )
+        ordenes[symbol] = data if isinstance(data, Order) else Order.from_dict(d)
         _CACHE_ORDENES = ordenes
         log.info(f'📌 Order actualizada para {symbol}.')
     except Exception as e:
@@ -442,7 +477,6 @@ def eliminar_orden(symbol: str, forzar_log: bool=False) ->None:
     try:
         with _connect_db() as conn:
             conn.execute('DELETE FROM ordenes WHERE symbol = ?', (symbol,))
-            conn.commit()
         del ordenes[symbol]
         _CACHE_ORDENES = ordenes
         log.info(f'🗑️ Order eliminada correctamente para {symbol}.')
