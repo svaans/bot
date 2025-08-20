@@ -668,6 +668,16 @@ def ejecutar_orden_market(symbol: str, cantidad: float, operation_id: str | None
                         'max_price': float(trade.get('price') or 0) if trade else 0,
                         'direccion': 'long',
                     })
+                    registrar_orden(
+                        symbol,
+                        float(trade.get('price') or 0) if trade else 0,
+                        ejecutado,
+                        0.0,
+                        0.0,
+                        {},
+                        '',
+                        'long',
+                    )
                 except Exception as e_reg:
                     log.error(f'❌ No se pudo registrar orden tras error: {e_reg}')
         except Exception as ver_err:

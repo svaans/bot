@@ -149,6 +149,7 @@ En `config/exit_defaults.py` se definen los valores iniciales para todas las est
 - `umbral_puntaje_macro_cierre`: Valor absoluto de puntaje macroeconómico que fuerza la salida inmediata.
 - `max_intentos_cierre`: Número de reintentos permitidos al cerrar por spread alto.
 - `delay_reintento_cierre`: Espera en segundos entre reintentos de cierre cuando el spread es elevado.
+- `max_velas_reversion_tendencia`: Cantidad de velas consecutivas que señalan una reversión de tendencia antes de forzar el cierre de la posición (por defecto 3).
 
 ## Límites de timeout
 

@@ -237,7 +237,7 @@ async def _manejar_cambio_tendencia(trader, orden, df) -> bool:
         orden, 'reversion_tendencia_contador', 0
     ) + 1
 
-    max_velas = config_actual.get('max_velas_reversion_tendencia', 0)
+    max_velas = config_actual.get('max_velas_reversion_tendencia', 3)
     if max_velas and orden.reversion_tendencia_contador >= max_velas:
         nueva_tendencia = obtener_tendencia(symbol, df)
         precio_cierre = float(df['close'].iloc[-1])

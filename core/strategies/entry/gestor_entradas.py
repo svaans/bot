@@ -4,7 +4,9 @@ Evalúa las estrategias activas y calcula el score técnico total y la diversida
 """
 from __future__ import annotations
 import asyncio
+import time
 import pandas as pd
+from prometheus_client import Histogram
 from core.strategies.pesos import gestor_pesos
 from .loader import cargar_estrategias
 from indicators.correlacion import calcular_correlacion
@@ -14,6 +16,12 @@ from core.score_tecnico import calcular_score_tecnico
 from core.utils import configurar_logger
 log = configurar_logger('entradas')
 _FUNCIONES = cargar_estrategias()
+
+ENTRADA_EVAL_LATENCY_MS = Histogram(
+    "entrada_eval_latency_ms",
+    "Latencia de evaluación de cada estrategia de entrada",
+    ["symbol", "task_id"],
+)
 
 
 async def evaluar_estrategias(symbol: str, df: pd.DataFrame, tendencia: str) -> dict:
@@ -27,11 +35,13 @@ async def evaluar_estrategias(symbol: str, df: pd.DataFrame, tendencia: str) -> 
     nombres = obtener_estrategias_por_tendencia(tendencia)
     activas: dict[str, bool] = {}
     puntaje_total = 0.0
+
     async def ejecutar(nombre: str):
         func = _FUNCIONES.get(nombre)
         if not callable(func):
             log.warning(f'Estrategia no encontrada: {nombre}')
             return nombre, False
+        inicio = time.perf_counter()
         try:
             resultado = await asyncio.to_thread(func, df)
             if isinstance(resultado, dict):
@@ -45,10 +55,22 @@ async def evaluar_estrategias(symbol: str, df: pd.DataFrame, tendencia: str) -> 
         except Exception as exc:
             log.warning(f'Error ejecutando {nombre}: {exc}')
             activo = False
+        finally:
+            duracion = (time.perf_counter() - inicio) * 1000
+            ENTRADA_EVAL_LATENCY_MS.labels(symbol=symbol, task_id=nombre).observe(duracion)
         return nombre, activo
 
-    resultados = await asyncio.gather(*(ejecutar(n) for n in nombres))
-    for nombre, activo in resultados:
+    tareas = [asyncio.wait_for(ejecutar(n), timeout=5) for n in nombres]
+    resultados = await asyncio.gather(*tareas, return_exceptions=True)
+    for nombre, resultado in zip(nombres, resultados):
+        if isinstance(resultado, Exception):
+            if isinstance(resultado, asyncio.TimeoutError):
+                log.warning(f'Timeout ejecutando {nombre}')
+            else:
+                log.warning(f'Error ejecutando {nombre}: {resultado}')
+            activas[nombre] = False
+            continue
+        _, activo = resultado
         activas[nombre] = activo
         if activo:
             puntaje_total += gestor_pesos.obtener_peso(nombre, symbol)
@@ -145,11 +167,11 @@ def entrada_permitida(symbol: str, potencia: float, umbral: float,
         return False
     if not _validar_diversidad(symbol, estrategias_activas):
         return False
-    if not _validar_score(symbol, potencia_ajustada, umbral):
-        return False
     if not _validar_volumen(symbol, df, cantidad):
         return False
     if not _validar_capital(symbol, capital_disponible):
+        return False
+    if not _validar_score(symbol, potencia_ajustada, umbral):
         return False
     if not _validar_sinergia(symbol, sinergia, umbral_sinergia):
         return False
