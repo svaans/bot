@@ -47,8 +47,10 @@ def _calcular_tendencia_base(
 def detectar_tendencia(symbol: str, df: pd.DataFrame) -> tuple[str, dict[str, bool]]:
     log.info("➡️ Entrando en detectar_tendencia()")
     """Evalúa la tendencia del mercado de forma simétrica para alza y baja."""
-    if df is None or df.empty or "close" not in df.columns or len(df) < 60:
-        log.warning(f"⚠️ Datos insuficientes para detectar tendencia en {symbol}")
+    if df is None or df.empty or "close" not in df.columns or len(df) < 30:
+        log.warning(
+            f"⚠️ Datos insuficientes para detectar tendencia en {symbol}"
+        )
         return "lateral", {}
     (
         delta,
