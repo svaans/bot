@@ -48,12 +48,22 @@ class Notificador:
             payload['parse_mode'] = self.parse_mode
         try:
             response = requests.post(url, json=payload, timeout=10)
-            if response.status_code != 200:
+            ok = False
+            try:
+                ok = response.json().get('ok', False)
+            except Exception:
+                ok = False
+            if response.status_code != 200 or not ok:
                 log.warning(f'⚠️ Error enviando notificación: {response.text}')
                 if self.parse_mode:
                     payload.pop('parse_mode', None)
                     retry = requests.post(url, json=payload, timeout=10)
-                    if retry.status_code != 200:
+                    retry_ok = False
+                    try:
+                        retry_ok = retry.status_code == 200 and retry.json().get('ok', False)
+                    except Exception:
+                        retry_ok = False
+                    if not retry_ok:
                         log.warning(
                             f'⚠️ Reintento sin parse_mode: {retry.text}')
         except Exception as e:
@@ -62,7 +72,12 @@ class Notificador:
                 payload.pop('parse_mode', None)
                 try:
                     retry = requests.post(url, json=payload, timeout=10)
-                    if retry.status_code != 200:
+                    retry_ok = False
+                    try:
+                        retry_ok = retry.status_code == 200 and retry.json().get('ok', False)
+                    except Exception:
+                        retry_ok = False
+                    if not retry_ok:
                         log.warning(
                             f'⚠️ Reintento tras excepción: {retry.text}')
                 except Exception as e2:

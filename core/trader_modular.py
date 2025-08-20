@@ -260,9 +260,10 @@ class Trader:
                 )
         if 'PYTEST_CURRENT_TEST' not in os.environ:
             try:
-                asyncio.run(self._cargar_estado_persistente())
+                loop = asyncio.get_running_loop()
             except RuntimeError:
-                loop = asyncio.get_event_loop()
+                asyncio.run(self._cargar_estado_persistente())
+            else:
                 loop.create_task(self._cargar_estado_persistente())
         else:
             log.debug('🔍 Modo prueba: se omite carga de estado persistente')

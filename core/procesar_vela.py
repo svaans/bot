@@ -72,9 +72,13 @@ async def procesar_vela(trader, vela: dict) -> None:
             estado.buffer = deque(maxlen=MAX_BUFFER_VELAS)
         if not isinstance(estado.estrategias_buffer, deque):
             estado.estrategias_buffer = deque(maxlen=MAX_ESTRATEGIAS_BUFFER)
-        if estado.ultimo_timestamp and ts <= estado.ultimo_timestamp:
-            log.error(f"❌ Vela fuera de orden para {symbol}: {ts} <= {estado.ultimo_timestamp}")
-            return
+        if estado.ultimo_timestamp:
+            if ts < estado.ultimo_timestamp:
+                log.error(f"❌ Vela fuera de orden para {symbol}: {ts} < {estado.ultimo_timestamp}")
+                return
+            if ts == estado.ultimo_timestamp:
+                log.warning(f"⚠️ Vela duplicada para {symbol}: {ts}")
+                return
 
         snapshot = {
             'symbol': symbol,

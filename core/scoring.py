@@ -4,6 +4,7 @@ from dataclasses import dataclass, asdict
 from enum import Enum
 from typing import Optional
 import json
+from math import isfinite
 import pandas as pd
 
 
@@ -76,7 +77,13 @@ def calcular_score_tecnico(
     direccion: str = "long",
 ) -> tuple[float, ScoreBreakdown]:
     """Agrega RSI, momentum, slope y tendencia ponderados para obtener un score técnico."""
-
+    if rsi is not None and not isfinite(rsi):
+        rsi = None
+    if momentum is not None and not isfinite(momentum):
+        momentum = None
+    if slope is not None and not isfinite(slope):
+        slope = None
+        
     bd = ScoreBreakdown()
     peso_rsi = PESOS_SCORE_TECNICO.get("RSI", 1.0)
     if rsi is not None:
