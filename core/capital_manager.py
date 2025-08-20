@@ -69,6 +69,10 @@ class CapitalManager:
         """Devuelve ``True`` si hay capital asignado a ``symbol``."""
         return self.capital_por_simbolo.get(symbol, 0.0) > 0
     
+    def es_moneda_base(self, symbol: str) -> bool:
+        """Verifica que ``symbol`` opere contra la ``capital_currency``."""
+        return symbol.split('/')[-1] == self.capital_currency
+    
     async def _on_calcular_cantidad(self, data: dict) -> None:
         fut = data.get('future')
         symbol = data.get('symbol')
@@ -162,6 +166,9 @@ class CapitalManager:
         capital_symbol = self.capital_por_simbolo.get(
             symbol, capital_total / max(len(self.capital_por_simbolo), 1)
         )
+        if not self.es_moneda_base(symbol):
+            log.warning(f'Moneda base incompatible para {symbol}')
+            return precio, 0.0
         if capital_total <= 0 or capital_symbol <= 0:
             log.warning(f'Saldo insuficiente en {self.capital_currency}')
             return precio, 0.0
@@ -185,6 +192,9 @@ class CapitalManager:
         )
         exposure_limit_global = capital_total * self.riesgo_maximo_diario
         disponible_global = max(0.0, exposure_limit_global - exposicion_total)
+        if disponible_global <= 0:
+            log.warning('Límite de exposición global alcanzado')
+            return precio, 0.0
         exposure_disponible = min(disponible_global, capital_symbol)
         market = await self._obtener_info_mercado(symbol)
         distancia_sl = abs(precio - stop_loss) if isinstance(stop_loss, (int, float)) else 0.0

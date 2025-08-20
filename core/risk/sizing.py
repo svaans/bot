@@ -62,6 +62,8 @@ def size_order(
     max_qty_risk = risk_limit / cost_per_unit
     max_qty_exposure = max(0.0, (exposure_limit - current_exposure) / price)
     qty = max(0.0, min(max_qty_risk, max_qty_exposure))
+    if qty <= 0:
+        return price, 0.0
     price, qty, notional = apply_exchange_limits(price, qty, market, side)
     cost_per_unit = abs(price - stop_price) + price * (fee_pct + slippage_pct)
     risk = qty * cost_per_unit

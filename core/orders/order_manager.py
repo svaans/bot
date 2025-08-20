@@ -9,6 +9,7 @@ from core.utils.logger import configurar_logger
 from core.orders import real_orders
 from core.utils.utils import is_valid_number
 from core.event_bus import EventBus
+from core.metrics import registrar_orden
 log = configurar_logger('orders', modo_silencioso=True)
 
 MAX_HISTORIAL_ORDENES = 1000
@@ -132,6 +133,7 @@ class OrderManager:
                             'tipo': 'CRITICAL',
                         },
                     )
+                    registrar_orden('rejected')
                     return
             else:
                 # modo simulado: registramos el costo inicial
@@ -161,8 +163,10 @@ class OrderManager:
                         'tipo': 'CRITICAL',
                     },
                 )
+            registrar_orden('failed')
             return
         self.ordenes[symbol] = orden
+        registrar_orden('opened')
         log.info(f'🟢 Orden abierta para {symbol} @ {precio:.2f}')
         if self.bus:
             estrategias_txt = ', '.join(estrategias.keys())
@@ -262,6 +266,7 @@ class OrderManager:
                     'notify',
                     {'mensaje': f'⚠️ Venta no realizada, se reintentará en {symbol}'},
                 )
+            registrar_orden('failed')
             return False
         try:
             await asyncio.to_thread(real_orders.eliminar_orden, symbol)
@@ -285,6 +290,7 @@ class OrderManager:
         if self.bus:
             mensaje = f"""📤 Venta {symbol}\nEntrada: {orden.precio_entrada:.2f} Salida: {precio:.2f}\nRetorno: {retorno * 100:.2f}%\nMotivo: {motivo}"""
             await self.bus.publish('notify', {'mensaje': mensaje})
+        registrar_orden('closed')
         return True
 
     async def cerrar_parcial_async(self, symbol: str, cantidad: float,
@@ -330,6 +336,7 @@ class OrderManager:
             await self.bus.publish('notify', {'mensaje': mensaje})
         if orden.cantidad_abierta <= 0:
             self.ordenes.pop(symbol, None)
+        registrar_orden('partial')
         return True
 
     def obtener(self, symbol: str) ->Optional[Order]:

@@ -47,6 +47,7 @@ from core.config_manager.dinamica import adaptar_configuracion
 from ccxt.base.errors import BaseError
 from core.reporting import reporter_diario
 from core.registro_metrico import registro_metrico
+from core.metrics import registrar_decision
 from core.supervisor import supervised_task, task_heartbeat, tick, last_alive, data_heartbeat
 from learning.aprendizaje_en_linea import registrar_resultado_trade
 from learning.aprendizaje_continuo import ejecutar_ciclo as ciclo_aprendizaje
@@ -359,6 +360,7 @@ class Trader:
             log.error(f'❌ {e}')
             return
         log.info(f"✅ Orden cerrada: {symbol} a {precio:.2f}€ por '{motivo}'")
+        registrar_decision(symbol, 'exit')
 
     async def _cerrar_y_reportar(self, orden, precio: float, motivo: str,
         tendencia: (str | None)=None, df: (pd.DataFrame | None)=None) ->None:
@@ -1547,6 +1549,7 @@ class Trader:
                 self._limite_riesgo_notificado = True
                 await self._cerrar_posiciones_por_riesgo()
             self._stop_event.set()
+            registrar_decision(symbol, 'risk_limit')
             return
         precio, cantidad_total = await self._calcular_cantidad_async(symbol, precio, sl)
         if cantidad_total <= 0:
@@ -1562,6 +1565,7 @@ class Trader:
                         f'{capital_disp:.2f}€ disponible)'
                     )
                 )
+            registrar_decision(symbol, 'no_capital')
             return
         fracciones = self.piramide_fracciones
         market = await self.capital_manager.info_mercado(symbol)
@@ -1633,6 +1637,7 @@ class Trader:
             fracciones=fracciones,
             detalles_tecnicos=detalles_tecnicos or {},
         )
+        registrar_decision(symbol, 'entry')
         self.capital_inicial_orden[symbol] = self.capital_por_simbolo.get(symbol, 0.0)
         estrategias_list = list(estrategias_dict.keys())
         log.info(
@@ -1791,8 +1796,11 @@ class Trader:
         log.debug('➡️ Entrando en _puede_evaluar_entradas()')
         """Determina si existen condiciones para evaluar nuevas compras."""
         if not self.capital_manager.tiene_capital(symbol):
+            log.info(f'[{symbol}] Entrada ignorada por capital agotado')
+            registrar_decision(symbol, 'skip_no_capital')
             return False
         if self.orders.tiene_posicion(symbol):
+            registrar_decision(symbol, 'skip_open_position')
             return False
         return True
         
