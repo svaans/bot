@@ -83,53 +83,7 @@ class DataFeed:
         """Escucha las velas de ``symbol`` y reintenta ante fallos de conexión."""
 
         async def wrapper(candle: dict) -> None:
-            if not self._should_enqueue_candle(symbol, candle):
-                return
-            self._last[symbol] = datetime.now(UTC)
-            self._last_monotonic[symbol] = time.monotonic()
-            self._mensajes_recibidos[symbol] = (
-                self._mensajes_recibidos.get(symbol, 0) + 1
-            )
-            log.debug(
-                f'[{symbol}] Recibida vela: timestamp={candle.get("timestamp")}')
-            tick_data(symbol)
-            queue = self._queues[symbol]
-            qsize = queue.qsize()
-            if queue.maxsize and qsize > queue.maxsize * 0.8:
-                log.warning(
-                    f"Queue {symbol} cerca del límite: {qsize}/{queue.maxsize}"
-                )
-            try:
-                await asyncio.wait_for(
-                    queue.put(candle), timeout=self.queue_put_timeout
-                )
-            except asyncio.TimeoutError:
-                log.warning("Queue bloqueada; descartando 1")
-                self._queue_discards[symbol] = (
-                    self._queue_discards.get(symbol, 0) + 1
-                )
-                try:
-                    queue.get_nowait()
-                    queue.task_done()
-                except asyncio.QueueEmpty:
-                    pass
-                try:
-                    await asyncio.wait_for(
-                        queue.put(candle), timeout=self.queue_put_timeout
-                    )
-                except asyncio.TimeoutError:
-                    log.error(
-                        f"Timeout en cola de {symbol}; reiniciando stream"
-                    )
-                    try:
-                        await self.notificador.enviar_async(
-                            f'⚠️ Timeout en cola de {symbol}; reiniciando stream',
-                            'WARN',
-                        )
-                    except Exception:
-                        tick('data_feed')
-                        pass
-                    await self._reiniciar_stream(symbol)
+            await self._handle_candle(symbol, candle)
 
         await self._relanzar_stream(symbol, wrapper)
 
@@ -147,6 +101,56 @@ class DataFeed:
             return False
         self._last_close_ts[symbol] = ts
         return True
+    
+    async def _handle_candle(self, symbol: str, candle: dict) -> None:
+        """Valida y encola la vela actualizando heartbeats solo al éxito."""
+        if not self._should_enqueue_candle(symbol, candle):
+            return
+        queue = self._queues[symbol]
+        qsize = queue.qsize()
+        if queue.maxsize and qsize > queue.maxsize * 0.8:
+            log.warning(
+                f"Queue {symbol} cerca del límite: {qsize}/{queue.maxsize}"
+            )
+        try:
+            await asyncio.wait_for(
+                queue.put(candle), timeout=self.queue_put_timeout
+            )
+        except asyncio.TimeoutError:
+            log.warning("Queue bloqueada; descartando 1")
+            self._queue_discards[symbol] = (
+                self._queue_discards.get(symbol, 0) + 1
+            )
+            try:
+                queue.get_nowait()
+                queue.task_done()
+            except asyncio.QueueEmpty:
+                pass
+            try:
+                await asyncio.wait_for(
+                    queue.put(candle), timeout=self.queue_put_timeout
+                )
+            except asyncio.TimeoutError:
+                log.error(
+                    f"Timeout en cola de {symbol}; reiniciando stream"
+                )
+                try:
+                    await self.notificador.enviar_async(
+                        f'⚠️ Timeout en cola de {symbol}; reiniciando stream',
+                        'WARN',
+                    )
+                except Exception:
+                    tick('data_feed')
+                await self._reiniciar_stream(symbol)
+                return
+        self._last[symbol] = datetime.now(UTC)
+        self._last_monotonic[symbol] = time.monotonic()
+        self._mensajes_recibidos[symbol] = (
+            self._mensajes_recibidos.get(symbol, 0) + 1
+        )
+        log.debug(
+            f'[{symbol}] Recibida vela: timestamp={candle.get("timestamp")}')
+        tick_data(symbol)
 
 
     async def _consumer(

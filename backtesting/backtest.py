@@ -5,12 +5,54 @@ import os
 from datetime import datetime, timezone
 from typing import Iterable, Dict
 import pandas as pd
+import ccxt.async_support as ccxt
 from tqdm import tqdm
 from config.config_manager import Config
 from core.trader_modular import Trader
 DATOS_DIR = os.getenv('DATOS_DIR', 'datos')
 BUFFER_INICIAL = 120
 CAPITAL_INICIAL = 300.0
+MESES_HISTORICO = 6
+
+
+async def descargar_historico(symbol: str, timeframe: str = '1m', meses: int = MESES_HISTORICO) -> str:
+    exchange = ccxt.binance()
+    await exchange.load_markets()
+    tf_minutos = int(timeframe[:-1]) if timeframe.endswith('m') else 1
+    dias = meses * 30
+    velas_por_dia = int(24 * 60 / tf_minutos)
+    max_barras = velas_por_dia * dias
+    limite = 1000
+    all_data = []
+    since = exchange.milliseconds() - max_barras * tf_minutos * 60 * 1000
+    print(f'⬇️ Descargando {meses} meses de datos para {symbol} ({max_barras} velas)...')
+    while len(all_data) < max_barras:
+        try:
+            data = await exchange.fetch_ohlcv(symbol, timeframe, since=since, limit=limite)
+        except Exception as e:
+            print(f'⚠️ Error al descargar {symbol}: {e}')
+            await asyncio.sleep(exchange.rateLimit / 1000)
+            continue
+        if not data:
+            break
+        all_data.extend(data)
+        since = data[-1][0] + 1
+        if len(data) < limite:
+            break
+        await asyncio.sleep(exchange.rateLimit / 1000)
+    await exchange.close()
+    df = pd.DataFrame(all_data, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+    df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
+    os.makedirs(DATOS_DIR, exist_ok=True)
+    archivo = os.path.join(DATOS_DIR, f"{symbol.replace('/', '_').lower()}_{timeframe}.parquet")
+    df.to_parquet(archivo, index=False)
+    print(f'✅ {symbol}: {len(df)} velas guardadas en {archivo}')
+    return archivo
+
+
+async def descargar_historicos(symbols: Iterable[str], timeframe: str = '1m', meses: int = MESES_HISTORICO) -> None:
+    tareas = [descargar_historico(s, timeframe, meses) for s in symbols]
+    await asyncio.gather(*tareas)
 
 
 class DummyCliente:
@@ -168,10 +210,14 @@ def generar_informe(bot: BacktestTrader, capital_inicial: float=CAPITAL_INICIAL
     print(f'- Ganancia total: {total_ganancia:.2f} €')
     print(f'- Rentabilidad total: {rentabilidad_total:.2f} %')
 
+async def main(symbols: Iterable[str] | None = None) -> None:
+    symbols = list(symbols or ['BTC/EUR', 'ETH/EUR', 'ADA/EUR', 'SOL/EUR', 'BNB/EUR'])
+    await descargar_historicos(symbols, meses=MESES_HISTORICO)
+    await backtest_modular(symbols)
+
 
 if __name__ == '__main__':
     import sys
     logging.disable(logging.CRITICAL)
-    symbols = sys.argv[1:] or ['BTC/EUR', 'ETH/EUR', 'ADA/EUR', 'SOL/EUR',
-        'BNB/EUR']
-    asyncio.run(backtest_modular(symbols))
+    symbols = sys.argv[1:] or ['BTC/EUR', 'ETH/EUR', 'ADA/EUR', 'SOL/EUR', 'BNB/EUR']
+    asyncio.run(main(symbols))
