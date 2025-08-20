@@ -125,10 +125,25 @@ def verificar_trailing_stop(info: dict, precio_actual: float, df: (pd.DataFrame 
         trigger_price = entrada * trailing_start_ratio
     if max_price >= trigger_price:
         if usar_atr:
-            trailing_stop = max_price - atr * atr_mult if direccion in ('long', 'compra') else max_price + atr * atr_mult
+            trailing_dist = atr * atr_mult
         else:
-            distancia_ratio = cfg['trailing_distance_ratio'] if config is None else config.get('trailing_distance_ratio', cfg['trailing_distance_ratio'])
-            trailing_stop = max_price * (1 - distancia_ratio) if direccion in ('long', 'compra') else max_price * (1 + distancia_ratio)
+            distancia_ratio = (
+                cfg['trailing_distance_ratio']
+                if config is None
+                else config.get('trailing_distance_ratio', cfg['trailing_distance_ratio'])
+            )
+            trailing_dist = max_price * distancia_ratio
+
+        ratio_fuerte = cfg.get('trailing_senal_fuerte_ratio', 0)
+        mult_fuerte = cfg.get('trailing_senal_fuerte_mult', 1.0)
+        cond_fuerte = (
+            (direccion in ('long', 'compra') and max_price >= entrada * ratio_fuerte)
+            or (direccion not in ('long', 'compra') and max_price <= entrada / ratio_fuerte if ratio_fuerte else False)
+        )
+        if ratio_fuerte and cond_fuerte:
+            trailing_dist *= mult_fuerte
+
+        trailing_stop = max_price - trailing_dist if direccion in ('long', 'compra') else max_price + trailing_dist
         if cfg['uso_trailing_technico'] and df is not None and len(df) >= 5:
             soporte = df['low'].rolling(window=5).min().iloc[-1]
             resistencia = df['high'].rolling(window=5).max().iloc[-1]

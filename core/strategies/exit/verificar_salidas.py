@@ -1,3 +1,17 @@
+"""Coordinador principal de las reglas de salida.
+
+La evaluación sigue una jerarquía estricta para garantizar compatibilidad entre
+estrategias y permitir reversión segura:
+
+1. Contexto macroeconómico crítico.
+2. Stop Loss y protecciones de emergencia.
+3. Take Profit y cierres parciales.
+4. Trailing Stop dinámico.
+5. Reversiones de tendencia.
+
+Cada etapa valida condiciones técnicas antes de ejecutar el cierre.
+"""
+
 from __future__ import annotations
 from datetime import datetime
 import asyncio

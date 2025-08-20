@@ -17,6 +17,8 @@ DEFAULT_EXIT_CFG: Dict[str, Any] = {
     'trailing_distance_ratio': 0.02,
     'trailing_por_atr': False,
     'uso_trailing_technico': False,
+    'trailing_senal_fuerte_ratio': 1.03,
+    'trailing_senal_fuerte_mult': 1.5,
     'tp_ratio': 2.5,
     'volumen_minimo_salida': 0.0,
     'max_spread_ratio': 0.003,
