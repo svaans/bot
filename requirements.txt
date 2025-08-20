@@ -62,6 +62,7 @@ cffi==1.17.1                  # Interfaz con código C (usado por cryptography)
 pycparser==2.22               # Parser de C para CFFI
 pytest==8.2.2
 pytest-asyncio==0.23.6
+hypothesis==6.99.13
 
 # ───────── COMPLEMENTOS Y DEPENDENCIAS ESPECIALES ─────────
 propcache==0.3.1              # Caché de propiedades

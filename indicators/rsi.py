@@ -1,6 +1,6 @@
 import pandas as pd
 import numpy as np
-from indicators.helpers import filtrar_cerradas, serie_cierres
+from indicators.helpers import filtrar_cerradas, serie_cierres, sanitize_series
 try:
     from numba import jit
 except Exception:
@@ -45,40 +45,71 @@ def _rsi_numba(close: np.ndarray, periodo: int) ->np.ndarray:
     return rsi
 
 
-def calcular_rsi(data, periodo: int = 14, serie_completa: bool = False) -> (float | pd.Series):
+def calcular_rsi(
+    data,
+    periodo: int = 14,
+    serie_completa: bool = False,
+    adaptativo: bool = False,
+    k: float = 1.0,
+) -> float | pd.Series | tuple:
     """Calcula el RSI usando el método de Wilder (EMA).
 
-    Acepta un ``DataFrame`` con la columna ``close`` o directamente una ``Series`` de
-    cierres. Si ``serie_completa`` es ``True`` devuelve la serie completa del RSI; en
-    caso contrario se retorna solo el último valor.
+    La serie de entrada se normaliza y se rellenan gaps para garantizar
+    determinismo. El suavizado se realiza con medias exponenciales (EMA) y,
+    opcionalmente, se calculan umbrales adaptativos ``media ± k·desviación``.
     """
     serie = serie_cierres(data)
     if serie is None or len(serie) < periodo + 1:
         return None
+    serie = sanitize_series(serie, clip_min=0.0, clip_max=1.0)
     delta = serie.diff()
     ganancia = delta.clip(lower=0)
     perdida = -delta.clip(upper=0)
-    avg_gain = ganancia.ewm(alpha=1 / periodo, adjust=False, min_periods=
-        periodo).mean()
-    avg_loss = perdida.ewm(alpha=1 / periodo, adjust=False, min_periods=periodo
-        ).mean()
-    rs = avg_gain / avg_loss
-    rsi = 100 - 100 / (1 + rs)
+    avg_gain = ganancia.ewm(alpha=1 / periodo, adjust=False, min_periods=periodo).mean()
+    avg_loss = perdida.ewm(alpha=1 / periodo, adjust=False, min_periods=periodo).mean()
+    epsilon = 1e-10
+    rs = avg_gain / (avg_loss + epsilon)
+    rsi = (100 - 100 / (1 + rs)).clip(lower=0, upper=100).fillna(50.0)
+    if adaptativo:
+        media = rsi.mean()
+        desv = rsi.std(ddof=0)
+        umbral_alto = media + k * desv
+        umbral_bajo = media - k * desv
+        if serie_completa:
+            return rsi, (umbral_bajo, umbral_alto)
+        return rsi.iloc[-1] if not rsi.empty else None, (umbral_bajo, umbral_alto)
     if serie_completa:
         return rsi
     return rsi.iloc[-1] if not rsi.empty else None
 
 
-def calcular_rsi_fast(df: pd.DataFrame, periodo: int=14, serie_completa:
-    bool=False) ->(float | pd.Series):
+def calcular_rsi_fast(
+    df: pd.DataFrame,
+    periodo: int = 14,
+    serie_completa: bool = False,
+    adaptativo: bool = False,
+    k: float = 1.0,
+) -> float | pd.Series | tuple:
     """Versión acelerada de :func:`calcular_rsi` usando numba si está disponible."""
     df = filtrar_cerradas(df)
-    if 'close' not in df or len(df) < periodo + 1:
+    if 'close' not in df:
         return None
-    close = df['close'].to_numpy(dtype=float)
+    serie = sanitize_series(df['close'], clip_min=0.0, clip_max=1.0)
+    if len(serie) < periodo + 1:
+        return None
+    close = serie.to_numpy(dtype=float)
     valores = _rsi_numba(close, periodo)
     if valores.size == 0:
         return None
+    rsi = pd.Series(np.clip(valores, 0.0, 100.0), index=serie.index).fillna(50.0)
+    if adaptativo:
+        media = rsi.mean()
+        desv = rsi.std(ddof=0)
+        umbral_alto = media + k * desv
+        umbral_bajo = media - k * desv
+        if serie_completa:
+            return rsi, (umbral_bajo, umbral_alto)
+        return float(rsi.iloc[-1]), (umbral_bajo, umbral_alto)
     if serie_completa:
-        return pd.Series(valores, index=df.index)
-    return float(valores[-1])
+        return rsi
+    return float(rsi.iloc[-1])

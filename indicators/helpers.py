@@ -22,6 +22,44 @@ def serie_cierres(data) -> pd.Series:
     return data
 
 
+def sanitize_series(
+    serie: pd.Series,
+    *,
+    sort: bool = True,
+    fill_method: str = 'ffill',
+    clip_min: float | None = None,
+    clip_max: float | None = None,
+    normalize: bool = True,
+) -> pd.Series:
+    """Normaliza y limpia una serie numérica para garantizar determinismo.
+
+    - Convierte a ``float`` y opcionalmente ordena por índice para evitar
+      efectos de reordenamiento.
+    - Rellena huecos según ``fill_method`` (``ffill`` por defecto) para manejar
+      gaps de datos.
+    - Si ``normalize`` es ``True`` aplica una normalización min-max.
+    - Opcionalmente clipea los valores entre ``clip_min`` y ``clip_max``.
+    """
+    serie = serie.astype(float)
+    if sort:
+        serie = serie.sort_index()
+    if fill_method == 'ffill':
+        serie = serie.ffill().bfill()
+    elif fill_method == 'interpolate':
+        serie = serie.interpolate().ffill().bfill()
+    if normalize and not serie.empty:
+        minimo = serie.min()
+        maximo = serie.max()
+        rango = maximo - minimo
+        if rango != 0:
+            serie = (serie - minimo) / rango
+        else:
+            serie = serie - minimo
+    if clip_min is not None or clip_max is not None:
+        serie = serie.clip(lower=clip_min, upper=clip_max)
+    return serie
+
+
 def _cached_value(df: pd.DataFrame, key: tuple, compute):
     cache = df.attrs.setdefault('_indicators_cache', {})
     if key not in cache:
