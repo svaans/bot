@@ -6,7 +6,7 @@ import threading
 import json
 import pandas as pd
 import psutil
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 from .logger import configurar_logger
 from core.modo import MODO_REAL
@@ -44,6 +44,17 @@ def intervalo_a_segundos(intervalo: str) -> int:
     """
     log.info('➡️ Entrando en intervalo_a_segundos()')
     return _MAPA_SEGUNDOS_INTERVALO.get(intervalo, 60)
+
+
+def timestamp_alineado(ts_ms: int, intervalo: str) -> bool:
+    """Verifica que ``ts_ms`` esté alineado al inicio del intervalo.
+
+    El timestamp debe venir en milisegundos y corresponder exactamente al
+    comienzo del bloque temporal definido por ``intervalo``.
+    """
+    log.info('➡️ Entrando en timestamp_alineado()')
+    periodo = intervalo_a_segundos(intervalo) * 1000
+    return ts_ms % periodo == 0
 
 
 log = configurar_logger('trader' if MODO_REAL else 'trader_simulado')
@@ -202,16 +213,17 @@ def segundos_transcurridos(timestamp_iso):
     """Devuelve los segundos transcurridos desde un timestamp ISO o epoch."""
     try:
         if isinstance(timestamp_iso, (int, float)):
-            ts = (timestamp_iso / 1000 if timestamp_iso > 1000000000000.0 else
-                timestamp_iso)
-            inicio = datetime.utcfromtimestamp(ts)
+            ts = (timestamp_iso / 1000 if timestamp_iso > 1000000000000.0 else timestamp_iso)
+            inicio = datetime.fromtimestamp(ts, tz=timezone.utc)
         elif isinstance(timestamp_iso, str) and timestamp_iso.isdigit():
             ts = int(timestamp_iso)
             ts = ts / 1000 if ts > 1000000000000.0 else ts
-            inicio = datetime.utcfromtimestamp(ts)
+            inicio = datetime.fromtimestamp(ts, tz=timezone.utc)
         else:
             inicio = datetime.fromisoformat(str(timestamp_iso))
-        ahora = datetime.utcnow()
+            if inicio.tzinfo is None:
+                inicio = inicio.replace(tzinfo=timezone.utc)
+        ahora = datetime.now(timezone.utc)
         return (ahora - inicio).total_seconds()
     except (ValueError, TypeError) as e:
         log.warning(f'⚠️ Error calculando segundos desde {timestamp_iso}: {e}')
