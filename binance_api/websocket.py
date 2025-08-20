@@ -35,7 +35,8 @@ MAX_BACKOFF = 60
 MAX_BACKFILL_CANDLES = 100  # límite para backfill para evitar saturación
 BACKFILL_CONCURRENCY = 3
 _backfill_semaphore = asyncio.Semaphore(BACKFILL_CONCURRENCY)
-
+MESSAGE_QUEUE_SIZE = 100
+CALLBACK_TIMEOUT = 5
 
 def _registrar_reconexion() -> None:
     """Registra un intento de reconexión y alerta si la tasa es elevada."""
@@ -100,6 +101,69 @@ async def _rellenar_gaps(
     return ultimo_ts
 
 
+
+async def _procesar_cola(
+    queue: asyncio.Queue,
+    handlers: dict,
+    last_message: dict[str, float],
+    handlers_by_norm: dict[str, str],
+    callback_timeout: int = CALLBACK_TIMEOUT,
+):
+    while True:
+        raw = await queue.get()
+        try:
+            data = json.loads(raw)
+        except json.JSONDecodeError:
+            log.warning(f'Mensaje JSON inválido: {raw}')
+            queue.task_done()
+            continue
+
+        if 'stream' in data:
+            stream = data['stream']
+            norm = stream.split('@')[0]
+            symbol = handlers_by_norm.get(norm)
+            if not symbol:
+                queue.task_done()
+                continue
+            payload = data.get('data', {})
+        else:
+            symbol = next(iter(handlers))
+            payload = data
+
+        h = handlers[symbol]
+        try:
+            vela = h['parser'](payload)
+        except Exception as e:
+            log.warning(f'❌ Error parseando mensaje: {e}')
+            queue.task_done()
+            continue
+
+        if not vela:
+            queue.task_done()
+            continue
+
+        h['ultimo_timestamp'] = await _rellenar_gaps(
+            h['callback'],
+            symbol,
+            h.get('ultimo_timestamp'),
+            h.get('ultimo_cierre'),
+            vela['timestamp'],
+            h['intervalo_ms'],
+        )
+        try:
+            await asyncio.wait_for(h['callback'](vela), timeout=callback_timeout)
+        except Exception as e:
+            log.warning(f'❌ Callback falló: {e}')
+            queue.task_done()
+            continue
+        h['ultimo_timestamp'] = vela['timestamp']
+        h['ultimo_cierre'] = vela['close']
+        last_message[symbol] = time.monotonic()
+        tick('data_feed')
+        queue.task_done()
+
+
+
 async def _gestionar_ws(
     url: str,
     handlers: dict,
@@ -156,6 +220,10 @@ async def _gestionar_ws(
             )
 
             handlers_by_norm = {normalizar_symbolo(s): s for s in handlers}
+            message_queue: asyncio.Queue = asyncio.Queue(maxsize=MESSAGE_QUEUE_SIZE)
+            consumer = asyncio.create_task(
+                _procesar_cola(message_queue, handlers, last_message, handlers_by_norm)
+            )
 
             backfill_tasks = []
             if cliente:
@@ -227,7 +295,12 @@ async def _gestionar_ws(
                             msg = await asyncio.wait_for(ws.recv(), timeout=mensaje_timeout)
                         else:
                             msg = await ws.recv()
-                        data = json.loads(msg)
+                        try:
+                            message_queue.put_nowait(msg)
+                        except asyncio.QueueFull:
+                            log.warning('📦 Cola de mensajes llena, descartando mensaje')
+                            tick('data_feed')
+                        continue
                     except asyncio.TimeoutError:
                         log.warning(
                             f'⏰ Sin datos en {mensaje_timeout}s, forzando reconexión'
@@ -245,35 +318,7 @@ async def _gestionar_ws(
                         await ws.close()
                         break
 
-                    if 'stream' in data:
-                        stream = data['stream']
-                        norm = stream.split('@')[0]
-                        symbol = handlers_by_norm.get(norm)
-                        if not symbol:
-                            continue
-                        payload = data.get('data', {})
-                    else:
-                        symbol = next(iter(handlers))
-                        payload = data
-
-                    h = handlers[symbol]
-                    vela = h['parser'](payload)
-                    if not vela:
-                        continue
-
-                    h['ultimo_timestamp'] = await _rellenar_gaps(
-                        h['callback'],
-                        symbol,
-                        h.get('ultimo_timestamp'),
-                        h.get('ultimo_cierre'),
-                        vela['timestamp'],
-                        h['intervalo_ms'],
-                    )
-                    await h['callback'](vela)
-                    h['ultimo_timestamp'] = vela['timestamp']
-                    h['ultimo_cierre'] = vela['close']
-                    last_message[symbol] = time.monotonic()
-                    tick('data_feed')
+                    pass
             finally:
                 log.info(
                     f"🔻 WebSocket desconectado de {url} a las {datetime.now(UTC).isoformat()}"
@@ -284,9 +329,9 @@ async def _gestionar_ws(
                     except Exception as e:
                         log.debug(f'Error en backfill: {e}')
                         tick('data_feed')
-                for t in watchdogs + [keeper]:
+                for t in watchdogs + [keeper, consumer]:
                     t.cancel()
-                for t in watchdogs + [keeper]:
+                for t in watchdogs + [keeper, consumer]:
                     try:
                         await t
                     except InactividadTimeoutError:
@@ -315,7 +360,7 @@ async def _gestionar_ws(
             )
             _registrar_reconexion()
             tick('data_feed')
-            await asyncio.sleep(backoff)
+            await asyncio.sleep(backoff + random.random())
             previo = backoff
             backoff = min(MAX_BACKOFF, backoff * 2)
             if backoff == MAX_BACKOFF and previo < MAX_BACKOFF:
