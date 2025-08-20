@@ -30,6 +30,9 @@ class OrderManager:
         self.historial: Dict[str, list] = {}
         self.bus = bus
         self.max_historial = max_historial
+        self.abriendo: set[str] = set()
+        self._sync_task: asyncio.Task | None = None
+        self._sync_interval = 300
         if bus:
             self.subscribe(bus)
 
@@ -69,6 +72,8 @@ class OrderManager:
         bus.subscribe('cerrar_orden', self._on_cerrar)
         bus.subscribe('cerrar_parcial', self._on_cerrar_parcial)
         bus.subscribe('agregar_parcial', self._on_agregar_parcial)
+        if self.modo_real:
+            self.start_sync()
 
     async def _on_abrir(self, data: dict) -> None:
         fut = data.pop('future', None)
@@ -94,6 +99,38 @@ class OrderManager:
         if fut:
             fut.set_result(result)
 
+    def start_sync(self, intervalo: int | None = None) -> None:
+        if intervalo:
+            self._sync_interval = intervalo
+        if self._sync_task is not None:
+            return
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        if loop.is_running():
+            self._sync_task = loop.create_task(self._sync_loop())
+
+    async def _sync_loop(self) -> None:
+        while True:
+            await asyncio.sleep(self._sync_interval)
+            try:
+                ordenes_binance = await asyncio.to_thread(real_orders.sincronizar_ordenes_binance)
+            except Exception as e:
+                log.error(f'❌ Error sincronizando órdenes: {e}')
+                continue
+            for sym, ord_ in ordenes_binance.items():
+                if sym not in self.ordenes:
+                    self.ordenes[sym] = ord_
+                    if self.bus:
+                        await self.bus.publish(
+                            'notify',
+                            {
+                                'mensaje': f'🔄 Orden sincronizada desde Binance: {sym}',
+                                'tipo': 'WARNING',
+                            },
+                        )
+
     async def abrir_async(self, symbol: str, precio: float, sl: float, tp:
         float, estrategias: Dict, tendencia: str, direccion: str='long',
         cantidad: float=0.0, puntaje: float=0.0, umbral: float=0.0,
@@ -101,17 +138,55 @@ class OrderManager:
         (dict | None)=None) ->None:
         log.info('➡️ Entrando en abrir_async()')
         """Registra una nueva orden en memoria y/o en Binance."""
+        if symbol in self.abriendo or symbol in self.ordenes:
+            log.warning(f'⚠️ Orden duplicada evitada para {symbol}')
+            return
+        if self.modo_real:
+            try:
+                ordenes_api = await asyncio.to_thread(
+                    real_orders.sincronizar_ordenes_binance, [symbol]
+                )
+            except Exception as e:
+                log.error(f'❌ Error verificando órdenes abiertas: {e}')
+                ordenes_api = {}
+            if symbol in ordenes_api:
+                self.ordenes[symbol] = ordenes_api[symbol]
+                log.warning(f'⚠️ Orden existente en Binance para {symbol}')
+                if self.bus:
+                    await self.bus.publish(
+                        'notify',
+                        {
+                            'mensaje': f'⚠️ Orden ya abierta en Binance para {symbol}',
+                            'tipo': 'WARNING',
+                        },
+                    )
+                return
+        self.abriendo.add(symbol)
         objetivo = objetivo if objetivo is not None else cantidad
-        orden = Order(symbol=symbol, precio_entrada=precio, cantidad=
-            objetivo, cantidad_abierta=cantidad, stop_loss=sl, take_profit=
-            tp, estrategias_activas=estrategias, tendencia=tendencia,
-            timestamp=datetime.utcnow().isoformat(), max_price=precio,
-            direccion=direccion, entradas=[{'precio': precio, 'cantidad':
-            cantidad}], fracciones_totales=fracciones, fracciones_restantes
-            =max(fracciones - 1, 0), precio_ultima_piramide=precio,
-            puntaje_entrada=puntaje, umbral_entrada=umbral,
-            detalles_tecnicos=detalles_tecnicos, break_even_activado=False,
-            duracion_en_velas=0)
+        orden = Order(
+            symbol=symbol,
+            precio_entrada=precio,
+            cantidad=objetivo,
+            cantidad_abierta=cantidad,
+            stop_loss=sl,
+            take_profit=tp,
+            estrategias_activas=estrategias,
+            tendencia=tendencia,
+            timestamp=datetime.utcnow().isoformat(),
+            max_price=precio,
+            direccion=direccion,
+            entradas=[{'precio': precio, 'cantidad': cantidad}],
+            fracciones_totales=fracciones,
+            fracciones_restantes=max(fracciones - 1, 0),
+            precio_ultima_piramide=precio,
+            puntaje_entrada=puntaje,
+            umbral_entrada=umbral,
+            detalles_tecnicos=detalles_tecnicos,
+            break_even_activado=False,
+            duracion_en_velas=0,
+            registro_pendiente=True,
+        )
+        self.ordenes[symbol] = orden
         try:
             if self.modo_real and is_valid_number(cantidad) and cantidad > 0:
                 ejecutado, fee, pnl = await self._ejecutar_market_retry('buy', symbol, cantidad)
@@ -139,17 +214,38 @@ class OrderManager:
                 # modo simulado: registramos el costo inicial
                 orden.pnl_operaciones = -precio * cantidad
             if cantidad > 0:
-                await asyncio.to_thread(
-                    real_orders.registrar_orden,
-                    symbol,
-                    precio,
-                    cantidad,
-                    sl,
-                    tp,
-                    estrategias,
-                    tendencia,
-                    direccion,
-                )
+                registrado = False
+                for intento in range(3):
+                    try:
+                        await asyncio.to_thread(
+                            real_orders.registrar_orden,
+                            symbol,
+                            precio,
+                            cantidad,
+                            sl,
+                            tp,
+                            estrategias,
+                            tendencia,
+                            direccion,
+                        )
+                        registrado = True
+                        break
+                    except Exception as e:
+                        log.error(f'❌ Error registrando orden {symbol}: {e}')
+                        if self.bus:
+                            await self.bus.publish(
+                                'notify',
+                                {
+                                    'mensaje': f'❌ Error registrando orden {symbol}: {e}',
+                                    'tipo': 'CRITICAL',
+                                },
+                            )
+                        await asyncio.sleep(1)
+                if registrado:
+                    orden.registro_pendiente = False
+                else:
+                    registrar_orden('failed')
+                    return
             if self.modo_real:
                 orden.cantidad_abierta = cantidad
                 orden.entradas[0]['cantidad'] = cantidad
@@ -163,14 +259,19 @@ class OrderManager:
                         'tipo': 'CRITICAL',
                     },
                 )
+            self.ordenes.pop(symbol, None)
             registrar_orden('failed')
             return
-        self.ordenes[symbol] = orden
+        finally:
+            self.abriendo.discard(symbol)
         registrar_orden('opened')
+        orden.registro_pendiente = False
         log.info(f'🟢 Orden abierta para {symbol} @ {precio:.2f}')
         if self.bus:
             estrategias_txt = ', '.join(estrategias.keys())
-            mensaje = f"""🟢 Compra {symbol}\nPrecio: {precio:.2f} Cantidad: {cantidad}\nSL: {sl:.2f} TP: {tp:.2f}\nEstrategias: {estrategias_txt}"""
+            mensaje = (
+                f"""🟢 Compra {symbol}\nPrecio: {precio:.2f} Cantidad: {cantidad}\nSL: {sl:.2f} TP: {tp:.2f}\nEstrategias: {estrategias_txt}"""
+            )
             await self.bus.publish('notify', {'mensaje': mensaje})
 
     async def agregar_parcial_async(self, symbol: str, precio: float,

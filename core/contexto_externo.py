@@ -15,7 +15,7 @@ UTC = timezone.utc
 
 log = configurar_logger('contexto_externo')
 _PUNTAJES: Dict[str, float] = {}
-CONTEXT_WS_URL = 'wss://stream.binance.com:9443/ws/{symbol}@kline_1m'
+CONTEXT_WS_URL = 'wss://stream.binance.com:9443/ws/{symbol}@kline_5m'
 
 
 def obtener_puntaje_contexto(symbol: str) ->float:

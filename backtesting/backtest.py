@@ -15,7 +15,7 @@ CAPITAL_INICIAL = 300.0
 MESES_HISTORICO = 6
 
 
-async def descargar_historico(symbol: str, timeframe: str = '1m', meses: int = MESES_HISTORICO) -> str:
+async def descargar_historico(symbol: str, timeframe: str = '5m', meses: int = MESES_HISTORICO) -> str:
     exchange = ccxt.binance()
     await exchange.load_markets()
     tf_minutos = int(timeframe[:-1]) if timeframe.endswith('m') else 1
@@ -50,7 +50,7 @@ async def descargar_historico(symbol: str, timeframe: str = '1m', meses: int = M
     return archivo
 
 
-async def descargar_historicos(symbols: Iterable[str], timeframe: str = '1m', meses: int = MESES_HISTORICO) -> None:
+async def descargar_historicos(symbols: Iterable[str], timeframe: str = '5m', meses: int = MESES_HISTORICO) -> None:
     tareas = [descargar_historico(s, timeframe, meses) for s in symbols]
     await asyncio.gather(*tareas)
 
@@ -111,7 +111,7 @@ async def backtest_modular(
     symbols = list(symbols)
     datos: Dict[str, pd.DataFrame] = {}
     for s in symbols:
-        archivo = f"{ruta_datos}/{s.replace('/', '_').lower()}_1m.parquet"
+        archivo = f"{ruta_datos}/{s.replace('/', '_').lower()}_5m.parquet"
         if not os.path.isfile(archivo):
             print(f'⚠️ Datos no encontrados para {s}. Se omite.')
             continue
@@ -126,7 +126,7 @@ async def backtest_modular(
             'No se encontraron datos de históricos para los símbolos especificados'
             )
     config = Config(api_key='', api_secret='', modo_real=False,
-        intervalo_velas='1m', symbols=list(datos.keys()),
+        intervalo_velas='5m', symbols=list(datos.keys()),
         umbral_riesgo_diario=0.03, min_order_eur=10.0, persistencia_minima=1)
     bot = BacktestTrader(config)
     await bot._precargar_historico(velas=BUFFER_INICIAL)

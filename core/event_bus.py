@@ -2,6 +2,9 @@ from __future__ import annotations
 import asyncio
 from collections import defaultdict
 from typing import Any, Awaitable, Callable, Dict, List
+from core.utils.logger import configurar_logger
+
+log = configurar_logger('event_bus', modo_silencioso=True)
 
 
 class EventBus:
@@ -45,9 +48,15 @@ class EventBus:
             event_type, data = await self._queue.get()
             for cb in list(self._listeners.get(event_type, [])):
                 try:
-                    asyncio.create_task(cb(data))
-                except Exception:
-                    pass
+                    task = asyncio.create_task(cb(data))
+                    task.add_done_callback(
+                        lambda t, evt=event_type: t.exception()
+                        and log.error(
+                            f"❌ Error en callback de '{evt}': {t.exception()}"
+                        )
+                    )
+                except Exception as e:
+                    log.error(f"❌ Error despachando '{event_type}': {e}")
 
     async def close(self) -> None:
         self._closed = True

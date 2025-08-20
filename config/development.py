@@ -6,7 +6,7 @@ from typing import List
 class DevelopmentConfig:
     """Valores por defecto para el entorno de desarrollo."""
     modo_real: bool = False
-    intervalo_velas: str = '1m'
+    intervalo_velas: str = '5m'
     symbols: List[str] = field(default_factory=lambda : ['BTC/EUR',
         'ETH/EUR', 'ADA/EUR', 'SOL/EUR', 'BNB/EUR'])
     umbral_riesgo_diario: float = 0.03

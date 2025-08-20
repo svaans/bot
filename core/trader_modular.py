@@ -971,7 +971,8 @@ class Trader:
         df = self.historicos.get(symbol)
         if df is None:
             archivo = os.path.join(
-                DATOS_DIR, f"{symbol.replace('/', '_').lower()}_1m.parquet"
+                DATOS_DIR,
+                f"{symbol.replace('/', '_').lower()}_{self.config.intervalo_velas}.parquet",
             )
             try:
                 df = pd.read_parquet(archivo)
