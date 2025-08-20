@@ -109,7 +109,7 @@ class StrategyEngine:
             contradiccion = contradiccion or rsi_contra
             if contradiccion:
                 log.warning(f"[{symbol}] Señales BUY y SELL simultáneas detectadas")
-            score_tec = calcular_score_tecnico(
+            score_tec, _ = calcular_score_tecnico(
                 df,
                 rsi_val,
                 mom_val,

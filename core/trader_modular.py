@@ -65,7 +65,7 @@ from core.procesar_vela import (
     MAX_ESTRATEGIAS_BUFFER,
 )
 from indicators.rsi import calcular_rsi
-from core.scoring import calcular_score_tecnico, PESOS_SCORE_TECNICO
+from core.scoring import calcular_score_tecnico, PESOS_SCORE_TECNICO, ScoreBreakdown
 from binance_api.cliente import fetch_ticker_async
 log = configurar_logger('trader')
 LOG_DIR = os.getenv('LOG_DIR', 'logs')
@@ -1350,45 +1350,29 @@ class Trader:
             return False
         return True
 
-    def _calcular_score_tecnico(self, df: pd.DataFrame, rsi: (float | None),
-        momentum: (float | None), tendencia: str, direccion: str) ->tuple[
-        float, dict]:
+    def _calcular_score_tecnico(
+        self,
+        df: pd.DataFrame,
+        rsi: float | None,
+        momentum: float | None,
+        tendencia: str,
+        direccion: str,
+    ) -> tuple[float, ScoreBreakdown]:
         log.debug('➡️ Entrando en _calcular_score_tecnico()')
         """Calcula un puntaje técnico simple a partir de varios indicadores."""
         slope = get_slope(df)
-        score_indicadores = calcular_score_tecnico(df, rsi, momentum, slope,
-            tendencia, direccion)
-        resultados = {'RSI': False, 'Momentum': False, 'Slope': False,
-            'Tendencia': False}
-        if rsi is not None:
-            if direccion == 'long':
-                resultados['RSI'] = rsi > 50 or 45 <= rsi <= 55
-            else:
-                resultados['RSI'] = rsi < 50 or 45 <= rsi <= 55
-        if momentum is not None:
-            if direccion == 'long':
-                resultados['Momentum'] = momentum > 0.001
-            else:
-                resultados['Momentum'] = momentum < -0.001
-        if slope is not None:
-            if direccion == 'long':
-                resultados['Slope'] = slope > 0
-            else:
-                resultados['Slope'] = slope < 0
-        if direccion == 'long':
-            resultados['Tendencia'] = tendencia in {'alcista', 'lateral'}
-        else:
-            resultados['Tendencia'] = tendencia in {'bajista', 'lateral'}
-        score_total = score_indicadores
-        if resultados['Tendencia']:
-            score_total += PESOS_SCORE_TECNICO.get('Tendencia', 1.0)
+        score_total, breakdown = calcular_score_tecnico(
+            df, rsi, momentum, slope, tendencia, direccion
+        )
         log.info(
-            '📊 Score técnico: %.2f | RSI: %s (%.2f), Momentum: %s (%.4f), Slope: %s (%.4f), Tendencia: %s'
-            , score_total, '✅' if resultados['RSI'] else '❌', rsi if rsi is not
-            None else 0.0, '✅' if resultados['Momentum'] else '❌', momentum if
-            momentum is not None else 0.0, '✅' if resultados['Slope'] else
-            '❌', slope, '✅' if resultados['Tendencia'] else '❌')
-        return float(score_total), resultados
+            '📊 Score técnico: %.2f | RSI: %.2f, Momentum: %.4f, Slope: %.4f, Tendencia: %.2f',
+            score_total,
+            breakdown.rsi,
+            breakdown.momentum,
+            breakdown.slope,
+            breakdown.tendencia,
+        )
+        return float(score_total), breakdown
 
     def _hay_contradicciones(self, df: pd.DataFrame, rsi: (float | None),
         momentum: (float | None), direccion: str, score: float) ->bool:

@@ -2,6 +2,8 @@ import pandas as pd
 from indicators.momentum import calcular_momentum
 from indicators.atr import calcular_atr
 from indicators.slope import calcular_slope
+from indicators.volumen import calcular_volumen_normalizado
+from indicators.volatilidad import calcular_volatilidad_normalizada
 
 
 def filtrar_cerradas(df: pd.DataFrame) -> pd.DataFrame:
@@ -96,3 +98,17 @@ def get_slope(df: pd.DataFrame, periodo: int = 5):
     """Obtiene la pendiente (slope) con cache simple."""
     key = ('slope', periodo)
     return _cached_value(df, key, lambda d: calcular_slope(d, periodo))
+
+
+def get_volumen_norm(df: pd.DataFrame, ventana: int = 20):
+    """Obtiene el volumen normalizado con cache simple."""
+    key = ('volumen_norm', ventana)
+    return _cached_value(df, key, lambda d: calcular_volumen_normalizado(d, ventana))
+
+
+def get_volatility_norm(df: pd.DataFrame, ventana: int = 14):
+    """Obtiene la volatilidad normalizada con cache simple."""
+    key = ('volatility_norm', ventana)
+    return _cached_value(
+        df, key, lambda d: calcular_volatilidad_normalizada(d, ventana)
+    )

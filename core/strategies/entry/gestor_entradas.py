@@ -137,7 +137,8 @@ def entrada_permitida(symbol: str, potencia: float, umbral: float,
     """Versión simplificada usada en las pruebas unitarias."""
     score_tecnico = score if score is not None else calcular_score_tecnico(
         df if df is not None else pd.DataFrame(), rsi, momentum, slope,
-        tendencia or 'lateral', direccion)
+        tendencia or 'lateral', direccion
+    )[0]
     assert 0.0 <= sinergia <= 1.0, 'sinergia fuera de rango'
     potencia_ajustada = potencia * (1 + score_tecnico / 3)
     if not _validar_correlacion(symbol, df, df_referencia, umbral_correlacion):

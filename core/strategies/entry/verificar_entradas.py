@@ -16,6 +16,7 @@ from indicators.helpers import get_rsi, get_momentum, get_atr
 from core.utils.utils import distancia_minima_valida, verificar_integridad_datos
 from core.contexto_externo import obtener_puntaje_contexto
 from core.metricas_semanales import metricas_tracker
+from core.scoring import DecisionTrace, DecisionReason
 log = configurar_logger('verificar_entrada')
 UTC = timezone.utc
 
@@ -132,8 +133,9 @@ async def verificar_entrada(trader, symbol: str, df: pd.DataFrame, estado) ->(
     elif isinstance(momentum, pd.Series):
         momentum = momentum.iloc[-1]
     if trader.usar_score_tecnico:
-        score_tecnico, puntos_tecnicos = trader._calcular_score_tecnico(df, rsi,
-            momentum, tendencia, direccion)
+        score_tecnico, puntos_tecnicos = trader._calcular_score_tecnico(
+            df, rsi, momentum, tendencia, direccion
+        )
     else:
         score_tecnico = None
         puntos_tecnicos = None
@@ -171,8 +173,8 @@ async def verificar_entrada(trader, symbol: str, df: pd.DataFrame, estado) ->(
             return None
     if trader.usar_score_tecnico:
         log.debug(
-            f'[{symbol}] Score técnico {score_tecnico:.2f} componentes: {puntos_tecnicos}'
-            )
+            f'[{symbol}] Score técnico {score_tecnico:.2f} componentes: {puntos_tecnicos.to_dict()}'
+        )
     else:
         score_tecnico = None
     precio = float(df['close'].iloc[-1])
@@ -225,9 +227,10 @@ async def verificar_entrada(trader, symbol: str, df: pd.DataFrame, estado) ->(
         vol, estrategias_persistentes)
     umbral_normalizado = umbral_tecnico / score_max if score_max else umbral_tecnico
     if score_normalizado < umbral_normalizado:
-        log.info(
-            f'[{symbol}] Score técnico {score_normalizado:.2f} < umbral {umbral_normalizado:.2f}'
-            )
+        trace = DecisionTrace(
+            score_normalizado, umbral_normalizado, DecisionReason.BELOW_THRESHOLD, puntos_tecnicos
+        )
+        log.info(f'[{symbol}] Trace: {trace.to_json()}')
         metricas_tracker.registrar_filtro('score_tecnico')
         return None
     abiertas = [s for s, o in trader.orders.ordenes.items() if o.cantidad_abierta > 0 and s != symbol]

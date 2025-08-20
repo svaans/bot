@@ -2,7 +2,7 @@
 from __future__ import annotations
 from typing import Optional
 import pandas as pd
-from .scoring import TechnicalScorer
+from .scoring import TechnicalScorer, ScoreBreakdown
 
 
 def calcular_score_tecnico(
@@ -12,6 +12,6 @@ def calcular_score_tecnico(
     slope: Optional[float],
     tendencia: str,
     direccion: str = "long",
-) -> float:
+) -> tuple[float, ScoreBreakdown]:
     """Delegado de compatibilidad que utiliza :class:`TechnicalScorer`."""
     return TechnicalScorer.calcular(df, rsi, momentum, slope, tendencia, direccion)
