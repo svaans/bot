@@ -130,6 +130,39 @@ class OrderManager:
                                 'tipo': 'WARNING',
                             },
                         )
+            for sym, ord_ in list(self.ordenes.items()):
+                if getattr(ord_, 'registro_pendiente', False):
+                    try:
+                        await asyncio.to_thread(
+                            real_orders.registrar_orden,
+                            sym,
+                            ord_.precio_entrada,
+                            ord_.cantidad_abierta or ord_.cantidad,
+                            ord_.stop_loss,
+                            ord_.take_profit,
+                            ord_.estrategias_activas,
+                            ord_.tendencia,
+                            ord_.direccion,
+                        )
+                        ord_.registro_pendiente = False
+                        registrar_orden('opened')
+                        log.info(f'🟢 Orden registrada tras reintento para {sym}')
+                        if self.bus:
+                            estrategias_txt = ', '.join(ord_.estrategias_activas.keys())
+                            mensaje = (
+                                f"""🟢 Compra {sym}\nPrecio: {ord_.precio_entrada:.2f} Cantidad: {ord_.cantidad_abierta or ord_.cantidad}\nSL: {ord_.stop_loss:.2f} TP: {ord_.take_profit:.2f}\nEstrategias: {estrategias_txt}"""
+                            )
+                            await self.bus.publish('notify', {'mensaje': mensaje})
+                    except Exception as e:
+                        log.error(f'❌ Error registrando orden pendiente {sym}: {e}')
+                        if self.bus:
+                            await self.bus.publish(
+                                'notify',
+                                {
+                                    'mensaje': f'❌ Error registrando orden pendiente {sym}: {e}',
+                                    'tipo': 'CRITICAL',
+                                },
+                            )
 
     async def abrir_async(self, symbol: str, precio: float, sl: float, tp:
         float, estrategias: Dict, tendencia: str, direccion: str='long',
@@ -187,6 +220,12 @@ class OrderManager:
             registro_pendiente=True,
         )
         self.ordenes[symbol] = orden
+        if self.bus:
+            estrategias_txt = ', '.join(estrategias.keys())
+            msg_pendiente = (
+                f"""📝 Compra creada (pendiente de registro) {symbol}\nPrecio: {precio:.2f} Cantidad: {cantidad}\nSL: {sl:.2f} TP: {tp:.2f}\nEstrategias: {estrategias_txt}"""
+            )
+            await self.bus.publish('notify', {'mensaje': msg_pendiente})
         try:
             if self.modo_real and is_valid_number(cantidad) and cantidad > 0:
                 ejecutado, fee, pnl = await self._ejecutar_market_retry('buy', symbol, cantidad)
@@ -245,7 +284,14 @@ class OrderManager:
                     orden.registro_pendiente = False
                 else:
                     registrar_orden('failed')
-                    return
+                    if self.bus:
+                        await self.bus.publish(
+                            'notify',
+                            {
+                                'mensaje': f'⚠️ Orden {symbol} ejecutada pero registro pendiente',
+                                'tipo': 'WARNING',
+                            },
+                        )
             if self.modo_real:
                 orden.cantidad_abierta = cantidad
                 orden.entradas[0]['cantidad'] = cantidad
@@ -264,8 +310,10 @@ class OrderManager:
             return
         finally:
             self.abriendo.discard(symbol)
+        if orden.registro_pendiente:
+            log.warning(f'⚠️ Orden {symbol} pendiente de registro')
+            return
         registrar_orden('opened')
-        orden.registro_pendiente = False
         log.info(f'🟢 Orden abierta para {symbol} @ {precio:.2f}')
         if self.bus:
             estrategias_txt = ', '.join(estrategias.keys())
