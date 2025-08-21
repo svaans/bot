@@ -116,60 +116,66 @@ class OrderManager:
         except RuntimeError:
             return
         if loop.is_running():
+            loop.create_task(self._sync_once())
             self._sync_task = loop.create_task(self._sync_loop())
 
-    async def _sync_loop(self) -> None:
-        while True:
-            await asyncio.sleep(self._sync_interval)
-            try:
-                ordenes_binance = await asyncio.to_thread(real_orders.sincronizar_ordenes_binance)
-            except Exception as e:
-                log.error(f'❌ Error sincronizando órdenes: {e}')
-                continue
-            for sym, ord_ in ordenes_binance.items():
-                if sym not in self.ordenes:
-                    self.ordenes[sym] = ord_
+    async def _sync_once(self) -> None:
+        try:
+            ordenes_binance = await asyncio.to_thread(
+                real_orders.sincronizar_ordenes_binance
+            )
+        except Exception as e:
+            log.error(f'❌ Error sincronizando órdenes: {e}')
+            return
+        for sym, ord_ in ordenes_binance.items():
+            if sym not in self.ordenes:
+                self.ordenes[sym] = ord_
+                if self.bus:
+                    await self.bus.publish(
+                        'notify',
+                        {
+                            'mensaje': f'🔄 Orden sincronizada desde Binance: {sym}',
+                            'tipo': 'WARNING',
+                        },
+                    )
+        for sym, ord_ in list(self.ordenes.items()):
+            if getattr(ord_, 'registro_pendiente', False):
+                try:
+                    await asyncio.to_thread(
+                        real_orders.registrar_orden,
+                        sym,
+                        ord_.precio_entrada,
+                        ord_.cantidad_abierta or ord_.cantidad,
+                        ord_.stop_loss,
+                        ord_.take_profit,
+                        ord_.estrategias_activas,
+                        ord_.tendencia,
+                        ord_.direccion,
+                    )
+                    ord_.registro_pendiente = False
+                    registrar_orden('opened')
+                    log.info(f'🟢 Orden registrada tras reintento para {sym}')
+                    if self.bus:
+                        estrategias_txt = ', '.join(ord_.estrategias_activas.keys())
+                        mensaje = (
+                            f"""🟢 Compra {sym}\nPrecio: {ord_.precio_entrada:.2f} Cantidad: {ord_.cantidad_abierta or ord_.cantidad}\nSL: {ord_.stop_loss:.2f} TP: {ord_.take_profit:.2f}\nEstrategias: {estrategias_txt}"""
+                        )
+                        await self.bus.publish('notify', {'mensaje': mensaje})
+                except Exception as e:
+                    log.error(f'❌ Error registrando orden pendiente {sym}: {e}')
                     if self.bus:
                         await self.bus.publish(
                             'notify',
                             {
-                                'mensaje': f'🔄 Orden sincronizada desde Binance: {sym}',
-                                'tipo': 'WARNING',
+                                'mensaje': f'❌ Error registrando orden pendiente {sym}: {e}',
+                                'tipo': 'CRITICAL',
                             },
                         )
-            for sym, ord_ in list(self.ordenes.items()):
-                if getattr(ord_, 'registro_pendiente', False):
-                    try:
-                        await asyncio.to_thread(
-                            real_orders.registrar_orden,
-                            sym,
-                            ord_.precio_entrada,
-                            ord_.cantidad_abierta or ord_.cantidad,
-                            ord_.stop_loss,
-                            ord_.take_profit,
-                            ord_.estrategias_activas,
-                            ord_.tendencia,
-                            ord_.direccion,
-                        )
-                        ord_.registro_pendiente = False
-                        registrar_orden('opened')
-                        log.info(f'🟢 Orden registrada tras reintento para {sym}')
-                        if self.bus:
-                            estrategias_txt = ', '.join(ord_.estrategias_activas.keys())
-                            mensaje = (
-                                f"""🟢 Compra {sym}\nPrecio: {ord_.precio_entrada:.2f} Cantidad: {ord_.cantidad_abierta or ord_.cantidad}\nSL: {ord_.stop_loss:.2f} TP: {ord_.take_profit:.2f}\nEstrategias: {estrategias_txt}"""
-                            )
-                            await self.bus.publish('notify', {'mensaje': mensaje})
-                    except Exception as e:
-                        log.error(f'❌ Error registrando orden pendiente {sym}: {e}')
-                        if self.bus:
-                            await self.bus.publish(
-                                'notify',
-                                {
-                                    'mensaje': f'❌ Error registrando orden pendiente {sym}: {e}',
-                                    'tipo': 'CRITICAL',
-                                },
-                            )
+                        
+    async def _sync_loop(self) -> None:
+        while True:
+            await self._sync_once()
+            await asyncio.sleep(self._sync_interval)
 
     async def abrir_async(
         self,
