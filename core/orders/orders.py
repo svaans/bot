@@ -8,8 +8,8 @@ _DEDUP_WINDOW = int(os.getenv("ORDER_DEDUP_WINDOW", "60"))
 
 # Historial de ordenes enviadas {cid: timestamp}
 _SENT_CIDS: Dict[str, float] = {}
-# Mapa para deduplicación por (symbol, side, candle_close_ts)
-_SEEN_KEYS: Dict[Tuple[str, str, int], str] = {}
+# Mapa para deduplicación por (symbol, side, candle_close_ts, version)
+_SEEN_KEYS: Dict[Tuple[str, str, int, str], str] = {}
 
 
 def _purge_expired(now: float) -> None:
@@ -40,14 +40,14 @@ def place_order(
     current = now if now is not None else time.time()
     _purge_expired(current)
     cid = _make_client_order_id(symbol, side, candle_close_ts, strategy_version)
-    key = (symbol, side, candle_close_ts)
+    key = (symbol, side, candle_close_ts, strategy_version)
 
     # Duplicado por CID en ventana Δt
     ts = _SENT_CIDS.get(cid)
     if ts and current - ts < _DEDUP_WINDOW:
         return {"status": "SKIP_DUPLICATE", "client_order_id": cid}
 
-    # Deduplicación por (symbol, side, candle_close_ts)
+    # Deduplicación por (symbol, side, candle_close_ts, version)
     existing = _SEEN_KEYS.get(key)
     if existing and current - _SENT_CIDS.get(existing, 0) < _DEDUP_WINDOW:
         return {"status": "SKIP_DUPLICATE", "client_order_id": existing}

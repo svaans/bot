@@ -42,7 +42,7 @@ from learning.entrenador_estrategias import actualizar_pesos_estrategias_symbol
 from core.utils.utils import configurar_logger
 from core.monitor_estado_bot import monitorear_estado_periodicamente
 from core.contexto_externo import StreamContexto
-from core.orders import real_orders, place_order
+from core.orders import real_orders
 from core.config_manager.dinamica import adaptar_configuracion
 from ccxt.base.errors import BaseError
 from core.reporting import reporter_diario
@@ -1509,15 +1509,6 @@ class Trader:
         **kwargs,
     ) -> None:
         log.debug('➡️ Entrando en _abrir_operacion_real()')
-        res = place_order(
-            symbol,
-            'buy' if direccion == 'long' else 'sell',
-            candle_close_ts,
-            strategy_version,
-        )
-        if res['status'] == 'SKIP_DUPLICATE':
-            log.info(f'⏭️ Orden duplicada para {symbol} ignorada')
-            return
         capital_total = sum(
             getattr(self, "capital_inicial_diario", self.capital_manager.capital_por_simbolo).values()
         )
@@ -1622,6 +1613,8 @@ class Trader:
             objetivo=cantidad_total,
             fracciones=fracciones,
             detalles_tecnicos=detalles_tecnicos or {},
+            candle_close_ts=candle_close_ts,
+            strategy_version=strategy_version,
         )
         registrar_decision(symbol, 'entry')
         self.capital_inicial_orden[symbol] = self.capital_por_simbolo.get(symbol, 0.0)
