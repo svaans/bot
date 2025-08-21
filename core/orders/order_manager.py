@@ -448,10 +448,10 @@ Estrategias: {estrategias_txt}"""
                             )
                 else:
                     # en modo simulado calculamos PnL con el precio indicado
-                diff = (precio - orden.precio_entrada) * orden.cantidad
-                if orden.direccion in ('short', 'venta'):
-                    diff = -diff
-                orden.pnl_operaciones += diff
+                    diff = (precio - orden.precio_entrada) * orden.cantidad
+                    if orden.direccion in ('short', 'venta'):
+                        diff = -diff
+                    orden.pnl_operaciones += diff
             if not venta_exitosa:
                 if self.bus and self.modo_real:
                     await self.bus.publish(
