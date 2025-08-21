@@ -356,7 +356,21 @@ def sincronizar_ordenes_binance(simbolos: (list[str] | None)=None) ->dict[
             continue
         side = o.get('side', 'buy').lower()
         direccion = 'long' if side == 'buy' else 'short'
-        registrar_orden(symbol, price, amount, 0.0, 0.0, {}, '', direccion)
+        sl = 0.0
+        tp = 0.0
+        try:
+            ohlcv = cliente.fetch_ohlcv(symbol, timeframe='1h', limit=120)
+            if ohlcv:
+                df = pd.DataFrame(ohlcv, columns=['ts', 'open', 'high', 'low', 'close', 'volume'])
+                cfg = load_exit_config(symbol)
+                sl_calc, tp_calc = calcular_tp_sl_adaptativos(symbol, df, cfg)
+                if direccion == 'long':
+                    sl, tp = sl_calc, tp_calc
+                else:
+                    sl, tp = tp_calc, sl_calc
+        except Exception as e:
+            log.warning(f'⚠️ Error calculando SL/TP para {symbol}: {e}')
+        registrar_orden(symbol, price, amount, sl, tp, {}, '', direccion)
     return cargar_ordenes()
 
 
