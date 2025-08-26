@@ -418,7 +418,7 @@ class OrderManager:
                 )
                 await self.bus.publish('notify', {'mensaje': mensaje})
 				
-	async def agregar_parcial_async(self, symbol: str, precio: float, cantidad: float) -> bool:
+    async def agregar_parcial_async(self, symbol: str, precio: float, cantidad: float) -> bool:
         log.info('➡️ Entrando en agregar_parcial_async()')
         lock = self._locks.setdefault(symbol, asyncio.Lock())
         async with lock:
