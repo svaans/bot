@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import asyncio
 from typing import Dict, Optional
-from datetime import datetime, UTC
+from datetime import datetime, timezone
 import os
 
 from core.orders.order_model import Order
