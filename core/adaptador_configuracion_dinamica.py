@@ -4,6 +4,7 @@ import pandas as pd
 import numpy as np
 from core.utils.utils import configurar_logger
 from indicators.helpers import get_atr, get_rsi, get_slope
+from core.ajustador_riesgo import ajustar_sl_tp_riesgo
 log = configurar_logger('adaptador_dinamico')
 
 
@@ -93,24 +94,14 @@ def _adaptar_configuracion_indicadores(symbol: str, df: pd.DataFrame, base_confi
     if abs(slope_pct) < 0.0005:
         factor_umbral += 0.1
     factor_umbral = min(factor_umbral, 1.3)
-    sl_ratio = 1.5
-    tp_ratio = 3.0
-    if atr_pct > 0.02:
-        sl_ratio *= 1.2
-    if slope_pct > 0.001:
-        tp_ratio *= 1.1
-    elif slope_pct < -0.001:
-        tp_ratio *= 0.9
-    sl_ratio = min(max(sl_ratio, 0.5), 5.0)
-    tp_ratio = min(max(tp_ratio, 1.0), 8.0)
+    sl_base = base_config.get('sl_ratio', 1.5)
+    tp_base = base_config.get('tp_ratio', 3.0)
+    riesgo_base = base_config.get('riesgo_maximo_diario', 2.0)
+    sl_ratio, tp_ratio, riesgo_maximo_diario = ajustar_sl_tp_riesgo(
+        atr_pct, slope_pct, riesgo_base, sl_base, tp_base
+    )
     if not _validar_coherencia_tp_sl(sl_ratio, tp_ratio):
-        tp_ratio = max(tp_ratio, sl_ratio * 1.2)
         _alertar_inconsistencias(symbol, sl_ratio, tp_ratio)
-    riesgo_maximo_diario = 2.0
-    if atr_pct < 0.01 and abs(slope_pct) > 0.001:
-        riesgo_maximo_diario *= 1.2
-    elif atr_pct > 0.02:
-        riesgo_maximo_diario *= 0.8
     cooldown_tras_perdida = 2
     if atr_pct > 0.02 or abs(slope_pct) < 0.0005:
         cooldown_tras_perdida = 4

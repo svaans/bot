@@ -28,6 +28,7 @@ from indicators.retornos_volatilidad import (
 from core.utils.utils import configurar_logger
 from core.contexto_externo import obtener_puntaje_contexto
 from core.market_regime import detectar_regimen
+from core.ajustador_riesgo import ajustar_sl_tp_riesgo
 log = configurar_logger('adaptador_dinamico')
 RUTA_CONFIGS_OPTIMAS = 'config/configuraciones_optimas.json'
 if os.path.exists(RUTA_CONFIGS_OPTIMAS):
@@ -69,18 +70,18 @@ def _adaptar_configuracion_base(symbol: str, df: pd.DataFrame, base_config: dict
     config['ajuste_volatilidad'] = round(min(5.0, 1 + volatilidad * 10), 2)
     factor_dinamico = base_config.get('factor_umbral', 1.0) * (1 + volatilidad)
     config['factor_umbral'] = round(min(3.0, max(0.3, factor_dinamico)), 2)
-    sl_ratio = base_config.get('sl_ratio', 2.0)
-    tp_ratio = base_config.get('tp_ratio', 4.0)
-    if slope < -0.001:
-        sl_ratio *= 1.1
-        tp_ratio *= 0.9
-    elif slope > 0.001:
-        sl_ratio *= 0.9
-        tp_ratio *= 1.1
-    config['sl_ratio'] = round(min(5.0, max(sl_ratio, 0.5)), 2)
-    config['tp_ratio'] = round(min(8.0, max(tp_ratio, 1.0)), 2)
+    precio_ref = precios.iloc[-1] if len(precios) else 0.0
+    slope_pct = slope / precio_ref if precio_ref else 0.0
+    sl_base = base_config.get('sl_ratio', 1.5)
+    tp_base = base_config.get('tp_ratio', 3.0)
+    riesgo_base = base_config.get('riesgo_maximo_diario', 2.0)
+    sl_ratio, tp_ratio, riesgo_diario = ajustar_sl_tp_riesgo(
+        volatilidad, slope_pct, riesgo_base, sl_base, tp_base
+    )
+    config['sl_ratio'] = sl_ratio
+    config['tp_ratio'] = tp_ratio
     base_peso = base_config.get('peso_minimo_total', 0.5)
-    config['peso_minimo_total'] = round(min(5.0, base_peso * (1 + 
+    config['peso_minimo_total'] = round(min(5.0, base_peso * (1 +
         volatilidad * 1.5)), 2)
     base_div = base_config.get('diversidad_minima', 2)
     diversidad = base_div
@@ -97,11 +98,9 @@ def _adaptar_configuracion_base(symbol: str, df: pd.DataFrame, base_config: dict
     config['modo_agresivo'] = modo_agresivo
     config['ponderar_por_diversidad'] = config['diversidad_minima'] <= 2
     base_mult = base_config.get('multiplicador_estrategias_recurrentes', 1.5)
-    config['multiplicador_estrategias_recurrentes'] = round(min(3.0, 
+    config['multiplicador_estrategias_recurrentes'] = round(min(3.0,
         base_mult * (1 + volatilidad)), 2)
-    base_riesgo = base_config.get('riesgo_maximo_diario', 5.0)
-    config['riesgo_maximo_diario'] = round(min(10.0, base_riesgo + 
-        volatilidad * 5), 2)
+    config['riesgo_maximo_diario'] = riesgo_diario
     log.info(
         f"[{symbol}] Config adaptada | Volatilidad={volatilidad:.4f} | Slope={slope:.4f} | Factor Umbral={config['factor_umbral']} | SL={config['sl_ratio']} | TP={config['tp_ratio']} | PesoMin={config['peso_minimo_total']} | Diversidad={config['diversidad_minima']} | Cooldown={config['cooldown_tras_perdida']} | Riesgo Diario={config['riesgo_maximo_diario']} | Aggresivo={config['modo_agresivo']}"
         )
