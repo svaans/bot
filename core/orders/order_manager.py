@@ -7,6 +7,7 @@ import os
 from core.orders.order_model import Order
 from core.utils.logger import configurar_logger
 from core.orders import real_orders, place_order
+from core.orders.validators import remainder_executable
 from core.utils.utils import is_valid_number
 from core.event_bus import EventBus
 from core.metrics import registrar_orden
@@ -121,23 +122,23 @@ class OrderManager:
 
     async def _sync_once(self) -> None:
         try:
-            ordenes_binance = await asyncio.to_thread(
-                real_orders.sincronizar_ordenes_binance
+            ordenes_reconciliadas = await asyncio.to_thread(
+                real_orders.reconciliar_ordenes
             )
         except Exception as e:
             log.error(f'❌ Error sincronizando órdenes: {e}')
             return
-        for sym, ord_ in ordenes_binance.items():
-            if sym not in self.ordenes:
-                self.ordenes[sym] = ord_
-                if self.bus:
-                    await self.bus.publish(
-                        'notify',
-                        {
-                            'mensaje': f'🔄 Orden sincronizada desde Binance: {sym}',
-                            'tipo': 'WARNING',
-                        },
-                    )
+        nuevos = set(ordenes_reconciliadas) - set(self.ordenes)
+        self.ordenes = ordenes_reconciliadas
+        for sym in nuevos:
+            if self.bus:
+                await self.bus.publish(
+                    'notify',
+                    {
+                        'mensaje': f'🔄 Orden sincronizada desde Binance: {sym}',
+                        'tipo': 'WARNING',
+                    },
+                )
         for sym, ord_ in list(self.ordenes.items()):
             if getattr(ord_, 'registro_pendiente', False):
                 try:
@@ -432,16 +433,33 @@ Estrategias: {estrategias_txt}"""
                 cantidad = orden.cantidad if is_valid_number(orden.cantidad) else 0.0
                 if cantidad > 1e-08:
                     try:
-                        ejecutado, fee, pnl = await self._ejecutar_market_retry('sell', symbol, cantidad)
-                        if ejecutado and ejecutado > 0:
+                        ejecutado, fee, pnl = await self._ejecutar_market_retry(
+                            'sell', symbol, cantidad
+                        )
+                        restante = cantidad - ejecutado
+                        if restante > 0 and not remainder_executable(
+                            symbol, precio, restante
+                        ):
+                            log.info(
+                                f'♻️ Resto no ejecutable para {symbol}: {restante}'
+                            )
                             venta_exitosa = True
-                            orden.fee_total += fee
-                            orden.pnl_operaciones += pnl
+                            motivo += '|non_executable_remainder'
+                        elif ejecutado and ejecutado > 0 and restante <= 1e-08:
+                            venta_exitosa = True
+                        elif ejecutado and ejecutado > 0 and restante > 0:
+                            log.error(
+                                f'❌ Venta parcial pendiente ejecutable para {symbol}: {restante}'
+                            )
+                            real_orders._VENTAS_FALLIDAS.add(symbol)
                         else:
                             log.error(
                                 f'❌ Venta no ejecutada o cantidad 0 para {symbol}'
                             )
                             real_orders._VENTAS_FALLIDAS.add(symbol)
+                        if ejecutado > 0:
+                            orden.fee_total += fee
+                            orden.pnl_operaciones += pnl
                     except Exception as e:
                         log.error(
                             f'❌ No se pudo cerrar la orden real para {symbol}: {e}'

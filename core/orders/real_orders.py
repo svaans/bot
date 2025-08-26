@@ -321,6 +321,88 @@ def obtener_todas_las_ordenes():
     return cargar_ordenes()
 
 
+def reconciliar_ordenes(simbolos: list[str] | None = None) -> dict[str, Order]:
+    log.info('➡️ Entrando en reconciliar_ordenes()')
+    local = cargar_ordenes()
+    try:
+        cliente = obtener_cliente()
+        markets = cliente.load_markets()
+        ordenes_api: list[dict] = []
+        if simbolos:
+            for s in simbolos:
+                ordenes_api.extend(cliente.fetch_open_orders(s))
+        else:
+            ordenes_api = cliente.fetch_open_orders()
+    except Exception as e:
+        log.error(f'❌ Error consultando órdenes abiertas: {e}')
+        return local
+    exchange: dict[str, dict] = {}
+    for o in ordenes_api:
+        symbol = o.get('symbol')
+        if not symbol:
+            continue
+        market = markets.get(symbol, {})
+        limits = market.get('limits', {}) if market else {}
+        min_amount = (limits.get('amount') or {}).get('min') or 0.0
+        min_cost = (limits.get('cost') or {}).get('min') or 0.0
+        price = float(o.get('price') or o.get('average') or 0.0)
+        amount = float(o.get('amount') or o.get('remaining') or 0.0)
+        if amount < min_amount or price * amount < min_cost:
+            continue
+        exchange[symbol] = {
+            'price': price,
+            'amount': amount,
+            'side': o.get('side', 'buy').lower(),
+        }
+    local_symbols = set(local.keys())
+    exchange_symbols = set(exchange.keys())
+    local_only = sorted(local_symbols - exchange_symbols)
+    exchange_only = sorted(exchange_symbols - local_symbols)
+    both = sorted(local_symbols & exchange_symbols)
+    log.info(f'local_only: {local_only}')
+    log.info(f'exchange_only: {exchange_only}')
+    log.info(f'both: {both}')
+    for sym in local_only:
+        ord_ = local.get(sym)
+        if not ord_:
+            continue
+        ord_.fecha_cierre = datetime.utcnow().isoformat()
+        ord_.motivo_cierre = 'closed_by_reconciliation'
+        try:
+            registrar_operacion(ord_)
+        except Exception as e:
+            log.warning(f'⚠️ No se pudo registrar cierre para {sym}: {e}')
+        try:
+            eliminar_orden(sym)
+        except Exception as e:
+            log.warning(f'⚠️ No se pudo eliminar orden local {sym}: {e}')
+        local.pop(sym, None)
+    for sym in exchange_only:
+        info = exchange[sym]
+        side = info['side']
+        direccion = 'long' if side == 'buy' else 'short'
+        sl = tp = 0.0
+        try:
+            ohlcv = cliente.fetch_ohlcv(sym, timeframe='1h', limit=120)
+            if ohlcv:
+                df = pd.DataFrame(
+                    ohlcv, columns=['ts', 'open', 'high', 'low', 'close', 'volume']
+                )
+                cfg = load_exit_config(sym)
+                sl_calc, tp_calc = calcular_tp_sl_adaptativos(sym, df, cfg)
+                if direccion == 'long':
+                    sl, tp = sl_calc, tp_calc
+                else:
+                    sl, tp = tp_calc, sl_calc
+        except Exception as e:
+            log.warning(f'⚠️ Error calculando SL/TP para {sym}: {e}')
+        try:
+            registrar_orden(sym, info['price'], info['amount'], sl, tp, {}, '', direccion)
+        except Exception as e:
+            log.warning(f'⚠️ No se pudo registrar orden reconciliada para {sym}: {e}')
+    return cargar_ordenes()
+
+
 def sincronizar_ordenes_binance(simbolos: (list[str] | None)=None) ->dict[
     str, Order]:
     log.info('➡️ Entrando en sincronizar_ordenes_binance()')

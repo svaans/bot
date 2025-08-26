@@ -243,10 +243,8 @@ class Trader:
         self.context_stream = StreamContexto()
         self.puntajes_contexto: Dict[str, float] = {}
         try:
-            self.orders.ordenes = real_orders.obtener_todas_las_ordenes()
-            if self.modo_real and not self.orders.ordenes:
-                self.orders.ordenes = real_orders.sincronizar_ordenes_binance(
-                    config.symbols)
+            simbolos = config.symbols if self.modo_real else None
+            self.orders.ordenes = real_orders.reconciliar_ordenes(simbolos)
         except Exception as e:
             log.warning(
                 f'⚠️ Error cargando órdenes previas desde la base de datos: {e}'
