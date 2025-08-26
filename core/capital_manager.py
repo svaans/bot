@@ -3,7 +3,9 @@ from collections import Counter
 from datetime import datetime, timezone
 from typing import Dict
 from config.config_manager import Config
-from binance_api.cliente import fetch_balance_async, load_markets_async
+import asyncio
+from binance_api.cliente import fetch_balance_async
+from binance_api.filters import get_symbol_filters
 from core.utils.logger import configurar_logger
 from core.risk import RiskManager, size_order, MarketInfo
 from core.event_bus import EventBus
@@ -25,7 +27,6 @@ class CapitalManager:
         self.modo_real = getattr(config, 'modo_real', False)
         self.modo_capital_bajo = config.modo_capital_bajo
         self.riesgo_maximo_diario = getattr(config, 'riesgo_maximo_diario', 1.0)
-        self._markets = None
         self._markets_cache: Dict[str, MarketInfo] = {}
         self.capital_currency = getattr(config, 'capital_currency', None)
         if not self.capital_currency:
@@ -103,26 +104,12 @@ class CapitalManager:
             self._markets_cache[symbol] = info
             return info
         try:
-            if self._markets is None:
-                self._markets = await load_markets_async(self.cliente)
-            key_base = symbol.replace('/', '')
-            info = self._markets.get(symbol) or self._markets.get(key_base)
-            if not info:
-                for k, v in self._markets.items():
-                    if k.replace('/', '') == key_base:
-                        info = v
-                        break
-            tick = step = min_notional = 0.0
-            if info:
-                filters = {f['filterType']: f for f in info.get('info', {}).get('filters', [])}
-                tick = float(filters.get('PRICE_FILTER', {}).get('tickSize', 0) or 0)
-                step = float(filters.get('LOT_SIZE', {}).get('stepSize', 0) or 0)
-                min_notional = float(
-                    filters.get('MIN_NOTIONAL', {}).get('minNotional', 0)
-                    or info.get('limits', {}).get('cost', {}).get('min', 0)
-                    or 0
-                )
-            market = MarketInfo(tick, step, min_notional)
+            filtros = await asyncio.to_thread(get_symbol_filters, symbol, self.cliente)
+            market = MarketInfo(
+                filtros.get('tick_size', 0.0),
+                filtros.get('step_size', 0.0),
+                filtros.get('min_notional', 0.0),
+            )
             self._markets_cache[symbol] = market
             return market
         except Exception as e:

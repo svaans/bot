@@ -32,6 +32,7 @@ from typing import Any, Mapping
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from datetime import datetime
 from binance_api.cliente import obtener_cliente
+from binance_api.filters import get_symbol_filters
 from .order_model import Order, normalizar_precio_cantidad
 from core.utils.utils import configurar_logger, guardar_orden_real
 from core.utils.logger import log_decision
@@ -326,7 +327,6 @@ def reconciliar_ordenes(simbolos: list[str] | None = None) -> dict[str, Order]:
     local = cargar_ordenes()
     try:
         cliente = obtener_cliente()
-        markets = cliente.load_markets()
         ordenes_api: list[dict] = []
         if simbolos:
             for s in simbolos:
@@ -341,10 +341,9 @@ def reconciliar_ordenes(simbolos: list[str] | None = None) -> dict[str, Order]:
         symbol = o.get('symbol')
         if not symbol:
             continue
-        market = markets.get(symbol, {})
-        limits = market.get('limits', {}) if market else {}
-        min_amount = (limits.get('amount') or {}).get('min') or 0.0
-        min_cost = (limits.get('cost') or {}).get('min') or 0.0
+        filtros = get_symbol_filters(symbol, cliente)
+        min_amount = filtros.get('min_qty', 0.0)
+        min_cost = filtros.get('min_notional', 0.0)
         price = float(o.get('price') or o.get('average') or 0.0)
         amount = float(o.get('amount') or o.get('remaining') or 0.0)
         if amount < min_amount or price * amount < min_cost:
@@ -424,7 +423,6 @@ def sincronizar_ordenes_binance(simbolos: (list[str] | None)=None) ->dict[
     """
     try:
         cliente = obtener_cliente()
-        markets = cliente.load_markets()
         ordenes_api = []
         if simbolos:
             for s in simbolos:
@@ -438,10 +436,9 @@ def sincronizar_ordenes_binance(simbolos: (list[str] | None)=None) ->dict[
         symbol = o.get('symbol')
         if not symbol:
             continue
-        market = markets.get(symbol, {})
-        limits = market.get('limits', {}) if market else {}
-        min_amount = (limits.get('amount') or {}).get('min') or 0.0
-        min_cost = (limits.get('cost') or {}).get('min') or 0.0
+        filtros = get_symbol_filters(symbol, cliente)
+        min_amount = filtros.get('min_qty', 0.0)
+        min_cost = filtros.get('min_notional', 0.0)
         price = float(o.get('price') or o.get('average') or 0)
         amount = float(o.get('amount') or o.get('remaining') or 0)
         if amount < min_amount or price * amount < min_cost:
@@ -470,14 +467,12 @@ def reconciliar_trades_binance(simbolos: list[str] | None = None, limit: int = 5
     log.info('➡️ Entrando en reconciliar_trades_binance()')
     try:
         cliente = obtener_cliente()
-        markets = cliente.load_markets()
         if simbolos is None:
-            simbolos = list(markets.keys())
+            simbolos = list(cliente.load_markets().keys())
         for s in simbolos:
-            market = markets.get(s, {})
-            limits = market.get('limits', {}) if market else {}
-            min_amount = (limits.get('amount') or {}).get('min') or 0.0
-            min_cost = (limits.get('cost') or {}).get('min') or 0.0
+            filtros = get_symbol_filters(s, cliente)
+            min_amount = filtros.get('min_qty', 0.0)
+            min_cost = filtros.get('min_notional', 0.0)
             try:
                 trades = cliente.fetch_my_trades(s.replace('/', ''), limit=limit)
             except Exception:
@@ -666,21 +661,17 @@ def ejecutar_orden_market(symbol: str, cantidad: float, operation_id: str | None
         return {'ejecutado': 0.0, 'restante': 0.0, 'status': 'FILLED', 'min_qty': 0.0, 'fee': 0.0, 'pnl': 0.0}
     try:
         cliente = obtener_cliente()
-        markets = cliente.load_markets()
-        market_info = markets.get(symbol.replace('/', ''), {})
-        precision = market_info.get('precision', {}).get('amount', 8)
-        step_size = 10 ** -precision
-        min_cost = float(market_info.get('limits', {}).get('cost', {}).get(
-            'min') or 0)
+        filtros = get_symbol_filters(symbol, cliente)
+        step_size = filtros.get('step_size', 0.0)
+        min_cost = filtros.get('min_notional', 0.0)
         ticker = cliente.fetch_ticker(symbol.replace('/', ''))
         precio = float(ticker.get('last') or ticker.get('close') or 0)
-        precio, cantidad = normalizar_precio_cantidad(market_info, precio, cantidad, 'compra')
+        precio, cantidad = normalizar_precio_cantidad(filtros, precio, cantidad, 'compra')
         if cantidad <= 0:
             log.error(f'⛔ Cantidad ajustada inválida para {symbol}: {cantidad}')
             log_decision(log, 'ejecutar_orden_market', operation_id, entrada, {'ajuste_valido': False}, 'reject', {'ejecutado': 0})
             return {'ejecutado': 0.0, 'restante': 0.0, 'status': 'FILLED', 'min_qty': 0.0, 'fee': 0.0, 'pnl': 0.0}
-        min_amount = float(market_info.get('limits', {}).get('amount', {}).get('min') or 0)
-        min_cost = float(market_info.get('limits', {}).get('cost', {}).get('min') or 0)
+        min_amount = filtros.get('min_qty', 0.0)
         quote = symbol.split('/')[1]
         balance = cliente.fetch_balance()
         disponible_quote = balance.get('free', {}).get(quote, 0)
@@ -688,7 +679,7 @@ def ejecutar_orden_market(symbol: str, cantidad: float, operation_id: str | None
             costo = cantidad * precio
             if costo > disponible_quote:
                 cantidad_ajustada = math.floor((disponible_quote / precio) / step_size) * step_size
-                cantidad_ajustada = normalizar_precio_cantidad(market_info, precio, cantidad_ajustada, 'compra')[1]
+                cantidad_ajustada = normalizar_precio_cantidad(filtros, precio, cantidad_ajustada, 'compra')[1]
                 if cantidad_ajustada <= 0:
                     log.error(
                         f'⛔ Compra cancelada por saldo insuficiente en {symbol}. Requerido: {costo:.2f} {quote}, disponible: {disponible_quote:.2f}'
@@ -826,10 +817,8 @@ def ejecutar_orden_market_sell(symbol: str, cantidad: float, operation_id: str |
         if disponible <= 0:
             log_decision(log, 'ejecutar_orden_market_sell', operation_id, entrada, {'saldo': 0}, 'reject', {'ejecutado': 0})
             raise InsufficientFunds(f'Saldo 0 disponible para {symbol}')
-        markets = cliente.load_markets()
-        info = markets.get(symbol.replace('/', ''), {})
-        precision = info.get('precision', {}).get('amount', 8)
-        step_size = 10 ** -precision
+        filtros = get_symbol_filters(symbol, cliente)
+        step_size = filtros.get('step_size', 0.0)
         cantidad_vender = math.floor(disponible / step_size) * step_size
         cantidad_vender = min(cantidad, cantidad_vender)
         if cantidad_vender <= 0:
@@ -837,11 +826,11 @@ def ejecutar_orden_market_sell(symbol: str, cantidad: float, operation_id: str |
             raise ValueError(
                 f'Cantidad inválida ({cantidad_vender}) para vender en {symbol}'
                 )
-        min_amount = float(info.get('limits', {}).get('amount', {}).get('min') or 0)
-        min_cost = float(info.get('limits', {}).get('cost', {}).get('min') or 0)
+        min_amount = filtros.get('min_qty', 0.0)
+        min_cost = filtros.get('min_notional', 0.0)
         ticker = cliente.fetch_ticker(symbol.replace('/', ''))
         precio = float(ticker.get('last') or ticker.get('close') or 0)
-        precio, cantidad_vender = normalizar_precio_cantidad(info, precio, cantidad_vender, 'venta')
+        precio, cantidad_vender = normalizar_precio_cantidad(filtros, precio, cantidad_vender, 'venta')
         if (cantidad_vender < min_amount or precio and cantidad_vender * precio < min_cost):
             log.error(
                 f'⛔ Venta rechazada por mínimos: {symbol} → cantidad: {cantidad_vender:.8f}, mínimos: amount={min_amount}, notional={min_cost}'
@@ -973,7 +962,7 @@ def ejecutar_orden_limit(
 
     for intento in range(1, max_reintentos + 1):
         precio, cantidad = normalizar_precio_cantidad(
-            info, precio, cantidad, 'compra' if side == 'buy' else 'venta'
+            filtros = get_symbol_filters(symbol, cliente)
         )
         params = params_base.copy()
         if operation_id:
@@ -1032,7 +1021,7 @@ def ejecutar_orden_limit(
             'ejecutado': ejecutado,
             'restante': restante,
             'status': status,
-            'min_qty': float(info.get('limits', {}).get('amount', {}).get('min') or 0),
+            'min_qty': filtros.get('min_qty', 0.0),
             'fee': metricas['fee'],
             'pnl': metricas['pnl'],
             'slippage': slippage,

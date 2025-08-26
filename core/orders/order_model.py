@@ -4,14 +4,9 @@ import json
 import math
 
 
-def normalizar_precio_cantidad(market_info: dict, precio: float, cantidad: float,
+def normalizar_precio_cantidad(filtros: Dict[str, float], precio: float, cantidad: float,
                                direccion: str = 'long') -> tuple[float, float]:
-    """Ajusta ``precio`` y ``cantidad`` a las restricciones del mercado.
-
-    Se aplican ``tickSize``, ``stepSize`` y ``minNotional`` tomando los datos
-    de ``market_info``. El redondeo de ``precio`` respeta la ``direccion`` de la
-    orden para evitar que una operación de venta quede por debajo del valor
-    deseado.
+    """Ajusta ``precio`` y ``cantidad`` según los filtros de mercado.
 
     Parameters
     ----------
@@ -30,17 +25,13 @@ def normalizar_precio_cantidad(market_info: dict, precio: float, cantidad: float
     tuple[float, float]
         Precio y cantidad ajustados.
     """
-    precision_price = market_info.get('precision', {}).get('price', 8)
-    precision_amount = market_info.get('precision', {}).get('amount', 8)
-    tick_size = 10 ** -precision_price
-    step_size = 10 ** -precision_amount
-    min_notional = float(
-        market_info.get('limits', {}).get('cost', {}).get('min') or 0
-    )
-    min_amount = float(
-        market_info.get('limits', {}).get('amount', {}).get('min') or 0
-    )
+    tick_size = filtros.get('tick_size', 0.0)
+    step_size = filtros.get('step_size', 0.0)
+    min_notional = filtros.get('min_notional', 0.0)
+    min_amount = filtros.get('min_qty', 0.0)
+
     precio = ajustar_tick_size(precio, tick_size, direccion)
+    
     if step_size > 0:
         cantidad = math.floor(cantidad / step_size) * step_size
 
