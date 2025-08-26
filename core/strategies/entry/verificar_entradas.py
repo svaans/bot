@@ -2,7 +2,8 @@ from __future__ import annotations
 from datetime import datetime, timezone
 import pandas as pd
 from core.utils import configurar_logger
-from core.adaptador_dinamico import calcular_umbral_adaptativo, calcular_tp_sl_adaptativos
+from core.adaptador_dinamico import calcular_tp_sl_adaptativos
+from core.adaptador_umbral import calcular_umbral_adaptativo
 from core.config_manager.dinamica import adaptar_configuracion
 from core.data import coincidencia_parcial
 from core.estrategias import filtrar_por_direccion
@@ -12,7 +13,7 @@ from core.strategies.evaluador_tecnico import (
     calcular_umbral_adaptativo as calc_umbral_tecnico,
     cargar_pesos_tecnicos,
 )
-from indicators.helpers import get_rsi, get_momentum, get_atr
+from indicators.helpers import get_rsi, get_momentum
 from core.utils.utils import distancia_minima_valida, verificar_integridad_datos
 from core.contexto_externo import obtener_puntaje_contexto
 from core.metricas_semanales import metricas_tracker
@@ -66,8 +67,12 @@ async def verificar_entrada(trader, symbol: str, df: pd.DataFrame, estado) ->(
     if buffer_len < 30 and persistencia_score < 1:
         metricas_tracker.registrar_filtro('prebuffer')
         return None
-    umbral = calcular_umbral_adaptativo(symbol, df, estrategias, trader.
-        pesos_por_simbolo.get(symbol, {}), persistencia_score)
+    contexto_umbral = {
+        "rsi": engine_eval.get("rsi"),
+        "slope": engine_eval.get("slope"),
+        "persistencia": persistencia_score,
+    }
+    umbral = calcular_umbral_adaptativo(symbol, df, contexto_umbral)
     estrategias_persistentes = {e: (True) for e, activo in estrategias.
         items() if activo and trader.persistencia.es_persistente(symbol, e)}
     direccion = 'short' if tendencia == 'bajista' else 'long'

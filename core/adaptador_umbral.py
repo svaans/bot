@@ -66,6 +66,8 @@ def calcular_umbral_adaptativo(
       al alza como a la baja.
     - **RSI**: alejarse de la zona neutra (50) aumenta la exigencia del
       umbral.
+    - **Persistencia**: una alta consistencia en señales previas puede
+      reducir ligeramente el umbral requerido.
     """
     config = _cargar_config().get(symbol, {})
     base = config.get("peso_minimo_total", 0.5)
@@ -87,14 +89,22 @@ def calcular_umbral_adaptativo(
 
     def _factor_rsi(valor: float | None) -> float:
         return 1 + abs(valor - 50) / 100 if valor is not None else 1.0
+    
+    def _factor_persistencia(valor: float | None) -> float:
+        """Reduce el umbral en función de la persistencia acumulada."""
+        if valor is None:
+            return 1.0
+        return 1 - min(valor * 0.1, 0.3)
 
     rsi_val = contexto.get("rsi") if contexto else indicador_rsi(df)
     slope_val = contexto.get("slope") if contexto else indicador_slope(df)
+    pers_val = contexto.get("persistencia") if contexto else None
 
     umbral = base * factor
     umbral *= _factor_volatilidad()
     umbral *= _factor_slope(slope_val)
     umbral *= _factor_rsi(rsi_val)
+    umbral *= _factor_persistencia(pers_val)
     umbral = max(1.0, umbral)
     if pd.isna(umbral) or not math.isfinite(umbral):
         return 1.0
