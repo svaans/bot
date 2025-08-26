@@ -57,11 +57,6 @@ class OrderManager:
         cantidad: float,
         operation_id: str | None = None,
     ) -> tuple[float, float, float]:
-        """Envía una orden de mercado reintentando en caso de fills parciales.
-
-        Retorna una tupla ``(ejecutado, fee, pnl)`` acumulando los valores de
-        cada intento.
-        """
         operation_id = operation_id or self._generar_operation_id(symbol)
         if side == 'sell':
             resp = await asyncio.to_thread(
