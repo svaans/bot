@@ -33,10 +33,10 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 from datetime import datetime
 from binance_api.cliente import obtener_cliente
 from .order_model import Order, normalizar_precio_cantidad
-from core.utils.utils import configurar_logger
+from core.utils.utils import configurar_logger, guardar_orden_real
+from core.utils.logger import log_decision
 from core.supervisor import tick
 from . import real_orders
-from core.utils.utils import guardar_orden_real
 from core.notificador import crear_notificador_desde_env
 from core.adaptador_dinamico import calcular_tp_sl_adaptativos
 from config.exit_defaults import load_exit_config
@@ -397,7 +397,17 @@ def reconciliar_ordenes(simbolos: list[str] | None = None) -> dict[str, Order]:
         except Exception as e:
             log.warning(f'⚠️ Error calculando SL/TP para {sym}: {e}')
         try:
-            registrar_orden(sym, info['price'], info['amount'], sl, tp, {}, '', direccion)
+            registrar_orden(
+                sym,
+                info['price'],
+                info['amount'],
+                sl,
+                tp,
+                {},
+                '',
+                direccion,
+                info.get('clientOrderId') if isinstance(info, dict) else None,
+            )
         except Exception as e:
             log.warning(f'⚠️ No se pudo registrar orden reconciliada para {sym}: {e}')
     return cargar_ordenes()
@@ -452,7 +462,7 @@ def sincronizar_ordenes_binance(simbolos: (list[str] | None)=None) ->dict[
                     sl, tp = tp_calc, sl_calc
         except Exception as e:
             log.warning(f'⚠️ Error calculando SL/TP para {symbol}: {e}')
-        registrar_orden(symbol, price, amount, sl, tp, {}, '', direccion)
+        registrar_orden(symbol, price, amount, sl, tp, {}, '', direccion, None)
     return cargar_ordenes()
 
 
@@ -506,7 +516,7 @@ def reconciliar_trades_binance(simbolos: list[str] | None = None, limit: int = 5
                 guardar_orden_real(s, data)
                 if side == 'buy' and amount > 0 and not obtener_orden(s):
                     try:
-                        registrar_orden(s, price, amount, 0.0, 0.0, {}, '', 'long')
+                        registrar_orden(s, price, amount, 0.0, 0.0, {}, '', 'long', None)
                     except Exception as e:
                         log.warning(f'⚠️ No se pudo registrar orden reconciliada para {s}: {e}')
     except Exception as e:
@@ -582,7 +592,8 @@ def eliminar_orden(symbol: str, forzar_log: bool=False) ->None:
 
 
 def registrar_orden(symbol: str, precio: float, cantidad: float, sl: float,
-    tp: float, estrategias, tendencia: str, direccion: str='long') ->None:
+    tp: float, estrategias, tendencia: str, direccion: str='long',
+    operation_id: str | None = None) ->None:
     log.info('➡️ Entrando en registrar_orden()')
     """Registra una nueva orden activa y la guarda en base de datos."""
     if not isinstance(symbol, str) or not symbol:
@@ -608,11 +619,18 @@ def registrar_orden(symbol: str, precio: float, cantidad: float, sl: float,
         tendencia=tendencia,
         max_price=precio,
         direccion=direccion,
+        operation_id=operation_id,
     )
     actualizar_orden(symbol, orden)
-    log.info(
-        f'✅ Order registrada para {symbol} — cantidad: {cantidad}, entrada: {precio}'
-        )
+    log_decision(
+        log,
+        'registrar_orden',
+        operation_id,
+        {'symbol': symbol, 'precio': precio, 'cantidad': cantidad},
+        {'precio_valido': precio > 0, 'cantidad_valida': cantidad > 0},
+        'accept',
+        {'registrada': True},
+    )
 
 
 def registrar_operacion(data: (dict | Order)) ->None:
@@ -641,8 +659,10 @@ def registrar_operacion(data: (dict | Order)) ->None:
 def ejecutar_orden_market(symbol: str, cantidad: float, operation_id: str | None = None) -> dict:
     log.info('➡️ Entrando en ejecutar_orden_market()')
     """Ejecuta una compra de mercado y devuelve detalles de la ejecución."""
+    entrada = {'symbol': symbol, 'cantidad': cantidad}
     if cantidad <= 0:
         log.warning(f'⚠️ Cantidad inválida para compra en {symbol}: {cantidad}')
+        log_decision(log, 'ejecutar_orden_market', operation_id, entrada, {'cantidad_valida': False}, 'reject', {'ejecutado': 0})
         return {'ejecutado': 0.0, 'restante': 0.0, 'status': 'FILLED', 'min_qty': 0.0, 'fee': 0.0, 'pnl': 0.0}
     try:
         cliente = obtener_cliente()
@@ -657,6 +677,7 @@ def ejecutar_orden_market(symbol: str, cantidad: float, operation_id: str | None
         precio, cantidad = normalizar_precio_cantidad(market_info, precio, cantidad, 'compra')
         if cantidad <= 0:
             log.error(f'⛔ Cantidad ajustada inválida para {symbol}: {cantidad}')
+            log_decision(log, 'ejecutar_orden_market', operation_id, entrada, {'ajuste_valido': False}, 'reject', {'ejecutado': 0})
             return {'ejecutado': 0.0, 'restante': 0.0, 'status': 'FILLED', 'min_qty': 0.0, 'fee': 0.0, 'pnl': 0.0}
         min_amount = float(market_info.get('limits', {}).get('amount', {}).get('min') or 0)
         min_cost = float(market_info.get('limits', {}).get('cost', {}).get('min') or 0)
@@ -679,6 +700,7 @@ def ejecutar_orden_market(symbol: str, cantidad: float, operation_id: str | None
                         )
                     except Exception:
                         pass
+                    log_decision(log, 'ejecutar_orden_market', operation_id, entrada, {'saldo_suficiente': False}, 'reject', {'ejecutado': 0})
                     return {'ejecutado': 0.0, 'restante': 0.0, 'status': 'FILLED', 'min_qty': min_amount, 'fee': 0.0, 'pnl': 0.0}
                 log.warning(
                     f'⚠️ Cantidad ajustada por saldo insuficiente en {symbol}. Requerido: {costo:.2f} {quote}, disponible: {disponible_quote:.2f}, nueva cantidad: {cantidad_ajustada}'
@@ -694,6 +716,7 @@ def ejecutar_orden_market(symbol: str, cantidad: float, operation_id: str | None
                 )
             except Exception:
                 pass
+            log_decision(log, 'ejecutar_orden_market', operation_id, entrada, {'minimos': False}, 'reject', {'ejecutado': 0})
             return {'ejecutado': 0.0, 'restante': 0.0, 'status': 'FILLED', 'min_qty': min_amount, 'fee': 0.0, 'pnl': 0.0}
         log.debug(
             f'📤 Enviando orden de compra para {symbol} | Cantidad: {cantidad} | Precio estimado: {precio:.4f}'
@@ -725,7 +748,7 @@ def ejecutar_orden_market(symbol: str, cantidad: float, operation_id: str | None
             except Exception:
                 pass
         log.info(f'🟢 Order real ejecutada: {symbol}, cantidad: {ejecutado}')
-        return {
+        salida = {
             'ejecutado': ejecutado,
             'restante': restante,
             'status': status,
@@ -734,6 +757,8 @@ def ejecutar_orden_market(symbol: str, cantidad: float, operation_id: str | None
             'pnl': metricas['pnl'],
             'slippage': slippage,
         }
+        log_decision(log, 'ejecutar_orden_market', operation_id, entrada, {'minimos': True}, 'accept', salida)
+        return salida
     except Exception as e:
         log.error(f'❌ Error en Binance al ejecutar compra en {symbol}: {e}')
 
@@ -773,21 +798,25 @@ def ejecutar_orden_market(symbol: str, cantidad: float, operation_id: str | None
                         {},
                         '',
                         'long',
+                        None,
                     )
                 except Exception as e_reg:
                     log.error(f'❌ No se pudo registrar orden tras error: {e_reg}')
         except Exception as ver_err:
             log.error(f'❌ Error verificando trades tras fallo: {ver_err}')
+            log_decision(log, 'ejecutar_orden_market', operation_id, entrada, {}, 'error', {'reason': str(e)})
         raise
 
 
 def ejecutar_orden_market_sell(symbol: str, cantidad: float, operation_id: str | None = None) -> dict:
     log.info('➡️ Entrando en ejecutar_orden_market_sell()')
     """Ejecuta una venta de mercado validando saldo y devuelve detalles."""
+    entrada = {'symbol': symbol, 'cantidad': cantidad}
     if symbol in _VENTAS_FALLIDAS:
         log.warning(
             f'⏭️ Venta omitida para {symbol} por intento previo fallido de saldo.'
             )
+        log_decision(log, 'ejecutar_orden_market_sell', operation_id, entrada, {'venta_omitida': True}, 'reject', {'ejecutado': 0})
         return {'ejecutado': 0.0, 'restante': cantidad, 'status': 'FILLED', 'min_qty': 0.0, 'fee': 0.0, 'pnl': 0.0}
     try:
         cliente = obtener_cliente()
@@ -795,6 +824,7 @@ def ejecutar_orden_market_sell(symbol: str, cantidad: float, operation_id: str |
         base = symbol.split('/')[0]
         disponible = balance.get('free', {}).get(base, 0)
         if disponible <= 0:
+            log_decision(log, 'ejecutar_orden_market_sell', operation_id, entrada, {'saldo': 0}, 'reject', {'ejecutado': 0})
             raise InsufficientFunds(f'Saldo 0 disponible para {symbol}')
         markets = cliente.load_markets()
         info = markets.get(symbol.replace('/', ''), {})
@@ -803,6 +833,7 @@ def ejecutar_orden_market_sell(symbol: str, cantidad: float, operation_id: str |
         cantidad_vender = math.floor(disponible / step_size) * step_size
         cantidad_vender = min(cantidad, cantidad_vender)
         if cantidad_vender <= 0:
+            log_decision(log, 'ejecutar_orden_market_sell', operation_id, entrada, {'cantidad_valida': False}, 'reject', {'ejecutado': 0})
             raise ValueError(
                 f'Cantidad inválida ({cantidad_vender}) para vender en {symbol}'
                 )
@@ -822,6 +853,7 @@ def ejecutar_orden_market_sell(symbol: str, cantidad: float, operation_id: str |
                 )
             except Exception:
                 pass
+            log_decision(log, 'ejecutar_orden_market_sell', operation_id, entrada, {'minimos': False}, 'reject', {'ejecutado': 0})
             return {'ejecutado': 0.0, 'restante': cantidad_vender, 'status': 'FILLED', 'min_qty': min_amount, 'fee': 0.0, 'pnl': 0.0}
         log.info(
             f'💱 Ejecutando venta real en {symbol}: {cantidad_vender:.8f} unidades (precio estimado: {precio:.2f})'
@@ -855,7 +887,7 @@ def ejecutar_orden_market_sell(symbol: str, cantidad: float, operation_id: str |
         log.info(
             f'🔴 Order de venta ejecutada: {symbol}, cantidad: {ejecutado:.8f}')
         _VENTAS_FALLIDAS.discard(symbol)
-        return {
+        salida = {
             'ejecutado': ejecutado,
             'restante': restante,
             'status': status,
@@ -864,6 +896,8 @@ def ejecutar_orden_market_sell(symbol: str, cantidad: float, operation_id: str |
             'pnl': metricas['pnl'],
             'slippage': slippage,
         }
+        log_decision(log, 'ejecutar_orden_market_sell', operation_id, entrada, {'minimos': True}, 'accept', salida)
+        return salida
     except InsufficientFunds as e:
         log.error(f'❌ Venta rechazada por saldo insuficiente en {symbol}: {e}')
         _VENTAS_FALLIDAS.add(symbol)
@@ -874,9 +908,11 @@ def ejecutar_orden_market_sell(symbol: str, cantidad: float, operation_id: str |
             )
         except Exception:
             pass
+        log_decision(log, 'ejecutar_orden_market_sell', operation_id, entrada, {'saldo_insuficiente': True}, 'reject', {'ejecutado': 0})
         return {'ejecutado': 0.0, 'restante': cantidad, 'status': 'FILLED', 'min_qty': 0.0, 'fee': 0.0, 'pnl': 0.0}
     except Exception as e:
         log.error(f'❌ Error en intercambio al vender {symbol}: {e}')
+        log_decision(log, 'ejecutar_orden_market_sell', operation_id, entrada, {}, 'error', {'reason': str(e)})
     raise
 
 

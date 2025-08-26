@@ -91,6 +91,21 @@ def configurar_logger(
     return logger
 
 
+def log_decision(logger: logging.Logger, accion: str, operation_id: str | None,
+                 entrada: dict, validaciones: dict, decision: str,
+                 salida: dict) -> None:
+    """Emite un log estructurado de una decisión tomada por el bot."""
+    payload = {
+        'accion': accion,
+        'operation_id': operation_id,
+        'entrada': entrada,
+        'validaciones': validaciones,
+        'decision': decision,
+        'salida': salida,
+    }
+    logger.info(json.dumps(payload, ensure_ascii=False))
+
+
 def log_resumen_operacion(tipo, symbol, **kwargs):
     log.info('➡️ Entrando en log_resumen_operacion()')
     log = logging.getLogger('resumen')

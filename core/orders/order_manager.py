@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 import os
 
 from core.orders.order_model import Order
-from core.utils.logger import configurar_logger
+from core.utils.logger import configurar_logger, log_decision
 from core.orders import real_orders
 from core.orders.validators import remainder_executable
 from core.utils.utils import is_valid_number
@@ -62,15 +62,18 @@ class OrderManager:
         operation_id: str | None = None,
     ) -> tuple[float, float, float]:
         operation_id = operation_id or self._generar_operation_id(symbol)
+        entrada = {'side': side, 'symbol': symbol, 'cantidad': cantidad}
         if side == 'sell':
             resp = await asyncio.to_thread(
                 real_orders._market_sell_retry, symbol, cantidad, operation_id
             )
-            return (
-                float(resp.get('ejecutado', 0.0)),
-                float(resp.get('fee', 0.0)),
-                float(resp.get('pnl', 0.0)),
-            )
+            salida = {
+                'ejecutado': float(resp.get('ejecutado', 0.0)),
+                'fee': float(resp.get('fee', 0.0)),
+                'pnl': float(resp.get('pnl', 0.0)),
+            }
+            log_decision(log, '_market_sell', operation_id, entrada, {}, 'execute', salida)
+            return salida['ejecutado'], salida['fee'], salida['pnl']
         restante = cantidad
         total = total_fee = total_pnl = 0.0
         while restante > 0:
@@ -84,6 +87,8 @@ class OrderManager:
             total_pnl += float(resp.get('pnl', 0.0))
             if resp.get('status') != 'PARTIAL' or restante < resp.get('min_qty', 0):
                 break
+        salida = {'ejecutado': total, 'fee': total_fee, 'pnl': total_pnl}
+        log_decision(log, '_market_buy', operation_id, entrada, {}, 'execute', salida)
         return total, total_fee, total_pnl
 
     def subscribe(self, bus: EventBus) -> None:
@@ -182,6 +187,7 @@ class OrderManager:
                         ord_.estrategias_activas,
                         ord_.tendencia,
                         ord_.direccion,
+                        ord_.operation_id,
                     )
                     ord_.registro_pendiente = False
                     registrar_orden('opened')
@@ -191,7 +197,7 @@ class OrderManager:
                         mensaje = (
                             f"""🟢 Compra {sym}\nPrecio: {ord_.precio_entrada:.2f} Cantidad: {ord_.cantidad_abierta or ord_.cantidad}\nSL: {ord_.stop_loss:.2f} TP: {ord_.take_profit:.2f}\nEstrategias: {estrategias_txt}"""
                         )
-                        await self.bus.publish('notify', {'mensaje': mensaje})
+                        await self.bus.publish('notify', {'mensaje': mensaje, 'operation_id': ord_.operation_id})
                 except Exception as e:
                     log.error(f'❌ Error registrando orden pendiente {sym}: {e}')
                     if self.bus:
@@ -200,6 +206,7 @@ class OrderManager:
                             {
                                 'mensaje': f'❌ Error registrando orden pendiente {sym}: {e}',
                                 'tipo': 'CRITICAL',
+                                'operation_id': ord_.operation_id,
                             },
                         )
 
@@ -229,6 +236,7 @@ class OrderManager:
                     orden.estrategias_activas,
                     orden.tendencia,
                     orden.direccion,
+                    orden.operation_id,
                 )
                 orden.registro_pendiente = False
                 registrar_orden('opened')
@@ -257,6 +265,14 @@ class OrderManager:
         strategy_version: str | None = None,  # reservado (no usado aquí)
     ) -> bool:
         log.info('➡️ Entrando en abrir_async()')
+        operation_id = self._generar_operation_id(symbol)
+        entrada_log = {
+            'symbol': symbol,
+            'precio': precio,
+            'sl': sl,
+            'tp': tp,
+            'cantidad': cantidad,
+        }
         lock = self._locks.setdefault(symbol, asyncio.Lock())
         async with lock:
             # Evitar duplicados si ya se está abriendo o existe localmente
@@ -264,6 +280,15 @@ class OrderManager:
                 if symbol not in self._dup_warned:
                     log.warning(f'⚠️ Orden duplicada evitada para {symbol}')
                     self._dup_warned.add(symbol)
+                log_decision(
+                    log,
+                    'abrir',
+                    operation_id,
+                    entrada_log,
+                    {'duplicada': True},
+                    'reject',
+                    {'reason': 'duplicate'},
+                )
                 return False
             # Consulta cruzada con Binance antes de abrir
             try:
@@ -278,8 +303,18 @@ class OrderManager:
                         {
                             'mensaje': f'⚠️ No se pudo verificar órdenes abiertas en {symbol}',
                             'tipo': 'WARNING',
+                            'operation_id': operation_id,
                         },
                     )
+                log_decision(
+                    log,
+                    'abrir',
+                    operation_id,
+                    entrada_log,
+                    {'verificacion': 'error'},
+                    'reject',
+                    {'reason': 'sync_error'},
+                )
                 return False
 
             if symbol in ordenes_api:
@@ -290,8 +325,17 @@ class OrderManager:
                 if self.bus:
                     await self.bus.publish(
                         'notify',
-                        {'mensaje': f'⚠️ Orden ya abierta en Binance para {symbol}'},
+                        {'mensaje': f'⚠️ Orden ya abierta en Binance para {symbol}', 'operation_id': operation_id},
                     )
+                log_decision(
+                    log,
+                    'abrir',
+                    operation_id,
+                    entrada_log,
+                    {'duplicada': True},
+                    'reject',
+                    {'reason': 'already_open'},
+                )
                 return False
 
             if self.modo_real:
@@ -307,10 +351,22 @@ class OrderManager:
                 if not remainder_executable(symbol, precio, cantidad) or notional > disponible:
                     if self.bus:
                         await self.bus.publish(
-                            'notify', {'mensaje': 'insuficiente', 'tipo': 'WARNING'}
+                            'notify', {'mensaje': 'insuficiente', 'tipo': 'WARNING', 'operation_id': operation_id}
                         )
                     registrar_buy_rejected_insufficient_funds()
                     registrar_orden('rejected')
+                    log_decision(
+                        log,
+                        'abrir',
+                        operation_id,
+                        entrada_log,
+                        {
+                            'saldo_disponible': disponible,
+                            'notional': notional,
+                        },
+                        'reject',
+                        {'reason': 'insufficient_funds'},
+                    )
                     return False
 
             self.abriendo.add(symbol)
@@ -338,6 +394,7 @@ class OrderManager:
                     break_even_activado=False,
                     duracion_en_velas=0,
                     registro_pendiente=True,
+                    operation_id=operation_id,
                 )
                 self.ordenes[symbol] = orden
 
@@ -349,11 +406,11 @@ class OrderManager:
                         SL: {sl:.2f} TP: {tp:.2f}
                         Estrategias: {estrategias_txt}"""
                     )
-                    await self.bus.publish('notify', {'mensaje': msg_pendiente})
+                    await self.bus.publish('notify', {'mensaje': msg_pendiente, 'operation_id': operation_id})
 
                 try:
                     if self.modo_real and is_valid_number(cantidad) and cantidad > 0:
-                        ejecutado, fee, pnl = await self._ejecutar_market_retry('buy', symbol, cantidad)
+                        ejecutado, fee, pnl = await self._ejecutar_market_retry('buy', symbol, cantidad, operation_id)
                         # actualiza con lo realmente ejecutado
                         cantidad = float(ejecutado)
                         orden.fee_total = getattr(orden, 'fee_total', 0.0) + fee
@@ -362,9 +419,22 @@ class OrderManager:
                             if self.bus:
                                 await self.bus.publish(
                                     'notify',
-                                    {'mensaje': f'❌ Orden real no ejecutada en {symbol}', 'tipo': 'CRITICAL'},
+                                    {
+                                        'mensaje': f'❌ Orden real no ejecutada en {symbol}',
+                                        'tipo': 'CRITICAL',
+                                        'operation_id': operation_id,
+                                    },
                                 )
                             registrar_orden('rejected')
+                            log_decision(
+                                log,
+                                'abrir',
+                                operation_id,
+                                entrada_log,
+                                {'ejecucion': 'sin_fills'},
+                                'reject',
+                                {'reason': 'no_fills'},
+                            )
                             return
                     else:
                         # Simulado: el “coste” inicial lo cargamos como PnL negativo hasta el cierre
@@ -384,17 +454,22 @@ class OrderManager:
                                     estrategias,
                                     tendencia,
                                     direccion,
+                                    operation_id,
                                 )
                                 registrado = True
                                 break
                             except Exception as e:
                                 log.error(f'❌ Error registrando orden {symbol}: {e}')
-                                if self.bus:
-                                    await self.bus.publish(
-                                        'notify',
-                                        {'mensaje': f'❌ Error registrando orden {symbol}: {e}', 'tipo': 'CRITICAL'},
-                                    )
-                                await asyncio.sleep(1)
+                        if self.bus:
+                            await self.bus.publish(
+                                'notify',
+                                {
+                                    'mensaje': f'❌ Error registrando orden {symbol}: {e}',
+                                    'tipo': 'CRITICAL',
+                                    'operation_id': operation_id,
+                                },
+                            )
+                        await asyncio.sleep(1)
 
                         if registrado:
                             orden.registro_pendiente = False
@@ -432,6 +507,15 @@ class OrderManager:
 
             if orden.registro_pendiente:
                 log.warning(f'⚠️ Orden {symbol} pendiente de registro')
+                log_decision(
+                    log,
+                    'abrir',
+                    operation_id,
+                    entrada_log,
+                    {'registro': 'pendiente'},
+                    'reject',
+                    {'reason': 'registro_pendiente'},
+                )
                 return False
 
             registrar_orden('opened')
@@ -441,7 +525,17 @@ class OrderManager:
                 mensaje = (
                     f"""🟢 Compra {symbol}\nPrecio: {precio:.2f} Cantidad: {cantidad}\nSL: {sl:.2f} TP: {tp:.2f}\nEstrategias: {estrategias_txt}"""
                 )
-                await self.bus.publish('notify', {'mensaje': mensaje})
+                await self.bus.publish('notify', {'mensaje': mensaje, 'operation_id': operation_id})
+
+            log_decision(
+                log,
+                'abrir',
+                operation_id,
+                entrada_log,
+                {'validaciones': 'ok'},
+                'accept',
+                {'cantidad': cantidad},
+            )
             return True
 				
     async def agregar_parcial_async(self, symbol: str, precio: float, cantidad: float) -> bool:
@@ -452,11 +546,13 @@ class OrderManager:
             orden = self.ordenes.get(symbol)
             if not orden:
                 return False
+            
+            operation_id = self._generar_operation_id(symbol)
 
             if self.modo_real:
                 try:
                     if cantidad > 0:
-                        ejecutado, fee, pnl = await self._ejecutar_market_retry('buy', symbol, cantidad)
+                        ejecutado, fee, pnl = await self._ejecutar_market_retry('buy', symbol, cantidad, operation_id)
                         cantidad = ejecutado
                         orden.fee_total = getattr(orden, 'fee_total', 0.0) + fee
                         orden.pnl_operaciones = getattr(orden, 'pnl_operaciones', 0.0) + pnl
@@ -465,7 +561,11 @@ class OrderManager:
                     if self.bus:
                         await self.bus.publish(
                             'notify',
-                            {'mensaje': f'❌ Error al agregar posición en {symbol}: {e}', 'tipo': 'CRITICAL'},
+                            {
+                                'mensaje': f'❌ Error al agregar posición en {symbol}: {e}',
+                                'tipo': 'CRITICAL',
+                                'operation_id': operation_id,
+                            },
                         )
                     return False
             else:
@@ -504,6 +604,8 @@ class OrderManager:
                 return False
 
             orden.cerrando = True
+            operation_id = self._generar_operation_id(symbol)
+            entrada_log = {'symbol': symbol, 'precio': precio, 'cantidad': orden.cantidad}
             try:
                 venta_exitosa = True
 
@@ -513,7 +615,7 @@ class OrderManager:
 
                     if cantidad > 1e-08:
                         try:
-                            ejecutado, fee, pnl = await self._ejecutar_market_retry('sell', symbol, cantidad)
+                            ejecutado, fee, pnl = await self._ejecutar_market_retry('sell', symbol, cantidad, operation_id)
                             restante = cantidad - ejecutado
 
                             if ejecutado > 0:
@@ -534,11 +636,11 @@ class OrderManager:
                                 real_orders._VENTAS_FALLIDAS.add(symbol)
 
                             if self.bus and not venta_exitosa:
-                                await self.bus.publish('notify', {'mensaje': f'❌ Venta fallida en {symbol}'})
+                                await self.bus.publish('notify', {'mensaje': f'❌ Venta fallida en {symbol}', 'operation_id': operation_id})
                         except Exception as e:
                             log.error(f'❌ Error al cerrar orden real en {symbol}: {e}')
                             if self.bus:
-                                await self.bus.publish('notify', {'mensaje': f'❌ Venta fallida en {symbol}: {e}'})
+                                await self.bus.publish('notify', {'mensaje': f'❌ Venta fallida en {symbol}: {e}', 'operation_id': operation_id})
                 else:
                     # Modo simulado: calcula PnL por diferencia
                     diff = (precio - orden.precio_entrada) * orden.cantidad
@@ -551,8 +653,12 @@ class OrderManager:
                     if self.bus and self.modo_real:
                         await self.bus.publish(
                             'notify',
-                            {'mensaje': f'⚠️ Venta no realizada, se reintentará en {symbol}'},
+                            {
+                                'mensaje': f'⚠️ Venta no realizada, se reintentará en {symbol}',
+                                'operation_id': operation_id,
+                            },
                         )
+                    log_decision(log, 'cerrar', operation_id, entrada_log, {'venta_exitosa': False}, 'reject', {'reason': 'venta_no_realizada'})
                     return False
 
                 # Venta exitosa: cerrar y registrar
@@ -576,7 +682,9 @@ class OrderManager:
                     mensaje = (
                         f"""📤 Venta {symbol}\nEntrada: {orden.precio_entrada:.2f} Salida: {precio:.2f}\nRetorno: {retorno * 100:.2f}%\nMotivo: {motivo}"""
                     )
-                    await self.bus.publish('notify', {'mensaje': mensaje})
+                    await self.bus.publish('notify', {'mensaje': mensaje, 'operation_id': operation_id})
+
+                log_decision(log, 'cerrar', operation_id, entrada_log, {'venta_exitosa': True}, 'accept', {'retorno': retorno})
 
                 registrar_orden('closed')
                 # Finalmente, elimina del activo
@@ -599,17 +707,20 @@ class OrderManager:
         if cantidad < 1e-08:
             log.warning(f'⚠️ Cantidad demasiado pequeña para vender: {cantidad}')
             return False
+        
+        operation_id = self._generar_operation_id(symbol)
 
         if self.modo_real:
             try:
-                ejecutado, fee, pnl = await self._ejecutar_market_retry('sell', symbol, cantidad)
+                ejecutado, fee, pnl = await self._ejecutar_market_retry('sell', symbol, cantidad, operation_id)
                 cantidad = ejecutado
                 orden.fee_total = getattr(orden, 'fee_total', 0.0) + fee
                 orden.pnl_operaciones = getattr(orden, 'pnl_operaciones', 0.0) + pnl
             except Exception as e:
                 log.error(f'❌ Error en venta parcial de {symbol}: {e}')
                 if self.bus:
-                    await self.bus.publish('notify', {'mensaje': f'❌ Venta parcial fallida en {symbol}: {e}'})
+                    await self.bus.publish('notify', {'mensaje': f'❌ Venta parcial fallida en {symbol}: {e}', 'operation_id': operation_id})
+                log_decision(log, 'cerrar_parcial', operation_id, {'symbol': symbol, 'cantidad': cantidad}, {}, 'reject', {'reason': str(e)})
                 return False
         else:
             diff = (precio - orden.precio_entrada) * cantidad
@@ -622,7 +733,7 @@ class OrderManager:
         log.info(f'📤 Cierre parcial de {symbol}: {cantidad} @ {precio:.2f} | {motivo}')
         if self.bus:
             mensaje = f"""📤 Venta parcial {symbol}\nCantidad: {cantidad}\nPrecio: {precio:.2f}\nMotivo: {motivo}"""
-            await self.bus.publish('notify', {'mensaje': mensaje})
+            await self.bus.publish('notify', {'mensaje': mensaje, 'operation_id': operation_id})
 
         if orden.cantidad_abierta <= 0:
             orden.precio_cierre = precio
@@ -641,7 +752,7 @@ class OrderManager:
                 mensaje = (
                     f"""📤 Venta {symbol}\nEntrada: {orden.precio_entrada:.2f} Salida: {precio:.2f}\nRetorno: {retorno * 100:.2f}%\nMotivo: {motivo}"""
                 )
-                await self.bus.publish('notify', {'mensaje': mensaje})
+                await self.bus.publish('notify', {'mensaje': mensaje, 'operation_id': operation_id})
             self.ordenes.pop(symbol, None)
 
             try:
@@ -649,8 +760,10 @@ class OrderManager:
             except Exception as e:
                 log.error(f'❌ Error eliminando orden {symbol} de SQLite: {e}')
             registrar_orden('closed')
+            log_decision(log, 'cerrar_parcial', operation_id, {'symbol': symbol, 'cantidad': cantidad}, {}, 'accept', {'retorno': retorno})
         else:
             registrar_orden('partial')
+            log_decision(log, 'cerrar_parcial', operation_id, {'symbol': symbol, 'cantidad': cantidad}, {}, 'accept', {'parcial': True})
         return True
 
     def obtener(self, symbol: str) -> Optional[Order]:

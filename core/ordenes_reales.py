@@ -3,7 +3,7 @@
 def ejecutar_orden_market(*args, **kwargs):
     return {'ejecutado': 0.0, 'restante': 0.0, 'status': 'FILLED', 'min_qty': 0.0, 'fee': 0.0, 'pnl': 0.0}
 
-def registrar_orden(*args, **kwargs):
+def registrar_orden(symbol, precio, cantidad, sl, tp, estrategias, tendencia, direccion='long', operation_id=None):
     return None
 
 def eliminar_orden(*args, **kwargs):

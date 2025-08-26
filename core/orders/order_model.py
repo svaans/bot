@@ -104,6 +104,7 @@ class Order:
     fee_total: float = 0.0
     pnl_operaciones: float = 0.0
     registro_pendiente: bool = False
+    operation_id: str | None = None
 
     @staticmethod
     def from_dict(data: Dict[str, Any]) ->'Order':
@@ -138,6 +139,7 @@ class Order:
         data.setdefault('fee_total', 0.0)
         data.setdefault('pnl_operaciones', 0.0)
         data.setdefault('registro_pendiente', False)
+        data.setdefault('operation_id', None)
         return Order(**data)
 
     def to_dict(self) ->Dict[str, Any]:
