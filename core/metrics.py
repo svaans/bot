@@ -18,6 +18,8 @@ from core.registro_metrico import registro_metrico
 
 _decisions: Dict[str, Dict[str, int]] = defaultdict(lambda: defaultdict(int))
 _orders: Dict[str, int] = defaultdict(int)
+_buy_rejected_insufficient_funds: int = 0
+
 
 
 def registrar_decision(symbol: str, action: str) -> None:
@@ -35,6 +37,15 @@ def registrar_orden(status: str) -> None:
     _orders[status] += 1
     registro_metrico.registrar("orden", {"status": status})
 
+def registrar_buy_rejected_insufficient_funds() -> None:
+    """Incrementa ``buy_rejected_insufficient_funds_total``."""
+
+    global _buy_rejected_insufficient_funds
+    _buy_rejected_insufficient_funds += 1
+    registro_metrico.registrar(
+        "buy_rejected", {"reason": "insufficient_funds"}
+    )
+
 
 def decisions_total() -> Dict[str, Dict[str, int]]:
     """Retorna una copia de los contadores de decisiones."""
@@ -46,3 +57,9 @@ def orders_total() -> Dict[str, int]:
     """Retorna una copia de los contadores de órdenes."""
 
     return dict(_orders)
+
+
+def buy_rejected_insufficient_funds_total() -> int:
+    """Retorna el total de compras rechazadas por fondos insuficientes."""
+
+    return _buy_rejected_insufficient_funds

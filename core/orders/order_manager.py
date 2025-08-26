@@ -12,7 +12,11 @@ from core.orders import real_orders
 from core.orders.validators import remainder_executable
 from core.utils.utils import is_valid_number
 from core.event_bus import EventBus
-from core.metrics import registrar_orden
+from core.metrics import (
+    registrar_orden,
+    registrar_buy_rejected_insufficient_funds,
+)
+from binance_api.cliente import obtener_cliente
 
 log = configurar_logger('orders', modo_silencioso=True)
 UTC = timezone.utc
@@ -251,7 +255,7 @@ class OrderManager:
         *,
         candle_close_ts: int | None = None,   # reservado (no usado aquí)
         strategy_version: str | None = None,  # reservado (no usado aquí)
-    ) -> None:
+    ) -> bool:
         log.info('➡️ Entrando en abrir_async()')
         lock = self._locks.setdefault(symbol, asyncio.Lock())
         async with lock:
@@ -260,7 +264,7 @@ class OrderManager:
                 if symbol not in self._dup_warned:
                     log.warning(f'⚠️ Orden duplicada evitada para {symbol}')
                     self._dup_warned.add(symbol)
-                return
+                return False
             # Consulta cruzada con Binance antes de abrir
             try:
                 ordenes_api = await asyncio.to_thread(
@@ -276,7 +280,7 @@ class OrderManager:
                             'tipo': 'WARNING',
                         },
                     )
-                return
+                return False
 
             if symbol in ordenes_api:
                 self.ordenes[symbol] = ordenes_api[symbol]
@@ -288,7 +292,26 @@ class OrderManager:
                         'notify',
                         {'mensaje': f'⚠️ Orden ya abierta en Binance para {symbol}'},
                     )
-                return
+                return False
+
+            if self.modo_real:
+                try:
+                    cliente = obtener_cliente()
+                    balance = cliente.fetch_balance()
+                    quote = symbol.split('/')[1]
+                    disponible = balance.get('free', {}).get(quote, 0.0)
+                except Exception as e:
+                    log.error(f'❌ Error obteniendo balance: {e}')
+                    disponible = 0.0
+                notional = precio * cantidad
+                if not remainder_executable(symbol, precio, cantidad) or notional > disponible:
+                    if self.bus:
+                        await self.bus.publish(
+                            'notify', {'mensaje': 'insuficiente', 'tipo': 'WARNING'}
+                        )
+                    registrar_buy_rejected_insufficient_funds()
+                    registrar_orden('rejected')
+                    return False
 
             self.abriendo.add(symbol)
             try:
@@ -401,7 +424,7 @@ class OrderManager:
                         )
                     self.ordenes.pop(symbol, None)
                     registrar_orden('failed')
-                    return
+                    return False
 
             finally:
                 self.abriendo.discard(symbol)
@@ -409,7 +432,7 @@ class OrderManager:
 
             if orden.registro_pendiente:
                 log.warning(f'⚠️ Orden {symbol} pendiente de registro')
-                return
+                return False
 
             registrar_orden('opened')
             log.info(f'🟢 Orden abierta para {symbol} @ {precio:.2f}')
@@ -419,6 +442,7 @@ class OrderManager:
                     f"""🟢 Compra {symbol}\nPrecio: {precio:.2f} Cantidad: {cantidad}\nSL: {sl:.2f} TP: {tp:.2f}\nEstrategias: {estrategias_txt}"""
                 )
                 await self.bus.publish('notify', {'mensaje': mensaje})
+            return True
 				
     async def agregar_parcial_async(self, symbol: str, precio: float, cantidad: float) -> bool:
         log.info('➡️ Entrando en agregar_parcial_async()')
