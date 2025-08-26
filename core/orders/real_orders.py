@@ -880,6 +880,33 @@ def ejecutar_orden_market_sell(symbol: str, cantidad: float, operation_id: str |
     raise
 
 
+def _market_sell_retry(symbol: str, cantidad: float, operation_id: str | None = None) -> dict:
+    log.info('➡️ Entrando en _market_sell_retry()')
+    """Envía ventas de mercado reintentando en caso de fills parciales."""
+    restante = cantidad
+    total = total_fee = total_pnl = 0.0
+    min_qty = 0.0
+    while restante > 0:
+        resp = ejecutar_orden_market_sell(symbol, restante, operation_id)
+        ejecutado = float(resp.get('ejecutado', 0.0))
+        restante = float(resp.get('restante', 0.0))
+        min_qty = float(resp.get('min_qty', 0.0))
+        total += ejecutado
+        total_fee += float(resp.get('fee', 0.0))
+        total_pnl += float(resp.get('pnl', 0.0))
+        if resp.get('status') != 'PARTIAL' or restante < min_qty:
+            break
+    estado = 'FILLED' if restante < 1e-8 else 'PARTIAL'
+    return {
+        'ejecutado': total,
+        'restante': restante,
+        'status': estado,
+        'min_qty': min_qty,
+        'fee': total_fee,
+        'pnl': total_pnl,
+    }
+
+
 def ejecutar_orden_limit(
     symbol: str,
     side: str,
