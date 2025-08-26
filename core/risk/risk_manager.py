@@ -151,7 +151,7 @@ class RiskManager:
         if exceso <= 1.0:
             return 1.0
         factor = 1.0 / exceso
-        factor = round(max(0.5, min(1.0, factor)), 3)
+        factor = round(max(0.25, min(1.0, factor)), 3)
         log.info(
             f'🌪️ Volatilidad excesiva, aplicando factor de reducción: {factor}'
             )

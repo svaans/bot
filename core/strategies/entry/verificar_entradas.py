@@ -13,8 +13,9 @@ from core.strategies.evaluador_tecnico import (
     calcular_umbral_adaptativo as calc_umbral_tecnico,
     cargar_pesos_tecnicos,
 )
-from indicators.helpers import get_rsi, get_momentum
+from indicators.helpers import get_rsi, get_momentum, get_atr
 from core.utils.utils import distancia_minima_valida, verificar_integridad_datos
+from core.utils.cooldown import calcular_cooldown
 from core.contexto_externo import obtener_puntaje_contexto
 from core.metricas_semanales import metricas_tracker
 from core.scoring import DecisionTrace, DecisionReason
@@ -89,9 +90,12 @@ async def verificar_entrada(trader, symbol: str, df: pd.DataFrame, estado) ->(
         if motivo == 'stop loss':
             velas = cierre.get('velas', 0) + 1
             cierre['velas'] = velas
-            if velas < int(config.get('cooldown_tras_perdida', 5)):
+            perdidas = cierre.get('perdidas_consecutivas', 1)
+            base_cd = int(config.get('cooldown_tras_perdida', 5))
+            cooldown = calcular_cooldown(perdidas, base_cd)
+            if velas < cooldown:
                 log.info(
-                    f'[{symbol}] Cooldown tras stop loss ({velas}) activo.')
+                    f'[{symbol}] Cooldown tras stop loss ({velas}/{cooldown}) activo.')
                 metricas_tracker.registrar_filtro('cooldown')
                 return None
             trader.historial_cierres.pop(symbol, None)
