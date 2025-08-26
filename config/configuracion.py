@@ -6,7 +6,8 @@ from core.utils.utils import configurar_logger
 RUTA_CONFIG_SIMBOLOS = 'config/configuraciones_optimas.json'
 log = configurar_logger('config_service')
 CONFIG_BASE = {'factor_umbral': 1.0, 'ajuste_volatilidad': 1.0,
-    'riesgo_maximo_diario': 2.0, 'ponderar_por_diversidad': True,
+    'riesgo_maximo_diario': 0.06, 'riesgo_por_trade': 0.02,
+    'ponderar_por_diversidad': True,
     'modo_agresivo': False, 'multiplicador_estrategias_recurrentes': 1.5,
     'peso_minimo_total': 0.5, 'diversidad_minima': 2,
     'umbral_peso_estrategia_unica': 3.5,

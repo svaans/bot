@@ -1,42 +1,36 @@
-"""Utilidades compartidas para ajustar ratios de SL/TP y riesgo.
+"""Utilidades compartidas para ajustar ratios de SL/TP, riesgo y modo agresivo."""
 
-Centraliza la lógica usada por ``adaptador_configuracion_dinamica`` y
-``adaptador_dinamico`` para evitar inconsistencias en los parámetros.
-"""
 from __future__ import annotations
+
 from core.utils.utils import configurar_logger
 
-log = configurar_logger('ajustador_riesgo')
+# Umbrales y riesgos base unificados
+MODO_AGRESIVO_VOL_THRESHOLD = 0.02
+MODO_AGRESIVO_SLOPE_THRESHOLD = 0.002
+RIESGO_POR_TRADE_BASE = 0.02  # 2% por operación
+RIESGO_MAXIMO_DIARIO_BASE = 0.06  # 6% riesgo global diario
+
+log = configurar_logger("ajustador_riesgo")
+
+
+def es_modo_agresivo(volatilidad: float, slope_pct: float) -> bool:
+    """Determina si el bot debe operar en modo agresivo."""
+    return (
+        volatilidad > MODO_AGRESIVO_VOL_THRESHOLD
+        or abs(slope_pct) > MODO_AGRESIVO_SLOPE_THRESHOLD
+    )
 
 
 def ajustar_sl_tp_riesgo(
     volatilidad: float,
     slope_pct: float,
-    base_riesgo: float = 2.0,
+    base_riesgo: float = RIESGO_MAXIMO_DIARIO_BASE,
     sl_ratio: float = 1.5,
     tp_ratio: float = 3.0,
 ) -> tuple[float, float, float]:
-    """Calcula ratios de SL/TP y riesgo adaptativos.
+    """Calcula ratios de SL/TP y riesgo adaptativos."""
 
-    Parameters
-    ----------
-    volatilidad: float
-        Medida relativa de volatilidad (por ejemplo ATR porcentual).
-    slope_pct: float
-        Pendiente del precio normalizada por el precio actual.
-    base_riesgo: float, optional
-        Riesgo máximo diario de partida.
-    sl_ratio: float, optional
-        Ratio base del *stop loss*.
-    tp_ratio: float, optional
-        Ratio base del *take profit*.
-
-    Returns
-    -------
-    tuple
-        ``(sl_ratio, tp_ratio, riesgo_maximo_diario)`` ajustados.
-    """
-    log.info('➡️ Entrando en ajustar_sl_tp_riesgo()')
+    log.info("➡️ Entrando en ajustar_sl_tp_riesgo()")
     # Ajuste por volatilidad
     if volatilidad > 0.02:
         sl_ratio *= 1.2

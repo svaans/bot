@@ -28,7 +28,11 @@ from indicators.retornos_volatilidad import (
 from core.utils.utils import configurar_logger
 from core.contexto_externo import obtener_puntaje_contexto
 from core.market_regime import detectar_regimen
-from core.ajustador_riesgo import ajustar_sl_tp_riesgo
+from core.ajustador_riesgo import (
+    ajustar_sl_tp_riesgo,
+    es_modo_agresivo,
+    RIESGO_MAXIMO_DIARIO_BASE,
+)
 log = configurar_logger('adaptador_dinamico')
 RUTA_CONFIGS_OPTIMAS = 'config/configuraciones_optimas.json'
 if os.path.exists(RUTA_CONFIGS_OPTIMAS):
@@ -74,7 +78,7 @@ def _adaptar_configuracion_base(symbol: str, df: pd.DataFrame, base_config: dict
     slope_pct = slope / precio_ref if precio_ref else 0.0
     sl_base = base_config.get('sl_ratio', 1.5)
     tp_base = base_config.get('tp_ratio', 3.0)
-    riesgo_base = base_config.get('riesgo_maximo_diario', 2.0)
+    riesgo_base = base_config.get('riesgo_maximo_diario', RIESGO_MAXIMO_DIARIO_BASE)
     sl_ratio, tp_ratio, riesgo_diario = ajustar_sl_tp_riesgo(
         volatilidad, slope_pct, riesgo_base, sl_base, tp_base
     )
@@ -90,7 +94,7 @@ def _adaptar_configuracion_base(symbol: str, df: pd.DataFrame, base_config: dict
     elif slope < -0.002:
         diversidad = max(base_div, 2)
     cooldown = min(24, max(0, int(volatilidad * 100)))
-    modo_agresivo = volatilidad > 0.01 or slope > 0.003
+    modo_agresivo = es_modo_agresivo(volatilidad, slope_pct)
     if modo_agresivo:
         diversidad = max(1, base_div - 1)
     config['diversidad_minima'] = diversidad
@@ -188,12 +192,12 @@ def calcular_umbral_adaptativo(symbol: str, df: pd.DataFrame,
     if config:
         ajuste_volatilidad = config.get('ajuste_volatilidad', 1.0)
         factor_umbral = config.get('factor_umbral', 1.0)
-        ajuste_riesgo = config.get('riesgo_maximo_diario', 1.0)
+        ajuste_riesgo = config.get('riesgo_maximo_diario', RIESGO_MAXIMO_DIARIO_BASE)
     else:
         cfg_sym = CONFIGS_OPTIMAS.get(symbol, {})
         ajuste_volatilidad = cfg_sym.get('ajuste_volatilidad', 1.0)
         factor_umbral = cfg_sym.get('factor_umbral', 1.0)
-        ajuste_riesgo = cfg_sym.get('riesgo_maximo_diario', 1.0)
+        ajuste_riesgo = cfg_sym.get('riesgo_maximo_diario', RIESGO_MAXIMO_DIARIO_BASE)
     contexto_score = (volatilidad * 0.3 + rango_medio * 0.3 + 
         volumen_relativo * 0.2 + momentum_std * 0.2) * 10 * ajuste_volatilidad
     if 40 < rsi < 60:

@@ -7,6 +7,7 @@ import asyncio
 from binance_api.cliente import fetch_balance_async
 from binance_api.filters import get_symbol_filters
 from core.utils.logger import configurar_logger
+from core.ajustador_riesgo import RIESGO_MAXIMO_DIARIO_BASE
 from core.risk import RiskManager, size_order, MarketInfo
 from core.event_bus import EventBus
 from core.contexto_externo import obtener_puntaje_contexto
@@ -26,7 +27,9 @@ class CapitalManager:
         self.fraccion_kelly = fraccion_kelly
         self.modo_real = getattr(config, 'modo_real', False)
         self.modo_capital_bajo = config.modo_capital_bajo
-        self.riesgo_maximo_diario = getattr(config, 'riesgo_maximo_diario', 1.0)
+        self.riesgo_maximo_diario = getattr(
+            config, 'riesgo_maximo_diario', RIESGO_MAXIMO_DIARIO_BASE
+        )
         self._markets_cache: Dict[str, MarketInfo] = {}
         self.capital_currency = getattr(config, 'capital_currency', None)
         if not self.capital_currency:

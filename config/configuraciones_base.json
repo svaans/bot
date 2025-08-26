@@ -2,7 +2,7 @@
   "BTC/EUR": {
       "factor_umbral": 1.5,
       "ajuste_volatilidad": 1.5,
-      "riesgo_maximo_diario": 2.0,
+      "riesgo_maximo_diario": 0.06, "riesgo_por_trade": 0.02,
       "ponderar_por_diversidad": true,
       "modo_agresivo": false,
       "multiplicador_estrategias_recurrentes": 1.5,
@@ -24,7 +24,7 @@
     "ETH/EUR": {
       "factor_umbral": 1.5,
       "ajuste_volatilidad": 1.5,
-      "riesgo_maximo_diario": 2.0,
+      "riesgo_maximo_diario": 0.06, "riesgo_por_trade": 0.02,
       "ponderar_por_diversidad": true,
       "modo_agresivo": false,
       "multiplicador_estrategias_recurrentes": 1.5,
@@ -46,7 +46,7 @@
     "ADA/EUR": {
       "factor_umbral": 1.5,
       "ajuste_volatilidad": 1.5,
-      "riesgo_maximo_diario": 2.0,
+      "riesgo_maximo_diario": 0.06, "riesgo_por_trade": 0.02,
       "ponderar_por_diversidad": true,
       "modo_agresivo": false,
       "multiplicador_estrategias_recurrentes": 1.5,
@@ -68,7 +68,7 @@
     "SOL/EUR": {
       "factor_umbral": 1.5,
       "ajuste_volatilidad": 1.5,
-      "riesgo_maximo_diario": 2.0,
+      "riesgo_maximo_diario": 0.06, "riesgo_por_trade": 0.02,
       "ponderar_por_diversidad": true,
       "modo_agresivo": false,
       "multiplicador_estrategias_recurrentes": 1.5,
@@ -90,7 +90,7 @@
     "BNB/EUR": {
       "factor_umbral": 1.5,
       "ajuste_volatilidad": 1.5,
-      "riesgo_maximo_diario": 2.0,
+      "riesgo_maximo_diario": 0.06, "riesgo_por_trade": 0.02,
       "ponderar_por_diversidad": true,
       "modo_agresivo": false,
       "multiplicador_estrategias_recurrentes": 1.5,

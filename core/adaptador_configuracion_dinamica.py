@@ -4,7 +4,11 @@ import pandas as pd
 import numpy as np
 from core.utils.utils import configurar_logger
 from indicators.helpers import get_atr, get_rsi, get_slope
-from core.ajustador_riesgo import ajustar_sl_tp_riesgo
+from core.ajustador_riesgo import (
+    ajustar_sl_tp_riesgo,
+    es_modo_agresivo,
+    RIESGO_MAXIMO_DIARIO_BASE,
+)
 log = configurar_logger('adaptador_dinamico')
 
 
@@ -86,8 +90,7 @@ def _adaptar_configuracion_indicadores(symbol: str, df: pd.DataFrame, base_confi
         t = np.clip((volumen_relativo - 1.2) / (1.5 - 1.2), 0.0, 1.0)
         min_volumen_relativo = 1.1 + t * (1.3 - 1.1)
     min_volumen_relativo = round(float(min_volumen_relativo), 3)
-    modo_agresivo = atr_pct > 0.02 or abs(rsi - 50) > 20 or abs(slope_pct
-        ) > 0.002
+    modo_agresivo = es_modo_agresivo(atr_pct, slope_pct)
     factor_umbral = 1.0
     if atr_pct > 0.02:
         factor_umbral += 0.1
@@ -96,7 +99,7 @@ def _adaptar_configuracion_indicadores(symbol: str, df: pd.DataFrame, base_confi
     factor_umbral = min(factor_umbral, 1.3)
     sl_base = base_config.get('sl_ratio', 1.5)
     tp_base = base_config.get('tp_ratio', 3.0)
-    riesgo_base = base_config.get('riesgo_maximo_diario', 2.0)
+    riesgo_base = base_config.get('riesgo_maximo_diario', RIESGO_MAXIMO_DIARIO_BASE)
     sl_ratio, tp_ratio, riesgo_maximo_diario = ajustar_sl_tp_riesgo(
         atr_pct, slope_pct, riesgo_base, sl_base, tp_base
     )

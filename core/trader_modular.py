@@ -38,6 +38,7 @@ from core.strategies import cargar_pesos_estrategias
 from core.risk import calcular_fraccion_kelly
 from core.data import PersistenciaTecnica, coincidencia_parcial, calcular_persistencia_minima
 from core.metricas_semanales import metricas_tracker, metricas_semanales
+from core.ajustador_riesgo import RIESGO_MAXIMO_DIARIO_BASE
 from learning.entrenador_estrategias import actualizar_pesos_estrategias_symbol
 from core.utils.utils import configurar_logger
 from core.monitor_estado_bot import monitorear_estado_periodicamente
@@ -208,7 +209,7 @@ class Trader:
         self.piramide_fracciones = max(1, config.fracciones_piramide)
         self.reserva_piramide = max(0.0, min(1.0, config.reserva_piramide))
         self.umbral_piramide = max(0.0, config.umbral_piramide)
-        self.riesgo_maximo_diario = 1.0
+        self.riesgo_maximo_diario = RIESGO_MAXIMO_DIARIO_BASE
         self.capital_manager = CapitalManager(config, self.cliente, self.risk,
             self.fraccion_kelly, bus=self.bus)
         self.capital_por_simbolo = self.capital_manager.capital_por_simbolo
