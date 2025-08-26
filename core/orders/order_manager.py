@@ -154,7 +154,7 @@ class OrderManager:
             local = self.ordenes.get(sym)
             if local:
                 # Preserva flags locales si aplican
-                setattr(remoto, 'registro_pendiente', getattr(local, 'registro_pendiente', False) and getattr(remoto, 'registro_pendiente', False))
+                setattr(remoto, 'registro_pendiente', getattr(local, 'registro_pendiente', False) or getattr(remoto, 'registro_pendiente', False))
                 setattr(remoto, 'cerrando', getattr(local, 'cerrando', False))
                 # Si tienes otros campos efímeros, mapéalos aquí
             merged[sym] = remoto
