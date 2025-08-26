@@ -63,15 +63,21 @@ class OrderManager:
         cada intento.
         """
         operation_id = operation_id or self._generar_operation_id(symbol)
+		if side == 'sell':
+            resp = await asyncio.to_thread(
+                real_orders._market_sell_retry, symbol, cantidad, operation_id
+            )
+            return (
+                float(resp.get('ejecutado', 0.0)),
+                float(resp.get('fee', 0.0)),
+                float(resp.get('pnl', 0.0)),
+            )
         restante = cantidad
         total = total_fee = total_pnl = 0.0
         while restante > 0:
-            func = (
-                real_orders.ejecutar_orden_market
-                if side == 'buy'
-                else real_orders.ejecutar_orden_market_sell
-            )
-            resp = await asyncio.to_thread(func, symbol, restante, operation_id)
+            resp = await asyncio.to_thread(
+                real_orders.ejecutar_orden_market, symbol, restante, operation_id
+			)
             ejecutado = float(resp.get('ejecutado', 0.0))
             total += ejecutado
             restante = float(resp.get('restante', 0.0))
@@ -600,10 +606,32 @@ class OrderManager:
             await self.bus.publish('notify', {'mensaje': mensaje})
 
         if orden.cantidad_abierta <= 0:
-            # si ya no quedan unidades abiertas, retira del activo (pero no toques historial aquí)
+            orden.precio_cierre = precio
+            orden.fecha_cierre = datetime.now(UTC).isoformat()
+            orden.motivo_cierre = motivo
+            base = orden.precio_entrada * orden.cantidad if orden.cantidad else 0.0
+            retorno = (orden.pnl_operaciones / base) if base else 0.0
+            orden.retorno_total = retorno
+            self.historial.setdefault(symbol, []).append(orden.to_dict())
+            if len(self.historial[symbol]) > self.max_historial:
+                self.historial[symbol] = self.historial[symbol][-self.max_historial:]
+            if retorno < 0 and self.bus:
+                await self.bus.publish('registrar_perdida', {'symbol': symbol, 'perdida': retorno})
+            log.info(f'📤 Orden cerrada para {symbol} @ {precio:.2f} | {motivo}')
+            if self.bus:
+                mensaje = (
+                    f"""📤 Venta {symbol}\nEntrada: {orden.precio_entrada:.2f} Salida: {precio:.2f}\nRetorno: {retorno * 100:.2f}%\nMotivo: {motivo}"""
+                )
+                await self.bus.publish('notify', {'mensaje': mensaje})
             self.ordenes.pop(symbol, None)
 
-        registrar_orden('partial')
+            try:
+                await asyncio.to_thread(real_orders.eliminar_orden, symbol)
+            except Exception as e:
+                log.error(f'❌ Error eliminando orden {symbol} de SQLite: {e}')
+            registrar_orden('closed')
+        else:
+            registrar_orden('partial')
         return True
 
     def obtener(self, symbol: str) -> Optional[Order]:
