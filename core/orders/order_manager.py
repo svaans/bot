@@ -63,7 +63,7 @@ class OrderManager:
         cada intento.
         """
         operation_id = operation_id or self._generar_operation_id(symbol)
-		if side == 'sell':
+        if side == 'sell':
             resp = await asyncio.to_thread(
                 real_orders._market_sell_retry, symbol, cantidad, operation_id
             )
@@ -77,7 +77,7 @@ class OrderManager:
         while restante > 0:
             resp = await asyncio.to_thread(
                 real_orders.ejecutar_orden_market, symbol, restante, operation_id
-			)
+            )
             ejecutado = float(resp.get('ejecutado', 0.0))
             total += ejecutado
             restante = float(resp.get('restante', 0.0))
