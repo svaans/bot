@@ -15,6 +15,7 @@ from core.event_bus import EventBus
 from core.metrics import registrar_orden
 
 log = configurar_logger('orders', modo_silencioso=True)
+UTC = timezone.utc
 
 MAX_HISTORIAL_ORDENES = 1000
 
