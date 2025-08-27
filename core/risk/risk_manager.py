@@ -5,7 +5,7 @@ from core.utils.utils import configurar_logger
 from core.risk.riesgo import riesgo_superado as _riesgo_superado, actualizar_perdida
 from core.reporting import reporter_diario
 from core.event_bus import EventBus
-from typing import Any
+from typing import Any, Dict, Set
 log = configurar_logger('risk', modo_silencioso=True)
 
 
@@ -17,6 +17,8 @@ class RiskManager:
         self.umbral = umbral
         self._factor_kelly_prev = None
         self.bus = bus
+        self.posiciones_abiertas: Set[str] = set()
+        self.correlaciones: Dict[str, Dict[str, float]] = {}
         if bus:
             self.subscribe(bus)
 
@@ -40,6 +42,51 @@ class RiskManager:
         """Registra una pérdida para ``symbol``."""
         if perdida < 0:
             actualizar_perdida(symbol, perdida)
+
+    # --- Gestión de correlaciones entre posiciones ---
+    def abrir_posicion(self, symbol: str) -> None:
+        """Marca ``symbol`` como posición abierta."""
+        self.posiciones_abiertas.add(symbol)
+
+    def cerrar_posicion(self, symbol: str) -> None:
+        """Elimina ``symbol`` de las posiciones abiertas y sus correlaciones."""
+        self.posiciones_abiertas.discard(symbol)
+        self.correlaciones.pop(symbol, None)
+        for otros in self.correlaciones.values():
+            otros.pop(symbol, None)
+
+    def registrar_correlaciones(self, symbol: str, correlaciones: dict[str, float]) -> None:
+        """Registra correlaciones de ``symbol`` con otras posiciones abiertas."""
+        if symbol not in self.posiciones_abiertas:
+            return
+        self.correlaciones.setdefault(symbol, {})
+        for otro, rho in correlaciones.items():
+            if otro in self.posiciones_abiertas:
+                self.correlaciones[symbol][otro] = rho
+                self.correlaciones.setdefault(otro, {})[symbol] = rho
+
+    def correlacion_media(self, symbol: str, correlaciones: dict[str, float]) -> float:
+        """Calcula la correlación media absoluta con posiciones abiertas."""
+        valores = [
+            abs(correlaciones[abierta])
+            for abierta in self.posiciones_abiertas
+            if abierta != symbol and abierta in correlaciones
+        ]
+        if not valores:
+            return 0.0
+        return float(np.mean(valores))
+
+    def permite_entrada(
+        self, symbol: str, correlaciones: dict[str, float], diversidad_minima: float
+    ) -> bool:
+        """Determina si se permite una nueva entrada según la correlación media."""
+        media = self.correlacion_media(symbol, correlaciones)
+        if media > diversidad_minima:
+            log.info(
+                f'🚫 {symbol}: correlación media {media:.2f} > {diversidad_minima:.2f}'
+            )
+            return False
+        return True
 
     def ajustar_umbral(self, segun_metricas: dict) ->None:
         log.info('➡️ Entrando en ajustar_umbral()')
