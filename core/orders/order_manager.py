@@ -138,11 +138,11 @@ class OrderManager:
             self._sync_task = loop.create_task(self._sync_loop())
 
     async def _sync_once(self) -> None:
-	    actuales = set(self.ordenes.keys())
-	    try:
-            ordenes_reconciliadas: Dict[str, Order] = await asyncio.to_thread(
-                real_orders.reconciliar_ordenes
-            )
++        actuales = set(self.ordenes.keys())
+         try:
+             ordenes_reconciliadas: Dict[str, Order] = await asyncio.to_thread(
+                 real_orders.reconciliar_ordenes
+             )
         except Exception as e:
             log.error(f'❌ Error sincronizando órdenes: {e}')
             return
