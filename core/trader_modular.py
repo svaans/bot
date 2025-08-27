@@ -68,6 +68,7 @@ from core.procesar_vela import (
 from indicators.rsi import calcular_rsi
 from core.scoring import calcular_score_tecnico, PESOS_SCORE_TECNICO, ScoreBreakdown
 from binance_api.cliente import fetch_ticker_async
+from core import adaptador_umbral
 log = configurar_logger('trader')
 LOG_DIR = os.getenv('LOG_DIR', 'logs')
 UTC = timezone.utc
@@ -1750,6 +1751,22 @@ class Trader:
                 os.path.join(ESTADO_DIR, 'capital.json'),
                 self.capital_por_simbolo,
             )
+            await asyncio.to_thread(adaptador_umbral.guardar_estado)
+            buffers = {
+                s: list(e.estrategias_buffer)[-100:]
+                for s, e in self.estado.items()
+                if e.estrategias_buffer
+            }
+            await asyncio.to_thread(
+                self._save_json_file,
+                os.path.join(ESTADO_DIR, 'estrategias_buffer.json'),
+                buffers,
+            )
+            await asyncio.to_thread(
+                self._save_json_file,
+                os.path.join(ESTADO_DIR, 'persistencia_conteo.json'),
+                self.persistencia.conteo,
+            )
         except Exception as e:
             log.warning(f'⚠️ Error guardando estado persistente: {e}')
 
@@ -1769,6 +1786,24 @@ class Trader:
             if data:
                 self.capital_por_simbolo.update(
                     {k: float(v) for k, v in data.items()}
+                )
+            await asyncio.to_thread(adaptador_umbral.cargar_estado)
+            data = await asyncio.to_thread(
+                self._load_json_file,
+                os.path.join(ESTADO_DIR, 'estrategias_buffer.json'),
+            )
+            for sym, buf in data.items():
+                if sym in self.estado and isinstance(buf, list):
+                    self.estado[sym].estrategias_buffer = deque(
+                        buf, maxlen=MAX_ESTRATEGIAS_BUFFER
+                    )
+            data = await asyncio.to_thread(
+                self._load_json_file,
+                os.path.join(ESTADO_DIR, 'persistencia_conteo.json'),
+            )
+            if data:
+                self.persistencia.conteo.update(
+                    {s: {k: int(v) for k, v in d.items()} for s, d in data.items()}
                 )
         except Exception as e:
             log.warning(f'⚠️ Error cargando estado persistente: {e}')

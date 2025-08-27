@@ -19,11 +19,14 @@ from indicators.retornos_volatilidad import (
     verificar_consistencia,
     volatilidad_welford,
 )
-from core.utils.utils import configurar_logger
+from core.utils.utils import configurar_logger, ESTADO_DIR
 log = configurar_logger("adaptador_umbral")
 RUTA_CONFIG = Path("config/configuraciones_optimas.json")
 _CONFIG_CACHE: Dict[str, dict] | None = None
 _UMBRAL_SUAVIZADO: Dict[str, float] = {}
+# Contador local para saltos de histéresis
+_HISTERESIS_SKIPS: Dict[str, int] = {}
+RUTA_ESTADO = Path(ESTADO_DIR) / "umbral_adaptativo.json"
 # Parámetros de suavizado
 ALPHA_BASE = 0.3
 ALPHA_VOLATILIDAD_ALTA = 0.5
@@ -40,6 +43,45 @@ UMBRAL_HISTERESIS_SKIPS = Counter(
     "Actualizaciones omitidas por la banda de histéresis",
     ["symbol"],
 )
+
+
+def cargar_estado() -> None:
+    log.info("➡️ Entrando en cargar_estado()")
+    if not RUTA_ESTADO.exists():
+        return
+    try:
+        with open(RUTA_ESTADO, "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+        _UMBRAL_SUAVIZADO.update(
+            {k: float(v) for k, v in data.get("umbral_suavizado", {}).items()}
+        )
+        for sym, val in _UMBRAL_SUAVIZADO.items():
+            UMBRAL_ADAPTATIVO_ACTUAL.labels(symbol=sym).set(val)
+        _HISTERESIS_SKIPS.update(
+            {k: int(v) for k, v in data.get("histeresis_skips", {}).items()}
+        )
+        for sym, count in _HISTERESIS_SKIPS.items():
+            if count:
+                UMBRAL_HISTERESIS_SKIPS.labels(symbol=sym).inc(count)
+    except Exception as e:  # pragma: no cover - logging de carga
+        log.warning(f"⚠️ Error cargando estado umbral: {e}")
+
+
+def guardar_estado() -> None:
+    log.info("➡️ Entrando en guardar_estado()")
+    try:
+        RUTA_ESTADO.parent.mkdir(parents=True, exist_ok=True)
+        with open(RUTA_ESTADO, "w", encoding="utf-8") as fh:
+            json.dump(
+                {
+                    "umbral_suavizado": _UMBRAL_SUAVIZADO,
+                    "histeresis_skips": _HISTERESIS_SKIPS,
+                },
+                fh,
+                indent=2,
+            )
+    except Exception as e:  # pragma: no cover - logging de guardado
+        log.warning(f"⚠️ Error guardando estado umbral: {e}")
 
 
 def _cargar_config() -> Dict[str, dict]:
@@ -131,6 +173,7 @@ def calcular_umbral_adaptativo(
         return 1.0
 
     if previo is not None and abs(suavizado - previo) < HISTERESIS:
+        _HISTERESIS_SKIPS[symbol] = _HISTERESIS_SKIPS.get(symbol, 0) + 1
         UMBRAL_HISTERESIS_SKIPS.labels(symbol=symbol).inc()
         UMBRAL_ADAPTATIVO_ACTUAL.labels(symbol=symbol).set(previo)
         return round(previo, 2)
