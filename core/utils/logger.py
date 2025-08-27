@@ -35,9 +35,24 @@ class JsonFormatter(logging.Formatter):
     """Formatter que genera cada entrada en formato JSON."""
 
     def format(self, record: logging.LogRecord) ->str:
-        data = {'timestamp': datetime.fromtimestamp(record.created, tz=
-            timezone.utc).isoformat(), 'level': record.levelname, 'logger':
-            record.name, 'message': record.getMessage()}
+        ts = getattr(record, 'timestamp', None)
+        if ts is None:
+            ts = record.created
+        if isinstance(ts, (int, float)):
+            ts_iso = datetime.fromtimestamp(ts, tz=timezone.utc).isoformat()
+        else:
+            try:
+                ts_iso = datetime.fromtimestamp(float(ts), tz=timezone.utc).isoformat()
+            except Exception:
+                ts_iso = str(ts)
+        data = {
+            'symbol': getattr(record, 'symbol', None),
+            'timeframe': getattr(record, 'timeframe', None),
+            'timestamp': ts_iso,
+            'evento': record.getMessage(),
+            'level': record.levelname,
+            'logger': record.name,
+        }
         return json.dumps(data, ensure_ascii=False)
 
 
