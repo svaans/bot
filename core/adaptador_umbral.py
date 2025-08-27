@@ -24,7 +24,10 @@ log = configurar_logger("adaptador_umbral")
 RUTA_CONFIG = Path("config/configuraciones_optimas.json")
 _CONFIG_CACHE: Dict[str, dict] | None = None
 _UMBRAL_SUAVIZADO: Dict[str, float] = {}
-ALPHA = 0.3
+# Parámetros de suavizado
+ALPHA_BASE = 0.3
+ALPHA_VOLATILIDAD_ALTA = 0.5
+PERCENTIL_VOL_ALTO = 0.9
 HISTERESIS = 0.05
 
 UMBRAL_ADAPTATIVO_ACTUAL = Gauge(
@@ -73,16 +76,23 @@ def calcular_umbral_adaptativo(
     base = config.get("peso_minimo_total", 0.5)
     factor = config.get("factor_umbral", 1.0)
 
-    def _factor_volatilidad() -> float:
-        if df is None or len(df) < 21 or "close" not in df:
-            return 1.0
-        precios = df["close"].tail(21)
+    # Cálculo de volatilidad actual y percentil para suavizado adaptativo
+    vol_actual: float | None = None
+    vol_umbral: float | None = None
+    if df is not None and len(df) >= 21 and "close" in df:
+        precios = df["close"].tail(200)
         simples = retornos_simples(precios)
         logs = retornos_log(precios)
-        if not verificar_consistencia(simples, logs):
+        if verificar_consistencia(simples, logs) and len(simples) >= 20:
+            vol_actual = volatilidad_welford(simples.tail(20))
+            vols = simples.rolling(20).std().dropna()
+            if len(vols) > 0:
+                vol_umbral = vols.quantile(PERCENTIL_VOL_ALTO)
+
+    def _factor_volatilidad() -> float:
+        if vol_actual is None:
             return 1.0
-        vol = volatilidad_welford(simples.tail(20))
-        return 1 + vol * 10
+        return 1 + vol_actual * 10
 
     def _factor_slope(valor: float | None) -> float:
         return 1 + abs(valor) if valor is not None else 1.0
@@ -108,11 +118,15 @@ def calcular_umbral_adaptativo(
     umbral = max(1.0, umbral)
     if pd.isna(umbral) or not math.isfinite(umbral):
         return 1.0
+    
+    alpha = ALPHA_BASE
+    if vol_actual is not None and vol_umbral is not None and vol_actual > vol_umbral:
+        alpha = ALPHA_VOLATILIDAD_ALTA
     previo = _UMBRAL_SUAVIZADO.get(symbol)
     if previo is None:
         suavizado = umbral
     else:
-        suavizado = previo + ALPHA * (umbral - previo)
+        suavizado = previo + alpha * (umbral - previo)
     if pd.isna(suavizado) or not math.isfinite(suavizado):
         return 1.0
 
