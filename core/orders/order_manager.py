@@ -280,7 +280,7 @@ class OrderManager:
         cantidad: float = 0.0,
         puntaje: float = 0.0,
         umbral: float = 0.0,
-		score_tecnico: float = 0.0,
+	    score_tecnico: float = 0.0,
         objetivo: float | None = None,
         fracciones: int = 1,
         detalles_tecnicos: dict | None = None,
