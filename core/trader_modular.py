@@ -48,7 +48,7 @@ from core.config_manager.dinamica import adaptar_configuracion
 from ccxt.base.errors import BaseError
 from core.reporting import reporter_diario
 from core.registro_metrico import registro_metrico
-from core.metrics import registrar_decision
+from core.metrics import registrar_decision, registrar_correlacion_btc
 from core.supervisor import supervised_task, task_heartbeat, tick, last_alive, data_heartbeat
 from learning.aprendizaje_en_linea import registrar_resultado_trade
 from learning.aprendizaje_continuo import ejecutar_ciclo as ciclo_aprendizaje
@@ -67,6 +67,7 @@ from core.procesar_vela import (
     MAX_ESTRATEGIAS_BUFFER,
 )
 from indicators.rsi import calcular_rsi
+from indicators.correlacion import correlacion_series
 from core.scoring import calcular_score_tecnico, PESOS_SCORE_TECNICO, ScoreBreakdown
 from binance_api.cliente import fetch_ticker_async
 from core import adaptador_umbral
@@ -172,7 +173,14 @@ class Trader:
         self.fraccion_kelly = calcular_fraccion_kelly()
         factor_kelly = self.risk.multiplicador_kelly()
         self.fraccion_kelly *= factor_kelly
-        self.series_precio: dict[str, deque] = defaultdict(lambda: deque(maxlen=MAX_BUFFER_VELAS))
+        self.series_precio: dict[str, deque] = defaultdict(
+            lambda: deque(maxlen=MAX_BUFFER_VELAS)
+        )
+        # Históricos adicionales para BTC y otros índices macro si se dispone.
+        self.historicos_macro: dict[str, deque] = defaultdict(
+            lambda: deque(maxlen=self.max_filas_historico)
+        )
+        self.umbral_correlacion_btc = getattr(config, "umbral_correlacion_btc", 0.9)
         factor_vol = 1.0
         try:
             factores = []
@@ -1018,6 +1026,36 @@ class Trader:
             self._correlaciones_cache = correlaciones
             self._correlaciones_ts = ahora
         return correlaciones
+    
+    def _es_correlacion_btc_alta(
+        self, symbol: str, ventana: int = 60
+    ) -> tuple[bool, float | None]:
+        """Evalúa si ``symbol`` está demasiado correlacionado con BTC.
+
+        Devuelve una tupla ``(rechazar, rho)`` donde ``rechazar`` indica si la
+        entrada debería rechazarse y ``rho`` es la correlación calculada o
+        ``None`` si no pudo obtenerse.
+        """
+
+        df_symbol = self._obtener_historico(symbol, max_rows=ventana)
+        df_btc = self._obtener_historico("BTC/EUR", max_rows=ventana)
+        if df_symbol is None or df_btc is None:
+            return False, None
+        if "close" not in df_symbol or "close" not in df_btc:
+            return False, None
+        rho = correlacion_series(df_symbol["close"], df_btc["close"], ventana)
+        if rho is None:
+            return False, None
+        registrar_correlacion_btc(symbol, rho)
+        return abs(rho) >= self.umbral_correlacion_btc, rho
+
+    def actualizar_indice_macro(self, nombre: str, valor: float) -> None:
+        """Añade un nuevo valor de cierre al histórico del índice ``nombre``."""
+
+        serie = self.historicos_macro.setdefault(
+            nombre, deque(maxlen=self.max_filas_historico)
+        )
+        serie.append(float(valor))
 
     def _iniciar_tarea(self, nombre: str, factory: Callable[[], Awaitable]
         ) ->None:
@@ -1687,6 +1725,11 @@ class Trader:
                 log.info(f'[{symbol}] Rechazo por diversificación correlacionada')
                 metricas_tracker.registrar_filtro('diversificacion')
                 return None
+        rechazado, rho = self._es_correlacion_btc_alta(symbol)
+        if rechazado:
+            log.info(f'[{symbol}] Rechazo por correlación con BTC: {rho:.2f}')
+            metricas_tracker.registrar_filtro('correlacion_btc')
+            return None
         return operacion
 
     async def ejecutar(self) ->None:

@@ -6,6 +6,7 @@ Este módulo implementa contadores simples en memoria y los registra en
 ``decisions_total{symbol,action}`` – Número de decisiones tomadas por
 símbolo y acción.
 ``orders_total{status}`` – Conteo de órdenes por estado.
+``correlacion_btc{symbol}`` – Última correlación conocida con BTC.
 """
 
 from __future__ import annotations
@@ -19,6 +20,7 @@ from core.registro_metrico import registro_metrico
 _decisions: Dict[str, Dict[str, int]] = defaultdict(lambda: defaultdict(int))
 _orders: Dict[str, int] = defaultdict(int)
 _buy_rejected_insufficient_funds: int = 0
+_correlacion_btc: Dict[str, float] = {}
 
 
 
@@ -26,9 +28,7 @@ def registrar_decision(symbol: str, action: str) -> None:
     """Incrementa ``decisions_total`` para ``symbol`` y ``action``."""
 
     _decisions[symbol][action] += 1
-    registro_metrico.registrar(
-        "decision", {"symbol": symbol, "action": action}
-    )
+    registro_metrico.registrar("decision", {"symbol": symbol, "action": action})
 
 
 def registrar_orden(status: str) -> None:
@@ -42,9 +42,14 @@ def registrar_buy_rejected_insufficient_funds() -> None:
 
     global _buy_rejected_insufficient_funds
     _buy_rejected_insufficient_funds += 1
-    registro_metrico.registrar(
-        "buy_rejected", {"reason": "insufficient_funds"}
-    )
+    registro_metrico.registrar("buy_rejected", {"reason": "insufficient_funds"})
+
+
+def registrar_correlacion_btc(symbol: str, rho: float) -> None:
+    """Registra la correlación de un símbolo con BTC."""
+
+    _correlacion_btc[symbol] = rho
+    registro_metrico.registrar("correlacion_btc", {"symbol": symbol, "rho": rho})
 
 
 def decisions_total() -> Dict[str, Dict[str, int]]:
@@ -63,3 +68,9 @@ def buy_rejected_insufficient_funds_total() -> int:
     """Retorna el total de compras rechazadas por fondos insuficientes."""
 
     return _buy_rejected_insufficient_funds
+
+
+def correlacion_btc() -> Dict[str, float]:
+    """Retorna la última correlación registrada con BTC por símbolo."""
+
+    return dict(_correlacion_btc)
