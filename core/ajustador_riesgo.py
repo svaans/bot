@@ -31,6 +31,7 @@ def ajustar_sl_tp_riesgo(
     """Calcula ratios de SL/TP y riesgo adaptativos."""
 
     log.info("➡️ Entrando en ajustar_sl_tp_riesgo()")
+    riesgo_inicial = base_riesgo
     # Ajuste por volatilidad
     if volatilidad > 0.02:
         sl_ratio *= 1.2
@@ -49,4 +50,10 @@ def ajustar_sl_tp_riesgo(
     tp_ratio = max(tp_ratio, sl_ratio * 1.2)
     tp_ratio = min(max(tp_ratio, 1.0), 8.0)
     riesgo_maximo_diario = round(base_riesgo, 4)
+    if riesgo_maximo_diario != round(riesgo_inicial, 4):
+        log.info(
+            "Riesgo diario ajustado de %.4f a %.4f",
+            round(riesgo_inicial, 4),
+            riesgo_maximo_diario,
+        )
     return round(sl_ratio, 2), round(tp_ratio, 2), riesgo_maximo_diario

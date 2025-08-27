@@ -91,6 +91,10 @@ def _adaptar_configuracion_indicadores(symbol: str, df: pd.DataFrame, base_confi
         min_volumen_relativo = 1.1 + t * (1.3 - 1.1)
     min_volumen_relativo = round(float(min_volumen_relativo), 3)
     modo_agresivo = es_modo_agresivo(atr_pct, slope_pct)
+    if modo_agresivo:
+        log.info(
+            f"[{symbol}] Modo agresivo activado (ATR%={atr_pct:.4f}, Slope%={slope_pct:.4f})"
+        )
     factor_umbral = 1.0
     if atr_pct > 0.02:
         factor_umbral += 0.1
@@ -103,6 +107,10 @@ def _adaptar_configuracion_indicadores(symbol: str, df: pd.DataFrame, base_confi
     sl_ratio, tp_ratio, riesgo_maximo_diario = ajustar_sl_tp_riesgo(
         atr_pct, slope_pct, riesgo_base, sl_base, tp_base
     )
+    if round(riesgo_maximo_diario, 4) != round(riesgo_base, 4):
+        log.info(
+            f"[{symbol}] Riesgo diario ajustado a {riesgo_maximo_diario:.4f}"
+        )
     if not _validar_coherencia_tp_sl(sl_ratio, tp_ratio):
         _alertar_inconsistencias(symbol, sl_ratio, tp_ratio)
     cooldown_tras_perdida = 2

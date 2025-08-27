@@ -82,6 +82,10 @@ def _adaptar_configuracion_base(symbol: str, df: pd.DataFrame, base_config: dict
     sl_ratio, tp_ratio, riesgo_diario = ajustar_sl_tp_riesgo(
         volatilidad, slope_pct, riesgo_base, sl_base, tp_base
     )
+    if round(riesgo_diario, 4) != round(riesgo_base, 4):
+        log.info(
+            f"[{symbol}] Riesgo diario ajustado a {riesgo_diario:.4f}"
+        )
     config['sl_ratio'] = sl_ratio
     config['tp_ratio'] = tp_ratio
     base_peso = base_config.get('peso_minimo_total', 0.5)
@@ -96,6 +100,9 @@ def _adaptar_configuracion_base(symbol: str, df: pd.DataFrame, base_config: dict
     cooldown = min(24, max(0, int(volatilidad * 100)))
     modo_agresivo = es_modo_agresivo(volatilidad, slope_pct)
     if modo_agresivo:
+        log.info(
+            f"[{symbol}] Modo agresivo activado (Vol={volatilidad:.4f}, Slope%={slope_pct:.4f})"
+        )
         diversidad = max(1, base_div - 1)
     config['diversidad_minima'] = diversidad
     config['cooldown_tras_perdida'] = cooldown

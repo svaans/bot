@@ -1151,6 +1151,9 @@ class Trader:
         Si ``modo_agresivo`` es ``True`` permite continuar incluso cuando el
         puntaje no alcanza el umbral establecido.
         """
+        log.info(
+            f"[{symbol}] Puntaje={puntaje:.2f} | Umbral adaptativo={umbral:.2f}"
+        )
         diferencia = umbral - puntaje
         metricas_tracker.registrar_diferencia_umbral(diferencia)
         if puntaje < umbral:
