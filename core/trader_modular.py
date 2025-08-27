@@ -43,6 +43,7 @@ from learning.entrenador_estrategias import actualizar_pesos_estrategias_symbol
 from core.utils.utils import configurar_logger
 from core.monitor_estado_bot import monitorear_estado_periodicamente
 from core.contexto_externo import StreamContexto
+from core.data.external_feeds import ExternalFeeds
 from core.orders import real_orders
 from core.config_manager.dinamica import adaptar_configuracion
 from ccxt.base.errors import BaseError
@@ -252,6 +253,7 @@ class Trader:
         self._cpu_high_cycles = 0
         self._mem_high_cycles = 0
         self.context_stream = StreamContexto()
+        self.external_feeds = ExternalFeeds(self.context_stream)
         self.puntajes_contexto: Dict[str, float] = {}
         try:
             simbolos = config.symbols if self.modo_real else None
@@ -1759,6 +1761,7 @@ class Trader:
             'context_stream': lambda: self.context_stream.escuchar(
                 symbols, handle_context
             ),
+            'external_feeds': lambda: self.external_feeds.escuchar(symbols),
             'flush': lambda: real_orders.flush_periodico(),
             'rechazos_flush': lambda: self.rejection_handler.flush_periodically(
                 self._rechazos_intervalo_flush, self._stop_event
@@ -1798,6 +1801,8 @@ class Trader:
                 await self.data_feed.detener()
             if nombre == 'context_stream':
                 await self.context_stream.detener()
+            if nombre == 'external_feeds':
+                await self.external_feeds.detener()
             tarea.cancel()
         await asyncio.gather(*self._tareas.values(), return_exceptions=True)
         await self.bus.close()
