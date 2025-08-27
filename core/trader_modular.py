@@ -60,6 +60,7 @@ from core.strategies.evaluador_tecnico import actualizar_pesos_tecnicos
 from core.auditoria import registrar_auditoria
 from core.strategies.exit.verificar_salidas import verificar_salidas
 from core.strategies.entry.verificar_entradas import verificar_entrada
+from core.strategies.entry.gestor_entradas import requiere_ajuste_diversificacion
 from core.procesar_vela import (
     procesar_vela,
     MAX_BUFFER_VELAS,
@@ -1508,6 +1509,7 @@ class Trader:
         strategy_version: str,
         puntaje: float = 0.0,
         umbral: float = 0.0,
+        score_tecnico: float = 0.0,
         detalles_tecnicos: dict | None = None,
         **kwargs,
     ) -> None:
@@ -1613,6 +1615,7 @@ class Trader:
             cantidad,
             puntaje,
             umbral,
+            score_tecnico,
             objetivo=cantidad_total,
             fracciones=fracciones,
             detalles_tecnicos=detalles_tecnicos or {},
@@ -1660,7 +1663,31 @@ class Trader:
             return None
         if not self._validar_config(symbol):
             return None
-        return await verificar_entrada(self, symbol, df, estado)
+        operacion = await verificar_entrada(self, symbol, df, estado)
+        if not operacion:
+            return None
+        abiertas_scores = {
+            s: getattr(o, 'score_tecnico', 0.0) for s, o in self.orders.ordenes.items()
+        }
+        correlaciones = self._calcular_correlaciones(
+            symbols=[symbol, *abiertas_scores.keys()]
+        )
+        if requiere_ajuste_diversificacion(
+            symbol,
+            operacion.get('score_tecnico', 0.0),
+            abiertas_scores,
+            correlaciones,
+            getattr(self.config, 'umbral_corr_diversificacion', 0.8),
+        ):
+            incremento = getattr(
+                self.config, 'incremento_umbral_diversificacion', 0.1
+            )
+            operacion['umbral'] *= 1 + incremento
+            if operacion['puntaje'] < operacion['umbral']:
+                log.info(f'[{symbol}] Rechazo por diversificación correlacionada')
+                metricas_tracker.registrar_filtro('diversificacion')
+                return None
+        return operacion
 
     async def ejecutar(self) ->None:
         log.debug('➡️ Entrando en ejecutar()')
