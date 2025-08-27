@@ -5,6 +5,7 @@ from typing import Awaitable, Callable, Dict, Iterable, Any
 from datetime import datetime, timezone
 import time
 from binance_api.websocket import escuchar_velas
+from binance_api.cliente import fetch_ohlcv_async
 from core.utils.logger import configurar_logger
 from core.utils import intervalo_a_segundos
 from core.registro_metrico import registro_metrico
@@ -20,6 +21,7 @@ from core.notificador import crear_notificador_desde_env
 UTC = timezone.utc
 log = configurar_logger('datafeed', modo_silencioso=False)
 
+BACKFILL_MAX_CANDLES = 100
 
 def validar_integridad_velas(symbol: str, tf: str, candles: Iterable[dict]) -> bool:
     log.debug('➡️ Entrando en validar_integridad_velas()')
@@ -81,6 +83,7 @@ class DataFeed:
         self._last_monotonic: Dict[str, float] = {}
         self._last_close_ts: Dict[str, int] = {}
         self._monitor_global_task: asyncio.Task | None = None
+        self._ultimo_candle: Dict[str, dict] = {}
         self._handler_actual: Callable[[dict], Awaitable[None]] | None = None
         self._running = False
         self._cliente: Any | None = None
@@ -119,7 +122,7 @@ class DataFeed:
 
         await self._relanzar_stream(symbol, wrapper)
 
-    def _should_enqueue_candle(self, symbol: str, candle: dict) -> bool:
+    def _should_enqueue_candle(self, symbol: str, candle: dict, force: bool = False) -> bool:
         """Valida que la vela esté cerrada y no se haya procesado ya."""
         if not candle.get('is_closed', True):
             log.debug(f'[{symbol}] Ignorando vela abierta: {candle}')
@@ -128,15 +131,15 @@ class DataFeed:
         if ts is None:
             log.debug(f'[{symbol}] Vela sin timestamp: {candle}')
             return False
-        if self._last_close_ts.get(symbol) == ts:
+        if not force and self._last_close_ts.get(symbol) == ts:
             log.debug(f'[{symbol}] Vela duplicada ignorada: {ts}')
             return False
         self._last_close_ts[symbol] = ts
         return True
     
-    async def _handle_candle(self, symbol: str, candle: dict) -> None:
+    async def _handle_candle(self, symbol: str, candle: dict, force: bool = False) -> None:
         """Valida y encola la vela actualizando heartbeats solo al éxito."""
-        if not self._should_enqueue_candle(symbol, candle):
+        if not self._should_enqueue_candle(symbol, candle, force=force):
             return
         queue = self._queues[symbol]
         qsize = queue.qsize()
@@ -180,9 +183,66 @@ class DataFeed:
         self._mensajes_recibidos[symbol] = (
             self._mensajes_recibidos.get(symbol, 0) + 1
         )
+        self._ultimo_candle[symbol] = {
+            'timestamp': candle.get('timestamp'),
+            'open': candle.get('open'),
+            'high': candle.get('high'),
+            'low': candle.get('low'),
+            'close': candle.get('close'),
+            'volume': candle.get('volume'),
+        }
         log.debug(
             f'[{symbol}] Recibida vela: timestamp={candle.get("timestamp")}')
         tick_data(symbol)
+    async def _backfill_candles(self, symbol: str) -> None:
+        """Recupera y procesa velas faltantes tras una reconexión."""
+        if not self._cliente:
+            return
+        last_ts = self._last_close_ts.get(symbol)
+        if last_ts is None:
+            return
+        intervalo_ms = self.intervalo_segundos * 1000
+        ahora = int(datetime.now(UTC).timestamp() * 1000)
+        faltan = max(0, (ahora - last_ts) // intervalo_ms)
+        if faltan <= 0:
+            return
+        limit = min(faltan + 1, BACKFILL_MAX_CANDLES)
+        try:
+            ohlcv = await fetch_ohlcv_async(
+                self._cliente,
+                symbol,
+                self.intervalo,
+                since=last_ts - intervalo_ms,
+                limit=limit,
+            )
+        except Exception as e:
+            log.warning(f'❌ Error obteniendo backfill para {symbol}: {e}')
+            return
+        registro_metrico.registrar(
+            'velas_backfill',
+            {'symbol': symbol, 'tf': self.intervalo, 'count': len(ohlcv)},
+        )
+        registro_metrico.registrar(
+            'delta_backfill',
+            {'symbol': symbol, 'tf': self.intervalo, 'delta': faltan},
+        )
+        for o in ohlcv:
+            candle = {
+                'symbol': symbol,
+                'timestamp': o[0],
+                'open': float(o[1]),
+                'high': float(o[2]),
+                'low': float(o[3]),
+                'close': float(o[4]),
+                'volume': float(o[5]),
+                'is_closed': True,
+            }
+            prev = self._ultimo_candle.get(symbol)
+            if prev and prev.get('timestamp') == candle['timestamp']:
+                if any(prev.get(k) != candle[k] for k in ('open', 'high', 'low', 'close', 'volume')):
+                    await self._handle_candle(symbol, candle, force=True)
+            else:
+                await self._handle_candle(symbol, candle)
 
 
     async def _consumer(
@@ -214,6 +274,7 @@ class DataFeed:
         fallos_consecutivos = 0
         while True:
             try:
+                await self._backfill_candles(symbol)
                 await escuchar_velas(
                     symbol,
                     self.intervalo,
