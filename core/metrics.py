@@ -11,16 +11,39 @@ símbolo y acción.
 
 from __future__ import annotations
 
+import os
 from collections import defaultdict
 from typing import Dict
 
+from prometheus_client import Counter, Gauge
+
 from core.registro_metrico import registro_metrico
+from core.utils.logger import configurar_logger
 
 
 _decisions: Dict[str, Dict[str, int]] = defaultdict(lambda: defaultdict(int))
 _orders: Dict[str, int] = defaultdict(int)
 _buy_rejected_insufficient_funds: int = 0
 _correlacion_btc: Dict[str, float] = {}
+
+_velas_total: Dict[str, int] = defaultdict(int)
+_velas_rechazadas: Dict[str, Dict[str, int]] = defaultdict(lambda: defaultdict(int))
+
+VELAS_TOTAL = Counter("velas_total", "Velas recibidas por símbolo", ["symbol"])
+VELAS_RECHAZADAS = Counter(
+    "velas_rechazadas_total",
+    "Velas rechazadas por símbolo y razón",
+    ["symbol", "reason"],
+)
+VELAS_RECHAZADAS_PCT = Gauge(
+    "velas_rechazadas_pct",
+    "Porcentaje de velas rechazadas por símbolo",
+    ["symbol"],
+)
+
+UMBRAL_VELAS_RECHAZADAS = float(os.getenv("UMBRAL_VELAS_RECHAZADAS", 5))
+
+log = configurar_logger("metrics")
 
 
 
@@ -74,3 +97,47 @@ def correlacion_btc() -> Dict[str, float]:
     """Retorna la última correlación registrada con BTC por símbolo."""
 
     return dict(_correlacion_btc)
+
+
+def registrar_vela_recibida(symbol: str) -> None:
+    """Incrementa el total de velas recibidas para ``symbol``."""
+
+    _velas_total[symbol] += 1
+    VELAS_TOTAL.labels(symbol=symbol).inc()
+    _actualizar_porcentaje(symbol)
+
+
+def registrar_vela_rechazada(symbol: str, reason: str) -> None:
+    """Incrementa el contador de velas rechazadas para ``symbol`` y ``reason``."""
+
+    _velas_rechazadas[symbol][reason] += 1
+    VELAS_RECHAZADAS.labels(symbol=symbol, reason=reason).inc()
+    registro_metrico.registrar("vela_rechazada", {"symbol": symbol, "reason": reason})
+    pct = _actualizar_porcentaje(symbol)
+    if pct > UMBRAL_VELAS_RECHAZADAS:
+        log.warning(
+            f"[{symbol}] porcentaje de velas rechazadas {pct:.2f}% supera umbral {UMBRAL_VELAS_RECHAZADAS}%"
+        )
+
+
+def _actualizar_porcentaje(symbol: str) -> float:
+    """Calcula y actualiza el porcentaje de velas rechazadas."""
+
+    total = _velas_total[symbol]
+    rechazadas = sum(_velas_rechazadas[symbol].values())
+    pct = (rechazadas / total * 100) if total else 0.0
+    VELAS_RECHAZADAS_PCT.labels(symbol=symbol).set(pct)
+    return pct
+
+
+def obtener_velas_rechazadas() -> Dict[str, Dict[str, int]]:
+    """Retorna los contadores de velas rechazadas."""
+
+    return {s: dict(r) for s, r in _velas_rechazadas.items()}
+
+
+def reset_velas_metrics() -> None:
+    """Reinicia los contadores internos de velas."""
+
+    _velas_total.clear()
+    _velas_rechazadas.clear()
