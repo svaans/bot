@@ -138,7 +138,7 @@ class OrderManager:
             self._sync_task = loop.create_task(self._sync_loop())
 
     async def _sync_once(self) -> None:
-		actuales = set(self.ordenes.keys())
+        actuales = set(self.ordenes.keys())
         try:
             ordenes_reconciliadas: Dict[str, Order] = await asyncio.to_thread(
                 real_orders.reconciliar_ordenes
@@ -193,7 +193,6 @@ class OrderManager:
                 # Si tienes otros campos efímeros, mapéalos aquí
             merged[sym] = remoto
 
-        
         self.ordenes = merged
 
         # Intenta registrar las que quedaron pendientes
@@ -220,7 +219,13 @@ class OrderManager:
                         mensaje = (
                             f"""🟢 Compra {sym}\nPrecio: {ord_.precio_entrada:.2f} Cantidad: {ord_.cantidad_abierta or ord_.cantidad}\nSL: {ord_.stop_loss:.2f} TP: {ord_.take_profit:.2f}\nEstrategias: {estrategias_txt}"""
                         )
-                        await self.bus.publish('notify', {'mensaje': mensaje, 'operation_id': ord_.operation_id})
+                        await self.bus.publish(
+                            'notify',
+                            {
+                                'mensaje': mensaje,
+                                'operation_id': ord_.operation_id,
+                            },
+                        )
                 except Exception as e:
                     log.error(f'❌ Error registrando orden pendiente {sym}: {e}')
                     if self.bus:
@@ -232,6 +237,7 @@ class OrderManager:
                                 'operation_id': ord_.operation_id,
                             },
                         )
+
 
     async def _sync_loop(self) -> None:
         while True:
