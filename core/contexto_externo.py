@@ -15,6 +15,7 @@ UTC = timezone.utc
 
 log = configurar_logger('contexto_externo')
 _PUNTAJES: Dict[str, float] = {}
+_DATOS_EXTERNOS: Dict[str, dict] = {}
 CONTEXT_WS_URL = 'wss://stream.binance.com:9443/ws/{symbol}@kline_5m'
 
 
@@ -32,6 +33,12 @@ def obtener_todos_puntajes() ->dict:
     log.debug('➡️ Entrando en obtener_todos_puntajes()')
     """Devuelve todos los puntajes actuales almacenados."""
     return dict(_PUNTAJES)
+
+
+def obtener_datos_externos(symbol: str) ->dict:
+    log.debug('➡️ Entrando en obtener_datos_externos()')
+    """Devuelve los últimos datos externos conocidos para ``symbol``."""
+    return dict(_DATOS_EXTERNOS.get(symbol, {}))
 
 
 class StreamContexto:
@@ -56,6 +63,11 @@ class StreamContexto:
         self._handler_actual: Callable[[str, float], Awaitable[None]] | None = None
         self._running = False
         self._symbols: list[str] = []
+
+    def actualizar_datos_externos(self, symbol: str, datos: dict) ->None:
+        log.debug('➡️ Entrando en actualizar_datos_externos()')
+        actual = _DATOS_EXTERNOS.setdefault(symbol, {})
+        actual.update(datos)
 
     async def _stream(
         self, symbol: str, handler: Callable[[str, float], Awaitable[None]]
@@ -220,4 +232,4 @@ class StreamContexto:
 
 
 __all__ = ['StreamContexto', 'obtener_puntaje_contexto',
-    'obtener_todos_puntajes']
+    'obtener_todos_puntajes', 'obtener_datos_externos']
