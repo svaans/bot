@@ -190,7 +190,7 @@ def _acumular_metricas(operation_id: str, response: dict) -> dict[str, float]:
 
 
 def _init_db() ->None:
-    log.info('➡️ Entrando en _init_db()')
+    log.info('➡️ Entrando en _init_db()', extra={'symbol': None, 'timeframe': None})
     """Crea la tabla de órdenes y operaciones si no existen."""
     os.makedirs(os.path.dirname(RUTA_DB), exist_ok=True)
     schema_base = """
@@ -217,14 +217,14 @@ def _init_db() ->None:
             conn.execute(
                 f'CREATE TABLE IF NOT EXISTS operaciones (id INTEGER PRIMARY KEY AUTOINCREMENT, {schema_base})'
                 )
-        log.info('🗃️ Tablas de órdenes y operaciones verificadas/creadas.')
+        log.info('🗃️ Tablas de órdenes y operaciones verificadas/creadas.', extra={'symbol': None, 'timeframe': None})
     except sqlite3.Error as e:
         log.error(f'❌ Error al crear las tablas en SQLite: {e}')
         raise
 
 
 def cargar_ordenes() ->dict[str, Order]:
-    log.info('➡️ Entrando en cargar_ordenes()')
+    log.info('➡️ Entrando en cargar_ordenes()', extra={'symbol': None, 'timeframe': None})
     """Carga las órdenes almacenadas desde la base de datos SQLite."""
     global _CACHE_ORDENES
     if _CACHE_ORDENES is not None:
@@ -242,7 +242,8 @@ def cargar_ordenes() ->dict[str, Order]:
                 orden = Order.from_dict(data)
                 ordenes[orden.symbol] = orden
         log.info(
-            f'📥 {len(ordenes)} órdenes abiertas cargadas desde la base de datos.'
+            f'📥 {len(ordenes)} órdenes abiertas cargadas desde la base de datos.',
+            extra={'symbol': None, 'timeframe': None},
         )
     except sqlite3.Error as e:
         log.error(f'❌ Error al cargar órdenes desde SQLite: {e}')
@@ -252,12 +253,12 @@ def cargar_ordenes() ->dict[str, Order]:
 
 
 def guardar_ordenes(ordenes: dict[str, Order]) ->None:
-    log.info('➡️ Entrando en guardar_ordenes()')
+    log.info('➡️ Entrando en guardar_ordenes()', extra={'symbol': None, 'timeframe': None})
     """Guarda las órdenes en la base de datos si han cambiado respecto al caché."""
     global _CACHE_ORDENES
 
     def ordenar_dict(d):
-        log.info('➡️ Entrando en ordenar_dict()')
+        log.info('➡️ Entrando en ordenar_dict()', extra={'symbol': None, 'timeframe': None})
         return json.dumps({k: o.to_dict() for k, o in d.items()}, sort_keys
             =True)
     if _CACHE_ORDENES and ordenar_dict(_CACHE_ORDENES) == ordenar_dict(ordenes
@@ -301,7 +302,8 @@ def guardar_ordenes(ordenes: dict[str, Order]) ->None:
                     )
         _CACHE_ORDENES = ordenes
         log.info(
-            f'💾 {len(ordenes)} órdenes guardadas correctamente en la base de datos.'
+            f'💾 {len(ordenes)} órdenes guardadas correctamente en la base de datos.',
+            extra={'symbol': None, 'timeframe': None},
         )
     except (sqlite3.Error, ValueError) as e:
         log.error(f'❌ Error al guardar órdenes en SQLite: {e}')
@@ -309,7 +311,7 @@ def guardar_ordenes(ordenes: dict[str, Order]) ->None:
 
 
 def obtener_orden(symbol: str) ->(Order | None):
-    log.info('➡️ Entrando en obtener_orden()')
+    log.info('➡️ Entrando en obtener_orden()', extra={'symbol': symbol, 'timeframe': None})
     try:
         return cargar_ordenes().get(symbol)
     except Exception as e:
@@ -318,12 +320,12 @@ def obtener_orden(symbol: str) ->(Order | None):
 
 
 def obtener_todas_las_ordenes():
-    log.info('➡️ Entrando en obtener_todas_las_ordenes()')
+    log.info('➡️ Entrando en obtener_todas_las_ordenes()', extra={'symbol': None, 'timeframe': None})
     return cargar_ordenes()
 
 
 def reconciliar_ordenes(simbolos: list[str] | None = None) -> dict[str, Order]:
-    log.info('➡️ Entrando en reconciliar_ordenes()')
+    log.info('➡️ Entrando en reconciliar_ordenes()', extra={'symbol': None, 'timeframe': None})
     local = cargar_ordenes()
     try:
         cliente = obtener_cliente()
@@ -358,9 +360,9 @@ def reconciliar_ordenes(simbolos: list[str] | None = None) -> dict[str, Order]:
     local_only = sorted(local_symbols - exchange_symbols)
     exchange_only = sorted(exchange_symbols - local_symbols)
     both = sorted(local_symbols & exchange_symbols)
-    log.info(f'local_only: {local_only}')
-    log.info(f'exchange_only: {exchange_only}')
-    log.info(f'both: {both}')
+    log.info(f'local_only: {local_only}', extra={'symbol': None, 'timeframe': None})
+    log.info(f'exchange_only: {exchange_only}', extra={'symbol': None, 'timeframe': None})
+    log.info(f'both: {both}', extra={'symbol': None, 'timeframe': None})
     for sym in local_only:
         ord_ = local.get(sym)
         if not ord_:
@@ -412,9 +414,8 @@ def reconciliar_ordenes(simbolos: list[str] | None = None) -> dict[str, Order]:
     return cargar_ordenes()
 
 
-def sincronizar_ordenes_binance(simbolos: (list[str] | None)=None) ->dict[
-    str, Order]:
-    log.info('➡️ Entrando en sincronizar_ordenes_binance()')
+def sincronizar_ordenes_binance(simbolos: (list[str] | None)=None) ->dict[str, Order]:
+    log.info('➡️ Entrando en sincronizar_ordenes_binance()', extra={'symbol': None, 'timeframe': None})
     """Consulta órdenes abiertas directamente desde Binance y las registra.
 
     Esto permite reconstruir el estado de las posiciones cuando el bot se
@@ -464,7 +465,7 @@ def sincronizar_ordenes_binance(simbolos: (list[str] | None)=None) ->dict[
 
 
 def reconciliar_trades_binance(simbolos: list[str] | None = None, limit: int = 50) -> None:
-    log.info('➡️ Entrando en reconciliar_trades_binance()')
+    log.info('➡️ Entrando en reconciliar_trades_binance()', extra={'symbol': None, 'timeframe': None})
     try:
         cliente = obtener_cliente()
         if simbolos is None:
@@ -495,7 +496,7 @@ def reconciliar_trades_binance(simbolos: list[str] | None = None, limit: int = 5
                         cfg = load_exit_config(s)
                         sl, tp = calcular_tp_sl_adaptativos(s, df, cfg, precio_actual=price)
                     except Exception as e:
-                        log.debug(f'No se pudieron calcular SL/TP para {s}: {e}')
+                        log.debug(f'No se pudieron calcular SL/TP para {s}: {e}', extra={'symbol': s, 'timeframe': None})
                 data = {
                     'symbol': s,
                     'precio_entrada': price,
@@ -519,7 +520,7 @@ def reconciliar_trades_binance(simbolos: list[str] | None = None, limit: int = 5
 
 
 def actualizar_orden(symbol: str, data: (Order | dict)) ->None:
-    log.info('➡️ Entrando en actualizar_orden()')
+    log.info('➡️ Entrando en actualizar_orden()', extra={'symbol': symbol, 'timeframe': None})
     ordenes = cargar_ordenes()
     if ordenes.get(symbol) == data:
         return
@@ -558,14 +559,14 @@ def actualizar_orden(symbol: str, data: (Order | dict)) ->None:
                 )
         ordenes[symbol] = data if isinstance(data, Order) else Order.from_dict(d)
         _CACHE_ORDENES = ordenes
-        log.info(f'📌 Order actualizada para {symbol}.')
+        log.info(f'📌 Order actualizada para {symbol}.', extra={'symbol': symbol, 'timeframe': None})
     except Exception as e:
         log.error(f'❌ Error al actualizar orden para {symbol}: {e}')
         raise
 
 
 def eliminar_orden(symbol: str, forzar_log: bool=False) ->None:
-    log.info('➡️ Entrando en eliminar_orden()')
+    log.info('➡️ Entrando en eliminar_orden()', extra={'symbol': symbol, 'timeframe': None})
     """Elimina una orden activa del sistema si existe."""
     ordenes = cargar_ordenes()
     if symbol not in ordenes:
@@ -573,14 +574,16 @@ def eliminar_orden(symbol: str, forzar_log: bool=False) ->None:
             log.warning(f'⚠️ Intento de eliminar orden inexistente: {symbol}')
         else:
             log.debug(
-                f'Intento de eliminar orden inexistente ignorado: {symbol}')
+                f'Intento de eliminar orden inexistente ignorado: {symbol}',
+                extra={'symbol': symbol, 'timeframe': None},
+            )
         return
     try:
         with _connect_db() as conn:
             conn.execute('DELETE FROM ordenes WHERE symbol = ?', (symbol,))
         del ordenes[symbol]
         _CACHE_ORDENES = ordenes
-        log.info(f'🗑️ Order eliminada correctamente para {symbol}.')
+        log.info(f'🗑️ Order eliminada correctamente para {symbol}.', extra={'symbol': symbol, 'timeframe': None})
     except sqlite3.Error as e:
         log.error(f'❌ Error eliminando orden de la base de datos: {e}')
         raise
@@ -589,7 +592,7 @@ def eliminar_orden(symbol: str, forzar_log: bool=False) ->None:
 def registrar_orden(symbol: str, precio: float, cantidad: float, sl: float,
     tp: float, estrategias, tendencia: str, direccion: str='long',
     operation_id: str | None = None) ->None:
-    log.info('➡️ Entrando en registrar_orden()')
+    log.info('➡️ Entrando en registrar_orden()', extra={'symbol': symbol, 'timeframe': None})
     """Registra una nueva orden activa y la guarda en base de datos."""
     if not isinstance(symbol, str) or not symbol:
         raise ValueError('❌ El símbolo debe ser una cadena no vacía.')
@@ -629,11 +632,11 @@ def registrar_orden(symbol: str, precio: float, cantidad: float, sl: float,
 
 
 def registrar_operacion(data: (dict | Order)) ->None:
-    log.info('➡️ Entrando en registrar_operacion()')
     """Agrega una operación ejecutada al buffer. Se persistirá automáticamente."""
     global _ULTIMO_FLUSH
     registro = data.to_dict() if isinstance(data, Order) else data
     symbol = registro.get('symbol')
+    log.info('➡️ Entrando en registrar_operacion()', extra={'symbol': symbol, 'timeframe': None})
     if not symbol:
         log.warning(
             '⚠️ Registro sin símbolo recibido en registrar_operacion(), ignorado.'
@@ -641,18 +644,20 @@ def registrar_operacion(data: (dict | Order)) ->None:
         return
     with _BUFFER_LOCK:
         _BUFFER_OPERACIONES.append(registro)
-        log.debug(f'📥 Operación registrada en buffer para {symbol}')
+        log.debug(f'📥 Operación registrada en buffer para {symbol}', extra={'symbol': symbol, 'timeframe': None})
     ahora = time.time()
     if len(_BUFFER_OPERACIONES
         ) >= _MAX_BUFFER or ahora - _ULTIMO_FLUSH >= _FLUSH_INTERVAL:
         log.debug(
-            '🔁 Buffer de operaciones lleno o expirado, iniciando flush...')
+            '🔁 Buffer de operaciones lleno o expirado, iniciando flush...',
+            extra={'symbol': symbol, 'timeframe': None},
+        )
         flush_operaciones()
         _ULTIMO_FLUSH = ahora
 
 
 def ejecutar_orden_market(symbol: str, cantidad: float, operation_id: str | None = None) -> dict:
-    log.info('➡️ Entrando en ejecutar_orden_market()')
+    log.info('➡️ Entrando en ejecutar_orden_market()', extra={'symbol': symbol, 'timeframe': None})
     """Ejecuta una compra de mercado y devuelve detalles de la ejecución."""
     entrada = {'symbol': symbol, 'cantidad': cantidad}
     if cantidad <= 0:
@@ -710,7 +715,9 @@ def ejecutar_orden_market(symbol: str, cantidad: float, operation_id: str | None
             log_decision(log, 'ejecutar_orden_market', operation_id, entrada, {'minimos': False}, 'reject', {'ejecutado': 0})
             return {'ejecutado': 0.0, 'restante': 0.0, 'status': 'FILLED', 'min_qty': min_amount, 'fee': 0.0, 'pnl': 0.0}
         log.debug(
-            f'📤 Enviando orden de compra para {symbol} | Cantidad: {cantidad} | Precio estimado: {precio:.4f}'
+            f'📤 Enviando orden de compra para {symbol} | Cantidad: {cantidad} | Precio estimado: {precio:.4f}',
+            extra={'symbol': symbol, 'timeframe': None},
+        )
             )
         params = {}
         if operation_id:
@@ -738,7 +745,7 @@ def ejecutar_orden_market(symbol: str, cantidad: float, operation_id: str | None
                 )
             except Exception:
                 pass
-        log.info(f'🟢 Order real ejecutada: {symbol}, cantidad: {ejecutado}')
+        log.info(f'🟢 Order real ejecutada: {symbol}, cantidad: {ejecutado}', extra={'symbol': symbol, 'timeframe': None})
         salida = {
             'ejecutado': ejecutado,
             'restante': restante,
@@ -800,7 +807,7 @@ def ejecutar_orden_market(symbol: str, cantidad: float, operation_id: str | None
 
 
 def ejecutar_orden_market_sell(symbol: str, cantidad: float, operation_id: str | None = None) -> dict:
-    log.info('➡️ Entrando en ejecutar_orden_market_sell()')
+    log.info('➡️ Entrando en ejecutar_orden_market_sell()', extra={'symbol': symbol, 'timeframe': None})
     """Ejecuta una venta de mercado validando saldo y devuelve detalles."""
     entrada = {'symbol': symbol, 'cantidad': cantidad}
     if symbol in _VENTAS_FALLIDAS:
@@ -845,7 +852,9 @@ def ejecutar_orden_market_sell(symbol: str, cantidad: float, operation_id: str |
             log_decision(log, 'ejecutar_orden_market_sell', operation_id, entrada, {'minimos': False}, 'reject', {'ejecutado': 0})
             return {'ejecutado': 0.0, 'restante': cantidad_vender, 'status': 'FILLED', 'min_qty': min_amount, 'fee': 0.0, 'pnl': 0.0}
         log.info(
-            f'💱 Ejecutando venta real en {symbol}: {cantidad_vender:.8f} unidades (precio estimado: {precio:.2f})'
+            f'💱 Ejecutando venta real en {symbol}: {cantidad_vender:.8f} unidades (precio estimado: {precio:.2f})',
+            extra={'symbol': symbol, 'timeframe': None},
+        )
             )
         params = {}
         if operation_id:
@@ -874,7 +883,9 @@ def ejecutar_orden_market_sell(symbol: str, cantidad: float, operation_id: str |
             except Exception:
                 pass
         log.info(
-            f'🔴 Order de venta ejecutada: {symbol}, cantidad: {ejecutado:.8f}')
+            f'🔴 Order de venta ejecutada: {symbol}, cantidad: {ejecutado:.8f}',
+            extra={'symbol': symbol, 'timeframe': None},
+        )
         _VENTAS_FALLIDAS.discard(symbol)
         salida = {
             'ejecutado': ejecutado,
@@ -906,7 +917,7 @@ def ejecutar_orden_market_sell(symbol: str, cantidad: float, operation_id: str |
 
 
 def _market_sell_retry(symbol: str, cantidad: float, operation_id: str | None = None) -> dict:
-    log.info('➡️ Entrando en _market_sell_retry()')
+    log.info('➡️ Entrando en _market_sell_retry()', extra={'symbol': symbol, 'timeframe': None})
     """Envía ventas de mercado reintentando en caso de fills parciales."""
     restante = cantidad
     total = total_fee = total_pnl = 0.0
@@ -1108,7 +1119,7 @@ def _chunked(seq: list, size: int):
 
 def flush_operaciones() ->None:
     global _SLOW_FLUSHES, _USE_PROCESS_POOL, _ULTIMO_FLUSH, _FLUSH_BATCH_SIZE
-    log.info('➡️ Entrando en flush_operaciones()')
+    log.info('➡️ Entrando en flush_operaciones()', extra={'symbol': None, 'timeframe': None})
     """Guarda en disco todas las operaciones acumuladas.
 
     Las operaciones se procesan en lotes para minimizar el impacto de las
@@ -1121,7 +1132,7 @@ def flush_operaciones() ->None:
     total_ops = len(operaciones)
     if not total_ops:
         return
-    log.info(f'📝 Iniciando flush_operaciones con {total_ops} operaciones.')
+    log.info(f'📝 Iniciando flush_operaciones con {total_ops} operaciones.', extra={'symbol': None, 'timeframe': None})
     inicio = time.time()
     errores_sqlite = errores_parquet = 0
     pendientes: list[dict] = []
@@ -1143,7 +1154,7 @@ def flush_operaciones() ->None:
     duracion = time.time() - inicio
     mensaje_timeout = int(os.getenv('MENSAJE_TIMEOUT', '0') or 0)
     inactivity_intervals = int(os.getenv('INACTIVITY_INTERVALS', '0') or 0)
-    log.info(f'🏁 flush_operaciones finalizado en {duracion:.2f}s para {total_ops} operaciones.')
+    log.info(f'🏁 flush_operaciones finalizado en {duracion:.2f}s para {total_ops} operaciones.', extra={'symbol': None, 'timeframe': None})
     if mensaje_timeout and duracion > mensaje_timeout:
         log.warning(
             f'⏱️ Duración {duracion:.2f}s supera mensaje_timeout {mensaje_timeout}s'
@@ -1163,7 +1174,8 @@ def flush_operaciones() ->None:
             if nuevo_tam < _FLUSH_BATCH_SIZE:
                 _FLUSH_BATCH_SIZE = nuevo_tam
                 log.info(
-                    f'ℹ️ FLUSH_BATCH_SIZE reducido a {_FLUSH_BATCH_SIZE} por flush lento'
+                    f'ℹ️ FLUSH_BATCH_SIZE reducido a {_FLUSH_BATCH_SIZE} por flush lento',
+                    extra={'symbol': None, 'timeframe': None},
                 )
     else:
         _SLOW_FLUSHES = 0
@@ -1181,7 +1193,7 @@ def flush_operaciones() ->None:
     _ULTIMO_FLUSH = time.time()
 
     if errores_sqlite == 0 and errores_parquet == 0:
-        log.info(f'✅ {total_ops} operaciones guardadas correctamente.')
+        log.info(f'✅ {total_ops} operaciones guardadas correctamente.', extra={'symbol': None, 'timeframe': None})
     else:
         log.warning(
             f'⚠️ Guardadas {total_ops} operaciones con errores — SQLite: {errores_sqlite}, Parquet: {errores_parquet}'
@@ -1194,7 +1206,7 @@ async def flush_periodico(
     max_fallos: int = 5,
     reintento: int = 300,
 ) -> None:
-    log.info('➡️ Entrando en flush_periodico()')
+    log.info('➡️ Entrando en flush_periodico()', extra={'symbol': None, 'timeframe': None})
     """
     Ejecuta :func:`flush_operaciones` cada ``interval`` segundos.
     Emite ``tick('flush')`` periódicamente para evitar reinicios por inactividad.
@@ -1243,17 +1255,17 @@ async def flush_periodico(
                     notificador.enviar(mensaje, 'CRITICAL')
                 except Exception:
                     pass
-                log.info(f'Reintentando flush en {reintento}s...')
+                log.info(f'Reintentando flush en {reintento}s...', extra={'symbol': None, 'timeframe': None})
                 await asyncio.sleep(reintento)
                 fallos_consecutivos = 0
     except asyncio.CancelledError:
         if _FLUSH_FUTURE and not _FLUSH_FUTURE.done():
-            log.info('Esperando a que flush_operaciones termine antes de cancelar.')
+            log.info('Esperando a que flush_operaciones termine antes de cancelar.', extra={'symbol': None, 'timeframe': None})
             try:
                 await asyncio.wait_for(_FLUSH_FUTURE, timeout=5)
             except Exception:
                 pass
-        log.info('🛑 flush_periodico cancelado correctamente.')
+        log.info('🛑 flush_periodico cancelado correctamente.', extra={'symbol': None, 'timeframe': None})
         raise
 
 atexit.register(flush_operaciones)
