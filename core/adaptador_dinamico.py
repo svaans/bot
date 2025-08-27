@@ -45,9 +45,15 @@ else:
     CONFIGS_OPTIMAS: dict = {}
 UMBRAL_POR_DEFECTO = 10
 MIN_LONGITUD_DATA = 30
-PESO_VOLATILIDAD = 0.4
-PESO_RANGO = 0.4
-PESO_VOLUMEN = 0.2
+PESOS_CONTEXTO = CONFIGS_OPTIMAS.get(
+    'pesos_contexto',
+    {
+        'volatilidad': 0.3,
+        'rango': 0.3,
+        'volumen': 0.2,
+        'momentum': 0.2,
+    },
+)
 
 
 def _adaptar_configuracion_base(symbol: str, df: pd.DataFrame, base_config: dict
@@ -205,8 +211,12 @@ def calcular_umbral_adaptativo(symbol: str, df: pd.DataFrame,
         ajuste_volatilidad = cfg_sym.get('ajuste_volatilidad', 1.0)
         factor_umbral = cfg_sym.get('factor_umbral', 1.0)
         ajuste_riesgo = cfg_sym.get('riesgo_maximo_diario', RIESGO_MAXIMO_DIARIO_BASE)
-    contexto_score = (volatilidad * 0.3 + rango_medio * 0.3 + 
-        volumen_relativo * 0.2 + momentum_std * 0.2) * 10 * ajuste_volatilidad
+    contexto_score = (
+        volatilidad * PESOS_CONTEXTO['volatilidad']
+        + rango_medio * PESOS_CONTEXTO['rango']
+        + volumen_relativo * PESOS_CONTEXTO['volumen']
+        + momentum_std * PESOS_CONTEXTO.get('momentum', 0.0)
+    ) * 10 * ajuste_volatilidad
     if 40 < rsi < 60:
         penalizacion = 1 - (1 - abs(rsi - 50) / 10) * 0.25
         contexto_score *= penalizacion
