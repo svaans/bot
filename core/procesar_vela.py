@@ -20,6 +20,7 @@ from core.strategies.tendencia import obtener_tendencia
 from indicators.helpers import clear_cache
 from core.indicadores import get_rsi, get_momentum, get_atr
 from core.registro_metrico import registro_metrico
+from core.metrics import registrar_vela_recibida, registrar_vela_rechazada
 
 """Procesa una vela de mercado y actualiza indicadores.
 
@@ -75,17 +76,21 @@ async def procesar_vela(trader, vela: dict) -> None:
     log.debug('➡️ Entrando en procesar_vela()')
     if not isinstance(vela, dict):
         log.error(f"❌ Formato de vela inválido: {vela}")
+        registrar_vela_rechazada('desconocido', 'formato_invalido')
         return
     symbol = vela.get('symbol')
     if symbol is None:
         log.error(f"❌ Vela sin símbolo: {vela}")
+        registrar_vela_rechazada('desconocido', 'sin_symbolo')
         return
+    registrar_vela_recibida(symbol)
     intervalo = getattr(trader.config, 'intervalo_velas', '')
     lock = _vela_locks[f'{symbol}:{intervalo}']
     async with lock:
         campos_requeridos = {'timestamp', 'close'}
         if not campos_requeridos.issubset(vela):
             log.error(f"❌ Vela incompleta para {symbol}: {vela}")
+            registrar_vela_rechazada(symbol, 'incompleta')
             return
         vela.setdefault('open', vela['close'])
         vela.setdefault('high', vela['close'])
@@ -94,11 +99,13 @@ async def procesar_vela(trader, vela: dict) -> None:
         for campo in ('timestamp', 'open', 'high', 'low', 'close', 'volume'):
             if not is_valid_number(vela.get(campo)):
                 log.error(f"❌ Valor inválido en campo {campo} para {symbol}: {vela.get(campo)}")
+                registrar_vela_rechazada(symbol, f'valor_invalido_{campo}')
                 return
         ts = int(float(vela['timestamp']))
         vela['timestamp'] = ts
         if not timestamp_alineado(ts, intervalo):
             log.error(f"❌ Timestamp desalineado para {symbol}: {ts}")
+            registrar_vela_rechazada(symbol, 'timestamp_desalineado')
             return
         
         estado = trader.estado[symbol]
@@ -109,9 +116,11 @@ async def procesar_vela(trader, vela: dict) -> None:
         if estado.ultimo_timestamp:
             if ts < estado.ultimo_timestamp:
                 log.error(f"❌ Vela fuera de orden para {symbol}: {ts} < {estado.ultimo_timestamp}")
+                registrar_vela_rechazada(symbol, 'fuera_de_orden')
                 return
             if ts == estado.ultimo_timestamp:
                 log.warning(f"⚠️ Vela duplicada para {symbol}: {ts}")
+                registrar_vela_rechazada(symbol, 'duplicada')
                 return
 
         snapshot = {
