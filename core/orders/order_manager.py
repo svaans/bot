@@ -139,7 +139,7 @@ class OrderManager:
 
     async def _sync_once(self) -> None:
 	    actuales = set(self.ordenes.keys())
-        try:
+	    try:
             ordenes_reconciliadas: Dict[str, Order] = await asyncio.to_thread(
                 real_orders.reconciliar_ordenes
             )
