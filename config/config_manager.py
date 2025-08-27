@@ -52,6 +52,8 @@ class Config:
     usar_score_tecnico: bool = True
     contradicciones_bloquean_entrada: bool = True
     registro_tecnico_csv: str = 'logs/rechazos_tecnico.csv'
+    umbral_confirmacion_micro: float = 0.6
+    umbral_confirmacion_macro: float = 0.6
     fracciones_piramide: int = 1
     reserva_piramide: float = 0.0
     umbral_piramide: float = 0.005
@@ -127,6 +129,8 @@ class ConfigManager:
             usar_score_tecnico=os.getenv('USAR_SCORE_TECNICO', str(defaults.usar_score_tecnico)).lower() == 'true',
             contradicciones_bloquean_entrada=os.getenv('CONTRADICCIONES_BLOQUEAN_ENTRADA', str(defaults.contradicciones_bloquean_entrada)).lower() == 'true',
             registro_tecnico_csv=os.getenv('REGISTRO_TECNICO_CSV', os.path.join(log_dir, 'rechazos_tecnico.csv')),
+            umbral_confirmacion_micro=_cargar_float('UMBRAL_CONFIRMACION_MICRO', getattr(defaults, 'umbral_confirmacion_micro', 0.6)),
+            umbral_confirmacion_macro=_cargar_float('UMBRAL_CONFIRMACION_MACRO', getattr(defaults, 'umbral_confirmacion_macro', 0.6)),
             fracciones_piramide=int(os.getenv('FRACCIONES_PIRAMIDE', defaults.fracciones_piramide)),
             reserva_piramide=float(os.getenv('RESERVA_PIRAMIDE', defaults.reserva_piramide)),
             umbral_piramide=float(os.getenv('UMBRAL_PIRAMIDE', defaults.umbral_piramide)),

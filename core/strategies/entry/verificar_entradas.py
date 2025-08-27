@@ -23,6 +23,53 @@ log = configurar_logger('verificar_entrada')
 UTC = timezone.utc
 
 
+def _tendencia_principal(tendencias: list[str | None]) -> tuple[str | None, float]:
+    """Devuelve la tendencia predominante y su proporción."""
+    valores = [t for t in tendencias if t]
+    if not valores:
+        return None, 0.0
+    tendencia = max(set(valores), key=valores.count)
+    proporcion = valores.count(tendencia) / len(tendencias)
+    return tendencia, proporcion
+
+
+def validar_marcos(symbol_state: dict) -> bool:
+    """Valida coherencia entre marcos temporales.
+
+    ``symbol_state`` debe incluir 'symbol', '1m', '5m', '1h', '1d' y opcionalmente
+    un diccionario ``config`` con ``umbral_confirmacion_micro`` y
+    ``umbral_confirmacion_macro``. Si las tendencias micro y macro superan
+    los umbrales y se contradicen, retorna ``False``.
+    """
+    symbol = symbol_state.get('symbol', '')
+    config = symbol_state.get('config', {})
+    umbral_micro = config.get('umbral_confirmacion_micro', 0.6)
+    umbral_macro = config.get('umbral_confirmacion_macro', 0.6)
+
+    def extraer(tf: str):
+        dato = symbol_state.get(tf)
+        if isinstance(dato, pd.DataFrame):
+            if dato.empty:
+                return None
+            return obtener_tendencia(symbol, dato)
+        return dato
+
+    micro = [extraer('1m'), extraer('5m')]
+    macro = [extraer('1h'), extraer('1d')]
+
+    micro_dir, micro_ratio = _tendencia_principal(micro)
+    macro_dir, macro_ratio = _tendencia_principal(macro)
+
+    if (
+        micro_dir
+        and macro_dir
+        and micro_ratio >= umbral_micro
+        and macro_ratio >= umbral_macro
+        and micro_dir != macro_dir
+    ):
+        return False
+    return True
+
 async def verificar_entrada(trader, symbol: str, df: pd.DataFrame, estado) ->(
     dict | None):
     log.debug('➡️ Entrando en verificar_entrada()')
@@ -38,6 +85,24 @@ async def verificar_entrada(trader, symbol: str, df: pd.DataFrame, estado) ->(
     trader.config_por_simbolo[symbol] = config
     tendencia = obtener_tendencia(symbol, df)
     log.debug(f'[{symbol}] Tendencia: {tendencia}')
+    df_sorted = df.sort_values('timestamp')
+    df_idx = df_sorted.set_index(pd.to_datetime(df_sorted['timestamp'], unit='ms'))
+    df_5m = df_idx.resample('5min').last().dropna() if len(df_idx) >= 5 else None
+    df_1h = df_idx.resample('1H').last().dropna() if len(df_idx) >= 60 else None
+    df_1d = df_idx.resample('1D').last().dropna() if len(df_idx) >= 1440 else None
+    if not validar_marcos(
+        {
+            'symbol': symbol,
+            '1m': df,
+            '5m': df_5m,
+            '1h': df_1h,
+            '1d': df_1d,
+            'config': config,
+        }
+    ):
+        log.info(f'[{symbol}] Contradicción entre marcos temporales.')
+        metricas_tracker.registrar_filtro('marcos_temporales')
+        return None
     engine_eval = await trader.engine.evaluar_entrada(
         symbol,
         df,
