@@ -7,6 +7,7 @@ import time
 from binance_api.websocket import escuchar_velas
 from core.utils.logger import configurar_logger
 from core.utils import intervalo_a_segundos
+from core.registro_metrico import registro_metrico
 from core.supervisor import (
     tick,
     tick_data,
@@ -18,6 +19,37 @@ from core.notificador import crear_notificador_desde_env
 
 UTC = timezone.utc
 log = configurar_logger('datafeed', modo_silencioso=False)
+
+
+def validar_integridad_velas(symbol: str, tf: str, candles: Iterable[dict]) -> bool:
+    log.debug('➡️ Entrando en validar_integridad_velas()')
+    timestamps = sorted(int(float(c['timestamp'])) for c in candles if 'timestamp' in c)
+    if len(timestamps) < 2:
+        return True
+    intervalo_ms = intervalo_a_segundos(tf) * 1000
+    dupes = gaps = desalineados = 0
+    prev = timestamps[0]
+    for curr in timestamps[1:]:
+        diff = curr - prev
+        if diff == 0:
+            dupes += 1
+        elif diff > intervalo_ms:
+            if diff % intervalo_ms == 0:
+                gaps += diff // intervalo_ms - 1
+            else:
+                desalineados += 1
+        elif diff % intervalo_ms != 0:
+            desalineados += 1
+        prev = curr
+    if dupes:
+        registro_metrico.registrar('velas_duplicadas', {'symbol': symbol, 'tf': tf, 'count': dupes})
+        log.warning(f'[{symbol}] {dupes} velas duplicadas detectadas en {tf}')
+    if gaps:
+        registro_metrico.registrar('velas_gap', {'symbol': symbol, 'tf': tf, 'count': gaps})
+        log.warning(f'[{symbol}] Gap de {gaps} velas en {tf}')
+    if desalineados:
+        log.error(f'[{symbol}] Timestamps desalineados en {tf}: {desalineados}')
+    return dupes == 0 and gaps == 0 and desalineados == 0
 
 
 class DataFeed:
