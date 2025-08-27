@@ -8,10 +8,13 @@ para facilitar la auditoría del proceso.
 from __future__ import annotations
 import json
 import math
+from collections import deque
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Deque, Dict, Optional
+
 import pandas as pd
 from prometheus_client import Counter, Gauge
+
 from indicators import rsi as indicador_rsi, slope as indicador_slope
 from indicators.retornos_volatilidad import (
     retornos_log,
@@ -26,6 +29,7 @@ _CONFIG_CACHE: Dict[str, dict] | None = None
 _UMBRAL_SUAVIZADO: Dict[str, float] = {}
 # Contador local para saltos de histéresis
 _HISTERESIS_SKIPS: Dict[str, int] = {}
+_UMBRAL_HISTORICO: Dict[str, Deque[float]] = {}
 RUTA_ESTADO = Path(ESTADO_DIR) / "umbral_adaptativo.json"
 # Parámetros de suavizado
 ALPHA_BASE = 0.3
@@ -171,15 +175,26 @@ def calcular_umbral_adaptativo(
         suavizado = previo + alpha * (umbral - previo)
     if pd.isna(suavizado) or not math.isfinite(suavizado):
         return 1.0
+    historial = _UMBRAL_HISTORICO.setdefault(symbol, deque(maxlen=20))
+    histeresis_actual = HISTERESIS
+    if len(historial) >= 2:
+        variacion = sum(
+            abs(historial[i] - historial[i - 1]) for i in range(1, len(historial))
+        ) / (len(historial) - 1)
+        if variacion > HISTERESIS:
+            histeresis_actual = HISTERESIS / 2
 
-    if previo is not None and abs(suavizado - previo) < HISTERESIS:
+    if previo is not None and abs(suavizado - previo) < histeresis_actual:
         _HISTERESIS_SKIPS[symbol] = _HISTERESIS_SKIPS.get(symbol, 0) + 1
         UMBRAL_HISTERESIS_SKIPS.labels(symbol=symbol).inc()
         UMBRAL_ADAPTATIVO_ACTUAL.labels(symbol=symbol).set(previo)
-        return round(previo, 2)
-    _UMBRAL_SUAVIZADO[symbol] = suavizado
-    UMBRAL_ADAPTATIVO_ACTUAL.labels(symbol=symbol).set(suavizado)
-    return round(suavizado, 2)
+        resultado = round(previo, 2)
+    else:
+        _UMBRAL_SUAVIZADO[symbol] = suavizado
+        UMBRAL_ADAPTATIVO_ACTUAL.labels(symbol=symbol).set(suavizado)
+        resultado = round(suavizado, 2)
+    historial.append(resultado)
+    return resultado
 
 
 def calcular_umbral_salida_adaptativo(
