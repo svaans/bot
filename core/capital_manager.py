@@ -76,7 +76,17 @@ class CapitalManager:
     def es_moneda_base(self, symbol: str) -> bool:
         """Verifica que ``symbol`` opere contra la ``capital_currency``."""
         return symbol.split('/')[-1] == self.capital_currency
-    
+
+    def capital_libre(self) -> float:
+        total = sum(self.capital_por_simbolo.values())
+        comprometido = sum(
+            self.capital_por_simbolo.get(s, 0.0)
+            for s in self.risk.posiciones_abiertas
+        )
+        return max(0.0, total - comprometido)
+
+    def hay_capital_libre(self) -> bool:
+        return self.capital_libre() > 0
     async def _on_calcular_cantidad(self, data: dict) -> None:
         fut = data.get('future')
         symbol = data.get('symbol')
