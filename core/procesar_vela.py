@@ -42,7 +42,7 @@ MAX_ESTRATEGIAS_BUFFER = MAX_BUFFER_VELAS
 
 
 def validar_integridad_velas(symbol: str, tf: str, candles: Iterable[dict]) -> bool:
-    log.debug('➡️ Entrando en validar_integridad_velas()')
+    log.debug('➡️ Entrando en validar_integridad_velas()', extra={'symbol': symbol, 'timeframe': tf})
     timestamps = sorted(int(float(c['timestamp'])) for c in candles if 'timestamp' in c)
     if len(timestamps) < 2:
         return True
@@ -73,7 +73,10 @@ def validar_integridad_velas(symbol: str, tf: str, candles: Iterable[dict]) -> b
 
 
 async def procesar_vela(trader, vela: dict) -> None:
-    log.debug('➡️ Entrando en procesar_vela()')
+    symbol = vela.get('symbol') if isinstance(vela, dict) else None
+    intervalo = getattr(trader.config, 'intervalo_velas', '')
+    ts_extra = vela.get('timestamp') if isinstance(vela, dict) else None
+    log.debug('➡️ Entrando en procesar_vela()', extra={'symbol': symbol, 'timeframe': intervalo, 'timestamp': ts_extra})
     if not isinstance(vela, dict):
         log.error(f"❌ Formato de vela inválido: {vela}")
         registrar_vela_rechazada('desconocido', 'formato_invalido')
@@ -181,12 +184,16 @@ async def procesar_vela(trader, vela: dict) -> None:
             )
             trader.estado_tendencia[symbol] = estado.tendencia_detectada
             log.debug(
-                f'obtener_tendencia tardó {time.perf_counter() - t_trend:.2f}s para {symbol}'
+                f'obtener_tendencia tardó {time.perf_counter() - t_trend:.2f}s para {symbol}',
+                extra={'symbol': symbol, 'timeframe': intervalo, 'timestamp': ts},
             )
         estado.contador_tendencia = (
             getattr(estado, 'contador_tendencia', 0) + 1
         ) % max(getattr(trader.config, 'frecuencia_tendencia', 1), 1)
-        log.debug(f"Procesando vela {symbol} | Precio: {vela_inmutable.get('close')}")
+        log.debug(
+            f"Procesando vela {symbol} | Precio: {vela_inmutable.get('close')}",
+            extra={'symbol': symbol, 'timeframe': intervalo, 'timestamp': ts},
+        )
         try:
             orden_existente = trader.orders.obtener(symbol)
             if orden_existente is not None:
@@ -197,7 +204,8 @@ async def procesar_vela(trader, vela: dict) -> None:
                         timeout=trader.config.timeout_verificar_salidas,
                     )
                     log.debug(
-                        f'_verificar_salidas tardó {time.perf_counter() - t_salidas:.2f}s para {symbol}'
+                        f'_verificar_salidas tardó {time.perf_counter() - t_salidas:.2f}s para {symbol}',
+                        extra={'symbol': symbol, 'timeframe': intervalo, 'timestamp': ts},
                     )
                     estado.timeouts_salidas = 0
                 except asyncio.TimeoutError:
@@ -245,7 +253,8 @@ async def procesar_vela(trader, vela: dict) -> None:
                     timeout=trader.config.timeout_evaluar_condiciones,
                 )
                 log.debug(
-                    f'evaluar_condiciones_de_entrada tardó {time.perf_counter() - t_entrada:.2f}s para {symbol}'
+                    f'evaluar_condiciones_de_entrada tardó {time.perf_counter() - t_entrada:.2f}s para {symbol}',
+                    extra={'symbol': symbol, 'timeframe': intervalo, 'timestamp': ts},
                 )
                 if isinstance(info, dict) and info:
                     try:
@@ -303,7 +312,8 @@ async def procesar_vela(trader, vela: dict) -> None:
                 mem = getattr(trader, '_ultimo_mem', 0.0)
             if log.isEnabledFor(logging.DEBUG):
                 log.debug(
-                    f'✅ procesar_vela completado en {duracion:.2f}s para {symbol} | CPU: {cpu:.1f}% | Memoria: {mem:.1f}%'
+                    f'✅ procesar_vela completado en {duracion:.2f}s para {symbol} | CPU: {cpu:.1f}% | Memoria: {mem:.1f}%',
+                    extra={'symbol': symbol, 'timeframe': intervalo, 'timestamp': ts},
                 )
             if cpu > trader.config.umbral_alerta_cpu:
                 trader._cpu_high_cycles += 1
