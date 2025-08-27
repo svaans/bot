@@ -5,20 +5,37 @@ from core.utils.utils import configurar_logger
 from core.risk.riesgo import riesgo_superado as _riesgo_superado, actualizar_perdida
 from core.reporting import reporter_diario
 from core.event_bus import EventBus
-from typing import Any, Dict, Set
+from datetime import datetime, timedelta
+from typing import Any, Dict, Set, TYPE_CHECKING
+
+if TYPE_CHECKING:  # pragma: no cover - solo para tipado
+    from core.capital_manager import CapitalManager
 log = configurar_logger('risk', modo_silencioso=True)
 
 
 class RiskManager:
     """Encapsula la lógica de control de riesgo del bot."""
 
-    def __init__(self, umbral: float, bus: EventBus | None = None) -> None:
+    def __init__(
+        self,
+        umbral: float,
+        bus: EventBus | None = None,
+        capital_manager: "CapitalManager" | None = None,
+        cooldown_pct: float = 0.1,
+        cooldown_duracion: int = 300,
+    ) -> None:
         log.info('➡️ Entrando en __init__()')
         self.umbral = umbral
         self._factor_kelly_prev = None
         self.bus = bus
+        self.capital_manager = capital_manager
+        self.cooldown_pct = cooldown_pct
+        self.cooldown_duracion = cooldown_duracion
+        self._cooldown_fin: datetime | None = None
         self.posiciones_abiertas: Set[str] = set()
         self.correlaciones: Dict[str, Dict[str, float]] = {}
+        self._fecha_riesgo = datetime.utcnow().date()
+        self.riesgo_diario = 0.0
         if bus:
             self.subscribe(bus)
 
