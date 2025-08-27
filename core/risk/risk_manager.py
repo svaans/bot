@@ -58,7 +58,18 @@ class RiskManager:
         log.info('➡️ Entrando en registrar_perdida()')
         """Registra una pérdida para ``symbol``."""
         if perdida < 0:
+            hoy = datetime.utcnow().date()
+            if hoy != self._fecha_riesgo:
+                self._fecha_riesgo = hoy
+                self.riesgo_diario = 0.0
+            perdida_abs = abs(perdida)
+            self.riesgo_diario += perdida_abs
             actualizar_perdida(symbol, perdida)
+            capital_symbol = 0.0
+            if self.capital_manager:
+                capital_symbol = self.capital_manager.capital_por_simbolo.get(symbol, 0.0)
+            if capital_symbol > 0 and perdida_abs / capital_symbol > self.cooldown_pct:
+                self._cooldown_fin = datetime.utcnow() + timedelta(seconds=self.cooldown_duracion)
 
     # --- Gestión de correlaciones entre posiciones ---
     def abrir_posicion(self, symbol: str) -> None:
@@ -97,6 +108,12 @@ class RiskManager:
         self, symbol: str, correlaciones: dict[str, float], diversidad_minima: float
     ) -> bool:
         """Determina si se permite una nueva entrada según la correlación media."""
+        if self.cooldown_activo:
+            log.info('🚫 Cooldown activo, no se permiten nuevas entradas')
+            return False
+        if self.capital_manager and not self.capital_manager.hay_capital_libre():
+            log.info('🚫 Sin capital libre para nuevas posiciones')
+            return False
         media = self.correlacion_media(symbol, correlaciones)
         if media > diversidad_minima:
             log.info(
@@ -104,6 +121,22 @@ class RiskManager:
             )
             return False
         return True
+
+    # --- Métricas internas ---
+    @property
+    def cooldown_activo(self) -> bool:
+        return bool(self._cooldown_fin and datetime.utcnow() < self._cooldown_fin)
+
+    @property
+    def riesgo_consumido(self) -> float:
+        return self.riesgo_diario
+
+    def metricas(self) -> dict[str, float | bool]:
+        """Devuelve un resumen de métricas de riesgo."""
+        return {
+            'riesgo_consumido': self.riesgo_consumido,
+            'cooldown_activo': self.cooldown_activo,
+        }
 
     def ajustar_umbral(self, segun_metricas: dict) ->None:
         log.info('➡️ Entrando en ajustar_umbral()')
