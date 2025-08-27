@@ -718,7 +718,6 @@ def ejecutar_orden_market(symbol: str, cantidad: float, operation_id: str | None
             f'📤 Enviando orden de compra para {symbol} | Cantidad: {cantidad} | Precio estimado: {precio:.4f}',
             extra={'symbol': symbol, 'timeframe': None},
         )
-            )
         params = {}
         if operation_id:
             params['newClientOrderId'] = operation_id
@@ -855,7 +854,6 @@ def ejecutar_orden_market_sell(symbol: str, cantidad: float, operation_id: str |
             f'💱 Ejecutando venta real en {symbol}: {cantidad_vender:.8f} unidades (precio estimado: {precio:.2f})',
             extra={'symbol': symbol, 'timeframe': None},
         )
-            )
         params = {}
         if operation_id:
             params['newClientOrderId'] = operation_id
