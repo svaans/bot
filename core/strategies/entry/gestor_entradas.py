@@ -106,6 +106,30 @@ def _validar_diversidad(symbol: str, estrategias: dict) ->bool:
     return True
 
 
+def requiere_ajuste_diversificacion(
+    symbol: str,
+    score: float,
+    abiertas_scores: dict[str, float],
+    correlaciones: pd.DataFrame,
+    umbral_correlacion: float = 0.8,
+) -> bool:
+    """Determina si ``symbol`` debe elevar su umbral por correlación.
+
+    Se compara ``score`` con los ``abiertas_scores`` de posiciones ya
+    abiertas. Si existe algún símbolo altamente correlacionado cuyo score
+    sea mayor o igual, se sugiere elevar el umbral para evitar duplicar
+    exposición.
+    """
+    log.info('➡️ Entrando en requiere_ajuste_diversificacion()')
+    if not abiertas_scores or correlaciones.empty or symbol not in correlaciones.columns:
+        return False
+    serie = correlaciones.loc[symbol, list(abiertas_scores.keys())].abs()
+    for otro, corr in serie.items():
+        if corr >= umbral_correlacion and abiertas_scores.get(otro, 0.0) >= score:
+            return True
+    return False
+    
+    
 def _validar_score(symbol: str, potencia: float, umbral: float) ->bool:
     log.info('➡️ Entrando en _validar_score()')
     if potencia < umbral:
