@@ -16,6 +16,7 @@ from core.metrics import (
     registrar_orden,
     registrar_buy_rejected_insufficient_funds,
 )
+from core.registro_metrico import registro_metrico
 from binance_api.cliente import obtener_cliente
 
 log = configurar_logger('orders', modo_silencioso=True)
@@ -137,6 +138,7 @@ class OrderManager:
             self._sync_task = loop.create_task(self._sync_loop())
 
     async def _sync_once(self) -> None:
+		actuales = set(self.ordenes.keys())
         try:
             ordenes_reconciliadas: Dict[str, Order] = await asyncio.to_thread(
                 real_orders.reconciliar_ordenes
@@ -145,17 +147,35 @@ class OrderManager:
             log.error(f'❌ Error sincronizando órdenes: {e}')
             return
 
-        # Merge granular: preserva campos locales útiles
-        nuevos = set(ordenes_reconciliadas) - set(self.ordenes)
-        for sym in nuevos:
-            if self.bus:
-                await self.bus.publish(
-                    'notify',
-                    {
-                        'mensaje': f'🔄 Orden sincronizada desde Binance: {sym}',
-                        'tipo': 'WARNING',
-                    },
-                )
+        reconciliadas = set(ordenes_reconciliadas.keys())
+        local_only = actuales - reconciliadas
+        exchange_only = reconciliadas - actuales
+
+        if local_only or exchange_only:
+            for sym in local_only:
+                log.warning(f'⚠️ Orden local {sym} ausente en exchange; cerrada.')
+                if self.bus:
+                    await self.bus.publish(
+                        'notify',
+                        {
+                            'mensaje': f'⚠️ Orden local {sym} cerrada por reconciliación',
+                            'tipo': 'WARNING',
+                        },
+                    )
+            for sym in exchange_only:
+                log.warning(f'⚠️ Orden {sym} encontrada en exchange y añadida.')
+                if self.bus:
+                    await self.bus.publish(
+                        'notify',
+                        {
+                            'mensaje': f'🔄 Orden sincronizada desde Binance: {sym}',
+                            'tipo': 'WARNING',
+                        },
+                    )
+            registro_metrico.registrar(
+                'discrepancia_ordenes',
+                {'local': len(local_only), 'exchange': len(exchange_only)},
+            )
 
         merged: Dict[str, Order] = {}
 
@@ -164,13 +184,16 @@ class OrderManager:
             local = self.ordenes.get(sym)
             if local:
                 # Preserva flags locales si aplican
-                setattr(remoto, 'registro_pendiente', getattr(local, 'registro_pendiente', False) or getattr(remoto, 'registro_pendiente', False))
-                setattr(remoto, 'cerrando', getattr(local, 'cerrando', False))
+                setattr(
+                    remoto,
+                    'registro_pendiente',
+                    getattr(local, 'registro_pendiente', False)
+                    or getattr(remoto, 'registro_pendiente', False),
+                )
                 # Si tienes otros campos efímeros, mapéalos aquí
             merged[sym] = remoto
 
-        # (Opcional) elimina locales que ya no aparezcan en remoto
-        # Si quieres mantenerlas, ajusta esta política.
+        
         self.ordenes = merged
 
         # Intenta registrar las que quedaron pendientes
