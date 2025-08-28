@@ -13,7 +13,7 @@ from core.strategies.evaluador_tecnico import (
     calcular_umbral_adaptativo as calc_umbral_tecnico,
     cargar_pesos_tecnicos,
 )
-from indicators.helpers import get_rsi, get_momentum, get_atr
+from indicators.helpers import get_rsi, get_momentum
 from core.utils.utils import distancia_minima_valida, verificar_integridad_datos
 from core.utils.cooldown import calcular_cooldown
 from core.contexto_externo import obtener_puntaje_contexto
@@ -285,9 +285,7 @@ async def verificar_entrada(trader, symbol: str, df: pd.DataFrame, estado) ->(
         metricas_tracker.registrar_filtro('sl_tp')
         return None
     
-    # El trader validará SL y TP con ATR al abrir la orden, por lo que
-    # evitamos duplicar esta comprobación aquí. Solo calculamos ATR una vez
-    # para posibles ajustes posteriores.
+    # evitamos duplicar esta comprobación aquí.
     atr = get_atr(df)
     eval_tecnica = await evaluar_puntaje_tecnico(symbol, df, precio, sl, tp)
     score_total = eval_tecnica['score_total']
