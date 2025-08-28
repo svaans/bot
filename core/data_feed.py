@@ -17,6 +17,7 @@ from core.supervisor import (
     registrar_reconexion_datafeed,
 )
 from core.notificador import crear_notificador_desde_env
+from ccxt.base.errors import AuthenticationError, NetworkError
 
 UTC = timezone.utc
 log = configurar_logger('datafeed', modo_silencioso=False)
@@ -175,6 +176,7 @@ class DataFeed:
                         'WARN',
                     )
                 except Exception:
+                    log.exception('Error enviando notificación de timeout de cola')
                     tick('data_feed')
                 await self._reiniciar_stream(symbol)
                 return
@@ -215,8 +217,11 @@ class DataFeed:
                 since=last_ts - intervalo_ms,
                 limit=limit,
             )
-        except Exception as e:
+        except (AuthenticationError, NetworkError) as e:
             log.warning(f'❌ Error obteniendo backfill para {symbol}: {e}')
+            return
+        except Exception:
+            log.exception(f'❌ Error inesperado obteniendo backfill para {symbol}')
             return
         registro_metrico.registrar(
             'velas_backfill',
@@ -290,7 +295,7 @@ class DataFeed:
                 await asyncio.sleep(1)
             except asyncio.CancelledError:
                 raise
-            except Exception as e:
+            except (AuthenticationError, NetworkError) as e:
                 log.warning(f'⚠️ Stream {symbol} falló: {e}. Reintentando en 5s')
                 fallos_consecutivos += 1
                 try:
@@ -300,8 +305,9 @@ class DataFeed:
                             'WARN',
                         )
                 except Exception:
+                    log.exception('Error enviando notificación de reconexión')
                     tick('data_feed')
-                    pass
+                    
                 tick('data_feed')
                 if fallos_consecutivos >= self.max_stream_restarts:
                     log.error(
@@ -316,8 +322,38 @@ class DataFeed:
                             'CRITICAL',
                         )
                     except Exception:
+                        log.exception('Error enviando notificación de límite de reconexiones')
                         tick('data_feed')
-                        pass
+                    raise
+                await asyncio.sleep(5)
+            except Exception:
+                log.exception(f'⚠️ Stream {symbol} falló de forma inesperada. Reintentando en 5s')
+                fallos_consecutivos += 1
+                try:
+                    if fallos_consecutivos == 1 or fallos_consecutivos % 5 == 0:
+                        await self.notificador.enviar_async(
+                            f'⚠️ Stream {symbol} en reconexión (intento {fallos_consecutivos})',
+                            'WARN',
+                        )
+                except Exception:
+                    log.exception('Error enviando notificación de reconexión')
+                    tick('data_feed')
+                tick('data_feed')
+                if fallos_consecutivos >= self.max_stream_restarts:
+                    log.error(
+                        f'❌ Stream {symbol} superó el límite de {self.max_stream_restarts} intentos'
+                    )
+                    log.debug(
+                        f"Stream {symbol} detenido tras {fallos_consecutivos} intentos"
+                    )
+                    try:
+                        await self.notificador.enviar_async(
+                            f'❌ Stream {symbol} superó el límite de {self.max_stream_restarts} intentos',
+                            'CRITICAL',
+                        )
+                    except Exception:
+                        log.exception('Error enviando notificación de límite de reconexiones')
+                        tick('data_feed')
                     raise
                 await asyncio.sleep(5)
 
@@ -370,7 +406,7 @@ class DataFeed:
             except asyncio.TimeoutError:
                 log.warning(f"⏱️ Timeout cancelando stream {symbol}")
             except Exception:
-                pass
+                log.exception(f'Error cancelando stream {symbol}')
         self._tasks[symbol] = supervised_task(
             lambda sym=symbol: self.stream(sym, self._handler_actual),
             f"stream_{symbol}",
@@ -418,7 +454,7 @@ class DataFeed:
                                     f"⏱️ Timeout cancelando stream {sym}"
                                 )
                             except Exception:
-                                pass
+                                log.exception(f'Error cancelando stream {sym}')
                         self._tasks[sym] = supervised_task(
                             lambda sym=sym: self.stream(sym, self._handler_actual),
                             f"stream_{sym}",
@@ -438,10 +474,8 @@ class DataFeed:
         except asyncio.CancelledError:
             tick('data_feed')
             raise
-        except Exception as e:
-            log.exception(
-                "Error inesperado en _monitor_global_inactividad: %s", e
-            )
+        except Exception:
+            log.exception("Error inesperado en _monitor_global_inactividad")
             tick('data_feed')
 
     async def escuchar(
@@ -528,7 +562,7 @@ class DataFeed:
             except asyncio.TimeoutError:
                 log.warning("🧟 Timeout cancelando tareas (tarea zombie)")
             except Exception:
-                pass
+                log.exception('Error cancelando tareas')
             tasks.clear()
 
         self._monitor_global_task = None
