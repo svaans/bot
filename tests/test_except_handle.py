@@ -1,0 +1,62 @@
+import pytest
+from unittest.mock import MagicMock
+from datetime import datetime, timezone
+from ccxt.base.errors import NetworkError
+
+from core import monitor_estado_bot
+from core.data_feed import DataFeed
+
+
+def test_monitorear_estado_bot_logs_exception(monkeypatch):
+    fake_log = MagicMock()
+    monkeypatch.setattr(monitor_estado_bot, 'log', fake_log)
+
+    def fake_crear_cliente():
+        raise ValueError('boom')
+
+    monkeypatch.setattr(monitor_estado_bot, 'crear_cliente', fake_crear_cliente)
+
+    with pytest.raises(ValueError):
+        monitor_estado_bot.monitorear_estado_bot()
+
+    fake_log.exception.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_backfill_handles_network_error(monkeypatch):
+    monkeypatch.setattr('core.data_feed.registrar_reconexion_datafeed', lambda cb: None)
+    df = DataFeed('1m')
+    df._cliente = object()
+    now = int(datetime.now(timezone.utc).timestamp() * 1000)
+    df._last_close_ts['BTC/USDT'] = now - df.intervalo_segundos * 2000
+
+    async def fake_fetch(*args, **kwargs):
+        raise NetworkError('net')
+
+    fake_log = MagicMock()
+    monkeypatch.setattr('core.data_feed.fetch_ohlcv_async', fake_fetch)
+    monkeypatch.setattr('core.data_feed.log', fake_log)
+
+    await df._backfill_candles('BTC/USDT')
+
+    fake_log.warning.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_backfill_logs_unexpected_exception(monkeypatch):
+    monkeypatch.setattr('core.data_feed.registrar_reconexion_datafeed', lambda cb: None)
+    df = DataFeed('1m')
+    df._cliente = object()
+    now = int(datetime.now(timezone.utc).timestamp() * 1000)
+    df._last_close_ts['BTC/USDT'] = now - df.intervalo_segundos * 2000
+
+    async def fake_fetch(*args, **kwargs):
+        raise ValueError('boom')
+
+    fake_log = MagicMock()
+    monkeypatch.setattr('core.data_feed.fetch_ohlcv_async', fake_fetch)
+    monkeypatch.setattr('core.data_feed.log', fake_log)
+
+    await df._backfill_candles('BTC/USDT')
+
+    fake_log.exception.assert_called_once()
