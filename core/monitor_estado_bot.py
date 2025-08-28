@@ -124,8 +124,8 @@ def monitorear_estado_bot(ordenes_memoria: (dict | None)=None):
     except NetworkError:
         log.error(
             '📡 Error de red al contactar con Binance. Verifica tu conexión.')
-    except Exception as e:
-        log.error(f'❌ Error inesperado en monitoreo del bot: {e}')
+    except Exception:
+        log.exception('❌ Error inesperado en monitoreo del bot')
         raise
 
 
@@ -144,6 +144,6 @@ async def monitorear_estado_periodicamente(self, intervalo=300):
         except asyncio.CancelledError:
             log.info('⏹️ Monitoreo cancelado. Cerrando tarea.')
             break
-        except Exception as e:
-            log.warning(f'⚠️ Error durante el monitoreo de estado: {e}')
+        except Exception:
+            log.exception('⚠️ Error durante el monitoreo de estado')
             await asyncio.sleep(intervalo)
