@@ -42,7 +42,6 @@ MAX_ESTRATEGIAS_BUFFER = MAX_BUFFER_VELAS
 
 
 def validar_integridad_velas(symbol: str, tf: str, candles: Iterable[dict]) -> bool:
-    log.debug('➡️ Entrando en validar_integridad_velas()', extra={'symbol': symbol, 'timeframe': tf})
     timestamps = sorted(int(float(c['timestamp'])) for c in candles if 'timestamp' in c)
     if len(timestamps) < 2:
         return True
@@ -76,7 +75,6 @@ async def procesar_vela(trader, vela: dict) -> None:
     symbol = vela.get('symbol') if isinstance(vela, dict) else None
     intervalo = getattr(trader.config, 'intervalo_velas', '')
     ts_extra = vela.get('timestamp') if isinstance(vela, dict) else None
-    log.debug('➡️ Entrando en procesar_vela()', extra={'symbol': symbol, 'timeframe': intervalo, 'timestamp': ts_extra})
     if not isinstance(vela, dict):
         log.error(f"❌ Formato de vela inválido: {vela}")
         registrar_vela_rechazada('desconocido', 'formato_invalido')
