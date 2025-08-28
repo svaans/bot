@@ -4,9 +4,10 @@ import signal
 import traceback
 from pathlib import Path
 from core.hot_reload import start_hot_reload, stop_hot_reload
-from core.supervisor import start_supervision, supervised_task
+from core.supervisor import start_supervision
 from learning.reset_configuracion import resetear_configuracion_diaria_si_corresponde
 from config.config_manager import ConfigManager
+from core.notificador import crear_notificador_desde_env
 
 
 def mostrar_banner():
@@ -50,6 +51,7 @@ async def main():
         print(f'❌ Error al inicializar el Trader: {e}')
         traceback.print_exc()
         return
+    notificador = crear_notificador_desde_env()
     tarea_bot = asyncio.create_task(bot.ejecutar())
     stop_event = asyncio.Event()
     tarea_stop = asyncio.create_task(stop_event.wait())
@@ -63,6 +65,9 @@ async def main():
         loop.add_signal_handler(signal.SIGTERM, detener_bot)
 
     pending = set()
+    max_retries = 5
+    retries = 0
+    backoff_base = 5
     try:
         while True:
             done, pending = await asyncio.wait(
@@ -74,6 +79,19 @@ async def main():
                 if exc:
                     print(f'❌ Error en la tarea del bot: {exc}')
                     traceback.print_exception(type(exc), exc, exc.__traceback__)
+                    retries += 1
+                    if retries > max_retries:
+                        print('🚨 Número máximo de reintentos alcanzado. Deteniendo bot.')
+                        try:
+                            notificador.enviar(
+                                'Bot detenido tras errores consecutivos', 'CRITICAL'
+                            )
+                        except Exception:
+                            pass
+                        break
+                    delay = min(backoff_base * 2 ** (retries - 1), 300)
+                    print(f'⏳ Reinicio del bot en {delay}s (intento {retries}/{max_retries})')
+                    await asyncio.sleep(delay)
                     print('🔄 Reiniciando bot...')
                     tarea_bot = asyncio.create_task(bot.ejecutar())
                     continue
