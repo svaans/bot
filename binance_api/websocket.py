@@ -59,7 +59,6 @@ def obtener_tasa_reconexion() -> int:
 
 
 def normalizar_symbolo(symbol: str) -> str:
-    log.debug('➡️ Entrando en normalizar_symbolo()')
     return symbol.replace('/', '').lower()
 
 
@@ -514,7 +513,6 @@ async def _watchdog(
     tiempo_maximo: int,
 ):
     """Cierra ``ws`` si no se reciben datos por ``tiempo_maximo`` segundos."""
-    log.debug('➡️ Entrando en _watchdog()')
     """
     Si no llega ninguna vela en tiempo_maximo (segundos), cierra el websocket para reiniciar.
     """

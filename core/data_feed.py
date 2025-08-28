@@ -25,7 +25,6 @@ log = configurar_logger('datafeed', modo_silencioso=False)
 BACKFILL_MAX_CANDLES = 100
 
 def validar_integridad_velas(symbol: str, tf: str, candles: Iterable[dict]) -> bool:
-    log.debug('➡️ Entrando en validar_integridad_velas()')
     timestamps = sorted(int(float(c['timestamp'])) for c in candles if 'timestamp' in c)
     if len(timestamps) < 2:
         return True
@@ -68,7 +67,6 @@ class DataFeed:
         cancel_timeout: float = 5,
         queue_put_timeout: float = 2,
     ) -> None:
-        log.debug('➡️ Entrando en __init__()')
         self.intervalo = intervalo
         self.intervalo_segundos = intervalo_a_segundos(intervalo)
         self.inactivity_intervals = inactivity_intervals
@@ -104,7 +102,6 @@ class DataFeed:
 
     @property
     def activos(self) ->list[str]:
-        log.debug('➡️ Entrando en activos()')
         """Lista de símbolos con streams activos."""
         return list(self._symbols)
     
@@ -115,7 +112,6 @@ class DataFeed:
     
 
     async def stream(self, symbol: str, handler: Callable[[dict], Awaitable[None]]) -> None:
-        log.debug('➡️ Entrando en stream()')
         """Escucha las velas de ``symbol`` y reintenta ante fallos de conexión."""
 
         async def wrapper(candle: dict) -> None:
@@ -484,7 +480,6 @@ class DataFeed:
         handler: Callable[[dict], Awaitable[None]],
         cliente: Any | None = None,
     ) -> None:
-        log.debug('➡️ Entrando en escuchar()')
         """Inicia un stream independiente por símbolo y espera a que finalicen.
 
         Si ``cliente`` se proporciona, se usará para recuperar velas perdidas tras
@@ -542,7 +537,6 @@ class DataFeed:
         self._queues.clear()
         self._running = False
     async def detener(self) -> None:
-        log.debug('➡️ Entrando en detener()')
         """Cancela todos los streams en ejecución."""
         tasks: list[asyncio.Task] = []
         if self._monitor_global_task:

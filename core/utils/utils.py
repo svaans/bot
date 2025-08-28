@@ -61,7 +61,6 @@ log = configurar_logger('trader' if MODO_REAL else 'trader_simulado')
 
 
 def obtener_uso_recursos() -> tuple[float, float]:
-    log.debug('➡️ Entrando en obtener_uso_recursos()')
     """Devuelve el uso actual de CPU y memoria en porcentaje."""
     cpu = psutil.cpu_percent()
     memoria = psutil.virtual_memory().percent

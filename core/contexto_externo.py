@@ -20,7 +20,6 @@ CONTEXT_WS_URL = 'wss://stream.binance.com:9443/ws/{symbol}@kline_5m'
 
 
 def obtener_puntaje_contexto(symbol: str) ->float:
-    log.debug('➡️ Entrando en obtener_puntaje_contexto()')
     """Devuelve el último puntaje conocido para ``symbol``."""
     valor = _PUNTAJES.get(symbol)
     try:
@@ -30,13 +29,11 @@ def obtener_puntaje_contexto(symbol: str) ->float:
 
 
 def obtener_todos_puntajes() ->dict:
-    log.debug('➡️ Entrando en obtener_todos_puntajes()')
     """Devuelve todos los puntajes actuales almacenados."""
     return dict(_PUNTAJES)
 
 
 def obtener_datos_externos(symbol: str) ->dict:
-    log.debug('➡️ Entrando en obtener_datos_externos()')
     """Devuelve los últimos datos externos conocidos para ``symbol``."""
     return dict(_DATOS_EXTERNOS.get(symbol, {}))
 
@@ -51,7 +48,6 @@ class StreamContexto:
         inactivity_timeout: int = 300,
         cancel_timeout: float = 5,
     ) -> None:
-        log.debug('➡️ Entrando en __init__()')
         self.url_template = url_template or CONTEXT_WS_URL
         self.monitor_interval = max(1, monitor_interval)
         self.inactivity_timeout = inactivity_timeout
@@ -65,14 +61,12 @@ class StreamContexto:
         self._symbols: list[str] = []
 
     def actualizar_datos_externos(self, symbol: str, datos: dict) ->None:
-        log.debug('➡️ Entrando en actualizar_datos_externos()')
         actual = _DATOS_EXTERNOS.setdefault(symbol, {})
         actual.update(datos)
 
     async def _stream(
         self, symbol: str, handler: Callable[[str, float], Awaitable[None]]
     ) -> None:
-        log.debug('➡️ Entrando en _stream()')
         symbol_norm = symbol.replace('/', '').lower()
         url = self.url_template.format(symbol=symbol_norm)
         try:
@@ -176,7 +170,6 @@ class StreamContexto:
             pass
 
     async def escuchar(self, symbols: Iterable[str], handler: Callable[[str, float], Awaitable[None]]) -> None:
-        log.debug('➡️ Entrando en escuchar()')
         """Inicia un stream supervisado por cada símbolo."""
         await self.detener()
         self._handler_actual = handler
@@ -199,7 +192,6 @@ class StreamContexto:
             self._running = False
 
     async def detener(self) -> None:
-        log.debug('➡️ Entrando en detener()')
         """Cancela todos los streams en ejecución."""
         if self._monitor_task and not self._monitor_task.done():
             self._monitor_task.cancel()

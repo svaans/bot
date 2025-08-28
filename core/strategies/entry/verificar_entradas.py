@@ -72,7 +72,6 @@ def validar_marcos(symbol_state: dict) -> bool:
 
 async def verificar_entrada(trader, symbol: str, df: pd.DataFrame, estado) ->(
     dict | None):
-    log.debug('➡️ Entrando en verificar_entrada()')
     """
     Evalúa condiciones de entrada y devuelve info de operación
     si cumple todos los filtros, de lo contrario None.
