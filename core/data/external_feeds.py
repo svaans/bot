@@ -64,14 +64,16 @@ class ExternalFeeds:
         if self.session is None:
             self.session = aiohttp.ClientSession()
 
-    async def funding_rate_rest(self, symbol: str) -> Dict[str, Any]:
+    async def funding_rate_rest(self, symbol: str) -> Dict[str, Any] | None:
         await self._ensure_session()
         url = f"https://fapi.binance.com/fapi/v1/fundingRate?symbol={symbol}&limit=1"
         async with self.session.get(url) as resp:
             data = await resp.json()
-        return data[0] if isinstance(data, list) else data
+        if isinstance(data, list):
+            return data[0] if data else None
+        return data
 
-    async def open_interest_rest(self, symbol: str) -> Dict[str, Any]:
+    async def open_interest_rest(self, symbol: str) -> Dict[str, Any] | None:
         await self._ensure_session()
         url = (
             "https://fapi.binance.com/futures/data/openInterestHist?"
@@ -79,7 +81,9 @@ class ExternalFeeds:
         )
         async with self.session.get(url) as resp:
             data = await resp.json()
-        return data[0] if isinstance(data, list) else data
+        if isinstance(data, list):
+            return data[0] if data else None
+        return data
 
     async def news_ws(self, url: str):
         async with websockets.connect(url, ping_interval=None, ping_timeout=None) as ws:
@@ -90,9 +94,12 @@ class ExternalFeeds:
         while self._running:
             try:
                 raw = await self.funding_rate_rest(symbol)
-                dato = normalizar_funding_rate(raw)
-                if self.stream:
-                    self.stream.actualizar_datos_externos(symbol, {'funding_rate': dato})
+                if not raw:
+                    log.warning(f'⚠️ Funding rate no disponible {symbol}')
+                else:
+                    dato = normalizar_funding_rate(raw)
+                    if self.stream:
+                        self.stream.actualizar_datos_externos(symbol, {'funding_rate': dato})
             except asyncio.CancelledError:
                 raise
             except Exception as e:
@@ -103,9 +110,12 @@ class ExternalFeeds:
         while self._running:
             try:
                 raw = await self.open_interest_rest(symbol)
-                dato = normalizar_open_interest(raw)
-                if self.stream:
-                    self.stream.actualizar_datos_externos(symbol, {'open_interest': dato})
+                if not raw:
+                    log.warning(f'⚠️ Open interest no disponible {symbol}')
+                else:
+                    dato = normalizar_open_interest(raw)
+                    if self.stream:
+                        self.stream.actualizar_datos_externos(symbol, {'open_interest': dato})
             except asyncio.CancelledError:
                 raise
             except Exception as e:
