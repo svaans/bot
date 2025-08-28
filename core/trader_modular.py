@@ -50,7 +50,13 @@ from ccxt.base.errors import BaseError
 from core.reporting import reporter_diario
 from core.registro_metrico import registro_metrico
 from core.metrics import registrar_decision, registrar_correlacion_btc
-from core.supervisor import supervised_task, task_heartbeat, tick, last_alive, data_heartbeat
+from core.supervisor import (
+    supervised_task,
+    task_heartbeat,
+    tick,
+    get_last_alive,
+    data_heartbeat,
+)
 from learning.aprendizaje_en_linea import registrar_resultado_trade
 from learning.aprendizaje_continuo import ejecutar_ciclo as ciclo_aprendizaje
 from core.strategies.exit.gestor_salidas import verificar_filtro_tecnico
@@ -1119,7 +1125,7 @@ class Trader:
                     if nombre == 'data_feed':
                         log.debug('Data feed terminado y reiniciado por vigilancia')
                 else:
-                    hb = task_heartbeat.get(nombre, last_alive)
+                    hb = task_heartbeat.get(nombre, get_last_alive())
                     elapsed = (ahora - hb).total_seconds()
                     if elapsed > intervalo:
                         log.warning(
