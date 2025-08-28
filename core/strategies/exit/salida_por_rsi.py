@@ -7,7 +7,6 @@ log = configurar_logger('salida_por_rsi')
 
 
 def salida_por_rsi(df: pd.DataFrame, umbral_bajo=30) ->dict:
-    log.info('➡️ Entrando en salida_por_rsi()')
     """
     Cierra si RSI cae por debajo del umbral (ej: 30)
     """

@@ -327,7 +327,6 @@ async def _aplicar_salidas_adicionales(trader, orden, df) -> bool:
 
 
 async def verificar_salidas(trader, symbol: str, df: pd.DataFrame) -> None:
-    log.info('➡️ Entrando en verificar_salidas()')
     """Evalúa si la orden abierta debe cerrarse."""
     
     inicio_total = time.time()

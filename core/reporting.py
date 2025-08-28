@@ -21,7 +21,6 @@ atexit.register(_executor.shutdown)
 class ReporterDiario:
 
     def __init__(self, carpeta='reportes_diarios', max_operaciones=1000):
-        log.info('➡️ Entrando en __init__()')
         self.carpeta = carpeta
         os.makedirs(self.carpeta, exist_ok=True)
         self.fecha_actual = datetime.now(UTC).date()
@@ -34,7 +33,6 @@ class ReporterDiario:
         self.max_operaciones = max_operaciones
 
     def _cargar_estadisticas(self):
-        log.info('➡️ Entrando en _cargar_estadisticas()')
         columnas = ['symbol', 'operaciones', 'wins', 'retorno_acumulado',
             'max_equity', 'drawdown', 'buy_hold_start', 'last_price']
         if os.path.exists(self.estadisticas_archivo):
@@ -47,7 +45,6 @@ class ReporterDiario:
             self.estadisticas = pd.DataFrame(columns=columnas)
 
     def _guardar_estadisticas(self):
-        log.info('➡️ Entrando en _guardar_estadisticas()')
         if self.estadisticas.empty:
             return
         df = self.estadisticas.copy()
@@ -57,7 +54,6 @@ class ReporterDiario:
         df.to_csv(self.estadisticas_archivo, index=False)
 
     def _actualizar_estadisticas(self, info: dict):
-        log.info('➡️ Entrando en _actualizar_estadisticas()')
         symbol = info.get('symbol') or info.get('simbolo')
         if not symbol:
             return
@@ -96,7 +92,6 @@ class ReporterDiario:
         self._guardar_estadisticas()
 
     def registrar_operacion(self, info: dict):
-        log.info('➡️ Entrando en registrar_operacion()')
         fecha = datetime.now(UTC).date()
         archivo = os.path.join(self.carpeta, f'{fecha}.csv')
         df = pd.DataFrame([info])
@@ -120,7 +115,6 @@ class ReporterDiario:
             self.fecha_actual = fecha
 
     def generar_informe(self, fecha):
-        log.info('➡️ Entrando en generar_informe()')
         archivo = os.path.join(self.carpeta, f'{fecha}.csv')
         if not os.path.exists(archivo):
             return
@@ -187,7 +181,6 @@ class ReporterDiario:
         self._guardar_pdf(df, fecha, ganancia_total, winrate, drawdown)
 
     def _guardar_pdf(self, df, fecha, ganancia, winrate, drawdown):
-        log.info('➡️ Entrando en _guardar_pdf()')
         pdf_path = os.path.join(self.carpeta, f'{fecha}.pdf')
         with PdfPages(pdf_path) as pdf:
             fig, ax = plt.subplots()

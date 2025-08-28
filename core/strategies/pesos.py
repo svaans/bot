@@ -12,7 +12,6 @@ log = configurar_logger('pesos')
 def normalizar_pesos(pesos_actuales: Dict[str, float], total: float=100,
     peso_min: float=0.5, factor_temporal: Optional[float]=None) ->Dict[str,
     float]:
-    log.info('➡️ Entrando en normalizar_pesos()')
     """Normaliza los pesos, respetando un mínimo y aplicando factor temporal si se indica."""
     pesos_temporales = {estrategia: (valor * factor_temporal if
         factor_temporal else valor) for estrategia, valor in pesos_actuales
@@ -35,11 +34,9 @@ class GestorPesos:
         )
 
     def __post_init__(self) ->None:
-        log.info('➡️ Entrando en __post_init__()')
         self.pesos = self._cargar_pesos()
 
     def _cargar_pesos(self) ->Dict[str, Dict[str, float]]:
-        log.info('➡️ Entrando en _cargar_pesos()')
         """Carga pesos desde JSON validando el formato y repara si es necesario."""
         if not os.path.exists(self.ruta):
             log.error(f'❌ No se encontró archivo de pesos: {self.ruta}')
@@ -55,7 +52,6 @@ class GestorPesos:
         return datos
 
     def _restaurar_desde_base(self) ->dict:
-        log.info('➡️ Entrando en _restaurar_desde_base()')
         """Restaura pesos desde una copia base."""
         ruta_base = 'config/estrategias_pesos_base.json'
         if not os.path.exists(ruta_base):
@@ -68,7 +64,6 @@ class GestorPesos:
         return datos
 
     def guardar(self, pesos: Dict[str, Dict[str, float]]) ->None:
-        log.info('➡️ Entrando en guardar()')
         """Guarda los pesos actualizados en disco."""
         try:
             with open(self.ruta, 'w') as f:
@@ -79,16 +74,13 @@ class GestorPesos:
             log.error(f'❌ Error al guardar pesos: {e}')
 
     def obtener_peso(self, estrategia: str, symbol: str) ->float:
-        log.info('➡️ Entrando en obtener_peso()')
         return self.pesos.get(symbol, {}).get(estrategia, 0.0)
 
     def obtener_pesos_symbol(self, symbol: str) ->Dict[str, float]:
-        log.info('➡️ Entrando en obtener_pesos_symbol()')
         return self.pesos.get(symbol, {})
 
     def calcular_desde_backtest(self, simbolos, carpeta='backtesting',
         escala=20) ->None:
-        log.info('➡️ Entrando en calcular_desde_backtest()')
         """Recalcula pesos desde los CSV de órdenes ganadoras por símbolo."""
         pesos_por_symbol = {}
         for symbol in simbolos:
@@ -137,11 +129,9 @@ class GestorPesosSalidas:
         )
 
     def __post_init__(self) ->None:
-        log.info('➡️ Entrando en __post_init__()')
         self.pesos = self._cargar_pesos()
 
     def _cargar_pesos(self) ->Dict[str, Dict[str, float]]:
-        log.info('➡️ Entrando en _cargar_pesos()')
         if not os.path.exists(self.ruta):
             log.error(f'❌ No se encontró archivo de pesos: {self.ruta}')
             raise ValueError('Archivo de pesos inexistente')
@@ -156,7 +146,6 @@ class GestorPesosSalidas:
         return datos
 
     def obtener(self, razon: str, symbol: str) ->float:
-        log.info('➡️ Entrando en obtener()')
         return self.pesos.get(symbol, {}).get(razon, 0.0)
 
 
@@ -169,12 +158,10 @@ except ValueError as e:
 
 
 def cargar_pesos_estrategias() ->Dict[str, Dict[str, float]]:
-    log.info('➡️ Entrando en cargar_pesos_estrategias()')
     return GestorPesos().pesos
 
 
 def obtener_peso_salida(razon: str, symbol: str) ->float:
-    log.info('➡️ Entrando en obtener_peso_salida()')
     """Devuelve el peso de una estrategia de salida para el símbolo dado."""
     try:
         return gestor_pesos_salidas.obtener(razon, symbol)

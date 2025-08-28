@@ -7,7 +7,6 @@ log = configurar_logger('ajustador_pesos')
 
 def ajustar_pesos_por_desempeno(resultados_backtest: dict, ruta_salida: str
     ) ->dict:
-    log.info('➡️ Entrando en ajustar_pesos_por_desempeno()')
     """
     Ajusta y normaliza los pesos de estrategias por símbolo usando softmax estable.
     Guarda un JSON con los pesos escalados en una escala de 0 a 10.

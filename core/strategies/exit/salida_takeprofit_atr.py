@@ -41,7 +41,6 @@ def salida_takeprofit_atr(
         Incremento mínimo de cantidad permitido por el mercado.
     """
 
-    log.info('➡️ Entrando en salida_takeprofit_atr()')
     try:
         if len(df) < 20 or 'close' not in df.columns:
             return resultado_salida('Take Profit', False, 'Datos insuficientes')

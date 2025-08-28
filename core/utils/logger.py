@@ -122,7 +122,6 @@ def log_decision(logger: logging.Logger, accion: str, operation_id: str | None,
 
 
 def log_resumen_operacion(tipo, symbol, **kwargs):
-    log.info('➡️ Entrando en log_resumen_operacion()')
     log = logging.getLogger('resumen')
     if tipo == 'entrada':
         log.info(

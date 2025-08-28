@@ -11,7 +11,6 @@ log = configurar_logger('analisis_salidas')
 def precio_cerca_de_soporte(
     df: pd.DataFrame, precio: float, ventana: int = 30, margen: float = 0.003
 ) -> bool:
-    log.info('➡️ Entrando en precio_cerca_de_soporte()')
     """Comprueba si ``precio`` está cerca de un soporte reciente y validado."""
     if not isinstance(df, pd.DataFrame):
         return False
@@ -38,7 +37,6 @@ def precio_cerca_de_soporte(
 
 
 def es_vela_envolvente_alcista(df: pd.DataFrame) ->bool:
-    log.info('➡️ Entrando en es_vela_envolvente_alcista()')
     """Detecta patrón de vela envolvente alcista en las dos últimas velas."""
     if len(df) < 2:
         return False
@@ -51,7 +49,6 @@ def es_vela_envolvente_alcista(df: pd.DataFrame) ->bool:
 
 
 def _score_tecnico_basico(df: pd.DataFrame, direccion: str) ->float:
-    log.info('➡️ Entrando en _score_tecnico_basico()')
     """Calcula un score técnico sencillo aplicando pesos configurables."""
     rsi = get_rsi(df)
     momentum = get_momentum(df)
@@ -80,7 +77,6 @@ def _score_tecnico_basico(df: pd.DataFrame, direccion: str) ->float:
 def evaluar_condiciones_de_cierre_anticipado(symbol: str, df: pd.DataFrame,
     orden: Dict[str, Any], score: float, estrategias_activas: (Dict[str,
     Any] | None)=None) ->bool:
-    log.info('➡️ Entrando en evaluar_condiciones_de_cierre_anticipado()')
     """Reevalúa el contexto técnico antes de confirmar un cierre por SL.
 
     Retorna ``True`` si se debe permitir el cierre, ``False`` si las
@@ -131,7 +127,6 @@ def evaluar_condiciones_de_cierre_anticipado(symbol: str, df: pd.DataFrame,
 def permitir_cierre_tecnico(
     symbol: str, df: pd.DataFrame, sl: float, precio: float
 ) -> bool:
-    log.info('➡️ Entrando en permitir_cierre_tecnico()')
     """Decide si se permite cerrar la operación ignorando posibles rebotes."""
     orden = None
     if isinstance(precio, dict):

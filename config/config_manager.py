@@ -10,7 +10,6 @@ log = configurar_logger('config_manager')
 
 
 def _cargar_float(clave, valor_defecto):
-    log.info('➡️ Entrando en _cargar_float()')
     try:
         return float(os.getenv(clave, valor_defecto))
     except ValueError:
@@ -21,7 +20,6 @@ def _cargar_float(clave, valor_defecto):
 
 
 def _cargar_int(clave, valor_defecto):
-    log.info('➡️ Entrando en _cargar_int()')
     try:
         return int(os.getenv(clave, valor_defecto))
     except ValueError:
@@ -84,7 +82,6 @@ class ConfigManager:
 
     @staticmethod
     def load_from_env() ->Config:
-        log.info('➡️ Entrando en load_from_env()')
         env_path = Path(__file__).resolve(
             ).parent.parent / 'config' / 'claves.env'
         load_dotenv(env_path)

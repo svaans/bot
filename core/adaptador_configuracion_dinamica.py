@@ -13,14 +13,12 @@ log = configurar_logger('adaptador_dinamico')
 
 
 def _validar_dataframe(df: pd.DataFrame) ->bool:
-    log.info('➡️ Entrando en _validar_dataframe()')
     columnas = {'open', 'high', 'low', 'close', 'volume'}
     return df is not None and columnas.issubset(df.columns) and len(df) >= 30
 
 
 def _validar_coherencia_tp_sl(sl: float, tp: float, ratio_min: float=1.1
     ) ->bool:
-    log.info('➡️ Entrando en _validar_coherencia_tp_sl()')
     """Comprueba que los ratios TP/SL sean coherentes."""
     if sl <= 0 or tp <= 0:
         return False
@@ -32,7 +30,6 @@ def _validar_coherencia_tp_sl(sl: float, tp: float, ratio_min: float=1.1
 
 
 def _alertar_inconsistencias(symbol: str, sl: float, tp: float) ->None:
-    log.info('➡️ Entrando en _alertar_inconsistencias()')
     """Emite alertas cuando la configuración es incoherente."""
     if not _validar_coherencia_tp_sl(sl, tp):
         log.warning(
@@ -41,7 +38,6 @@ def _alertar_inconsistencias(symbol: str, sl: float, tp: float) ->None:
 
 
 def _adaptar_configuracion_indicadores(symbol: str, df: pd.DataFrame, base_config: dict | None=None) ->dict:
-    log.info('➡️ Entrando en _adaptar_configuracion_indicadores()')
     """Ajusta los parámetros del bot según contexto de mercado."""
     if not _validar_dataframe(df):
         log.warning(f'[{symbol}] Datos insuficientes para adaptación dinámica.')

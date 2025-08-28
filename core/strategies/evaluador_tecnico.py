@@ -27,7 +27,6 @@ _pesos_lock = asyncio.Lock()
 
 
 def _cargar_pesos(symbol: str) ->dict:
-    log.info('➡️ Entrando en _cargar_pesos()')
     """Devuelve los pesos técnicos para ``symbol``.
 
     Debe ejecutarse con ``_pesos_lock`` adquirido por el llamador. Si ``symbol``
@@ -56,7 +55,6 @@ def _cargar_pesos(symbol: str) ->dict:
 
 
 async def cargar_pesos_tecnicos(symbol: str) -> dict:
-    log.info('➡️ Entrando en cargar_pesos_tecnicos()')
     """Interfaz pública para obtener los pesos de un símbolo.
 
     Usa un ``asyncio.Lock`` para proteger el acceso concurrente al cache de
@@ -67,7 +65,6 @@ async def cargar_pesos_tecnicos(symbol: str) -> dict:
 
 async def evaluar_puntaje_tecnico(symbol: str, df: pd.DataFrame, precio: float,
     sl: float, tp: float) -> dict:
-    log.info('➡️ Entrando en evaluar_puntaje_tecnico()')
     """Evalúa condiciones técnicas y retorna un puntaje acumulado.
 
     La obtención de pesos está protegida mediante ``_pesos_lock``.
@@ -93,7 +90,6 @@ async def evaluar_puntaje_tecnico(symbol: str, df: pd.DataFrame, precio: float,
     total = 0.0
 
     def _add(clave: str, condicion: (bool | None)) ->None:
-        log.info('➡️ Entrando en _add()')
         """Suma o resta puntaje según ``condicion`` y registra detalles."""
         nonlocal total
         peso = pesos.get(clave, 0.0)
@@ -137,7 +133,6 @@ async def evaluar_puntaje_tecnico(symbol: str, df: pd.DataFrame, precio: float,
 
 def calcular_umbral_adaptativo(score_maximo_esperado: float, tendencia: str,
     volatilidad: float, volumen: float, estrategias_activas: dict) ->float:
-    log.info('➡️ Entrando en calcular_umbral_adaptativo()')
     """Calcula un umbral técnico dinámico simple."""
     base = score_maximo_esperado * 0.5
     if volumen > 1:
@@ -153,7 +148,6 @@ def calcular_umbral_adaptativo(score_maximo_esperado: float, tendencia: str,
 
 async def actualizar_pesos_tecnicos(symbol: str, detalles: dict, retorno: float,
     factor: float = 0.05) -> None:
-    log.info('➡️ Entrando en actualizar_pesos_tecnicos()')
     """Ajusta pesos del JSON según rendimiento de la operación.
 
     El acceso a ``_pesos_cache`` está protegido por ``_pesos_lock`` para evitar

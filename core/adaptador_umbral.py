@@ -50,7 +50,6 @@ UMBRAL_HISTERESIS_SKIPS = Counter(
 
 
 def cargar_estado() -> None:
-    log.info("➡️ Entrando en cargar_estado()")
     if not RUTA_ESTADO.exists():
         return
     try:
@@ -72,7 +71,6 @@ def cargar_estado() -> None:
 
 
 def guardar_estado() -> None:
-    log.info("➡️ Entrando en guardar_estado()")
     try:
         RUTA_ESTADO.parent.mkdir(parents=True, exist_ok=True)
         with open(RUTA_ESTADO, "w", encoding="utf-8") as fh:
@@ -89,7 +87,6 @@ def guardar_estado() -> None:
 
 
 def _cargar_config() -> Dict[str, dict]:
-    log.info("➡️ Entrando en _cargar_config()")
     global _CONFIG_CACHE
     if _CONFIG_CACHE is None:
         if RUTA_CONFIG.exists():
@@ -103,7 +100,6 @@ def _cargar_config() -> Dict[str, dict]:
 def calcular_umbral_adaptativo(
     symbol: str, df: pd.DataFrame, contexto: Optional[Dict] = None
 ) -> float:
-    log.info("➡️ Entrando en calcular_umbral_adaptativo()")
     """Devuelve un umbral adaptativo basado en datos técnicos actuales.
 
     El cálculo parte de los pesos configurados y aplica multiplicadores
@@ -200,7 +196,6 @@ def calcular_umbral_adaptativo(
 def calcular_umbral_salida_adaptativo(
     symbol: str, config: Dict | None = None, contexto: Optional[Dict] = None
 ) -> float:
-    log.info("➡️ Entrando en calcular_umbral_salida_adaptativo()")
     """Calcula un umbral dinámico para salidas basado en contexto de mercado."""
     if config is None:
         config = {}

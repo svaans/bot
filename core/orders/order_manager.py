@@ -34,7 +34,6 @@ class OrderManager:
         bus: EventBus | None = None,
         max_historial: int = MAX_HISTORIAL_ORDENES,
     ) -> None:
-        log.info('➡️ Entrando en __init__()')
         self.modo_real = modo_real
         self.ordenes: Dict[str, Order] = {}
         self.historial: Dict[str, list] = {}
@@ -294,7 +293,6 @@ class OrderManager:
         candle_close_ts: int | None = None,   # reservado (no usado aquí)
         strategy_version: str | None = None,  # reservado (no usado aquí)
     ) -> bool:
-        log.info('➡️ Entrando en abrir_async()')
         operation_id = self._generar_operation_id(symbol)
         entrada_log = {
             'symbol': symbol,
@@ -590,7 +588,6 @@ class OrderManager:
             return True
 				
     async def agregar_parcial_async(self, symbol: str, precio: float, cantidad: float) -> bool:
-        log.info('➡️ Entrando en agregar_parcial_async()')
         lock = self._locks.setdefault(symbol, asyncio.Lock())
         async with lock:
             """Aumenta la posición abierta agregando una compra parcial."""
@@ -640,7 +637,6 @@ class OrderManager:
             return True
 
     async def cerrar_async(self, symbol: str, precio: float, motivo: str) -> bool:
-        log.info('➡️ Entrando en cerrar_async()')
         lock = self._locks.setdefault(symbol, asyncio.Lock())
         async with lock:
             """Cierra la orden indicada completamente."""
@@ -754,7 +750,6 @@ class OrderManager:
                 self._dup_warned.discard(symbol)
 
     async def cerrar_parcial_async(self, symbol: str, cantidad: float, precio: float, motivo: str) -> bool:
-        log.info('➡️ Entrando en cerrar_parcial_async()')
         """Cierra parcialmente la orden activa."""
         orden = self.ordenes.get(symbol)
         if not orden or orden.cantidad_abierta <= 0:
@@ -831,5 +826,4 @@ class OrderManager:
         return True
 
     def obtener(self, symbol: str) -> Optional[Order]:
-        log.info('➡️ Entrando en obtener()')
         return self.ordenes.get(symbol)

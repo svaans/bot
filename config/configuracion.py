@@ -20,7 +20,6 @@ CONFIG_BASE = {'factor_umbral': 1.0, 'ajuste_volatilidad': 1.0,
 
 
 def backup_json(path: str):
-    log.info('➡️ Entrando en backup_json()')
     if os.path.exists(path):
         ts = datetime.now().strftime('%Y%m%d_%H%M%S')
         shutil.copy(path, path + f'.bak_{ts}')
@@ -31,11 +30,9 @@ class ConfigurationService:
     """Gestiona la carga y almacenamiento de configuraciones por símbolo."""
 
     def __init__(self, ruta: str=RUTA_CONFIG_SIMBOLOS) ->None:
-        log.info('➡️ Entrando en __init__()')
         self.ruta = ruta
 
     def load(self, symbol: str) ->dict:
-        log.info('➡️ Entrando en load()')
         if not os.path.exists(self.ruta):
             log.error(f'❌ Archivo de configuración no encontrado: {self.ruta}')
             raise ValueError('Archivo de configuración inexistente')
@@ -60,7 +57,6 @@ class ConfigurationService:
         return config
 
     def save(self, symbol: str, config: dict) ->None:
-        log.info('➡️ Entrando en save()')
         if not isinstance(config, dict):
             log.error(f'❌ Configuración inválida para guardar: {symbol}')
             raise ValueError('La configuración debe ser un diccionario')
@@ -83,10 +79,8 @@ _service = ConfigurationService()
 
 
 def cargar_configuracion_simbolo(symbol: str) ->dict:
-    log.info('➡️ Entrando en cargar_configuracion_simbolo()')
     return _service.load(symbol)
 
 
 def guardar_configuracion_simbolo(symbol: str, config: dict) ->None:
-    log.info('➡️ Entrando en guardar_configuracion_simbolo()')
     _service.save(symbol, config)

@@ -4,9 +4,11 @@ import re
 # Carpeta raíz de tu proyecto
 ROOT_DIR = "."
 
-# Regex para detectar el log de entrada
-# Captura cualquier cosa como log.debug('➡️ Entrando en ...')
-LOG_REGEX = re.compile(r"^\s*log\.debug\(\s*['\"]➡️ Entrando en .*['\"]\s*\)\s*$")
+# Regex para detectar logs de entrada tanto en debug como info
+# Ej: log.debug('➡️ Entrando en ejecutar()') o log.info("➡️ Entrando en procesar()")
+LOG_REGEX = re.compile(
+    r"^\s*log\.(debug|info)\(\s*['\"]➡️ Entrando en .*['\"]\s*\)\s*$"
+)
 
 def limpiar_logs_en_archivo(filepath: str):
     with open(filepath, "r", encoding="utf-8") as f:
@@ -35,3 +37,4 @@ def recorrer_directorio(root_dir: str):
 
 if __name__ == "__main__":
     recorrer_directorio(ROOT_DIR)
+

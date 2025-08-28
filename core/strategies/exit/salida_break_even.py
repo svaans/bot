@@ -7,7 +7,6 @@ log = configurar_logger('salida_break_even')
 
 def salida_break_even(orden: dict, df: pd.DataFrame, config: (dict | None)=None
     ) -> dict:
-    log.info('➡️ Entrando en salida_break_even()')
     """Evalúa si se debe mover el Stop Loss a precio de entrada."""
     try:
         if df is None or len(df) < 15 or not {'close', 'high', 'low'}.issubset(

@@ -8,7 +8,6 @@ ESCAPE_CHARS = ['_', '*', '[', ']', '(', ')', '~', '`', '>', '#', '+', '-',
 
 
 def escape_markdown(text: str) ->str:
-    log.info('➡️ Entrando en escape_markdown()')
     """Escapa caracteres problemáticos para Markdown/MarkdownV2 de Telegram."""
     for char in ESCAPE_CHARS:
         text = text.replace(char, f'\\{char}')
@@ -22,7 +21,6 @@ class Notificador:
 
     def __init__(self, token: str='', chat_id: str='', modo_test: bool=
         False, parse_mode: (str | None)='Markdown'):
-        log.info('➡️ Entrando en __init__()')
         self.token = token
         self.chat_id = chat_id
         self.modo_test = modo_test
@@ -33,7 +31,6 @@ class Notificador:
                 )
 
     def enviar(self, mensaje: str, tipo: str='INFO') ->None:
-        log.info('➡️ Entrando en enviar()')
         if not self.token or not self.chat_id:
             return
         mensaje = f'[{tipo.upper()}] {mensaje}'
@@ -84,14 +81,12 @@ class Notificador:
                     log.error(f'❌ Error en reintento de notificación: {e2}')
 
     async def enviar_async(self, mensaje: str, tipo: str='INFO') ->None:
-        log.info('➡️ Entrando en enviar_async()')
         """Envía la notificación sin bloquear el loop principal."""
         loop = asyncio.get_running_loop()
         await loop.run_in_executor(None, self.enviar, mensaje, tipo)
 
 
 def crear_notificador_desde_env() ->Notificador:
-    log.info('➡️ Entrando en crear_notificador_desde_env()')
     load_dotenv('config/claves.env')
     token = os.getenv('TELEGRAM_TOKEN', '')
     chat_id = os.getenv('TELEGRAM_CHAT_ID', '')

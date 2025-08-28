@@ -45,7 +45,6 @@ def _clasificar_politica(evento: str, resultado: dict) -> str | None:
 
 
 async def evaluar_salidas(orden: dict, df, config=None, contexto=None):
-    log.info('➡️ Entrando en evaluar_salidas()')
     symbol = orden.get('symbol', 'SYM')
     if not validar_dataframe(df, ['close', 'high', 'low', 'volume']):
         log.warning(f'[{symbol}] DataFrame inválido para gestor de salidas')
@@ -206,7 +205,6 @@ async def evaluar_salidas(orden: dict, df, config=None, contexto=None):
 
 async def verificar_filtro_tecnico(symbol, df, estrategias_activas, pesos_symbol,
     config=None):
-    log.info('➡️ Entrando en verificar_filtro_tecnico()')
     if not validar_dataframe(df, ['high', 'low', 'close']):
         return False
     tendencia, _ = detectar_tendencia(symbol, df)

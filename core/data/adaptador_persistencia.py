@@ -9,7 +9,6 @@ log = configurar_logger('persistencia')
 
 def calcular_persistencia_minima(symbol: str, df: pd.DataFrame, tendencia:
     str, base_minimo: float=1.0) ->float:
-    log.info('➡️ Entrando en calcular_persistencia_minima()')
     """Calcula un umbral de persistencia adaptativo según volatilidad, pendiente y RSI."""
     if df is None or len(df) < 10 or 'close' not in df.columns:
         log.debug(

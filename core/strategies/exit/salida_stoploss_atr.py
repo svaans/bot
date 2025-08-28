@@ -6,7 +6,6 @@ log = configurar_logger('salida_stoploss_atr')
 
 
 def salida_stoploss_atr(orden: dict, df: pd.DataFrame) ->dict:
-    log.info('➡️ Entrando en salida_stoploss_atr()')
     try:
         if len(df) < 20 or 'close' not in df.columns:
             return resultado_salida('Stop Loss', False, 'Datos insuficientes')

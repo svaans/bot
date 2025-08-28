@@ -108,7 +108,6 @@ def _validar_datos_orden(data: Mapping[str, Any]) -> dict:
 
 def esperar_balance(cliente, symbol: str, cantidad_esperada: float,
     max_intentos: int=10, delay: float=0.3) ->float:
-    log.info('➡️ Entrando en esperar_balance()')
     """Espera hasta que el balance disponible alcance la cantidad esperada."""
     try:
         base = symbol.split('/')[0]

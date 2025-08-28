@@ -25,7 +25,6 @@ ENTRADA_EVAL_LATENCY_MS = Histogram(
 
 
 async def evaluar_estrategias(symbol: str, df: pd.DataFrame, tendencia: str) -> dict:
-    log.info('➡️ Entrando en evaluar_estrategias()')
     """Evalúa las estrategias correspondientes a ``tendencia``
     Retorna un diccionario con puntaje_total, estrategias_activas y diversidad.
     """
@@ -86,7 +85,6 @@ async def evaluar_estrategias(symbol: str, df: pd.DataFrame, tendencia: str) -> 
 
 def _validar_correlacion(symbol: str, df: pd.DataFrame, df_ref: pd.
     DataFrame, umbral: float) ->bool:
-    log.info('➡️ Entrando en _validar_correlacion()')
     if df is not None and df_ref is not None and umbral < 1.0:
         correlacion = calcular_correlacion(df, df_ref)
         if correlacion is not None and correlacion >= umbral:
@@ -98,7 +96,6 @@ def _validar_correlacion(symbol: str, df: pd.DataFrame, df_ref: pd.
 
 
 def _validar_diversidad(symbol: str, estrategias: dict) ->bool:
-    log.info('➡️ Entrando en _validar_diversidad()')
     activas = sum(1 for v in estrategias.values() if v)
     if activas <= 0:
         log.info(f'🚫 [{symbol}] Rechazo por falta de estrategias activas')
@@ -120,7 +117,6 @@ def requiere_ajuste_diversificacion(
     sea mayor o igual, se sugiere elevar el umbral para evitar duplicar
     exposición.
     """
-    log.info('➡️ Entrando en requiere_ajuste_diversificacion()')
     if not abiertas_scores or correlaciones.empty or symbol not in correlaciones.columns:
         return False
     serie = correlaciones.loc[symbol, list(abiertas_scores.keys())].abs()
@@ -131,7 +127,6 @@ def requiere_ajuste_diversificacion(
     
     
 def _validar_score(symbol: str, potencia: float, umbral: float) ->bool:
-    log.info('➡️ Entrando en _validar_score()')
     if potencia < umbral:
         log.info(
             f'🚫 [{symbol}] Rechazo por score {potencia:.2f} < {umbral:.2f}')
@@ -144,7 +139,6 @@ def _validar_score(symbol: str, potencia: float, umbral: float) ->bool:
 
 
 def _validar_volumen(symbol: str, df: pd.DataFrame, cantidad: float) ->bool:
-    log.info('➡️ Entrando en _validar_volumen()')
     if df is not None and cantidad > 0:
         if not verificar_liquidez_orden(df, cantidad):
             log.info(
@@ -155,7 +149,6 @@ def _validar_volumen(symbol: str, df: pd.DataFrame, cantidad: float) ->bool:
 
 
 def _validar_capital(symbol: str, capital: float) ->bool:
-    log.info('➡️ Entrando en _validar_capital()')
     if capital <= 0:
         log.info(f'🚫 [{symbol}] Rechazo por capital insuficiente')
         return False
@@ -163,7 +156,6 @@ def _validar_capital(symbol: str, capital: float) ->bool:
 
 
 def _validar_sinergia(symbol: str, sinergia: float, umbral: float) ->bool:
-    log.info('➡️ Entrando en _validar_sinergia()')
     if sinergia < umbral:
         log.info(
             f'🚫 [{symbol}] Rechazo por sinergia {sinergia:.2f} < {umbral:.2f}'
@@ -179,7 +171,6 @@ def entrada_permitida(symbol: str, potencia: float, umbral: float,
     float | None)=None, persistencia: float=0.0, persistencia_minima: float=0.0,
     capital_disponible: float=0.0, sinergia: float=1.0, umbral_sinergia: float=0.5
     ) ->bool:
-    log.info('➡️ Entrando en entrada_permitida()')
     """Versión simplificada usada en las pruebas unitarias."""
     score_tecnico = score if score is not None else calcular_score_tecnico(
         df if df is not None else pd.DataFrame(), rsi, momentum, slope,

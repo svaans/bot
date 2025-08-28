@@ -20,7 +20,6 @@ log = configurar_logger('aprendizaje_continuo')
 
 
 def _cargar_feedback(symbol: str) ->dict:
-    log.info('➡️ Entrando en _cargar_feedback()')
     """Lee ajustes manuales de ``FEEDBACK_PATH`` si existen."""
     if not os.path.exists(FEEDBACK_PATH):
         return {}
@@ -34,7 +33,6 @@ def _cargar_feedback(symbol: str) ->dict:
 
 
 def _aplicar_feedback_pesos(symbol: str, feedback: dict) ->None:
-    log.info('➡️ Entrando en _aplicar_feedback_pesos()')
     if not feedback.get('pesos'):
         return
     pesos = gestor_pesos.obtener_pesos_symbol(symbol)
@@ -56,7 +54,6 @@ def _aplicar_feedback_pesos(symbol: str, feedback: dict) ->None:
 
 
 def _actualizar_config(symbol: str, df: pd.DataFrame) ->None:
-    log.info('➡️ Entrando en _actualizar_config()')
     if df.empty:
         return
     config = cargar_configuracion_simbolo(symbol) or {}
@@ -85,7 +82,6 @@ def _actualizar_config(symbol: str, df: pd.DataFrame) ->None:
 
 
 def procesar_simbolo(symbol: str, ruta: str) ->None:
-    log.info('➡️ Entrando en procesar_simbolo()')
     metricas_diarias = analizar_estrategias_en_ordenes(ruta, dias=1)
     if metricas_diarias.empty:
         log.info(f'[{symbol}] Sin operaciones diarias para evaluar')
@@ -105,7 +101,6 @@ def procesar_simbolo(symbol: str, ruta: str) ->None:
 
 
 def ejecutar_ciclo() ->None:
-    log.info('➡️ Entrando en ejecutar_ciclo()')
     archivos = glob.glob(os.path.join(CARPETA_ORDENES, '*.parquet'))
     if not archivos:
         log.warning(f'⚠️ No se encontraron órdenes en {CARPETA_ORDENES}')

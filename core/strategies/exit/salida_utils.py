@@ -8,7 +8,6 @@ log = configurar_logger('salida_utils')
 
 def resultado_salida(evento: str, cerrar: bool, razon: str, logger=None, **
     extras) ->dict:
-    log.info('➡️ Entrando en resultado_salida()')
     """Genera un diccionario estándar para resultados de salida."""
     if logger and cerrar:
         logger.info(f'{evento} → {razon}')

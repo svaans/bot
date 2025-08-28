@@ -36,7 +36,6 @@ class StrategyEngine:
         config: dict | None = None,
         pesos_symbol: dict | None = None,
     ) -> Dict:
-        log.info("➡️ Entrando en evaluar_entrada()")
         """
         Evalúa si se cumplen condiciones para abrir una posición.
 
@@ -186,7 +185,6 @@ class StrategyEngine:
 
     @staticmethod
     async def evaluar_salida(df: pd.DataFrame, orden: Dict) -> Dict:
-        log.info("➡️ Entrando en evaluar_salida()")
         """
         Evalúa si se debe cerrar una orden activa.
 

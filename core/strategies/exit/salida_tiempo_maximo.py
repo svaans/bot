@@ -6,7 +6,6 @@ log = configurar_logger('salida_tiempo_maximo')
 
 
 def salida_tiempo_maximo(orden: dict, df: pd.DataFrame) ->dict:
-    log.info('➡️ Entrando en salida_tiempo_maximo()')
     try:
         timestamp = orden.get('timestamp')
         if not timestamp:

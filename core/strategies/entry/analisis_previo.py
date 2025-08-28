@@ -11,7 +11,6 @@ log = configurar_logger('analisis_previo')
 
 def validar_condiciones_tecnicas_extra(symbol: str, datos: pd.DataFrame,
     precio: float, sl: float, tp: float) ->bool:
-    log.info('➡️ Entrando en validar_condiciones_tecnicas_extra()')
     if datos is None or len(datos) < 30:
         log.warning(f'[{symbol}] Datos insuficientes para validación previa.')
         return False

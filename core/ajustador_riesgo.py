@@ -30,7 +30,6 @@ def ajustar_sl_tp_riesgo(
 ) -> tuple[float, float, float]:
     """Calcula ratios de SL/TP y riesgo adaptativos."""
 
-    log.info("➡️ Entrando en ajustar_sl_tp_riesgo()")
     riesgo_inicial = base_riesgo
     # Ajuste por volatilidad
     if volatilidad > 0.02:
