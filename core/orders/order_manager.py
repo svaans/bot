@@ -10,7 +10,7 @@ from core.orders.order_model import Order
 from core.utils.logger import configurar_logger, log_decision
 from core.orders import real_orders
 from core.orders.validators import remainder_executable
-from core.utils.utils import is_valid_number
+from core.utils.utils import is_valid_number, guardar_orden_simulada
 from core.event_bus import EventBus
 from core.metrics import (
     registrar_orden,
@@ -472,54 +472,74 @@ class OrderManager:
                         orden.pnl_operaciones = getattr(orden, 'pnl_operaciones', 0.0) - (precio * cantidad)
 
                     if cantidad > 0:
-                        registrado = False
-                        for _ in range(3):
-                            try:
-                                await asyncio.to_thread(
-                                    real_orders.registrar_orden,
-                                    symbol,
-                                    precio,
-                                    cantidad,
-                                    sl,
-                                    tp,
-                                    estrategias,
-                                    tendencia,
-                                    direccion,
-                                    operation_id,
-                                )
-                                registrado = True
-                                break
-                            except Exception as e:
-                                log.error(f'❌ Error registrando orden {symbol}: {e}')
-                        if self.bus:
-                            await self.bus.publish(
-                                'notify',
-                                {
-                                    'mensaje': f'❌ Error registrando orden {symbol}: {e}',
-                                    'tipo': 'CRITICAL',
-                                    'operation_id': operation_id,
-                                },
-                            )
-                        await asyncio.sleep(1)
-
-                        if registrado:
-                            orden.registro_pendiente = False
-                        else:
-                            registrar_orden('failed')  # mantenemos etiqueta por compatibilidad
+                        if self.modo_real:
+                            registrado = False
+                            for _ in range(3):
+                                try:
+                                    await asyncio.to_thread(
+                                        real_orders.registrar_orden,
+                                        symbol,
+                                        precio,
+                                        cantidad,
+                                        sl,
+                                        tp,
+                                        estrategias,
+                                        tendencia,
+                                        direccion,
+                                        operation_id,
+                                    )
+                                    registrado = True
+                                    break
+                                except Exception as e:
+                                    log.error(f'❌ Error registrando orden {symbol}: {e}')
                             if self.bus:
                                 await self.bus.publish(
                                     'notify',
                                     {
-                                        'mensaje': f'⚠️ Orden {symbol} ejecutada pero registro pendiente',
-                                        'tipo': 'WARNING',
+                                        'mensaje': f'❌ Error registrando orden {symbol}: {e}',
+                                        'tipo': 'CRITICAL',
+                                        'operation_id': operation_id,
                                     },
                                 )
-                            # programa reintento rápido además del loop periódico
-                            self._schedule_registro_retry(symbol)
+                            await asyncio.sleep(1)
 
-                        if self.modo_real:
+                            if registrado:
+                                orden.registro_pendiente = False
+                            else:
+                                registrar_orden('failed')  # mantenemos etiqueta por compatibilidad
+                                if self.bus:
+                                    await self.bus.publish(
+                                        'notify',
+                                        {
+                                            'mensaje': f'⚠️ Orden {symbol} ejecutada pero registro pendiente',
+                                            'tipo': 'WARNING',
+                                        },
+                                    )
+                                # programa reintento rápido además del loop periódico
+                                self._schedule_registro_retry(symbol)
+
                             orden.cantidad_abierta = cantidad
                             orden.entradas[0]['cantidad'] = cantidad
+                        
+                        else:
+                            try:
+                                await asyncio.to_thread(
+                                    guardar_orden_simulada,
+                                    symbol,
+                                    {
+                                        'precio_entrada': precio,
+                                        'cantidad': cantidad,
+                                        'stop_loss': sl,
+                                        'take_profit': tp,
+                                        'estrategias': estrategias,
+                                        'tendencia': tendencia,
+                                        'direccion': direccion,
+                                        'operation_id': operation_id,
+                                    },
+                                )
+                            except Exception as e:
+                                log.error(f'❌ Error guardando orden simulada {symbol}: {e}')
+                            orden.registro_pendiente = False
 
                 except Exception as e:
                     log.error(f'❌ No se pudo abrir la orden para {symbol}: {e}')
@@ -718,6 +738,13 @@ class OrderManager:
                 log_decision(log, 'cerrar', operation_id, entrada_log, {'venta_exitosa': True}, 'accept', {'retorno': retorno})
 
                 registrar_orden('closed')
+
+                if not self.modo_real:
+                    try:
+                        await asyncio.to_thread(guardar_orden_simulada, symbol, orden.to_dict())
+                    except Exception as e:
+                        log.error(f'❌ Error guardando cierre simulado {symbol}: {e}')
+
                 # Finalmente, elimina del activo
                 self.ordenes.pop(symbol, None)
                 return True
@@ -786,10 +813,16 @@ class OrderManager:
                 await self.bus.publish('notify', {'mensaje': mensaje, 'operation_id': operation_id})
             self.ordenes.pop(symbol, None)
 
-            try:
-                await asyncio.to_thread(real_orders.eliminar_orden, symbol)
-            except Exception as e:
-                log.error(f'❌ Error eliminando orden {symbol} de SQLite: {e}')
+            if self.modo_real:
+                try:
+                    await asyncio.to_thread(real_orders.eliminar_orden, symbol)
+                except Exception as e:
+                    log.error(f'❌ Error eliminando orden {symbol} de SQLite: {e}')
+            else:
+                try:
+                    await asyncio.to_thread(guardar_orden_simulada, symbol, orden.to_dict())
+                except Exception as e:
+                    log.error(f'❌ Error guardando cierre simulado {symbol}: {e}')
             registrar_orden('closed')
             log_decision(log, 'cerrar_parcial', operation_id, {'symbol': symbol, 'cantidad': cantidad}, {}, 'accept', {'retorno': retorno})
         else:
