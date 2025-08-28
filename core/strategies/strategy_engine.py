@@ -161,8 +161,20 @@ class StrategyEngine:
                 "validaciones_fallidas": validaciones_fallidas,
                 "score_tecnico": score_tec,
             }
-        except Exception as e:
-            log.error(f"❌ Error evaluando entrada para {symbol}: {e}")
+        except (ValueError, KeyError) as e:
+            log.error(f"❌ Error de datos evaluando entrada para {symbol}: {e}")
+            return {
+                "permitido": False,
+                "motivo_rechazo": "error",
+                "estrategias_activas": {},
+                "score_total": 0.0,
+                "umbral": 0.0,
+                "diversidad": 0,
+            }
+        except Exception:
+            log.exception(
+                f"❌ Error inesperado evaluando entrada para {symbol}"
+            )
             return {
                 "permitido": False,
                 "motivo_rechazo": "error",
@@ -190,6 +202,9 @@ class StrategyEngine:
             return {}
         try:
             return await evaluar_salidas(orden, df)
-        except Exception as e:
-            log.error(f"❌ Error evaluando salida: {e}")
+        except (ValueError, KeyError) as e:
+            log.error(f"❌ Error de datos evaluando salida: {e}")
+            return {}
+        except Exception:
+            log.exception("❌ Error inesperado evaluando salida")
             return {}
