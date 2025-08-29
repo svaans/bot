@@ -13,7 +13,7 @@ from core.strategies.evaluador_tecnico import (
     calcular_umbral_adaptativo as calc_umbral_tecnico,
     cargar_pesos_tecnicos,
 )
-from indicators.helpers import get_rsi, get_momentum
+from indicators.helpers import get_rsi, get_momentum, get_atr
 from core.utils.utils import distancia_minima_valida, verificar_integridad_datos
 from core.utils.cooldown import calcular_cooldown
 from core.contexto_externo import obtener_puntaje_contexto
