@@ -67,6 +67,9 @@ class Supervisor:
 
         exc = context.get("exception")
         if exc:
+            if isinstance(exc, StopIteration):
+                log.debug("StopIteration ignorado en loop")
+                return
             if isinstance(exc, RecursionError):
                 log.critical("Excepcion no controlada en loop: %s", exc)
             else:
