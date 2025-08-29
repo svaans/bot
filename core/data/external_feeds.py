@@ -11,6 +11,7 @@ import aiohttp
 import websockets
 
 from core.contexto_externo import StreamContexto
+from core.supervisor import beat
 from core.metrics import (
     registrar_feed_funding_missing,
     registrar_feed_open_interest_missing,
@@ -117,13 +118,13 @@ class ExternalFeeds:
         self._futures_symbols = _futures_symbols_global or set()
         return result
 
-    async def funding_rate_rest(self, symbol: str) -> Dict[str, Any] | None:
+    async def funding_rate_rest(self, symbol: str) -> tuple[Dict[str, Any] | None, str]:
         if symbol in self._funding_permanent_missing:
-            return None
+            return None, "sin_datos"
         now = time.time()
         cached = self._funding_cache.get(symbol)
         if cached and cached[0] > now:
-            return cached[1]
+            return cached[1], "ok"
         await self._ensure_session()
         url = f"https://fapi.binance.com/fapi/v1/fundingRate?symbol={symbol}&limit=1"
         delay = 1
@@ -134,29 +135,32 @@ class ExternalFeeds:
                         self._funding_permanent_missing.add(symbol)
                         registrar_feed_funding_missing(symbol, "not_listed")
                         log.info(f"ℹ️ Funding rate no listado {symbol}")
-                        return None
+                        return None, "sin_datos"
+                    if resp.status == 429:
+                        await asyncio.sleep(delay)
+                        return None, "rate_limit"
                     data = await resp.json()
                 if isinstance(data, list):
                     data = data[0] if data else None
                 if data:
                     self._funding_cache[symbol] = (time.time() + CACHE_TTL, data)
-                return data
+                return data, "ok" if data else "sin_datos"
             except Exception:
                 if intento == 2:
                     registrar_feed_funding_missing(symbol, "unavailable")
-                    return None
+                    return None, "backoff"
                 await asyncio.sleep(delay)
                 delay *= 2
         registrar_feed_funding_missing(symbol, "unavailable")
-        return None
+        return None, "backoff"
 
-    async def open_interest_rest(self, symbol: str) -> Dict[str, Any] | None:
+    async def open_interest_rest(self, symbol: str) -> tuple[Dict[str, Any] | None, str]:
         if symbol in self._oi_permanent_missing:
-            return None
+            return None, "sin_datos"
         now = time.time()
         cached = self._oi_cache.get(symbol)
         if cached and cached[0] > now:
-            return cached[1]
+            return cached[1], "ok"
         await self._ensure_session()
         url = (
             "https://fapi.binance.com/futures/data/openInterestHist?"
@@ -170,21 +174,24 @@ class ExternalFeeds:
                         self._oi_permanent_missing.add(symbol)
                         registrar_feed_open_interest_missing(symbol, "not_listed")
                         log.info(f"ℹ️ Open interest no listado {symbol}")
-                        return None
+                        return None, "sin_datos"
+                    if resp.status == 429:
+                        await asyncio.sleep(delay)
+                        return None, "rate_limit"
                     data = await resp.json()
                 if isinstance(data, list):
                     data = data[0] if data else None
                 if data:
                     self._oi_cache[symbol] = (time.time() + CACHE_TTL, data)
-                return data
+                return data, "ok" if data else "sin_datos"
             except Exception:
                 if intento == 2:
                     registrar_feed_open_interest_missing(symbol, "unavailable")
-                    return None
+                    return None, "backoff"
                 await asyncio.sleep(delay)
                 delay *= 2
         registrar_feed_open_interest_missing(symbol, "unavailable")
-        return None
+        return None, "backoff"
 
     async def news_ws(self, url: str):
         async with websockets.connect(url, ping_interval=None, ping_timeout=None) as ws:
@@ -194,10 +201,12 @@ class ExternalFeeds:
     async def _poll_funding(self, symbol: str, interval: int) -> None:
         while self._running:
             if symbol in self._funding_permanent_missing:
+                beat('external_feeds', 'sin_datos')
                 return
             try:
-                raw = await self.funding_rate_rest(symbol)
+                raw, cause = await self.funding_rate_rest(symbol)
                 if not raw:
+                    beat('external_feeds', cause)
                     if symbol in self._funding_permanent_missing:
                         return
                     log.warning(f'⚠️ Funding rate no disponible {symbol}')
@@ -205,19 +214,23 @@ class ExternalFeeds:
                     dato = normalizar_funding_rate(raw)
                     if self.stream:
                         self.stream.actualizar_datos_externos(symbol, {'funding_rate': dato})
+                    beat('external_feeds')
             except asyncio.CancelledError:
                 raise
             except Exception as e:
+                beat('external_feeds', 'backoff')
                 log.warning(f'⚠️ Funding rate falló {symbol}: {e}')
             await asyncio.sleep(interval)
 
     async def _poll_open_interest(self, symbol: str, interval: int) -> None:
         while self._running:
             if symbol in self._oi_permanent_missing:
+                beat('external_feeds', 'sin_datos')
                 return
             try:
-                raw = await self.open_interest_rest(symbol)
+                raw, cause = await self.open_interest_rest(symbol)
                 if not raw:
+                    beat('external_feeds', cause)
                     if symbol in self._oi_permanent_missing:
                         return
                     log.warning(f'⚠️ Open interest no disponible {symbol}')
@@ -225,9 +238,11 @@ class ExternalFeeds:
                     dato = normalizar_open_interest(raw)
                     if self.stream:
                         self.stream.actualizar_datos_externos(symbol, {'open_interest': dato})
+                    beat('external_feeds')
             except asyncio.CancelledError:
                 raise
             except Exception as e:
+                beat('external_feeds', 'backoff')
                 log.warning(f'⚠️ Open interest falló {symbol}: {e}')
             await asyncio.sleep(interval)
 
@@ -238,9 +253,11 @@ class ExternalFeeds:
                 symbol = dato.get('symbol') or 'GLOBAL'
                 if self.stream:
                     self.stream.actualizar_datos_externos(symbol, {'news': dato})
+                beat('external_feeds')
             except asyncio.CancelledError:
                 raise
             except Exception as e:
+                beat('external_feeds', 'backoff')
                 log.warning(f'⚠️ Error procesando noticia: {e}')
 
     async def escuchar(self, symbols: Iterable[str], interval: int = 60, news_url: str | None = None) -> None:
