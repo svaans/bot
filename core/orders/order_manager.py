@@ -318,28 +318,11 @@ class OrderManager:
                     {'reason': 'duplicate'},
                 )
                 return False
-            exchange._modo_real = modo_real
-                    )
-                log_decision(
-                    log,
-                    'abrir',
-                    operation_id,
-                    entrada_log,
-                    {'verificacion': 'error'},
-                    'reject',
-                    {'reason': 'sync_error'},
-                )
-                return False
-
-            if symbol in ordenes_api:
-                self.ordenes[symbol] = ordenes_api[symbol]
-                if symbol not in self._dup_warned:
-                    log.warning(f'⚠️ Orden duplicada evitada para {symbol}')
-                    self._dup_warned.add(symbol)
-                if self.bus:
-                    await self.bus.publish(
-                        'notify',
-                        {'mensaje': f'⚠️ Orden ya abierta en Binance para {symbol}', 'operation_id': operation_id},
+            ordenes_api = {}
+            if self.modo_real:
+                try:
+                    ordenes_api = await asyncio.to_thread(
+                        real_orders.sincronizar_ordenes_binance, [symbol]
                     )
                 except Exception as e:
                     log.error(f'❌ Error verificando órdenes abiertas: {e}')
@@ -362,7 +345,28 @@ class OrderManager:
                         {'reason': 'sync_error'},
                     )
                     return False
-
+                
+            if symbol in ordenes_api:
+                self.ordenes[symbol] = ordenes_api[symbol]
+                if symbol not in self._dup_warned:
+                    log.warning(f'⚠️ Orden duplicada evitada para {symbol}')
+                    self._dup_warned.add(symbol)
+                if self.bus:
+                    await self.bus.publish(
+                        'notify',
+                        {'mensaje': f'⚠️ Orden ya abierta en Binance para {symbol}', 'operation_id': operation_id},
+                    )
+                log_decision(
+                    log,
+                    'abrir',
+                    operation_id,
+                    entrada_log,
+                    {'duplicada': True},
+                    'reject',
+                    {'reason': 'already_open'},
+                )
+                return False
+            
             if self.modo_real:
                 try:
                     cliente = obtener_cliente()
