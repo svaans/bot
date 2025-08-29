@@ -53,6 +53,12 @@ FEEDS_OPEN_INTEREST_MISSING = Counter(
     ["symbol", "reason"],
 )
 
+WATCHDOG_RESTARTS = Counter(
+    "watchdog_restarts_total",
+    "Reinicios de tareas provocados por el watchdog",
+    ["task"],
+)
+
 UMBRAL_VELAS_RECHAZADAS = float(os.getenv("UMBRAL_VELAS_RECHAZADAS", 5))
 
 log = configurar_logger("metrics")
@@ -96,6 +102,13 @@ def registrar_feed_open_interest_missing(symbol: str, reason: str) -> None:
     registro_metrico.registrar(
         "feed_open_interest_missing", {"symbol": symbol, "reason": reason}
     )
+
+
+def registrar_watchdog_restart(task: str) -> None:
+    """Registra un reinicio de ``task`` provocado por el watchdog."""
+
+    WATCHDOG_RESTARTS.labels(task=task).inc()
+    registro_metrico.registrar("watchdog_restart", {"task": task})
     
 def registrar_correlacion_btc(symbol: str, rho: float) -> None:
     """Registra la correlación de un símbolo con BTC."""

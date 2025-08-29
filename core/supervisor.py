@@ -13,14 +13,16 @@ import asyncio
 import logging
 import traceback
 import threading
-from datetime import datetime, timezone
-from typing import Awaitable, Callable, Dict
+from collections import defaultdict, deque
+from datetime import datetime, timedelta, timezone
+from typing import Awaitable, Callable, Deque, Dict
 
 
 from config.config import INTERVALO_VELAS
 from core.notificador import crear_notificador_desde_env
 from core.utils.logger import configurar_logger
 from core.utils.utils import intervalo_a_segundos
+from core.metrics import registrar_watchdog_restart
 
 
 UTC = timezone.utc
@@ -33,7 +35,13 @@ class Supervisor:
         self.last_alive = datetime.now(UTC)
         self.last_function = "init"
         self.tasks: Dict[str, asyncio.Task] = {}
+        self.task_factories: Dict[str, Callable[..., Awaitable]] = {}
         self.task_heartbeat: Dict[str, datetime] = {}
+        self.task_intervals: Dict[str, Deque[float]] = defaultdict(lambda: deque(maxlen=100))
+        self.task_cause: Dict[str, str] = {}
+        self.task_cooldown: Dict[str, datetime] = {}
+        self.task_backoff: Dict[str, int] = defaultdict(lambda: 5)
+        self.task_restart_times: Dict[str, Deque[datetime]] = defaultdict(deque)
         self.data_heartbeat: Dict[str, datetime] = {}
         self.TIMEOUT_SIN_DATOS = max(
             intervalo_a_segundos(INTERVALO_VELAS) * 5, 300
@@ -51,6 +59,9 @@ class Supervisor:
     # Métodos de utilidad
     # ------------------------------------------------------------------
 
+    def _now(self) -> datetime:
+        return datetime.now(UTC)
+
     def exception_handler(self, loop: asyncio.AbstractEventLoop, context: dict) -> None:
         """Manejador de excepciones no controladas del loop principal."""
 
@@ -65,17 +76,32 @@ class Supervisor:
         else:
             log.critical("Error en loop: %s", context.get("message"))
 
-    def tick(self, name: str) -> None:
-        """Actualiza la función y marca latido para ``name``."""
+    def beat(self, name: str, cause: str | None = None) -> None:
+        """Registra un latido para ``name`` y opcionalmente su ``cause``."""
+
+        now = self._now()
+        last = self.task_heartbeat.get(name)
+        if last:
+            interval = (now - last).total_seconds()
+            self.task_intervals[name].append(interval)
+        self.task_heartbeat[name] = now
+        if cause:
+            self.task_cause[name] = cause
 
         self.last_function = name
-        self.last_alive = datetime.now(UTC)
-        self.task_heartbeat[name] = self.last_alive
+        self.last_alive = now
+        # reinicio exitoso resetea backoff
+        if name in self.task_backoff:
+            self.task_backoff[name] = 5
+
+    # Alias retrocompatible
+    def tick(self, name: str, cause: str | None = None) -> None:  # pragma: no cover - compat
+        self.beat(name, cause)
 
     def tick_data(self, symbol: str, reinicio: bool = False) -> None:
         """Actualiza la marca de tiempo de la última vela recibida."""
 
-        ahora = datetime.now(UTC)
+        ahora = self._now()
         self.data_heartbeat[symbol] = ahora
         if reinicio:
             log.info("🔄 Reinicio exitoso del stream %s, esperando datos...", symbol)
@@ -112,7 +138,7 @@ class Supervisor:
 
         while True:
             log.info("bot alive | last=%s", self.last_function)
-            self.last_alive = datetime.now(UTC)
+            self.last_alive = self._now()
             await asyncio.sleep(interval)
 
     def set_watchdog_interval(self, interval: int) -> None:
@@ -121,77 +147,101 @@ class Supervisor:
         self._watchdog_interval = interval
         self._watchdog_interval_event.set()
 
+    async def _watchdog_once(self, timeout: int) -> None:
+        now = self._now()
+        delta = (now - self.last_alive).total_seconds()
+        if delta > timeout:
+            log.critical(
+                "⚠️ BOT INACTIVO desde hace %.1f segundos. Ultima funcion: %s",
+                delta,
+                self.last_function,
+            )
+            for nombre, task in self.tasks.items():
+                try:
+                    stack = "\n".join(traceback.format_stack(task.get_stack()))
+                    log.critical("Stack de %s:\n%s", nombre, stack)
+                except Exception:
+                    pass
+        for task_name, ts in list(self.task_heartbeat.items()):
+            cooldown = self.task_cooldown.get(task_name)
+            if cooldown and now < cooldown:
+                continue
+            intervals = list(self.task_intervals.get(task_name, []))
+            if intervals:
+                idx = max(0, int(len(intervals) * 0.95) - 1)
+                p95 = sorted(intervals)[idx]
+                timeout_task = min(max(p95 * 3, 30), 300)
+            else:
+                timeout_task = 120
+            delta_task = (now - ts).total_seconds()
+            if delta_task > timeout_task:
+                log.critical(
+                    "⚠️ %s inactivo %.1fs (umbral %.1fs)",
+                    task_name,
+                    delta_task,
+                    timeout_task,
+                )
+                await self.restart_task(task_name)
+        for sym, ts in self.data_heartbeat.items():
+            sin_datos = (now - ts).total_seconds()
+            log.debug(
+                "Verificando datos de %s: %.1f segundos desde la última vela",
+                sym,
+                sin_datos,
+            )
+            if sin_datos > self.TIMEOUT_SIN_DATOS:
+                ahora = now
+                ultima = self.last_data_alert.get(sym)
+                if not ultima or (
+                    ahora - ultima
+                ).total_seconds() > self.ALERTA_SIN_DATOS_INTERVALO:
+                    log.critical(
+                        "⚠️ Sin datos de %s desde hace %.1f segundos",
+                        sym,
+                        sin_datos,
+                    )
+                    self.last_data_alert[sym] = ahora
+                    try:
+                        self.notificador.enviar(
+                            f"⚠️ Sin datos de {sym} desde hace {sin_datos:.1f} segundos",
+                            "CRITICAL",
+                        )
+                    except Exception:
+                        pass
+                    task = self.tasks.get(f"stream_{sym}")
+                    if self.data_feed_reconnector:
+                        try:
+                            log.warning(
+                                "Solicitando reinicio de DataFeed para %s", sym
+                            )
+                            await self.data_feed_reconnector(sym)
+                        except Exception as e:
+                            log.error(
+                                "No se pudo solicitar reinicio de DataFeed para %s: %s",
+                                sym,
+                                e,
+                            )
+                    elif task:
+                        try:
+                            log.warning(
+                                "Cancelando stream %s desde watchdog", sym
+                            )
+                            task.cancel()
+                            log.debug(
+                                "Stream %s cancelado; el monitor debería reiniciarlo",
+                                sym,
+                            )
+                        except Exception as e:
+                            log.debug(
+                                "No se pudo cancelar stream %s: %s", sym, e
+                            )
+
     async def watchdog(self, timeout: int = 120, check_interval: int = 10) -> None:
         """Valida que el proceso siga activo e imprime trazas si se congela."""
 
         self._watchdog_interval = check_interval
         while True:
-            delta = (datetime.now(UTC) - self.last_alive).total_seconds()
-            if delta > timeout:
-                log.critical(
-                    "⚠️ BOT INACTIVO desde hace %.1f segundos. Ultima funcion: %s",
-                    delta,
-                    self.last_function,
-                )
-                for nombre, task in self.tasks.items():
-                    try:
-                        stack = "\n".join(traceback.format_stack(task.get_stack()))
-                        log.critical("Stack de %s:\n%s", nombre, stack)
-                    except Exception:
-                        pass
-            for sym, ts in self.data_heartbeat.items():
-                sin_datos = (datetime.now(UTC) - ts).total_seconds()
-                log.debug(
-                    "Verificando datos de %s: %.1f segundos desde la última vela",
-                    sym,
-                    sin_datos,
-                )
-                if sin_datos > self.TIMEOUT_SIN_DATOS:
-                    ahora = datetime.now(UTC)
-                    ultima = self.last_data_alert.get(sym)
-                    if not ultima or (
-                        ahora - ultima
-                    ).total_seconds() > self.ALERTA_SIN_DATOS_INTERVALO:
-                        log.critical(
-                            "⚠️ Sin datos de %s desde hace %.1f segundos",
-                            sym,
-                            sin_datos,
-                        )
-                        self.last_data_alert[sym] = ahora
-                        try:
-                            self.notificador.enviar(
-                                f"⚠️ Sin datos de {sym} desde hace {sin_datos:.1f} segundos",
-                                "CRITICAL",
-                            )
-                        except Exception:
-                            pass
-                        task = self.tasks.get(f"stream_{sym}")
-                        if self.data_feed_reconnector:
-                            try:
-                                log.warning(
-                                    "Solicitando reinicio de DataFeed para %s", sym
-                                )
-                                await self.data_feed_reconnector(sym)
-                            except Exception as e:
-                                log.error(
-                                    "No se pudo solicitar reinicio de DataFeed para %s: %s",
-                                    sym,
-                                    e,
-                                )
-                        elif task:
-                            try:
-                                log.warning(
-                                    "Cancelando stream %s desde watchdog", sym
-                                )
-                                task.cancel()
-                                log.debug(
-                                    "Stream %s cancelado; el monitor debería reiniciarlo",
-                                    sym,
-                                )
-                            except Exception as e:
-                                log.debug(
-                                    "No se pudo cancelar stream %s: %s", sym, e
-                                )
+            await self._watchdog_once(timeout)
 
             
             try:
@@ -238,8 +288,9 @@ class Supervisor:
         """Ejecuta ``coro_factory`` reiniciándolo ante fallos o finalización."""
 
         restarts = 0
+        current_delay = delay
         while True:
-            self.tick(task_name)
+            self.beat(task_name)
             try:
                 result = coro_factory()
                 if asyncio.iscoroutine(result):
@@ -253,7 +304,7 @@ class Supervisor:
                     "⚠️ Error en %s: %r. Reiniciando en %ss",
                     task_name,
                     e,
-                    delay,
+                    current_delay,
                     exc_info=True,
                 )
                 if max_restarts is not None and restarts >= max_restarts:
@@ -264,11 +315,48 @@ class Supervisor:
                     )
                     break
                 log.warning(
-                    "⏹️ %s finalizó; reiniciando en %ss", task_name, delay
+                    "⏹️ %s finalizó; reiniciando en %ss", task_name, current_delay
                 )
-                await asyncio.sleep(delay)
+                await asyncio.sleep(current_delay)
                 restarts += 1
+                current_delay = min(current_delay * 2, 120)
                 continue
+    async def restart_task(self, task_name: str) -> None:
+        """Reinicia ``task_name`` aplicando backoff y registrando métricas."""
+
+        task = self.tasks.get(task_name)
+        if task:
+            try:
+                task.cancel()
+            except Exception:
+                pass
+        registrar_watchdog_restart(task_name)
+        now = self._now()
+        times = self.task_restart_times[task_name]
+        times.append(now)
+        limite = now - timedelta(minutes=10)
+        while times and times[0] < limite:
+            times.popleft()
+        if len(times) > 3:
+            log.warning(
+                "⚠️ %s reiniciado %s veces en 10m", task_name, len(times)
+            )
+            try:
+                self.notificador.enviar(
+                    f"⚠️ {task_name} reiniciado {len(times)} veces en 10m",
+                    "WARNING",
+                )
+            except Exception:
+                pass
+        delay = self.task_backoff[task_name]
+        async def _starter() -> None:
+            await asyncio.sleep(delay)
+            factory = self.task_factories.get(task_name)
+            if factory:
+                self.supervised_task(factory, name=task_name)
+            self.task_cooldown[task_name] = self._now() + timedelta(seconds=15)
+        asyncio.create_task(_starter(), name=f"{task_name}_restart")
+        self.task_backoff[task_name] = min(delay * 2, 120)
 
     def supervised_task(
         self,
@@ -280,6 +368,8 @@ class Supervisor:
         """Crea una tarea supervisada que se reinicia automáticamente."""
 
         task_name = name or getattr(coro_factory, "__name__", "task")
+        self.task_factories[task_name] = coro_factory
+        self.task_backoff[task_name] = 5
         task = asyncio.create_task(
             self._restartable_runner(coro_factory, task_name, delay, max_restarts),
             name=task_name,
@@ -296,6 +386,7 @@ _default_supervisor = Supervisor()
 
 start_supervision = _default_supervisor.start_supervision
 supervised_task = _default_supervisor.supervised_task
+beat = _default_supervisor.beat
 tick = _default_supervisor.tick
 tick_data = _default_supervisor.tick_data
 registrar_reinicio_inactividad = _default_supervisor.registrar_reinicio_inactividad
@@ -319,6 +410,7 @@ __all__ = [
     "Supervisor",
     "start_supervision",
     "supervised_task",
+    "beat",
     "tick",
     "tick_data",
     "registrar_reinicio_inactividad",
