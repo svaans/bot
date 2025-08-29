@@ -895,9 +895,16 @@ def ejecutar_orden_market_sell(symbol: str, cantidad: float, operation_id: str |
         log_decision(log, 'ejecutar_orden_market_sell', operation_id, entrada, {'saldo_insuficiente': True}, 'reject', {'ejecutado': 0})
         return {'ejecutado': 0.0, 'restante': cantidad, 'status': 'FILLED', 'min_qty': 0.0, 'fee': 0.0, 'pnl': 0.0}
     except Exception as e:
-        log.error(f'❌ Error en intercambio al vender {symbol}: {e}')
-        log_decision(log, 'ejecutar_orden_market_sell', operation_id, entrada, {}, 'error', {'reason': str(e)})
-    raise
++        log.error(f'❌ Error en intercambio al vender {symbol}: {e}')
++        log_decision(log, 'ejecutar_orden_market_sell', operation_id, entrada, {}, 'error', {'reason': str(e)})
++        return {
++            'ejecutado': 0.0,
++            'restante': cantidad,
++            'status': 'ERROR',
++            'min_qty': 0.0,
++            'fee': 0.0,
++            'pnl': 0.0,
++        }
 
 
 def _market_sell_retry(symbol: str, cantidad: float, operation_id: str | None = None) -> dict:
@@ -954,10 +961,11 @@ def ejecutar_orden_limit(
     if operation_id:
         params_base['newClientOrderId'] = operation_id
 
-    for intento in range(1, max_reintentos + 1):
-        precio, cantidad = normalizar_precio_cantidad(
-            filtros = get_symbol_filters(symbol, cliente)
-        )
+    filtros = get_symbol_filters(symbol, cliente)
++    for intento in range(1, max_reintentos + 1):
++        precio, cantidad = normalizar_precio_cantidad(
++            filtros, precio, cantidad, 'compra' if side == 'buy' else 'venta'
++        )
         params = params_base.copy()
         if operation_id:
             params['newClientOrderId'] = f"{operation_id}-{intento}"
