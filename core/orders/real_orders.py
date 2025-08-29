@@ -413,6 +413,8 @@ def sincronizar_ordenes_binance(simbolos: (list[str] | None)=None) ->dict[str, O
     reinicia y la base de datos local no contiene todas las operaciones
     abiertas. Devuelve el diccionario de órdenes resultante.
     """
+    if os.getenv('MODO_REAL', 'true').lower() != 'true':
+        return cargar_ordenes()
     try:
         cliente = obtener_cliente()
         ordenes_api = []
