@@ -5,6 +5,7 @@ import time
 from dataclasses import dataclass, replace, field
 from typing import Dict, Callable, Awaitable, Any, List
 from collections import OrderedDict, deque, defaultdict
+from core.streams.candle_filter import CandleFilter
 from datetime import datetime, timedelta, timezone
 import json
 import os
@@ -107,6 +108,7 @@ class EstadoSimbolo:
     )
     ultimo_umbral: float = 0.0
     ultimo_timestamp: int | None = None
+    candle_filter: CandleFilter = field(default_factory=CandleFilter)
     tendencia_detectada: str | None = None
     timeouts_salidas: int = 0
     df: pd.DataFrame = field(default_factory=pd.DataFrame)
