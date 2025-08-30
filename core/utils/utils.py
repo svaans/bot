@@ -3,11 +3,13 @@ import os
 import time
 import shutil
 import threading
+import re
 import json
 import pandas as pd
 import psutil
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING
+from pandas.tseries.frequencies import to_offset
 from .logger import configurar_logger
 from core.modo import MODO_REAL
 if TYPE_CHECKING:
@@ -53,6 +55,23 @@ def timestamp_alineado(ts_ms: int, intervalo: str) -> bool:
     """
     periodo = intervalo_a_segundos(intervalo) * 1000
     return ts_ms % periodo == 0
+
+
+def safe_resample(df: pd.DataFrame, freq: str):
+    """Devuelve un resampler validado para ``df``.
+
+    Normaliza ``freq`` a minúsculas, reemplaza el alias ``T`` por ``min``
+    y valida la frecuencia con ``to_offset``. Lanza ``ValueError`` si la
+    frecuencia no es válida.
+    """
+    norm = freq.lower().strip()
+    if norm.endswith("t"):
+        norm = norm[:-1] + "min"
+    try:
+        to_offset(norm)
+    except ValueError as err:
+        raise ValueError(f"Frecuencia inválida: {freq}") from err
+    return df.resample(norm)
 
 
 log = configurar_logger('trader' if MODO_REAL else 'trader_simulado')

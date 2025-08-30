@@ -1,7 +1,7 @@
 from __future__ import annotations
 from datetime import datetime, timezone
 import pandas as pd
-from core.utils import configurar_logger
+from core.utils import configurar_logger, safe_resample
 from core.adaptador_dinamico import calcular_tp_sl_adaptativos
 from core.adaptador_umbral import calcular_umbral_adaptativo
 from core.config_manager.dinamica import adaptar_configuracion
@@ -86,9 +86,9 @@ async def verificar_entrada(trader, symbol: str, df: pd.DataFrame, estado) ->(
     log.debug(f'[{symbol}] Tendencia: {tendencia}')
     df_sorted = df.sort_values('timestamp')
     df_idx = df_sorted.set_index(pd.to_datetime(df_sorted['timestamp'], unit='ms'))
-    df_5m = df_idx.resample('5min').last().dropna() if len(df_idx) >= 5 else None
-    df_1h = df_idx.resample('1H').last().dropna() if len(df_idx) >= 60 else None
-    df_1d = df_idx.resample('1D').last().dropna() if len(df_idx) >= 1440 else None
+    df_5m = safe_resample(df_idx, '5min').last().dropna() if len(df_idx) >= 5 else None
+    df_1h = safe_resample(df_idx, '1h').last().dropna() if len(df_idx) >= 60 else None
+    df_1d = safe_resample(df_idx, '1d').last().dropna() if len(df_idx) >= 1440 else None
     if not validar_marcos(
         {
             'symbol': symbol,
@@ -257,10 +257,8 @@ async def verificar_entrada(trader, symbol: str, df: pd.DataFrame, estado) ->(
         df_htf = (
             df.sort_values('timestamp')
             .set_index(pd.to_datetime(df['timestamp'], unit='ms'))
-            .resample('5min')
-            .last()
-            .dropna()
         )
+        df_htf = safe_resample(df_htf, '5min').last().dropna()
         if len(df_htf) >= 30:
             tendencia_htf = obtener_tendencia(symbol, df_htf)
             if tendencia_htf != tendencia:
