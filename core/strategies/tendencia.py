@@ -6,6 +6,13 @@ from indicators.adx import calcular_adx
 from core.strategies.entry.gestor_entradas import evaluar_estrategias
 from core.estrategias import obtener_estrategias_por_tendencia
 from core.utils.utils import configurar_logger
+from core.data.bootstrap import (
+    MIN_BARS,
+    enqueue_fetch,
+    was_warned,
+    mark_warned,
+    update_progress,
+)
 log = configurar_logger("tendencia")
 
 
@@ -86,7 +93,19 @@ def detectar_tendencia(symbol: str, df: pd.DataFrame) -> tuple[str, dict[str, bo
 
 
 def obtener_tendencia(symbol: str, df: pd.DataFrame) -> str:
-    """Envuelve :func:`detectar_tendencia` y devuelve solo la tendencia."""
+    """Devuelve la tendencia si hay suficientes datos, sino pospone."""
+
+    if df is None or df.empty or "close" not in df.columns:
+        return "lateral"
+    update_progress(symbol, len(df))
+    if len(df) < MIN_BARS:
+        enqueue_fetch(symbol)
+        if not was_warned(symbol):
+            log.info(
+                f"⏳ Warmup {symbol}: {len(df)}/{MIN_BARS} velas; posponiendo evaluación"
+            )
+            mark_warned(symbol)
+        return "lateral"
 
     tendencia, _ = detectar_tendencia(symbol, df)
     return tendencia

@@ -41,6 +41,12 @@ VELAS_RECHAZADAS_PCT = Gauge(
     ["symbol"],
 )
 
+WARMUP_PROGRESS = Gauge(
+    "context_warmup_progress",
+    "Progreso de warmup de datos",
+    ["symbol"],
+)
+
 FEEDS_FUNDING_MISSING = Counter(
     "feeds_funding_missing_total",
     "Consultas de funding rate ausentes por símbolo y razón",
@@ -117,6 +123,14 @@ def registrar_correlacion_btc(symbol: str, rho: float) -> None:
     registro_metrico.registrar("correlacion_btc", {"symbol": symbol, "rho": rho})
 
 
+def registrar_warmup_progress(symbol: str, progress: float) -> None:
+    """Actualiza la métrica de progreso de warmup para ``symbol``."""
+    WARMUP_PROGRESS.labels(symbol=symbol).set(progress)
+    registro_metrico.registrar(
+        "warmup_progress", {"symbol": symbol, "progress": progress}
+    )
+
+    
 def decisions_total() -> Dict[str, Dict[str, int]]:
     """Retorna una copia de los contadores de decisiones."""
 

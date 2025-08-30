@@ -79,6 +79,7 @@ from indicators.correlacion import correlacion_series
 from core.scoring import calcular_score_tecnico, PESOS_SCORE_TECNICO, ScoreBreakdown
 from binance_api.cliente import fetch_ticker_async
 from core import adaptador_umbral
+from core.data.bootstrap import warmup_symbol
 log = configurar_logger('trader')
 LOG_DIR = os.getenv('LOG_DIR', 'logs')
 UTC = timezone.utc
@@ -777,7 +778,7 @@ class Trader:
         self.fecha_actual = fecha or datetime.now(UTC).date()
         log.info(f'💰 Capital redistribuido: {self.capital_por_simbolo}')
 
-    async def _precargar_historico(self, velas: int=12) ->None:
+    async def _precargar_historico(self, velas: int = 12) -> None:
         """Carga datos recientes para todos los símbolos antes de iniciar."""
         cliente_temp = None
         cliente = self.cliente
@@ -788,58 +789,27 @@ class Trader:
                 cliente = cliente_temp
                 log.info('📈 Precargando histórico usando cliente temporal')
             except Exception as e:
-                log.info(
-                    f'📈 No se pudo precargar histórico desde Binance: {e}'
-                    )
-                return
+                log.info(f'📈 No se pudo precargar histórico desde Binance: {e}')
         for symbol in self.estado.keys():
             try:
-                datos = await fetch_ohlcv_async(cliente, symbol, self.config.intervalo_velas, limit=velas)
+                df = await warmup_symbol(symbol, self.config.intervalo_velas, cliente)
             except BaseError as e:
                 log.warning(f'⚠️ Error cargando histórico para {symbol}: {e}')
                 continue
             except Exception as e:
-                log.warning(
-                    f'⚠️ Error inesperado cargando histórico para {symbol}: {e}'
-                    )
+                log.warning(f'⚠️ Error inesperado cargando histórico para {symbol}: {e}')
                 continue
-            for vela in datos:
-                try:
-                    ts, open_, high_, low_, close_, vol = vela
-                except (TypeError, ValueError):
-                    log.warning(
-                        f'⚠️ Formato de vela inesperado para {symbol}: {vela}'
-                    )
-                    continue
-                self.estado[symbol].buffer.append({
-                    'symbol': symbol,
-                    'timestamp': ts,
-                    'open': float(open_),
-                    'high': float(high_),
-                    'low': float(low_),
-                    'close': float(close_),
-                    'volume': float(vol),
-                })
-            if datos:
-                ultimo = datos[-1]
-                try:
-                    self.estado[symbol].ultimo_timestamp = ultimo[0]
-                except (IndexError, TypeError):
-                    self.estado[symbol].ultimo_timestamp = ultimo
-                # Construir DataFrame con el histórico precargado
-                self.estado[symbol].df = pd.DataFrame(
-                    self.estado[symbol].buffer
-                ).drop(columns=['symbol'], errors='ignore')
-                # Adaptar configuración inicial con los datos precargados
+            for fila in df.to_dict('records'):
+                self.estado[symbol].buffer.append(fila)
+            if not df.empty:
+                self.estado[symbol].ultimo_timestamp = int(df['timestamp'].iloc[-1])
+                self.estado[symbol].df = df.drop(columns=['symbol'], errors='ignore')
                 self.config_por_simbolo[symbol] = adaptar_configuracion(
                     symbol,
                     self.estado[symbol].df,
                     self.config_por_simbolo.get(symbol, {}),
                 )
-                # Detectar tendencia inicial a partir del histórico
-                tendencia, _ = detectar_tendencia(
-                    symbol, self.estado[symbol].df
-                )
+                tendencia, _ = detectar_tendencia(symbol, self.estado[symbol].df)
                 self.estado[symbol].tendencia_detectada = tendencia
                 self.estado_tendencia[symbol] = tendencia
         if cliente_temp is not None:
