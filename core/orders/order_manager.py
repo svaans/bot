@@ -318,33 +318,34 @@ class OrderManager:
                     {'reason': 'duplicate'},
                 )
                 return False
-            # Consulta cruzada con Binance antes de abrir
-            try:
-                ordenes_api = await asyncio.to_thread(
-                    real_orders.sincronizar_ordenes_binance, [symbol]
-                )
-            except Exception as e:
-                log.error(f'❌ Error verificando órdenes abiertas: {e}')
-                if self.bus:
-                    await self.bus.publish(
-                        'notify',
-                        {
-                            'mensaje': f'⚠️ No se pudo verificar órdenes abiertas en {symbol}',
-                            'tipo': 'WARNING',
-                            'operation_id': operation_id,
-                        },
+            ordenes_api = {}
+            if self.modo_real:
+                try:
+                    ordenes_api = await asyncio.to_thread(
+                        real_orders.sincronizar_ordenes_binance, [symbol]
                     )
-                log_decision(
-                    log,
-                    'abrir',
-                    operation_id,
-                    entrada_log,
-                    {'verificacion': 'error'},
-                    'reject',
-                    {'reason': 'sync_error'},
-                )
-                return False
-
+                except Exception as e:
+                    log.error(f'❌ Error verificando órdenes abiertas: {e}')
+                    if self.bus:
+                        await self.bus.publish(
+                            'notify',
+                            {
+                                'mensaje': f'⚠️ No se pudo verificar órdenes abiertas en {symbol}',
+                                'tipo': 'WARNING',
+                                'operation_id': operation_id,
+                            },
+                        )
+                    log_decision(
+                        log,
+                        'abrir',
+                        operation_id,
+                        entrada_log,
+                        {'verificacion': 'error'},
+                        'reject',
+                        {'reason': 'sync_error'},
+                    )
+                    return False
+                
             if symbol in ordenes_api:
                 self.ordenes[symbol] = ordenes_api[symbol]
                 if symbol not in self._dup_warned:
@@ -365,7 +366,7 @@ class OrderManager:
                     {'reason': 'already_open'},
                 )
                 return False
-
+            
             if self.modo_real:
                 try:
                     cliente = obtener_cliente()

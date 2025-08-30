@@ -8,6 +8,7 @@ from core.utils.utils import configurar_logger
 from core.orders import real_orders
 from core.reporting import reporter_diario
 from core.risk.riesgo import cargar_estado_riesgo
+from core.supervisor import beat
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 ORDENES_DB_PATH = os.getenv(
     'ORDENES_DB_PATH',
@@ -131,6 +132,7 @@ async def monitorear_estado_periodicamente(self, intervalo=300):
         try:
             await loop.run_in_executor(None, monitorear_estado_bot, dict(
                 self.ordenes_abiertas))
+            beat('estado')
             log.info('🧭 Monitoreo de estado completado.')
             log.debug(
                 f'📌 Órdenes abiertas: {list(self.ordenes_abiertas.keys())}')
@@ -140,4 +142,5 @@ async def monitorear_estado_periodicamente(self, intervalo=300):
             break
         except Exception:
             log.exception('⚠️ Error durante el monitoreo de estado')
+            beat('estado', 'error')
             await asyncio.sleep(intervalo)

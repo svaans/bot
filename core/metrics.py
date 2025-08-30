@@ -41,6 +41,24 @@ VELAS_RECHAZADAS_PCT = Gauge(
     ["symbol"],
 )
 
+FEEDS_FUNDING_MISSING = Counter(
+    "feeds_funding_missing_total",
+    "Consultas de funding rate ausentes por símbolo y razón",
+    ["symbol", "reason"],
+)
+
+FEEDS_OPEN_INTEREST_MISSING = Counter(
+    "feeds_open_interest_missing_total",
+    "Consultas de open interest ausentes por símbolo y razón",
+    ["symbol", "reason"],
+)
+
+WATCHDOG_RESTARTS = Counter(
+    "watchdog_restarts_total",
+    "Reinicios de tareas provocados por el watchdog",
+    ["task"],
+)
+
 UMBRAL_VELAS_RECHAZADAS = float(os.getenv("UMBRAL_VELAS_RECHAZADAS", 5))
 
 log = configurar_logger("metrics")
@@ -68,6 +86,30 @@ def registrar_buy_rejected_insufficient_funds() -> None:
     registro_metrico.registrar("buy_rejected", {"reason": "insufficient_funds"})
 
 
+def registrar_feed_funding_missing(symbol: str, reason: str) -> None:
+    """Registra ausencia de funding rate."""
+
+    FEEDS_FUNDING_MISSING.labels(symbol=symbol, reason=reason).inc()
+    registro_metrico.registrar(
+        "feed_funding_missing", {"symbol": symbol, "reason": reason}
+    )
+
+
+def registrar_feed_open_interest_missing(symbol: str, reason: str) -> None:
+    """Registra ausencia de open interest."""
+
+    FEEDS_OPEN_INTEREST_MISSING.labels(symbol=symbol, reason=reason).inc()
+    registro_metrico.registrar(
+        "feed_open_interest_missing", {"symbol": symbol, "reason": reason}
+    )
+
+
+def registrar_watchdog_restart(task: str) -> None:
+    """Registra un reinicio de ``task`` provocado por el watchdog."""
+
+    WATCHDOG_RESTARTS.labels(task=task).inc()
+    registro_metrico.registrar("watchdog_restart", {"task": task})
+    
 def registrar_correlacion_btc(symbol: str, rho: float) -> None:
     """Registra la correlación de un símbolo con BTC."""
 

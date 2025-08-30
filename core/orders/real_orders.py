@@ -413,6 +413,8 @@ def sincronizar_ordenes_binance(simbolos: (list[str] | None)=None) ->dict[str, O
     reinicia y la base de datos local no contiene todas las operaciones
     abiertas. Devuelve el diccionario de órdenes resultante.
     """
+    if os.getenv('MODO_REAL', 'true').lower() != 'true':
+        return cargar_ordenes()
     try:
         cliente = obtener_cliente()
         ordenes_api = []
@@ -793,82 +795,109 @@ def ejecutar_orden_market(symbol: str, cantidad: float, operation_id: str | None
 def ejecutar_orden_market_sell(symbol: str, cantidad: float, operation_id: str | None = None) -> dict:
     """Ejecuta una venta de mercado validando saldo y devuelve detalles."""
     entrada = {'symbol': symbol, 'cantidad': cantidad}
+
     if symbol in _VENTAS_FALLIDAS:
-        log.warning(
-            f'⏭️ Venta omitida para {symbol} por intento previo fallido de saldo.'
-            )
-        log_decision(log, 'ejecutar_orden_market_sell', operation_id, entrada, {'venta_omitida': True}, 'reject', {'ejecutado': 0})
-        return {'ejecutado': 0.0, 'restante': cantidad, 'status': 'FILLED', 'min_qty': 0.0, 'fee': 0.0, 'pnl': 0.0}
+        log.warning(f'⏭️ Venta omitida para {symbol} por intento previo fallido de saldo.')
+        log_decision(
+            log,
+            'ejecutar_orden_market_sell',
+            operation_id,
+            entrada,
+            {'venta_omitida': True},
+            'reject',
+            {'ejecutado': 0},
+        )
+        return {
+            'ejecutado': 0.0,
+            'restante': cantidad,
+            'status': 'FILLED',
+            'min_qty': 0.0,
+            'fee': 0.0,
+            'pnl': 0.0,
+        }
+
     try:
         cliente = obtener_cliente()
         balance = cliente.fetch_balance()
         base = symbol.split('/')[0]
         disponible = balance.get('free', {}).get(base, 0)
+
         if disponible <= 0:
             log_decision(log, 'ejecutar_orden_market_sell', operation_id, entrada, {'saldo': 0}, 'reject', {'ejecutado': 0})
             raise InsufficientFunds(f'Saldo 0 disponible para {symbol}')
+
         filtros = get_symbol_filters(symbol, cliente)
         step_size = filtros.get('step_size', 0.0)
         cantidad_vender = math.floor(disponible / step_size) * step_size
         cantidad_vender = min(cantidad, cantidad_vender)
+
         if cantidad_vender <= 0:
             log_decision(log, 'ejecutar_orden_market_sell', operation_id, entrada, {'cantidad_valida': False}, 'reject', {'ejecutado': 0})
-            raise ValueError(
-                f'Cantidad inválida ({cantidad_vender}) para vender en {symbol}'
-                )
+            raise ValueError(f'Cantidad inválida ({cantidad_vender}) para vender en {symbol}')
+
         min_amount = filtros.get('min_qty', 0.0)
         min_cost = filtros.get('min_notional', 0.0)
         ticker = cliente.fetch_ticker(symbol.replace('/', ''))
         precio = float(ticker.get('last') or ticker.get('close') or 0)
         precio, cantidad_vender = normalizar_precio_cantidad(filtros, precio, cantidad_vender, 'venta')
-        if (cantidad_vender < min_amount or precio and cantidad_vender * precio < min_cost):
+
+        if cantidad_vender < min_amount or (precio and cantidad_vender * precio < min_cost):
             log.error(
-                f'⛔ Venta rechazada por mínimos: {symbol} → cantidad: {cantidad_vender:.8f}, mínimos: amount={min_amount}, notional={min_cost}'
-                )
+                f'⛔ Venta rechazada por mínimos: {symbol} → cantidad: {cantidad_vender:.8f}, '
+                f'mínimos: amount={min_amount}, notional={min_cost}'
+            )
             _VENTAS_FALLIDAS.add(symbol)
             try:
-                notificador.enviar(
-                    f'Venta rechazada por mínimos en {symbol}', 'WARNING'
-                )
+                notificador.enviar(f'Venta rechazada por mínimos en {symbol}', 'WARNING')
             except Exception:
                 pass
             log_decision(log, 'ejecutar_orden_market_sell', operation_id, entrada, {'minimos': False}, 'reject', {'ejecutado': 0})
-            return {'ejecutado': 0.0, 'restante': cantidad_vender, 'status': 'FILLED', 'min_qty': min_amount, 'fee': 0.0, 'pnl': 0.0}
+            return {
+                'ejecutado': 0.0,
+                'restante': cantidad_vender,
+                'status': 'FILLED',
+                'min_qty': min_amount,
+                'fee': 0.0,
+                'pnl': 0.0,
+            }
+
         log.info(
             f'💱 Ejecutando venta real en {symbol}: {cantidad_vender:.8f} unidades (precio estimado: {precio:.2f})',
             extra={'symbol': symbol, 'timeframe': None},
         )
+
         params = {}
         if operation_id:
             params['newClientOrderId'] = operation_id
+
         response = cliente.create_market_sell_order(symbol.replace('/', ''), cantidad_vender, params)
         ejecutado = float(response.get('amount') or response.get('filled') or 0)
         if ejecutado <= 0:
             ejecutado = cantidad_vender
+
         restante = max(cantidad_vender - ejecutado, 0.0)
-        status = 'FILLED'
-        if restante > 1e-8:
-            status = 'PARTIAL'
+        status = 'FILLED' if restante <= 1e-8 else 'PARTIAL'
+
         metricas = {'fee': 0.0, 'pnl': 0.0}
         if operation_id:
             metricas = _acumular_metricas(operation_id, response)
+
         precio_fill = float(response.get('price') or response.get('average') or precio)
         slippage = abs(precio_fill - precio) / precio if precio else 0.0
         if slippage > _MAX_SLIPPAGE_PCT:
-            log.warning(
-                f'⚠️ Slippage alto en {symbol}: {slippage:.2%} (máx {_MAX_SLIPPAGE_PCT:.2%})'
-            )
+            log.warning(f'⚠️ Slippage alto en {symbol}: {slippage:.2%} (máx {_MAX_SLIPPAGE_PCT:.2%})')
             try:
-                notificador.enviar(
-                    f'Slippage alto en {symbol}: {slippage:.2%}', 'WARNING'
-                )
+                notificador.enviar(f'Slippage alto en {symbol}: {slippage:.2%}', 'WARNING')
             except Exception:
                 pass
+
         log.info(
-            f'🔴 Order de venta ejecutada: {symbol}, cantidad: {ejecutado:.8f}',
+            f'🔴 Orden de venta ejecutada: {symbol}, cantidad: {ejecutado:.8f}',
             extra={'symbol': symbol, 'timeframe': None},
         )
+
         _VENTAS_FALLIDAS.discard(symbol)
+
         salida = {
             'ejecutado': ejecutado,
             'restante': restante,
@@ -880,22 +909,44 @@ def ejecutar_orden_market_sell(symbol: str, cantidad: float, operation_id: str |
         }
         log_decision(log, 'ejecutar_orden_market_sell', operation_id, entrada, {'minimos': True}, 'accept', salida)
         return salida
+
     except InsufficientFunds as e:
         log.error(f'❌ Venta rechazada por saldo insuficiente en {symbol}: {e}')
         _VENTAS_FALLIDAS.add(symbol)
         try:
-            notificador.enviar(
-                f'Venta rechazada por saldo insuficiente en {symbol}',
-                'CRITICAL',
-            )
+            notificador.enviar(f'Venta rechazada por saldo insuficiente en {symbol}', 'CRITICAL')
         except Exception:
             pass
-        log_decision(log, 'ejecutar_orden_market_sell', operation_id, entrada, {'saldo_insuficiente': True}, 'reject', {'ejecutado': 0})
-        return {'ejecutado': 0.0, 'restante': cantidad, 'status': 'FILLED', 'min_qty': 0.0, 'fee': 0.0, 'pnl': 0.0}
+        log_decision(
+            log,
+            'ejecutar_orden_market_sell',
+            operation_id,
+            entrada,
+            {'saldo_insuficiente': True},
+            'reject',
+            {'ejecutado': 0},
+        )
+        return {
+            'ejecutado': 0.0,
+            'restante': cantidad,
+            'status': 'FILLED',
+            'min_qty': 0.0,
+            'fee': 0.0,
+            'pnl': 0.0,
+        }
+
     except Exception as e:
         log.error(f'❌ Error en intercambio al vender {symbol}: {e}')
         log_decision(log, 'ejecutar_orden_market_sell', operation_id, entrada, {}, 'error', {'reason': str(e)})
-    raise
+        return {
+            'ejecutado': 0.0,
+            'restante': cantidad,
+            'status': 'ERROR',
+            'min_qty': 0.0,
+            'fee': 0.0,
+            'pnl': 0.0,
+        }
+
 
 
 def _market_sell_retry(symbol: str, cantidad: float, operation_id: str | None = None) -> dict:
@@ -934,95 +985,108 @@ def ejecutar_orden_limit(
     offset_reprice: float | None = None,
     max_reintentos: int | None = None,
 ) -> dict:
-    """Ejecuta una orden ``limit`` con re-precio y *fallback* a market.
+    """Ejecuta una orden LIMIT con re-precio y fallback a MARKET.
 
-    Si la orden no se completa dentro de ``timeout`` segundos se cancela y se
-    re-precia usando ``offset_reprice``. Tras ``max_reintentos`` intentos
-    fallidos, la función envía una orden de mercado.
+    Si la orden no se completa dentro de `timeout` segundos se cancela y se
+    re-precia usando `offset_reprice`. Tras `max_reintentos` intentos fallidos,
+    envía una orden de mercado.
     """
-    if side not in {'buy', 'sell'}:
+    if side not in {"buy", "sell"}:
         raise ValueError('side debe ser "buy" o "sell"')
+
     timeout = timeout or _LIMIT_TIMEOUT
     offset_reprice = offset_reprice or _OFFSET_REPRICE
     max_reintentos = max_reintentos or _LIMIT_MAX_RETRY
+
     cliente = obtener_cliente()
-    markets = cliente.load_markets()
-    info = markets.get(symbol.replace('/', ''), {})
+    cliente.load_markets()  # asegura markets en ccxt
+
     params_base = {}
     if operation_id:
-        params_base['newClientOrderId'] = operation_id
+        params_base["newClientOrderId"] = operation_id
+
+    filtros = get_symbol_filters(symbol, cliente)
 
     for intento in range(1, max_reintentos + 1):
+        # Normaliza precio/cantidad para cumplir filtros del exchange
         precio, cantidad = normalizar_precio_cantidad(
-            filtros = get_symbol_filters(symbol, cliente)
+            filtros, precio, cantidad, "compra" if side == "buy" else "venta"
         )
+
         params = params_base.copy()
         if operation_id:
-            params['newClientOrderId'] = f"{operation_id}-{intento}"
-        if side == 'buy':
+            params["newClientOrderId"] = f"{operation_id}-{intento}"
+
+        if side == "buy":
             orden = cliente.create_limit_buy_order(
-                symbol.replace('/', ''), cantidad, precio, params
+                symbol.replace("/", ""), cantidad, precio, params
             )
         else:
             orden = cliente.create_limit_sell_order(
-                symbol.replace('/', ''), cantidad, precio, params
+                symbol.replace("/", ""), cantidad, precio, params
             )
-        order_id = orden.get('id')
+
+        order_id = orden.get("id")
         inicio = time.time()
         estado = orden
+
+        # Espera activa hasta timeout comprobando fills
         while time.time() - inicio < timeout:
-            estado = cliente.fetch_order(order_id, symbol.replace('/', ''))
-            filled = float(estado.get('filled') or 0)
-            if estado.get('status') in {'closed', 'canceled'} or filled >= cantidad:
+            estado = cliente.fetch_order(order_id, symbol.replace("/", ""))
+            filled = float(estado.get("filled") or 0.0)
+            if estado.get("status") in {"closed", "canceled"} or filled >= cantidad:
                 break
             time.sleep(1)
         else:
+            # timeout -> cancelar, re-preciar y reintentar
             try:
-                cliente.cancel_order(order_id, symbol.replace('/', ''))
+                cliente.cancel_order(order_id, symbol.replace("/", ""))
             except Exception as e:
-                log.warning(f'⚠️ No se pudo cancelar orden {order_id}: {e}')
+                log.warning(f"⚠️ No se pudo cancelar orden {order_id}: {e}")
+
             if intento >= max_reintentos:
                 break
-            if side == 'buy':
+
+            if side == "buy":
                 precio *= 1 + offset_reprice
             else:
                 precio *= 1 - offset_reprice
             continue
 
-        ejecutado = float(estado.get('filled') or 0)
+        # Evaluar resultado
+        ejecutado = float(estado.get("filled") or 0.0)
         restante = max(cantidad - ejecutado, 0.0)
-        status = 'FILLED'
-        if restante > 1e-8:
-            status = 'PARTIAL'
-        precio_fill = float(estado.get('price') or estado.get('average') or precio)
+        status = "FILLED" if restante <= 1e-8 else "PARTIAL"
+
+        precio_fill = float(estado.get("price") or estado.get("average") or precio)
         slippage = abs(precio_fill - precio) / precio if precio else 0.0
         if slippage > _MAX_SLIPPAGE_PCT:
-            log.warning(
-                f'⚠️ Slippage alto en {symbol}: {slippage:.2%} (máx {_MAX_SLIPPAGE_PCT:.2%})'
-            )
+            log.warning(f"⚠️ Slippage alto en {symbol}: {slippage:.2%} (máx {_MAX_SLIPPAGE_PCT:.2%})")
             try:
-                notificador.enviar(
-                    f'Slippage alto en {symbol}: {slippage:.2%}', 'WARNING'
-                )
+                notificador.enviar(f"Slippage alto en {symbol}: {slippage:.2%}", "WARNING")
             except Exception:
                 pass
-        metricas = {'fee': 0.0, 'pnl': 0.0}
+
+        metricas = {"fee": 0.0, "pnl": 0.0}
         if operation_id:
             metricas = _acumular_metricas(operation_id, estado)
+
         return {
-            'ejecutado': ejecutado,
-            'restante': restante,
-            'status': status,
-            'min_qty': filtros.get('min_qty', 0.0),
-            'fee': metricas['fee'],
-            'pnl': metricas['pnl'],
-            'slippage': slippage,
+            "ejecutado": ejecutado,
+            "restante": restante,
+            "status": status,
+            "min_qty": filtros.get("min_qty", 0.0),
+            "fee": metricas["fee"],
+            "pnl": metricas["pnl"],
+            "slippage": slippage,
         }
 
-    log.warning(f'⚠️ Fallback a orden de mercado en {symbol} tras {max_reintentos} intentos limit fallidos')
-    if side == 'buy':
+    # Fallback a MARKET tras reintentos fallidos
+    log.warning(f"⚠️ Fallback a orden de mercado en {symbol} tras {max_reintentos} intentos limit fallidos")
+    if side == "buy":
         return ejecutar_orden_market(symbol, cantidad, operation_id)
     return ejecutar_orden_market_sell(symbol, cantidad, operation_id)
+
 
 
 def _persistir_operaciones(operaciones: list[dict]) -> tuple[int, int, list[dict]]:
