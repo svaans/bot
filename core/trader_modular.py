@@ -263,6 +263,8 @@ class Trader:
         self.context_stream = StreamContexto()
         self.external_feeds = ExternalFeeds(self.context_stream)
         self.puntajes_contexto: Dict[str, float] = {}
+        self.estrategias_habilitadas = False
+        self.warmup_completed = False
         try:
             simbolos = config.symbols if self.modo_real else None
             self.orders.ordenes = real_orders.reconciliar_ordenes(simbolos)
@@ -313,6 +315,11 @@ class Trader:
                 json.dump(data, f, indent=2)
         except OSError as e:
             log.warning(f'⚠️ Error guardando {path}: {e}')
+
+    def habilitar_estrategias(self) -> None:
+        """Permite que las estrategias comiencen a evaluarse."""
+        self.estrategias_habilitadas = True
+        log.info('🟢 Estrategias habilitadas')
 
     def _registrar_rechazo(self, symbol: str, motivo: str, **datos: Any) -> None:
         """Registrar rechazos con campos comunes.
@@ -780,6 +787,9 @@ class Trader:
 
     async def _precargar_historico(self, velas: int = 12) -> None:
         """Carga datos recientes para todos los símbolos antes de iniciar."""
+        if self.warmup_completed:
+            log.info('📈 Histórico ya precargado, omitiendo')
+            return
         cliente_temp = None
         cliente = self.cliente
         if cliente is None:
@@ -817,6 +827,7 @@ class Trader:
                 cliente_temp.close()
             except Exception:
                 pass
+        self.warmup_completed = True
         log.info('📈 Histórico inicial cargado')
 
     async def _ciclo_aprendizaje(self, intervalo: int = 86400, max_fallos: int = 5) -> None:

@@ -118,49 +118,50 @@ class ExternalFeeds:
         self._futures_symbols = _futures_symbols_global or set()
         return result
 
-    async def funding_rate_rest(self, symbol: str) -> tuple[Dict[str, Any] | None, str]:
+    async def funding_rate_rest(self, symbol: str) -> Dict[str, Any] | None:
         if symbol in self._funding_permanent_missing:
-            return None, "sin_datos"
+            return None
         now = time.time()
         cached = self._funding_cache.get(symbol)
         if cached and cached[0] > now:
-            return cached[1], "ok"
+            return cached[1]
         await self._ensure_session()
         url = f"https://fapi.binance.com/fapi/v1/fundingRate?symbol={symbol}&limit=1"
         delay = 1
         for intento in range(3):
             try:
                 async with self.session.get(url) as resp:
-                    if resp.status == 404:
+                    status = getattr(resp, 'status', 200)
+                    if status == 404:
                         self._funding_permanent_missing.add(symbol)
                         registrar_feed_funding_missing(symbol, "not_listed")
                         log.info(f"ℹ️ Funding rate no listado {symbol}")
-                        return None, "sin_datos"
-                    if resp.status == 429:
+                        return None
+                    if status == 429:
                         await asyncio.sleep(delay)
-                        return None, "rate_limit"
+                        continue
                     data = await resp.json()
                 if isinstance(data, list):
                     data = data[0] if data else None
                 if data:
                     self._funding_cache[symbol] = (time.time() + CACHE_TTL, data)
-                return data, "ok" if data else "sin_datos"
+                return data
             except Exception:
                 if intento == 2:
                     registrar_feed_funding_missing(symbol, "unavailable")
-                    return None, "backoff"
+                    break
                 await asyncio.sleep(delay)
                 delay *= 2
         registrar_feed_funding_missing(symbol, "unavailable")
-        return None, "backoff"
+        return None
 
     async def open_interest_rest(self, symbol: str) -> tuple[Dict[str, Any] | None, str]:
         if symbol in self._oi_permanent_missing:
-            return None, "sin_datos"
+            return None
         now = time.time()
         cached = self._oi_cache.get(symbol)
         if cached and cached[0] > now:
-            return cached[1], "ok"
+            return cached[1]
         await self._ensure_session()
         url = (
             "https://fapi.binance.com/futures/data/openInterestHist?"
@@ -170,24 +171,25 @@ class ExternalFeeds:
         for intento in range(3):
             try:
                 async with self.session.get(url) as resp:
-                    if resp.status == 404:
+                    status = getattr(resp, 'status', 200)
+                    if status == 404:
                         self._oi_permanent_missing.add(symbol)
                         registrar_feed_open_interest_missing(symbol, "not_listed")
                         log.info(f"ℹ️ Open interest no listado {symbol}")
-                        return None, "sin_datos"
-                    if resp.status == 429:
+                        return None
+                    if status == 429:
                         await asyncio.sleep(delay)
-                        return None, "rate_limit"
+                        continue
                     data = await resp.json()
                 if isinstance(data, list):
                     data = data[0] if data else None
                 if data:
                     self._oi_cache[symbol] = (time.time() + CACHE_TTL, data)
-                return data, "ok" if data else "sin_datos"
+                return data
             except Exception:
                 if intento == 2:
                     registrar_feed_open_interest_missing(symbol, "unavailable")
-                    return None, "backoff"
+                    break
                 await asyncio.sleep(delay)
                 delay *= 2
         registrar_feed_open_interest_missing(symbol, "unavailable")
@@ -204,9 +206,9 @@ class ExternalFeeds:
                 beat('external_feeds', 'sin_datos')
                 return
             try:
-                raw, cause = await self.funding_rate_rest(symbol)
+                raw = await self.funding_rate_rest(symbol)
                 if not raw:
-                    beat('external_feeds', cause)
+                    beat('external_feeds', 'sin_datos')
                     if symbol in self._funding_permanent_missing:
                         return
                     log.warning(f'⚠️ Funding rate no disponible {symbol}')
@@ -228,9 +230,9 @@ class ExternalFeeds:
                 beat('external_feeds', 'sin_datos')
                 return
             try:
-                raw, cause = await self.open_interest_rest(symbol)
+                raw = await self.open_interest_rest(symbol)
                 if not raw:
-                    beat('external_feeds', cause)
+                    beat('external_feeds', 'sin_datos')
                     if symbol in self._oi_permanent_missing:
                         return
                     log.warning(f'⚠️ Open interest no disponible {symbol}')

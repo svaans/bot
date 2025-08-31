@@ -145,6 +145,9 @@ async def _procesar_candle(trader, symbol: str, intervalo: str, estado, vela: di
         f"Procesando vela {symbol} | Precio: {vela_inmutable.get('close')}",
         extra={'symbol': symbol, 'timeframe': intervalo, 'timestamp': ts},
     )
+    if not getattr(trader, 'estrategias_habilitadas', True):
+        log.debug(f'Estrategias deshabilitadas para {symbol}')
+        return
     try:
         orden_existente = trader.orders.obtener(symbol)
         if orden_existente is not None:

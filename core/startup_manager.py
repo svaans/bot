@@ -1,0 +1,126 @@
+import asyncio
+import json
+import time
+from contextlib import suppress
+from pathlib import Path
+from typing import Optional
+
+import aiohttp
+
+from config.config_manager import ConfigManager, Config
+from core.trader_modular import Trader
+from core.utils.utils import configurar_logger
+
+SNAPSHOT_PATH = Path('estado/startup_snapshot.json')
+
+
+class StartupManager:
+    """Orquesta las fases de arranque del bot."""
+
+    def __init__(self, trader: Optional[Trader] = None) -> None:
+        self.trader = trader
+        self.config: Optional[Config] = getattr(trader, 'config', None)
+        self.task: Optional[asyncio.Task] = None
+        self.log = configurar_logger('startup')
+
+    async def run(self) -> tuple[Trader, asyncio.Task, Config]:
+        executed = []
+        try:
+            await self._load_config()
+            executed.append(self._stop_trader)
+            await self._bootstrap()
+            await self._validate_feeds()
+            await self._open_streams()
+            executed.append(self._stop_streams)
+            await self._enable_strategies()
+            return self.trader, self.task, self.config  # type: ignore
+        except Exception as e:
+            self.log.error(f'Fallo en arranque: {e}')
+            for rollback in reversed(executed):
+                with suppress(Exception):
+                    await rollback()
+            raise
+
+    async def _load_config(self) -> None:
+        if self.trader is not None:
+            return
+        self.config = ConfigManager.load_from_env()
+        self.trader = Trader(self.config)  # type: ignore[arg-type]
+
+    async def _bootstrap(self) -> None:
+        assert self.trader is not None
+        await self.trader._precargar_historico()
+
+    async def _validate_feeds(self) -> None:
+        assert self.trader is not None and self.config is not None
+        if self.config.modo_real and not self.trader.cliente:
+            raise RuntimeError('Cliente Binance no inicializado')
+
+    async def _open_streams(self) -> None:
+        assert self.trader is not None
+        self.task = asyncio.create_task(self.trader.ejecutar())
+
+    async def _enable_strategies(self) -> None:
+        assert self.trader is not None
+        await self._wait_ws()
+        if not await self._check_clock_drift():
+            raise RuntimeError('Desincronización de reloj >500ms')
+        if not await self._check_storage():
+            raise RuntimeError('Storage no disponible')
+        self.trader.habilitar_estrategias()
+        self._snapshot()
+
+    async def _wait_ws(self, timeout: float = 10.0) -> None:
+        assert self.trader is not None
+        start = time.time()
+        while time.time() - start < timeout:
+            if self.trader.data_feed.activos:
+                return
+            await asyncio.sleep(0.1)
+        raise RuntimeError('WS no conectado')
+
+    async def _check_clock_drift(self) -> bool:
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get('https://api.binance.com/api/v3/time', timeout=5) as r:
+                    data = await r.json()
+            server = data.get('serverTime', 0) / 1000
+            drift = abs(server - time.time())
+            return drift < 0.5
+        except Exception:
+            return False
+
+    async def _check_storage(self) -> bool:
+        try:
+            SNAPSHOT_PATH.parent.mkdir(parents=True, exist_ok=True)
+            tmp = SNAPSHOT_PATH.parent / 'tmp_check'
+            tmp.write_text('ok')
+            tmp.unlink()
+            return True
+        except Exception:
+            return False
+
+    def _snapshot(self) -> None:
+        assert self.config is not None
+        data = {
+            'symbols': self.config.symbols,
+            'modo_real': self.config.modo_real,
+            'timestamp': time.time(),
+        }
+        try:
+            SNAPSHOT_PATH.parent.mkdir(parents=True, exist_ok=True)
+            with open(SNAPSHOT_PATH, 'w') as f:
+                json.dump(data, f, indent=2)
+        except Exception as e:
+            self.log.error(f'No se pudo guardar snapshot: {e}')
+
+    async def _stop_streams(self) -> None:
+        if self.task is not None:
+            self.task.cancel()
+            with suppress(Exception):
+                await self.task
+
+    async def _stop_trader(self) -> None:
+        if self.trader is not None:
+            with suppress(Exception):
+                await self.trader.cerrar()
