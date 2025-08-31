@@ -16,8 +16,10 @@ log = configurar_logger('binance_client')
 
 AUTH_WARNING_EMITTED = False
 
-# Estado del circuit breaker por endpoint
-_CIRCUIT_BREAKERS: dict[str, dict[str, float]] = {}
+CB_SILENCE_SECONDS = float(os.getenv("CB_SILENCE_SECONDS", "60"))
+
+# Estado del circuit breaker y métricas por endpoint
+_CIRCUIT_BREAKERS: dict[str, dict[str, Any]] = {}
 
 
 class BinanceError(Exception):
@@ -47,15 +49,28 @@ def binance_call(
     fn: Callable[[], Any], *, signed: bool = False, endpoint: str | None = None, symbol: str | None = None
 ) -> Any:
     endpoint = endpoint or getattr(fn, "__name__", "unknown")
-    state = _CIRCUIT_BREAKERS.setdefault(endpoint, {"fails": 0, "until": 0.0})
+    state = _CIRCUIT_BREAKERS.setdefault(
+        endpoint,
+        {
+            "fails": 0,  # fallos consecutivos para circuit breaker
+            "until": 0.0,  # tiempo hasta que se reintenta
+            "silence": 0.0,  # ventana de silencio para logs
+            "attempts": 0,  # métricas totales
+            "failures": 0,
+            "last_code": None,
+        },
+    )
+    state["attempts"] += 1
     now = time.time()
     if state["until"] > now:
+        if now >= state.get("silence", 0.0):
+            log.error(f"Circuit breaker activo para {endpoint}")
+            state["silence"] = now + CB_SILENCE_SECONDS
         exc = RuntimeError("Circuit breaker activo")
         exc.endpoint = endpoint
         exc.symbol = symbol
         exc.signed = signed
         exc.attempts = 0
-        log.error(f"Circuit breaker activo para {endpoint}")
         raise exc
 
     max_attempts = 5
@@ -68,9 +83,12 @@ def binance_call(
             result = fn()
             state["fails"] = 0
             state["until"] = 0.0
+            state["last_code"] = None
             return result
         except Exception as exc:
             code = _extract_code(exc)
+            state["last_code"] = code
+            state["failures"] += 1
             status = getattr(exc, "http_status", None)
             is_5xx = isinstance(status, int) and 500 <= status < 600
             if is_5xx:
@@ -79,10 +97,13 @@ def binance_call(
                     state["until"] = time.time() + 30
             else:
                 state["fails"] = 0
-            _CIRCUIT_BREAKERS[endpoint] = state
 
             final = False
             if code == -2015:
+                state["until"] = time.time() + random.randint(600, 900)
+                if time.time() >= state.get("silence", 0.0):
+                    log.error(f"Error -2015 en {endpoint}: {exc}")
+                    state["silence"] = time.time() + CB_SILENCE_SECONDS
                 final = True
             elif state["fails"] > 3 or attempt >= max_attempts:
                 final = True
@@ -103,7 +124,9 @@ def binance_call(
             exc.signed = signed
             exc.attempts = attempt
             if final:
-                log.error(f"Error final en {endpoint}: {exc}")
+                if code != -2015 and time.time() >= state.get("silence", 0.0):
+                    log.error(f"Error final en {endpoint}: {exc}")
+                    state["silence"] = time.time() + CB_SILENCE_SECONDS
                 raise
             log.debug(f"Intento {attempt} fallido en {endpoint}: {exc}")
             espera = base * (2 ** (attempt - 1)) + random.random() * jitter
