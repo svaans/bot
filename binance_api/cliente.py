@@ -183,6 +183,12 @@ class BinanceClient:
 
 def crear_cliente(config: Config | None = None):
     modo_real = True
+    if config is None:
+        try:
+            from config import config as app_config
+            config = getattr(app_config, "cfg", None)
+        except Exception:
+            config = None
     if config is not None:
         modo_real = getattr(config, "modo_real", True)
     else:

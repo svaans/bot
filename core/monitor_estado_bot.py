@@ -3,6 +3,7 @@ import asyncio
 from datetime import datetime
 import sqlite3
 from binance_api.cliente import crear_cliente
+from config import config as app_config
 from ccxt.base.errors import AuthenticationError, NetworkError
 from core.utils.utils import configurar_logger
 from core.orders import real_orders
@@ -21,12 +22,11 @@ def obtener_orden_abierta():
     if os.path.exists(ORDENES_DB_PATH):
         try:
             ordenes = real_orders.cargar_ordenes()
-            if not ordenes:
+            if not ordenes and app_config.MODO_REAL:
                 ordenes = real_orders.sincronizar_ordenes_binance()
             return ordenes if ordenes else None
         except (OSError, sqlite3.Error) as e:
-            log.warning(f'⚠️ Error al leer órdenes desde la base de datos: {e}'
-                )
+            log.warning(f'⚠️ Error al leer órdenes desde la base de datos: {e}')
             return None
     return None
 
@@ -84,10 +84,13 @@ def monitorear_estado_bot(ordenes_memoria: (dict | None)=None):
     operaciones también en modo simulado.
     """
     try:
-        cliente = crear_cliente()
-        balance = cliente.fetch_balance()
-        euros = balance['total'].get('EUR', 0)
-        orden_abierta = obtener_orden_abierta()
+        euros = 0.0
+        orden_abierta = None
+        if app_config.MODO_REAL:
+            cliente = crear_cliente(app_config.cfg)
+            balance = cliente.fetch_balance()
+            euros = balance['total'].get('EUR', 0)
+            orden_abierta = obtener_orden_abierta()
         if not orden_abierta and ordenes_memoria:
             orden_abierta = ordenes_memoria
         log.info('======= 🤖 ESTADO ACTUAL DEL BOT =======')

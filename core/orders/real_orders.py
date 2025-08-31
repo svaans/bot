@@ -41,6 +41,7 @@ from . import real_orders
 from core.notificador import crear_notificador_desde_env
 from core.adaptador_dinamico import calcular_tp_sl_adaptativos
 from config.exit_defaults import load_exit_config
+from config import config as app_config
 import pandas as pd
 import math
 try:
@@ -413,7 +414,7 @@ def sincronizar_ordenes_binance(simbolos: (list[str] | None)=None) ->dict[str, O
     reinicia y la base de datos local no contiene todas las operaciones
     abiertas. Devuelve el diccionario de órdenes resultante.
     """
-    if os.getenv('MODO_REAL', 'true').lower() != 'true':
+    if not app_config.MODO_REAL:
         return cargar_ordenes()
     try:
         cliente = obtener_cliente()
