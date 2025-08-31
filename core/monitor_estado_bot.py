@@ -23,7 +23,9 @@ def obtener_orden_abierta():
         try:
             ordenes = real_orders.cargar_ordenes()
             if not ordenes and app_config.MODO_REAL:
-                ordenes = real_orders.sincronizar_ordenes_binance()
+                ordenes = real_orders.sincronizar_ordenes_binance(
+                    config=app_config.cfg
+                )
             return ordenes if ordenes else None
         except (OSError, sqlite3.Error) as e:
             log.warning(f'⚠️ Error al leer órdenes desde la base de datos: {e}')

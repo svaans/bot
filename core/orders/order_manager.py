@@ -322,7 +322,9 @@ class OrderManager:
             if self.modo_real:
                 try:
                     ordenes_api = await asyncio.to_thread(
-                        real_orders.sincronizar_ordenes_binance, [symbol]
+                        real_orders.sincronizar_ordenes_binance,
+                        [symbol],
+                        modo_real=self.modo_real,
                     )
                 except Exception as e:
                     log.error(f'❌ Error verificando órdenes abiertas: {e}')

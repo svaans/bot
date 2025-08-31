@@ -42,6 +42,7 @@ from core.notificador import crear_notificador_desde_env
 from core.adaptador_dinamico import calcular_tp_sl_adaptativos
 from config.exit_defaults import load_exit_config
 from config import config as app_config
+from config.config_manager import Config
 import pandas as pd
 import math
 try:
@@ -407,17 +408,24 @@ def reconciliar_ordenes(simbolos: list[str] | None = None) -> dict[str, Order]:
     return cargar_ordenes()
 
 
-def sincronizar_ordenes_binance(simbolos: (list[str] | None)=None) ->dict[str, Order]:
+def sincronizar_ordenes_binance(
+    simbolos: list[str] | None = None,
+    config: Config | None = None,
+    modo_real: bool | None = None,
+) -> dict[str, Order]:
     """Consulta órdenes abiertas directamente desde Binance y las registra.
 
     Esto permite reconstruir el estado de las posiciones cuando el bot se
     reinicia y la base de datos local no contiene todas las operaciones
     abiertas. Devuelve el diccionario de órdenes resultante.
     """
-    if not app_config.MODO_REAL:
+    config = config or getattr(app_config, "cfg", None)
+    if modo_real is None:
+        modo_real = getattr(config, "modo_real", True)
+    if not modo_real:
         return cargar_ordenes()
     try:
-        cliente = obtener_cliente()
+        cliente = obtener_cliente(config)
         ordenes_api = []
         if simbolos:
             for s in simbolos:

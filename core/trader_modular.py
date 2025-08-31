@@ -1144,6 +1144,7 @@ class Trader:
                 await asyncio.to_thread(
                     real_orders.sincronizar_ordenes_binance,
                     self.config.symbols,
+                    self.config,
                 )
                 log.debug('🔄 Sincronización de órdenes completada')
             except Exception as e:

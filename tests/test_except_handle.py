@@ -11,7 +11,7 @@ def test_monitorear_estado_bot_logs_exception(monkeypatch):
     fake_log = MagicMock()
     monkeypatch.setattr(monitor_estado_bot, 'log', fake_log)
 
-    def fake_crear_cliente():
+    def fake_crear_cliente(*args, **kwargs):
         raise ValueError('boom')
 
     monkeypatch.setattr(monitor_estado_bot, 'crear_cliente', fake_crear_cliente)
