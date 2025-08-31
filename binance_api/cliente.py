@@ -12,6 +12,7 @@ import ccxt
 import websockets
 from config.config_manager import Config
 from core.utils.utils import configurar_logger
+from core.metrics import registrar_binance_weight
 
 log = configurar_logger('binance_client')
 
@@ -86,6 +87,16 @@ def binance_call(
     while attempt <= max_attempts:
         try:
             result = fn()
+            exchange = getattr(fn, "__self__", None)
+            used = 0
+            if exchange and getattr(exchange, "last_response", None):
+                try:
+                    used = int(exchange.last_response.headers.get("X-MBX-USED-WEIGHT-1m", 0))
+                except Exception:
+                    used = 0
+            registrar_binance_weight(used)
+            if used > 1000:
+                log.warning(f"⚠️ Weight {used}/1200 used")
             state["fails"] = 0
             state["until"] = 0.0
             state["last_code"] = None

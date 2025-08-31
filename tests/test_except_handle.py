@@ -58,3 +58,24 @@ async def test_backfill_logs_unexpected_exception(monkeypatch):
     await df._backfill_candles('BTC/USDT')
 
     fake_log.exception.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_backfill_since_salta_duplicado(monkeypatch):
+    monkeypatch.setattr('core.data_feed.registrar_reconexion_datafeed', lambda cb: None)
+    df = DataFeed('1m')
+    df._cliente = object()
+    now = int(datetime.now(timezone.utc).timestamp() * 1000)
+    last_ts = now - df.intervalo_segundos * 2000
+    df._last_close_ts['BTC/USDT'] = last_ts
+    llamado = {}
+
+    async def fake_fetch(cliente, symbol, tf, since, limit):
+        llamado['since'] = since
+        return []
+
+    monkeypatch.setattr('core.data_feed.fetch_ohlcv_async', fake_fetch)
+
+    await df._backfill_candles('BTC/USDT')
+
+    assert llamado['since'] == last_ts + 1

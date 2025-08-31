@@ -33,3 +33,15 @@ def test_dedup_y_orden():
     assert procesadas == expected
     assert 'duplicate' in estados
     assert 'out_of_order' in estados
+
+
+def test_reset_reinicia_estado():
+    filtro = CandleFilter()
+    intervalo_ms = 60_000
+    vela = _candle(60_000)
+    filtro.push(vela, intervalo_ms)
+    assert filtro.last_ts_processed == 60_000
+    filtro.reset()
+    assert filtro.last_ts_processed is None
+    assert filtro.total == 0
+    assert filtro.rejected == 0

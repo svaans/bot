@@ -89,6 +89,11 @@ WATCHDOG_RESTART_RATE = Gauge(
     ["task"],
 )
 
+BINANCE_WEIGHT_USED_1M = Gauge(
+    "binance_weight_used_1m",
+    "Peso utilizado en el último minuto según Binance",
+)
+
 UMBRAL_VELAS_RECHAZADAS = float(os.getenv("UMBRAL_VELAS_RECHAZADAS", 5))
 
 log = configurar_logger("metrics")
@@ -108,6 +113,11 @@ def registrar_orden(status: str) -> None:
     _orders[status] += 1
     registro_metrico.registrar("orden", {"status": status})
 
+
+def registrar_binance_weight(weight: int) -> None:
+    """Actualiza el peso usado en el último minuto."""
+    BINANCE_WEIGHT_USED_1M.set(weight)
+    
 def registrar_buy_rejected_insufficient_funds() -> None:
     """Incrementa ``buy_rejected_insufficient_funds_total``."""
 

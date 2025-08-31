@@ -1016,6 +1016,7 @@ def ejecutar_orden_limit(
 
     filtros = get_symbol_filters(symbol, cliente)
 
+    cantidad_original = cantidad
     for intento in range(1, max_reintentos + 1):
         # Normaliza precio/cantidad para cumplir filtros del exchange
         precio, cantidad = normalizar_precio_cantidad(
@@ -1049,9 +1050,23 @@ def ejecutar_orden_limit(
         else:
             # timeout -> cancelar, re-preciar y reintentar
             try:
-                cliente.cancel_order(order_id, symbol.replace("/", ""))
+                cancel_info = cliente.cancel_order(order_id, symbol.replace("/", ""))
             except Exception as e:
                 log.warning(f"⚠️ No se pudo cancelar orden {order_id}: {e}")
+                cancel_info = {}
+            filled_cancel = float(
+                cancel_info.get("filled")
+                or cancel_info.get("executedQty")
+                or 0.0
+            )
+            if filled_cancel == 0.0:
+                try:
+                    final_estado = cliente.fetch_order(order_id, symbol.replace("/", ""))
+                    filled_cancel = float(final_estado.get("filled") or 0.0)
+                except Exception:
+                    filled_cancel = 0.0
+            if filled_cancel > 0:
+                cantidad = max(cantidad - filled_cancel, 0.0)
 
             if intento >= max_reintentos:
                 break
@@ -1091,6 +1106,17 @@ def ejecutar_orden_limit(
         }
 
     # Fallback a MARKET tras reintentos fallidos
+    if cantidad <= 0:
+        ejecutado_total = cantidad_original
+        return {
+            "ejecutado": ejecutado_total,
+            "restante": 0.0,
+            "status": "FILLED",
+            "min_qty": filtros.get("min_qty", 0.0),
+            "fee": 0.0,
+            "pnl": 0.0,
+            "slippage": 0.0,
+        }
     log.warning(f"⚠️ Fallback a orden de mercado en {symbol} tras {max_reintentos} intentos limit fallidos")
     if side == "buy":
         return ejecutar_orden_market(symbol, cantidad, operation_id)

@@ -321,17 +321,20 @@ async def procesar_vela(trader, vela: dict) -> None:
             registrar_vela_rechazada(symbol, 'duplicada')
             if warn:
                 log.warning(f'Alto ratio de velas descartadas para {symbol}')
+                estado.candle_filter.reset()
             return
         if status == 'out_of_order':
             log.debug(f"Vela fuera de orden para {symbol}: {vela['timestamp']}")
             registrar_vela_rechazada(symbol, 'fuera_de_orden')
             if warn:
                 log.warning(f'Alto ratio de velas descartadas para {symbol}')
+                estado.candle_filter.reset()
             return
         if status == 'partial':
             log.debug(f"Ignorando kline parcial para {symbol}")
             return
         if warn:
             log.warning(f'Alto ratio de velas descartadas para {symbol}')
+            estado.candle_filter.reset()
         for vela_proc in ready:
             await _procesar_candle(trader, symbol, intervalo, estado, vela_proc)

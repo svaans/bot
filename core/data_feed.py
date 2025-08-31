@@ -213,7 +213,7 @@ class DataFeed:
                 self._cliente,
                 symbol,
                 self.intervalo,
-                since=last_ts - intervalo_ms,
+                since=last_ts + 1,
                 limit=limit,
             )
         except (AuthenticationError, NetworkError) as e:

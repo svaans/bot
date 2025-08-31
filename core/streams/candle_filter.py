@@ -24,6 +24,16 @@ class CandleFilter:
         self.rejected: int = 0
         self._window_start = time.time()
 
+    def reset(self) -> None:
+        """Resetea el estado interno del filtro tras una reconexión."""
+        self.last_ts_processed = None
+        self._recent.clear()
+        self._recent_set.clear()
+        self._buffer.clear()
+        self.total = 0
+        self.rejected = 0
+        self._window_start = time.time()
+
     def _normalize(self, ts: int, intervalo_ms: int) -> int:
         return (ts // intervalo_ms) * intervalo_ms
 
