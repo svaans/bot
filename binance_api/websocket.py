@@ -7,8 +7,11 @@ import socket
 import time
 from typing import Awaitable, Callable
 
+import ssl
 import websockets
 from websockets.exceptions import ConnectionClosed
+import certifi
+import resource
 
 UTC = timezone.utc
 
@@ -27,6 +30,20 @@ class InactividadTimeoutError(Exception):
     pass
 
 log = configurar_logger('websocket')
+
+def _ajustar_limite_archivos(min_limit: int = 4096) -> None:
+    """Intenta aumentar el límite de descriptores si es demasiado bajo."""
+    try:
+        soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+        if soft < min_limit:
+            resource.setrlimit(resource.RLIMIT_NOFILE, (min_limit, hard))
+            log.debug(f'Límite de archivos incrementado a {min_limit}')
+    except Exception as e:  # pragma: no cover - fallbacks en entornos no POSIX
+        log.debug(f'No se pudo ajustar el límite de archivos: {e}')
+
+_ajustar_limite_archivos()
+
+_SSL_CONTEXT = ssl.create_default_context(cafile=certifi.where())
 
 RECONNECT_WINDOW = 300  # 5 minutos
 RECONNECT_THRESHOLD = 250
@@ -199,6 +216,7 @@ async def _gestionar_ws(
                     ping_interval=None,
                     ping_timeout=None,
                     max_size=2 ** 20,
+                    ssl=_SSL_CONTEXT,
                 ),
                 timeout=15,
             )
