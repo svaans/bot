@@ -207,7 +207,10 @@ class ExternalFeeds:
                 beat('external_feeds', 'sin_datos')
                 return
             try:
-                raw = await self.funding_rate_rest(symbol)
+                beat('external_feeds', 'start')
+                raw = await asyncio.wait_for(
+                    self.funding_rate_rest(symbol), timeout=interval
+                )
                 if not raw:
                     beat('external_feeds', 'sin_datos')
                     if symbol in self._funding_permanent_missing:
@@ -218,7 +221,11 @@ class ExternalFeeds:
                     if self.stream:
                         self.stream.actualizar_datos_externos(symbol, {'funding_rate': dato})
                     beat('external_feeds')
+            except asyncio.TimeoutError:
+                beat('external_feeds', 'timeout')
+                log.warning(f'⌛ Funding rate timeout {symbol}')
             except asyncio.CancelledError:
+                beat('external_feeds', 'cancel')
                 raise
             except Exception as e:
                 beat('external_feeds', 'backoff')
@@ -231,7 +238,10 @@ class ExternalFeeds:
                 beat('external_feeds', 'sin_datos')
                 return
             try:
-                raw = await self.open_interest_rest(symbol)
+                beat('external_feeds', 'start')
+                raw = await asyncio.wait_for(
+                    self.open_interest_rest(symbol), timeout=interval
+                )
                 if not raw:
                     beat('external_feeds', 'sin_datos')
                     if symbol in self._oi_permanent_missing:
@@ -242,7 +252,11 @@ class ExternalFeeds:
                     if self.stream:
                         self.stream.actualizar_datos_externos(symbol, {'open_interest': dato})
                     beat('external_feeds')
+            except asyncio.TimeoutError:
+                beat('external_feeds', 'timeout')
+                log.warning(f'⌛ Open interest timeout {symbol}')
             except asyncio.CancelledError:
+                beat('external_feeds', 'cancel')
                 raise
             except Exception as e:
                 beat('external_feeds', 'backoff')

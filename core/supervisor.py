@@ -293,16 +293,22 @@ class Supervisor:
         restarts = 0
         current_delay = delay
         while True:
-            self.beat(task_name)
+            # Latido antes de iniciar el trabajo para prevenir falsos inactivos
+            self.beat(task_name, "start")
             try:
                 result = coro_factory()
                 if asyncio.iscoroutine(result):
                     await result
+                # Latido tras finalizar correctamente
+                self.beat(task_name, "end")
                 break  # fin normal
             except asyncio.CancelledError:
+                # Aseguramos latido y limpieza ante cancelación
+                self.beat(task_name, "cancel")
                 log.info("Tarea %s cancelada", task_name)
                 raise
             except Exception as e:  # pragma: no cover - log crítico
+                self.beat(task_name, "error")
                 log.error(
                     "⚠️ Error en %s: %r. Reiniciando en %ss",
                     task_name,

@@ -279,24 +279,44 @@ class DataFeed:
         backoff = 1
         while True:
             try:
-                await self._backfill_candles(symbol)
-                await escuchar_velas(
-                    symbol,
-                    self.intervalo,
-                    handler,
-                    self._last,
-                    self.tiempo_inactividad,
-                    self.ping_interval,
-                    cliente=self._cliente,
-                    mensaje_timeout=self.tiempo_inactividad,
+                beat(f'stream_{symbol}', 'backfill_start')
+                await asyncio.wait_for(
+                    self._backfill_candles(symbol), timeout=self.tiempo_inactividad
                 )
+                beat(f'stream_{symbol}', 'backfill_end')
+                beat(f'stream_{symbol}', 'listen_start')
+                await asyncio.wait_for(
+                    escuchar_velas(
+                        symbol,
+                        self.intervalo,
+                        handler,
+                        self._last,
+                        self.tiempo_inactividad,
+                        self.ping_interval,
+                        cliente=self._cliente,
+                        mensaje_timeout=self.tiempo_inactividad,
+                    ),
+                    timeout=self.tiempo_inactividad + self.ping_interval + 5,
+                )
+                beat(f'stream_{symbol}', 'listen_end')
                 log.warning(f'🔁 Conexión de {symbol} finalizada; reintentando en {backoff}s')
                 fallos_consecutivos = 0
                 backoff = 1
                 await asyncio.sleep(backoff + random.random())
+            except asyncio.TimeoutError:
+                beat(f'stream_{symbol}', 'timeout')
+                log.warning(
+                    f'⌛ Timeout en stream {symbol}; reintentando en {backoff}s'
+                )
+                fallos_consecutivos += 1
+                await asyncio.sleep(backoff + random.random())
+                backoff = min(backoff * 2, 60)
+                continue
             except asyncio.CancelledError:
+                beat(f'stream_{symbol}', 'cancel')
                 raise
             except Exception as e:
+                beat(f'stream_{symbol}', 'error')
                 fallos_consecutivos += 1
                 try:
                     if fallos_consecutivos == 1 or fallos_consecutivos % 5 == 0:

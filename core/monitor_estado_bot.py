@@ -150,12 +150,21 @@ async def monitorear_estado_periodicamente(self, intervalo=300):
     loop = asyncio.get_running_loop()
     while True:
         try:
-            await loop.run_in_executor(None, monitorear_estado_bot, dict(
-                self.ordenes_abiertas))
+            beat('estado', 'start')
+            await asyncio.wait_for(
+                loop.run_in_executor(
+                    None, monitorear_estado_bot, dict(self.ordenes_abiertas)
+                ),
+                timeout=intervalo,
+            )
             beat('estado')
             log.info('🧭 Monitoreo de estado completado.')
             log.debug(
                 f'📌 Órdenes abiertas: {list(self.ordenes_abiertas.keys())}')
+            await asyncio.sleep(intervalo)
+        except asyncio.TimeoutError:
+            log.warning('⌛ Monitoreo de estado excedió el tiempo')
+            beat('estado', 'timeout')
             await asyncio.sleep(intervalo)
         except asyncio.CancelledError:
             log.info('⏹️ Monitoreo cancelado. Cerrando tarea.')
