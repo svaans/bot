@@ -1,5 +1,6 @@
 from __future__ import annotations
 from core.orders.order_manager import OrderManager
+from core.orders.storage_simulado import sincronizar_ordenes_simuladas
 from core.event_bus import EventBus
 
 
@@ -8,6 +9,8 @@ class PositionManager:
 
     def __init__(self, modo_real: bool, bus: EventBus | None = None) -> None:
         self._manager = OrderManager(modo_real, bus)
+        if not modo_real:
+            sincronizar_ordenes_simuladas(self._manager)
 
     @property
     def ordenes(self):

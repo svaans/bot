@@ -10,7 +10,7 @@ from core.orders.order_model import Order
 from core.utils.logger import configurar_logger, log_decision
 from core.orders import real_orders
 from core.orders.validators import remainder_executable
-from core.utils.utils import is_valid_number, guardar_orden_simulada
+from core.utils.utils import is_valid_number
 from core.event_bus import EventBus
 from core.metrics import (
     registrar_orden,
@@ -521,23 +521,21 @@ class OrderManager:
                             orden.entradas[0]['cantidad'] = cantidad
                         
                         else:
-                            try:
-                                await asyncio.to_thread(
-                                    guardar_orden_simulada,
-                                    symbol,
+                            if self.bus:
+                                await self.bus.publish(
+                                    'orden_simulada_creada',
                                     {
-                                        'precio_entrada': precio,
+                                        'symbol': symbol,
+                                        'precio': precio,
                                         'cantidad': cantidad,
-                                        'stop_loss': sl,
-                                        'take_profit': tp,
+                                        'sl': sl,
+                                        'tp': tp,
                                         'estrategias': estrategias,
-                                        'tendencia': tendencia,
                                         'direccion': direccion,
                                         'operation_id': operation_id,
+                                        'orden': orden.to_parquet_record(),
                                     },
                                 )
-                            except Exception as e:
-                                log.error(f'❌ Error guardando orden simulada {symbol}: {e}')
                             orden.registro_pendiente = False
 
                 except Exception as e:
@@ -570,7 +568,7 @@ class OrderManager:
 
             registrar_orden('opened')
             log.info(f'🟢 Orden abierta para {symbol} @ {precio:.2f}')
-            if self.bus:
+            if self.bus and self.modo_real:
                 estrategias_txt = ', '.join(estrategias.keys())
                 mensaje = (
                     f"""🟢 Compra {symbol}\nPrecio: {precio:.2f} Cantidad: {cantidad}\nSL: {sl:.2f} TP: {tp:.2f}\nEstrategias: {estrategias_txt}"""
@@ -727,20 +725,26 @@ class OrderManager:
 
                 log.info(f'📤 Orden cerrada para {symbol} @ {precio:.2f} | {motivo}')
                 if self.bus:
-                    mensaje = (
-                        f"""📤 Venta {symbol}\nEntrada: {orden.precio_entrada:.2f} Salida: {precio:.2f}\nRetorno: {retorno * 100:.2f}%\nMotivo: {motivo}"""
-                    )
-                    await self.bus.publish('notify', {'mensaje': mensaje, 'operation_id': operation_id})
+                    if self.modo_real:
+                        mensaje = (
+                            f"""📤 Venta {symbol}\nEntrada: {orden.precio_entrada:.2f} Salida: {precio:.2f}\nRetorno: {retorno * 100:.2f}%\nMotivo: {motivo}"""
+                        )
+                        await self.bus.publish('notify', {'mensaje': mensaje, 'operation_id': operation_id})
+                    else:
+                        await self.bus.publish(
+                            'orden_simulada_cerrada',
+                            {
+                                'symbol': symbol,
+                                'precio_cierre': precio,
+                                'retorno': retorno,
+                                'motivo': motivo,
+                                'operation_id': operation_id,
+                            },
+                        )
 
                 log_decision(log, 'cerrar', operation_id, entrada_log, {'venta_exitosa': True}, 'accept', {'retorno': retorno})
 
                 registrar_orden('closed')
-
-                if not self.modo_real:
-                    try:
-                        await asyncio.to_thread(guardar_orden_simulada, symbol, orden.to_dict())
-                    except Exception as e:
-                        log.error(f'❌ Error guardando cierre simulado {symbol}: {e}')
 
                 # Finalmente, elimina del activo
                 self.ordenes.pop(symbol, None)
@@ -803,10 +807,22 @@ class OrderManager:
                 await self.bus.publish('registrar_perdida', {'symbol': symbol, 'perdida': retorno})
             log.info(f'📤 Orden cerrada para {symbol} @ {precio:.2f} | {motivo}')
             if self.bus:
-                mensaje = (
-                    f"""📤 Venta {symbol}\nEntrada: {orden.precio_entrada:.2f} Salida: {precio:.2f}\nRetorno: {retorno * 100:.2f}%\nMotivo: {motivo}"""
-                )
-                await self.bus.publish('notify', {'mensaje': mensaje, 'operation_id': operation_id})
+                if self.modo_real:
+                    mensaje = (
+                        f"""📤 Venta {symbol}\nEntrada: {orden.precio_entrada:.2f} Salida: {precio:.2f}\nRetorno: {retorno * 100:.2f}%\nMotivo: {motivo}"""
+                    )
+                    await self.bus.publish('notify', {'mensaje': mensaje, 'operation_id': operation_id})
+                else:
+                    await self.bus.publish(
+                        'orden_simulada_cerrada',
+                        {
+                            'symbol': symbol,
+                            'precio_cierre': precio,
+                            'retorno': retorno,
+                            'motivo': motivo,
+                            'operation_id': operation_id,
+                        },
+                    )
             self.ordenes.pop(symbol, None)
 
             if self.modo_real:
@@ -814,11 +830,6 @@ class OrderManager:
                     await asyncio.to_thread(real_orders.eliminar_orden, symbol)
                 except Exception as e:
                     log.error(f'❌ Error eliminando orden {symbol} de SQLite: {e}')
-            else:
-                try:
-                    await asyncio.to_thread(guardar_orden_simulada, symbol, orden.to_dict())
-                except Exception as e:
-                    log.error(f'❌ Error guardando cierre simulado {symbol}: {e}')
             registrar_orden('closed')
             log_decision(log, 'cerrar_parcial', operation_id, {'symbol': symbol, 'cantidad': cantidad}, {}, 'accept', {'retorno': retorno})
         else:

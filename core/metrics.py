@@ -197,3 +197,16 @@ def reset_velas_metrics() -> None:
 
     _velas_total.clear()
     _velas_rechazadas.clear()
+
+
+def subscribe_simulated_order_metrics(bus) -> None:
+    """Suscribe métricas a eventos de órdenes simuladas."""
+
+    async def _on_open(_):
+        registrar_orden('opened')
+
+    async def _on_close(_):
+        registrar_orden('closed')
+
+    bus.subscribe('orden_simulada_creada', _on_open)
+    bus.subscribe('orden_simulada_cerrada', _on_close)

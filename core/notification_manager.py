@@ -24,6 +24,8 @@ class NotificationManager:
 
     def subscribe(self, bus: EventBus) -> None:
         bus.subscribe('notify', self._on_notify)
+        bus.subscribe('orden_simulada_creada', self._on_orden_creada)
+        bus.subscribe('orden_simulada_cerrada', self._on_orden_cerrada)
 
     async def _on_notify(self, data: Any) -> None:
         """Wrapper a prueba de fallos para las notificaciones."""
@@ -43,3 +45,17 @@ class NotificationManager:
 
     async def enviar_async(self, mensaje: str, tipo: str='INFO') ->None:
         await self._notifier.enviar_async(mensaje, tipo)
+
+    async def _on_orden_creada(self, data: Any) -> None:
+        mensaje = (
+            f"🟢 Compra {data['symbol']}\nPrecio: {data['precio']:.2f} Cantidad: {data['cantidad']}"
+            f"\nSL: {data['sl']:.2f} TP: {data['tp']:.2f}"
+        )
+        await self._on_notify({'mensaje': mensaje, 'operation_id': data.get('operation_id')})
+
+    async def _on_orden_cerrada(self, data: Any) -> None:
+        mensaje = (
+            f"📤 Venta {data['symbol']}\nPrecio: {data['precio_cierre']:.2f}"
+            f"\nRetorno: {data['retorno'] * 100:.2f}%\nMotivo: {data['motivo']}"
+        )
+        await self._on_notify({'mensaje': mensaje, 'operation_id': data.get('operation_id')})
