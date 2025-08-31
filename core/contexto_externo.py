@@ -71,7 +71,13 @@ class StreamContexto:
         url = self.url_template.format(symbol=symbol_norm)
         try:
             async with websockets.connect(
-                url, ping_interval=None, ping_timeout=None
+                url,
+                open_timeout=15,
+                ping_interval=20,
+                ping_timeout=10,
+                close_timeout=5,
+                max_queue=1000,
+                compression="deflate",
             ) as ws:
                 log.info(f'🔌 Contexto conectado para {symbol}')
                 self._last[symbol] = datetime.now(UTC)
@@ -120,9 +126,14 @@ class StreamContexto:
         except asyncio.CancelledError:
             log.info(f'🛑 Stream contexto {symbol} cancelado')
             raise
+        except asyncio.TimeoutError as e:
+            log.warning(
+                f'⏱️ Timeout handshake contexto {symbol} en {url}: {e}'
+            )
+            raise
         except Exception as e:
             log.warning(
-                f'⚠️ Stream de contexto {symbol} finalizó con error: {e}'
+                f'⚠️ Stream de contexto {symbol} en {url} finalizó con error: {e}'
             )
             raise
 
