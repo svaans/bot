@@ -266,8 +266,15 @@ class Trader:
         self.estrategias_habilitadas = False
         self.warmup_completed = False
         try:
-            simbolos = config.symbols if self.modo_real else None
-            self.orders.ordenes = real_orders.reconciliar_ordenes(simbolos)
+            if self.modo_real:
+                simbolos = config.symbols
+                self.orders.ordenes = real_orders.reconciliar_ordenes(simbolos)
+            else:
+                log.info(
+                    'SIMULADO: reconciliación real omitida',
+                    extra={'symbol': None, 'timeframe': None},
+                )
+                self.orders.ordenes = real_orders.cargar_ordenes()
         except Exception as e:
             log.warning(
                 f'⚠️ Error cargando órdenes previas desde la base de datos: {e}'
