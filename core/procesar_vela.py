@@ -19,7 +19,11 @@ from core.strategies.tendencia import obtener_tendencia
 from indicators.helpers import clear_cache
 from core.indicadores import get_rsi, get_momentum, get_atr
 from core.registro_metrico import registro_metrico
-from core.metrics import registrar_vela_recibida, registrar_vela_rechazada
+from core.metrics import (
+    registrar_vela_recibida,
+    registrar_vela_rechazada,
+    registrar_candles_duplicadas,
+)
 
 """Procesa una vela de mercado y actualiza indicadores.
 
@@ -61,7 +65,8 @@ def validar_integridad_velas(symbol: str, tf: str, candles: Iterable[dict]) -> b
         prev = curr
     if dupes:
         registro_metrico.registrar('velas_duplicadas', {'symbol': symbol, 'tf': tf, 'count': dupes})
-        log.warning(f'[{symbol}] {dupes} velas duplicadas detectadas en {tf}')
+        registrar_candles_duplicadas(symbol, dupes)
+        log.info(f'[{symbol}] {dupes} velas duplicadas detectadas en {tf}')
     if gaps:
         registro_metrico.registrar('velas_gap', {'symbol': symbol, 'tf': tf, 'count': gaps})
         log.warning(f'[{symbol}] Gap de {gaps} velas en {tf}')

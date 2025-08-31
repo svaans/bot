@@ -59,3 +59,20 @@ class NotificationManager:
             f"\nRetorno: {data['retorno'] * 100:.2f}%\nMotivo: {data['motivo']}"
         )
         await self._on_notify({'mensaje': mensaje, 'operation_id': data.get('operation_id')})
+
+    def iniciar_comando_status(self, alert_manager, intervalo: int = 5) -> None:
+        """Inicia escucha del comando /status."""
+
+        asyncio.create_task(self._notifier.escuchar_status(alert_manager, intervalo))
+
+    def iniciar_resumen_periodico(self, alert_manager, intervalo: int = 300) -> None:
+        """Envía un resumen agrupado de eventos cada ``intervalo`` segundos."""
+
+        async def _resumir():
+            while True:
+                await asyncio.sleep(intervalo)
+                resumen = alert_manager.format_summary(intervalo)
+                if resumen != 'Sin eventos':
+                    await self._on_notify({'mensaje': resumen})
+
+        asyncio.create_task(_resumir())

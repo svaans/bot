@@ -19,6 +19,7 @@ from prometheus_client import Counter, Gauge
 
 from core.registro_metrico import registro_metrico
 from core.utils.logger import configurar_logger
+from core.alertas import alert_manager
 
 
 _decisions: Dict[str, Dict[str, int]] = defaultdict(lambda: defaultdict(int))
@@ -28,6 +29,17 @@ _correlacion_btc: Dict[str, float] = {}
 
 _velas_total: Dict[str, int] = defaultdict(int)
 _velas_rechazadas: Dict[str, Dict[str, int]] = defaultdict(lambda: defaultdict(int))
+
+VELAS_DUPLICADAS = Counter(
+    "candles_duplicates_total",
+    "Velas duplicadas detectadas por símbolo",
+    ["symbol"],
+)
+CANDLES_DUPLICADAS_RATE = Gauge(
+    "candles_duplicates_rate",
+    "Tasa de velas duplicadas por minuto",
+    ["symbol"],
+)
 
 VELAS_TOTAL = Counter("velas_total", "Velas recibidas por símbolo", ["symbol"])
 VELAS_RECHAZADAS = Counter(
@@ -59,9 +71,21 @@ FEEDS_OPEN_INTEREST_MISSING = Counter(
     ["symbol", "reason"],
 )
 
+FEEDS_MISSING_RATE = Gauge(
+    "feeds_missing_rate",
+    "Tasa de feeds ausentes por minuto",
+    ["symbol"],
+)
+
 WATCHDOG_RESTARTS = Counter(
     "watchdog_restarts_total",
     "Reinicios de tareas provocados por el watchdog",
+    ["task"],
+)
+
+WATCHDOG_RESTART_RATE = Gauge(
+    "watchdog_restart_rate",
+    "Tasa de reinicios del watchdog por minuto",
     ["task"],
 )
 
@@ -92,10 +116,34 @@ def registrar_buy_rejected_insufficient_funds() -> None:
     registro_metrico.registrar("buy_rejected", {"reason": "insufficient_funds"})
 
 
+def registrar_candles_duplicadas(symbol: str, count: int) -> None:
+    """Registra velas duplicadas y actualiza tasa."""
+
+    if count <= 0:
+        return
+    VELAS_DUPLICADAS.labels(symbol=symbol).inc(count)
+    rate = alert_manager.record("candles_duplicates", symbol, count)
+    CANDLES_DUPLICADAS_RATE.labels(symbol=symbol).set(rate * 60)
+    if alert_manager.should_alert("candles_duplicates", symbol):
+        log.warning(
+            f"[{symbol}] tasa de velas duplicadas {rate * 60:.2f}/min excede umbral"
+        )
+
+
+def _registrar_feed_missing(symbol: str) -> None:
+    rate = alert_manager.record("feeds_missing", symbol)
+    FEEDS_MISSING_RATE.labels(symbol=symbol).set(rate * 60)
+    if alert_manager.should_alert("feeds_missing", symbol):
+        log.warning(
+            f"[{symbol}] tasa de feeds ausentes {rate * 60:.2f}/min excede umbral"
+        )
+
+
 def registrar_feed_funding_missing(symbol: str, reason: str) -> None:
     """Registra ausencia de funding rate."""
 
     FEEDS_FUNDING_MISSING.labels(symbol=symbol, reason=reason).inc()
+    _registrar_feed_missing(symbol)
     registro_metrico.registrar(
         "feed_funding_missing", {"symbol": symbol, "reason": reason}
     )
@@ -114,6 +162,12 @@ def registrar_watchdog_restart(task: str) -> None:
     """Registra un reinicio de ``task`` provocado por el watchdog."""
 
     WATCHDOG_RESTARTS.labels(task=task).inc()
+    rate = alert_manager.record("watchdog_restart", task)
+    WATCHDOG_RESTART_RATE.labels(task=task).set(rate * 60)
+    if alert_manager.should_alert("watchdog_restart", task):
+        log.warning(
+            f"[{task}] tasa de reinicios del watchdog {rate * 60:.2f}/min excede umbral"
+        )
     registro_metrico.registrar("watchdog_restart", {"task": task})
     
 def registrar_correlacion_btc(symbol: str, rho: float) -> None:

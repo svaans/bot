@@ -85,7 +85,33 @@ class Notificador:
         loop = asyncio.get_running_loop()
         await loop.run_in_executor(None, self.enviar, mensaje, tipo)
 
+    async def escuchar_status(self, alert_manager, intervalo: int = 5) -> None:
+        """Escucha el comando /status y responde con un resumen."""
 
+        if not self.token or not self.chat_id:
+            return
+        offset = None
+        url = f'https://api.telegram.org/bot{self.token}/getUpdates'
+        while True:
+            try:
+                params = {'timeout': 0}
+                if offset is not None:
+                    params['offset'] = offset
+                resp = requests.get(url, params=params, timeout=10)
+                datos = resp.json()
+                for upd in datos.get('result', []):
+                    offset = upd['update_id'] + 1
+                    msg = upd.get('message') or {}
+                    chat_id = str(msg.get('chat', {}).get('id'))
+                    texto = (msg.get('text') or '').strip()
+                    if chat_id == str(self.chat_id) and texto == '/status':
+                        resumen = alert_manager.format_summary(900)
+                        self.enviar(resumen, 'INFO')
+            except Exception as e:  # pragma: no cover - defensivo
+                log.error(f'❌ Error escuchando comandos: {e}')
+            await asyncio.sleep(intervalo)
+
+            
 def crear_notificador_desde_env() ->Notificador:
     load_dotenv('config/claves.env')
     token = os.getenv('TELEGRAM_TOKEN', '')

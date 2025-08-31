@@ -2,23 +2,22 @@ import os
 import asyncio
 import functools
 import json
-import os
 import random
 import re
+import time
 from typing import Any, Callable
 
 import ccxt
-from prometheus_client import Gauge
 from config.config_manager import Config
 from core.utils.utils import configurar_logger
 
 log = configurar_logger('binance_client')
 
-DEGRADED_GAUGE = Gauge('degraded_mode', 'Estado del modo degradado', ['state'])
-DEGRADED_GAUGE.labels(state='on').set(0)
-DEGRADED_GAUGE.labels(state='off').set(1)
 
 AUTH_WARNING_EMITTED = False
+
+# Estado del circuit breaker por endpoint
+_CIRCUIT_BREAKERS: dict[str, dict[str, float]] = {}
 
 
 class BinanceError(Exception):
@@ -29,6 +28,87 @@ class BinanceError(Exception):
         self.code = code
         self.reason = reason
         self.suggestion = suggestion
+
+def _extract_code(exc: Exception) -> int | None:
+    code = getattr(exc, "code", None)
+    if isinstance(code, int):
+        return code
+    try:
+        data = json.loads(str(exc))
+        return int(data.get("code"))
+    except Exception:
+        match = re.search(r'"code":(-?\d+)', str(exc))
+        if match:
+            return int(match.group(1))
+    return None
+
+
+def binance_call(
+    fn: Callable[[], Any], *, signed: bool = False, endpoint: str | None = None, symbol: str | None = None
+) -> Any:
+    endpoint = endpoint or getattr(fn, "__name__", "unknown")
+    state = _CIRCUIT_BREAKERS.setdefault(endpoint, {"fails": 0, "until": 0.0})
+    now = time.time()
+    if state["until"] > now:
+        exc = RuntimeError("Circuit breaker activo")
+        exc.endpoint = endpoint
+        exc.symbol = symbol
+        exc.signed = signed
+        exc.attempts = 0
+        log.error(f"Circuit breaker activo para {endpoint}")
+        raise exc
+
+    max_attempts = 5
+    base = 0.5
+    jitter = 0.1
+    time_synced = False
+    attempt = 1
+    while attempt <= max_attempts:
+        try:
+            result = fn()
+            state["fails"] = 0
+            state["until"] = 0.0
+            return result
+        except Exception as exc:
+            code = _extract_code(exc)
+            status = getattr(exc, "http_status", None)
+            is_5xx = isinstance(status, int) and 500 <= status < 600
+            if is_5xx:
+                state["fails"] += 1
+                if state["fails"] > 3:
+                    state["until"] = time.time() + 30
+            else:
+                state["fails"] = 0
+            _CIRCUIT_BREAKERS[endpoint] = state
+
+            final = False
+            if code == -2015:
+                final = True
+            elif state["fails"] > 3 or attempt >= max_attempts:
+                final = True
+
+            if code == -1021 and not time_synced:
+                exchange = getattr(fn, "__self__", None)
+                if exchange and hasattr(exchange, "load_time_difference"):
+                    try:
+                        exchange.load_time_difference()
+                    except Exception:
+                        pass
+                time_synced = True
+                attempt += 1
+                continue
+
+            exc.endpoint = endpoint
+            exc.symbol = symbol
+            exc.signed = signed
+            exc.attempts = attempt
+            if final:
+                log.error(f"Error final en {endpoint}: {exc}")
+                raise
+            log.debug(f"Intento {attempt} fallido en {endpoint}: {exc}")
+            espera = base * (2 ** (attempt - 1)) + random.random() * jitter
+            time.sleep(espera)
+            attempt += 1
 
 
 def auth_guard(default: Any = None):
@@ -57,114 +137,19 @@ def auth_guard(default: Any = None):
 
 
 class BinanceClient:
-    """Wrapper del cliente Binance con reintentos y modo degradado."""
+    """Wrapper asíncrono mínimo sobre el cliente Binance."""
 
-    def __init__(
-        self,
-        config: Config | None = None,
-        *,
-        max_retries: int = 5,
-        backoff_base: float = 0.5,
-        jitter: float = 0.1,
-        fail_threshold: int = 5,
-    ) -> None:
+    def __init__(self, config: Config | None = None) -> None:
         self.exchange = crear_cliente(config)
-        self.authenticated = bool(getattr(self.exchange, "apiKey", None) and getattr(self.exchange, "secret", None))
+        self.authenticated = bool(
+            getattr(self.exchange, "apiKey", None) and getattr(self.exchange, "secret", None)
+        )
         self.modo_real = getattr(self.exchange, "_modo_real", True)
-        self.max_retries = max_retries
-        self.backoff_base = backoff_base
-        self.jitter = jitter
-        self.fail_threshold = fail_threshold
-        self._consecutive_failures = 0
-        self.degraded = False
-
-    def _update_metric(self) -> None:
-        if self.degraded:
-            DEGRADED_GAUGE.labels(state='on').set(1)
-            DEGRADED_GAUGE.labels(state='off').set(0)
-        else:
-            DEGRADED_GAUGE.labels(state='on').set(0)
-            DEGRADED_GAUGE.labels(state='off').set(1)
-
-    def _record_success(self) -> None:
-        if self.degraded:
-            self.degraded = False
-            log.info('Modo degradado desactivado')
-            self._update_metric()
-        self._consecutive_failures = 0
-
-    def _record_failure(self) -> None:
-        self._consecutive_failures += 1
-        if self._consecutive_failures >= self.fail_threshold and not self.degraded:
-            self.degraded = True
-            log.warning('Modo degradado activado')
-            self._update_metric()
-
-    @staticmethod
-    def _retryable(exc: Exception) -> bool:
-        if isinstance(exc, (ccxt.NetworkError, ccxt.RequestTimeout, asyncio.TimeoutError)):
-            return True
-        status = getattr(exc, 'http_status', None)
-        return isinstance(status, int) and 500 <= status < 600
-
-    def _extract_code(self, exc: Exception) -> int | None:
-        code = getattr(exc, "code", None)
-        if isinstance(code, int):
-            return code
-        try:
-            data = json.loads(str(exc))
-            return int(data.get("code"))
-        except Exception:
-            match = re.search(r'"code":(-?\d+)', str(exc))
-            if match:
-                return int(match.group(1))
-        return None
-
-    def _map_error(self, exc: Exception) -> Exception:
-        code = self._extract_code(exc)
-        mapping = {
-            -2015: ("invalid_api_key", "Verifica API key, IP o permisos"),
-            -1021: ("timestamp", "Sincroniza reloj"),
-            -2014: ("bad_api_key_format", "Revisa el formato de las claves"),
-            -2011: ("unknown_order", "Revisa el id de la orden"),
-        }
-        if isinstance(exc, ccxt.DDoSProtection) or getattr(exc, "http_status", None) == 429:
-            return BinanceError(429, "rate_limit", "Reduce la frecuencia de llamadas")
-        if code in mapping:
-            reason, suggestion = mapping[code]
-            return BinanceError(code, reason, suggestion)
-        return exc
 
     async def execute(self, func: Callable[..., Any], *args, **kwargs) -> Any:
         loop = asyncio.get_running_loop()
-        time_synced = False
-        for intento in range(1, self.max_retries + 1):
-            try:
-                if asyncio.iscoroutinefunction(func):
-                    resultado = await func(*args, **kwargs)
-                else:
-                    parcial = functools.partial(func, *args, **kwargs)
-                    resultado = await loop.run_in_executor(None, parcial)
-                self._record_success()
-                return resultado
-            except Exception as exc:  # pragma: no cover - guard para errores no previstos
-                code = self._extract_code(exc)
-                if code == -1021 and not time_synced:
-                    try:
-                        await loop.run_in_executor(None, self.exchange.load_time_difference)
-                    except Exception:
-                        pass
-                    time_synced = True
-                    continue
-                if not self._retryable(exc):
-                    self._record_failure()
-                    raise self._map_error(exc)
-                self._record_failure()
-                if intento >= self.max_retries:
-                    raise self._map_error(exc)
-                espera = self.backoff_base * (2 ** (intento - 1))
-                espera += random.random() * self.jitter
-                await asyncio.sleep(espera)
+        parcial = functools.partial(func, *args, **kwargs)
+        return await loop.run_in_executor(None, parcial)
 
     @auth_guard(lambda: {'total': {'EUR': 1000.0}, 'free': {'EUR': 1000.0}})
     async def fetch_balance(self, *args, **kwargs):
@@ -172,14 +157,10 @@ class BinanceClient:
 
     @auth_guard(PermissionError('Auth required'))
     async def create_order(self, *args, **kwargs):
-        if self.degraded:
-            raise RuntimeError('Modo degradado activo: creación de órdenes suspendida')
         return await self.execute(self.exchange.create_order, *args, **kwargs)
 
     @auth_guard(PermissionError('Auth required'))
     async def create_market_buy_order(self, *args, **kwargs):
-        if self.degraded:
-            raise RuntimeError('Modo degradado activo: creación de órdenes suspendida')
         return await self.execute(self.exchange.create_market_buy_order, *args, **kwargs)
 
     @auth_guard(PermissionError('Auth required'))
@@ -233,6 +214,35 @@ def crear_cliente(config: Config | None = None):
     except Exception:
         pass
     exchange._modo_real = modo_real
+
+    def _wrap(name: str, signed: bool) -> None:
+        original = getattr(exchange, name, None)
+        if not callable(original):
+            return
+
+        def caller(*args, **kwargs):
+            symbol = kwargs.get('symbol')
+            if symbol is None and args:
+                first = args[0]
+                if isinstance(first, str):
+                    symbol = first
+            return binance_call(lambda: original(*args, **kwargs), signed=signed, endpoint=name, symbol=symbol)
+
+        setattr(exchange, name, caller)
+
+    wrappers = {
+        'fetch_balance': True,
+        'create_order': True,
+        'create_market_buy_order': True,
+        'create_market_sell_order': True,
+        'fetch_open_orders': True,
+        'fetch_ticker': False,
+        'load_markets': False,
+        'fetch_ohlcv': False,
+    }
+    for nombre, firmado in wrappers.items():
+        _wrap(nombre, firmado)
+        
     return exchange
 
 
