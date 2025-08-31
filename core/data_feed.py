@@ -1,8 +1,9 @@
 """Módulo para gestionar el flujo de datos desde Binance."""
 from __future__ import annotations
 import asyncio
+import random
 from typing import Awaitable, Callable, Dict, Iterable, Any
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 import time
 from binance_api.websocket import escuchar_velas
 from binance_api.cliente import fetch_ohlcv_async
@@ -15,6 +16,8 @@ from core.supervisor import (
     supervised_task,
     registrar_reinicio_inactividad,
     registrar_reconexion_datafeed,
+    beat,
+    task_cooldown,
 )
 from core.notificador import crear_notificador_desde_env
 from ccxt.base.errors import AuthenticationError, NetworkError
@@ -271,8 +274,9 @@ class DataFeed:
     async def _relanzar_stream(
         self, symbol: str, handler: Callable[[dict], Awaitable[None]]
     ) -> None:
-        """Mantiene un loop de conexión para ``symbol`` reiniciando automáticamente."""
+        """Mantiene un loop de conexión para ``symbol`` con backoff exponencial."""
         fallos_consecutivos = 0
+        backoff = 1
         while True:
             try:
                 await self._backfill_candles(symbol)
@@ -286,13 +290,13 @@ class DataFeed:
                     cliente=self._cliente,
                     mensaje_timeout=self.tiempo_inactividad,
                 )
-                log.warning(f'🔁 Conexión de {symbol} finalizada; reintentando en 1s')
+                log.warning(f'🔁 Conexión de {symbol} finalizada; reintentando en {backoff}s')
                 fallos_consecutivos = 0
-                await asyncio.sleep(1)
+                backoff = 1
+                await asyncio.sleep(backoff + random.random())
             except asyncio.CancelledError:
                 raise
-            except (AuthenticationError, NetworkError) as e:
-                log.warning(f'⚠️ Stream {symbol} falló: {e}. Reintentando en 5s')
+            except Exception as e:
                 fallos_consecutivos += 1
                 try:
                     if fallos_consecutivos == 1 or fallos_consecutivos % 5 == 0:
@@ -305,6 +309,25 @@ class DataFeed:
                     tick('data_feed')
                     
                 tick('data_feed')
+                if isinstance(e, AuthenticationError) and (
+                    getattr(e, 'code', None) == -2015 or '-2015' in str(e)
+                ):
+                    beat(f'stream_{symbol}', 'auth')
+                    task_cooldown[f'stream_{symbol}'] = datetime.now(UTC) + timedelta(minutes=10)
+                    log.error(f'❌ Auth fallida para {symbol}; esperando 600s')
+                    await asyncio.sleep(600)
+                    backoff = 1
+                    continue
+
+                if isinstance(e, (AuthenticationError, NetworkError)):
+                    log.warning(
+                        f'⚠️ Stream {symbol} falló: {e}. Reintentando en {backoff}s'
+                    )
+                else:
+                    log.exception(
+                        f'⚠️ Stream {symbol} falló de forma inesperada. Reintentando en {backoff}s'
+                    )
+                    
                 if fallos_consecutivos >= self.max_stream_restarts:
                     log.error(
                         f'❌ Stream {symbol} superó el límite de {self.max_stream_restarts} intentos'
@@ -321,37 +344,8 @@ class DataFeed:
                         log.exception('Error enviando notificación de límite de reconexiones')
                         tick('data_feed')
                     raise
-                await asyncio.sleep(5)
-            except Exception:
-                log.exception(f'⚠️ Stream {symbol} falló de forma inesperada. Reintentando en 5s')
-                fallos_consecutivos += 1
-                try:
-                    if fallos_consecutivos == 1 or fallos_consecutivos % 5 == 0:
-                        await self.notificador.enviar_async(
-                            f'⚠️ Stream {symbol} en reconexión (intento {fallos_consecutivos})',
-                            'WARN',
-                        )
-                except Exception:
-                    log.exception('Error enviando notificación de reconexión')
-                    tick('data_feed')
-                tick('data_feed')
-                if fallos_consecutivos >= self.max_stream_restarts:
-                    log.error(
-                        f'❌ Stream {symbol} superó el límite de {self.max_stream_restarts} intentos'
-                    )
-                    log.debug(
-                        f"Stream {symbol} detenido tras {fallos_consecutivos} intentos"
-                    )
-                    try:
-                        await self.notificador.enviar_async(
-                            f'❌ Stream {symbol} superó el límite de {self.max_stream_restarts} intentos',
-                            'CRITICAL',
-                        )
-                    except Exception:
-                        log.exception('Error enviando notificación de límite de reconexiones')
-                        tick('data_feed')
-                    raise
-                await asyncio.sleep(5)
+                await asyncio.sleep(backoff + random.random())
+                backoff = min(backoff * 2, 60)
 
 
     async def iniciar(self) -> None:

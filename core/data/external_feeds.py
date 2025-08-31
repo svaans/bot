@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import json
 import time
+import random
 from datetime import datetime, timezone
 from typing import Any, Awaitable, Callable, Dict, Iterable
 
@@ -138,7 +139,7 @@ class ExternalFeeds:
                         log.info(f"ℹ️ Funding rate no listado {symbol}")
                         return None
                     if status == 429:
-                        await asyncio.sleep(delay)
+                        await asyncio.sleep(delay + random.random())
                         continue
                     data = await resp.json()
                 if isinstance(data, list):
@@ -150,7 +151,7 @@ class ExternalFeeds:
                 if intento == 2:
                     registrar_feed_funding_missing(symbol, "unavailable")
                     break
-                await asyncio.sleep(delay)
+                await asyncio.sleep(delay + random.random())
                 delay *= 2
         registrar_feed_funding_missing(symbol, "unavailable")
         return None
@@ -178,7 +179,7 @@ class ExternalFeeds:
                         log.info(f"ℹ️ Open interest no listado {symbol}")
                         return None
                     if status == 429:
-                        await asyncio.sleep(delay)
+                        await asyncio.sleep(delay + random.random())
                         continue
                     data = await resp.json()
                 if isinstance(data, list):
@@ -190,7 +191,7 @@ class ExternalFeeds:
                 if intento == 2:
                     registrar_feed_open_interest_missing(symbol, "unavailable")
                     break
-                await asyncio.sleep(delay)
+                await asyncio.sleep(delay + random.random())
                 delay *= 2
         registrar_feed_open_interest_missing(symbol, "unavailable")
         return None, "backoff"
