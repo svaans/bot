@@ -7,7 +7,9 @@ import re
 import time
 from typing import Any, Callable
 
+import aiohttp
 import ccxt
+import websockets
 from config.config_manager import Config
 from core.utils.utils import configurar_logger
 
@@ -21,6 +23,9 @@ CB_SILENCE_SECONDS = float(os.getenv("CB_SILENCE_SECONDS", "60"))
 # Estado del circuit breaker y métricas por endpoint
 _CIRCUIT_BREAKERS: dict[str, dict[str, Any]] = {}
 
+# Tasks for the Binance user data stream
+_USER_STREAM_TASK: asyncio.Task | None = None
+_KEEPALIVE_TASK: asyncio.Task | None = None
 
 class BinanceError(Exception):
     """Excepción propia con código y sugerencia."""
@@ -89,7 +94,19 @@ def binance_call(
             code = _extract_code(exc)
             state["last_code"] = code
             state["failures"] += 1
-            status = getattr(exc, "http_status", None)
+            status = getattr(exc, "http_status", None) or getattr(exc, "status", None)
+            if code == -1003 or (isinstance(status, int) and status in (429, 418)):
+                headers = getattr(getattr(exc, "response", None), "headers", {}) or {}
+                retry_after = headers.get("Retry-After")
+                try:
+                    wait = int(retry_after)
+                except Exception:
+                    wait = 60
+                state["until"] = time.time() + wait
+                if time.time() >= state.get("silence", 0.0):
+                    log.error(f"🕒 Límite de tasa excedido en {endpoint}, pausando {wait} s")
+                    state["silence"] = time.time() + CB_SILENCE_SECONDS
+                raise BinanceError(code or status or 429, "Rate limit hit", f"Backoff {wait}s")
             is_5xx = isinstance(status, int) and 500 <= status < 600
             if is_5xx:
                 state["fails"] += 1
@@ -97,8 +114,11 @@ def binance_call(
                     state["until"] = time.time() + 30
             else:
                 state["fails"] = 0
-
             final = False
+
+            if code in (-1013, -1100, -1102, -1130):
+                final = True
+
             if code == -2015:
                 state["until"] = time.time() + random.randint(600, 900)
                 if time.time() >= state.get("silence", 0.0):
@@ -132,6 +152,78 @@ def binance_call(
             espera = base * (2 ** (attempt - 1)) + random.random() * jitter
             time.sleep(espera)
             attempt += 1
+
+async def _keepalive_listen_key(api_url: str, headers: dict[str, str], listen_key: str) -> None:
+    """Renews the listenKey periodically to keep the user stream alive."""
+    async with aiohttp.ClientSession() as session:
+        while True:
+            try:
+                await session.put(
+                    f"{api_url}/api/v3/userDataStream",
+                    headers=headers,
+                    params={"listenKey": listen_key},
+                )
+            except Exception as e:
+                log.error(f"Error renovando listenKey: {e}")
+            await asyncio.sleep(30 * 60)
+
+
+async def _user_stream_ws(exchange, listen_key: str) -> None:
+    """Listens to the user data stream and updates local order cache."""
+    url = f"wss://stream.binance.com:9443/ws/{listen_key}"
+    while True:
+        try:
+            async with websockets.connect(url) as ws:
+                async for msg in ws:
+                    try:
+                        data = json.loads(msg)
+                    except Exception:
+                        continue
+                    if data.get("e") != "executionReport":
+                        continue
+                    status = data.get("X")
+                    if status not in {"FILLED", "EXPIRED"}:
+                        continue
+                    raw = data.get("s", "")
+                    try:
+                        symbol = exchange.market_id_to_symbol(raw)
+                    except Exception:
+                        symbol = raw[:-4] + "/" + raw[-4:] if len(raw) > 4 else raw
+                    try:
+                        from core.orders import real_orders
+
+                        real_orders.eliminar_orden(symbol, forzar_log=True)
+                    except Exception as err:
+                        log.error(
+                            f"Error actualizando orden {symbol} desde user stream: {err}"
+                        )
+        except Exception as e:
+            log.error(f"Error en websocket de user stream: {e}")
+            await asyncio.sleep(5)
+
+
+async def _start_user_stream(exchange) -> None:
+    """Initializes the Binance user data stream and background tasks."""
+    global _USER_STREAM_TASK, _KEEPALIVE_TASK
+    if _USER_STREAM_TASK and not _USER_STREAM_TASK.done():
+        return
+    api_url = exchange.urls.get("api") or "https://api.binance.com"
+    headers = {"X-MBX-APIKEY": exchange.apiKey}
+    async with aiohttp.ClientSession() as session:
+        try:
+            resp = await session.post(f"{api_url}/api/v3/userDataStream", headers=headers)
+            data = await resp.json()
+        except Exception as e:
+            log.error(f"No se pudo iniciar user data stream: {e}")
+            return
+    listen_key = data.get("listenKey")
+    if not listen_key:
+        log.error("Respuesta sin listenKey al iniciar user data stream")
+        return
+    _USER_STREAM_TASK = asyncio.create_task(_user_stream_ws(exchange, listen_key))
+    _KEEPALIVE_TASK = asyncio.create_task(
+        _keepalive_listen_key(api_url, headers, listen_key)
+    )
 
 
 def auth_guard(default: Any = None):
@@ -238,6 +330,11 @@ def crear_cliente(config: Config | None = None):
         exchange.load_time_difference()
     except Exception:
         pass
+    if modo_real and not testnet and api_key:
+        try:
+            asyncio.get_event_loop().create_task(_start_user_stream(exchange))
+        except RuntimeError:
+            pass
     exchange._modo_real = modo_real
 
     def _wrap(name: str, signed: bool) -> None:
