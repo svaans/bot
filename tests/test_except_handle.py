@@ -11,13 +11,11 @@ def test_monitorear_estado_bot_logs_exception(monkeypatch):
     fake_log = MagicMock()
     monkeypatch.setattr(monitor_estado_bot, 'log', fake_log)
 
-    def fake_crear_cliente(*args, **kwargs):
+    def fake_balance():
         raise ValueError('boom')
 
-    monkeypatch.setattr(monitor_estado_bot, 'crear_cliente', fake_crear_cliente)
-
     with pytest.raises(ValueError):
-        monitor_estado_bot.monitorear_estado_bot()
+        monitor_estado_bot.monitorear_estado_bot(get_balance=fake_balance)
 
     fake_log.exception.assert_called_once()
 

@@ -2,7 +2,9 @@ import os
 import asyncio
 from datetime import datetime
 import sqlite3
-from binance_api.cliente import crear_cliente
+from typing import Callable
+
+from binance_api.cliente import BinanceClient
 from config import config as app_config
 from ccxt.base.errors import AuthenticationError, NetworkError
 from core.utils.utils import configurar_logger
@@ -78,28 +80,41 @@ def resumen_emocional() ->str:
         )
 
 
-def monitorear_estado_bot(ordenes_memoria: (dict | None)=None):
+def monitorear_estado_bot(
+    ordenes_memoria: dict | None = None,
+    get_balance: Callable[[], float] | None = None,
+):
     """Muestra el estado del bot y las órdenes activas.
+
+    ``get_balance`` permite inyectar una función para obtener el saldo en
+    pruebas. Si no se provee, se utilizará ``BinanceClient`` que devuelve un
+    balance simulado en modo no real (gracias a ``auth_guard``).
+
 
     Si no se encuentran órdenes en la base de datos y ``ordenes_memoria`` está
     provisto, se utilizarán esos datos en su lugar. Esto permite monitorizar las
     operaciones también en modo simulado.
     """
     try:
-        euros = 0.0
-        orden_abierta = None
-        if app_config.MODO_REAL:
-            cliente = crear_cliente(app_config.cfg)
-            balance = cliente.fetch_balance()
-            euros = balance['total'].get('EUR', 0)
-            orden_abierta = obtener_orden_abierta()
+        orden_abierta = obtener_orden_abierta()
         if not orden_abierta and ordenes_memoria:
             orden_abierta = ordenes_memoria
+
+        if get_balance is not None:
+            euros = get_balance()
+        else:
+            cliente = BinanceClient(app_config.cfg)
+            balance = asyncio.run(cliente.fetch_balance())
+            euros = balance.get('total', {}).get('EUR', 0.0)
+            
         log.info('======= 🤖 ESTADO ACTUAL DEL BOT =======')
         log.info(
             f"🕒 Hora actual: {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')} UTC"
             )
-        log.info(f'💶 Saldo disponible (EUR): {euros:.2f}')
+        if app_config.MODO_REAL:
+            log.info(f'💶 Saldo disponible (EUR): {euros:.2f}')
+        else:
+            log.info(f'💶 Saldo simulado (EUR): {euros:.2f}')
         if orden_abierta:
             for symbol, orden in orden_abierta.items():
                 precio = orden.get('precio_entrada') if isinstance(orden, dict
