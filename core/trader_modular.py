@@ -132,7 +132,12 @@ class Trader:
                 f'⚠️ Símbolo {sym} no listado o inactivo en Binance. Se desactivará.'
             )
         if not activos:
-            raise ValueError('No hay símbolos activos disponibles.')
+            msg = (
+                'No hay símbolos activos disponibles en la configuración. '
+                'Revisa el archivo de símbolos.'
+            )
+            log.error(f'❌ {msg}')
+            raise SystemExit(msg)
         config = replace(config, symbols=activos)
         self.config = config
         self.heartbeat_interval = getattr(config, 'heartbeat_interval', 60)
