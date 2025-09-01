@@ -44,11 +44,12 @@ class Supervisor:
         self.task_restart_times: Dict[str, Deque[datetime]] = defaultdict(deque)
         self.data_heartbeat: Dict[str, datetime] = {}
         self.TIMEOUT_SIN_DATOS = max(
-            intervalo_a_segundos(INTERVALO_VELAS) * 5, 300
+            intervalo_a_segundos(INTERVALO_VELAS) * TIMEOUT_SIN_DATOS_FACTOR, 300
         )
         self.ALERTA_SIN_DATOS_INTERVALO = 300
         self.last_data_alert: Dict[str, datetime] = {}
         self.reinicios_inactividad: Dict[str, int] = {}
+        self.inactive_symbols: set[str] = set()
         self.notificador = crear_notificador_desde_env()
         self.data_feed_reconnector: Callable[[str], Awaitable[None]] | None = None
         self.main_loop: asyncio.AbstractEventLoop | None = None
@@ -111,6 +112,9 @@ class Supervisor:
         if symbol in self.last_data_alert:
             log.info("✅ %s retomó latidos de datos", symbol)
             self.last_data_alert.pop(symbol, None)
+        if symbol in self.inactive_symbols:
+            log.info("✅ %s reactivado tras ausencia de datos", symbol)
+            self.inactive_symbols.discard(symbol)
         log.debug("tick_data registrado para %s a las %s", symbol, ahora.isoformat())
 
     def registrar_reinicio_inactividad(self, symbol: str) -> None:
@@ -193,6 +197,9 @@ class Supervisor:
                 sin_datos,
             )
             if sin_datos > self.TIMEOUT_SIN_DATOS:
+                if sym in self.inactive_symbols:
+                    log.debug("%s marcado como inactivo; omitiendo alerta", sym)
+                    continue
                 ahora = now
                 ultima = self.last_data_alert.get(sym)
                 if not ultima or (
@@ -238,6 +245,7 @@ class Supervisor:
                             log.debug(
                                 "No se pudo cancelar stream %s: %s", sym, e
                             )
+                    self.inactive_symbols.add(sym)
 
     async def watchdog(self, timeout: int = 120, check_interval: int = 10) -> None:
         """Valida que el proceso siga activo e imprime trazas si se congela."""
