@@ -18,7 +18,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Awaitable, Callable, Deque, Dict
 
 
-from config.config import INTERVALO_VELAS
+from config.config import INTERVALO_VELAS, TIMEOUT_SIN_DATOS_FACTOR
 from core.notificador import crear_notificador_desde_env
 from core.utils.logger import configurar_logger
 from core.utils.utils import intervalo_a_segundos
@@ -300,44 +300,50 @@ class Supervisor:
 
         restarts = 0
         current_delay = delay
-        while True:
-            # Latido antes de iniciar el trabajo para prevenir falsos inactivos
-            self.beat(task_name, "start")
-            try:
-                result = coro_factory()
-                if asyncio.iscoroutine(result):
-                    await result
-                # Latido tras finalizar correctamente
-                self.beat(task_name, "end")
-                break  # fin normal
-            except asyncio.CancelledError:
-                # Aseguramos latido y limpieza ante cancelación
-                self.beat(task_name, "cancel")
-                log.info("Tarea %s cancelada", task_name)
-                raise
-            except Exception as e:  # pragma: no cover - log crítico
-                self.beat(task_name, "error")
-                log.error(
-                    "⚠️ Error en %s: %r. Reiniciando en %ss",
-                    task_name,
-                    e,
-                    current_delay,
-                    exc_info=True,
-                )
-                if max_restarts is not None and restarts >= max_restarts:
+        task = asyncio.current_task()
+        try:
+            while True:
+                # Latido antes de iniciar el trabajo para prevenir falsos inactivos
+                self.beat(task_name, "start")
+                try:
+                    result = coro_factory()
+                    if asyncio.iscoroutine(result):
+                        await result
+                    # Latido tras finalizar correctamente
+                    self.beat(task_name, "end")
+                    break  # fin normal
+                except asyncio.CancelledError:
+                    # Aseguramos latido y limpieza ante cancelación
+                    self.beat(task_name, "cancel")
+                    log.info("Tarea %s cancelada", task_name)
+                    raise
+                except Exception as e:  # pragma: no cover - log crítico
+                    self.beat(task_name, "error")
                     log.error(
-                        "❌ %s alcanzó el límite de reinicios (%s)",
+                        "⚠️ Error en %s: %r. Reiniciando en %ss",
                         task_name,
-                        max_restarts,
+                        e,
+                        current_delay,
+                        exc_info=True,
                     )
-                    break
-                log.warning(
-                    "⏹️ %s finalizó; reiniciando en %ss", task_name, current_delay
-                )
-                await asyncio.sleep(current_delay)
-                restarts += 1
-                current_delay = min(current_delay * 2, 120)
-                continue
+                    if max_restarts is not None and restarts >= max_restarts:
+                        log.error(
+                            "❌ %s alcanzó el límite de reinicios (%s)",
+                            task_name,
+                            max_restarts,
+                        )
+                        break
+                    log.warning(
+                        "⏹️ %s finalizó; reiniciando en %ss", task_name, current_delay
+                    )
+                    await asyncio.sleep(current_delay)
+                    restarts += 1
+                    current_delay = min(current_delay * 2, 120)
+                    continue
+        finally:
+            # Limpia la referencia de la tarea si ya no es la vigente
+            if self.tasks.get(task_name) is task:
+                self.tasks.pop(task_name, None)
     async def restart_task(self, task_name: str) -> None:
         """Reinicia ``task_name`` aplicando backoff y registrando métricas."""
 
@@ -345,8 +351,20 @@ class Supervisor:
         if task:
             try:
                 task.cancel()
+                try:
+                    await asyncio.wait_for(task, timeout=5)
+                except asyncio.TimeoutError:
+                    log.warning("⏱️ Timeout cancelando %s", task_name)
+                except asyncio.CancelledError:
+                    pass
+                except Exception:
+                    log.exception("Error esperando cancelación de %s", task_name)
             except Exception:
                 pass
+            finally:
+                # Eliminamos referencia a la tarea cancelada
+                if self.tasks.get(task_name) is task:
+                    self.tasks.pop(task_name, None)
         registrar_watchdog_restart(task_name)
         now = self._now()
         times = self.task_restart_times[task_name]
