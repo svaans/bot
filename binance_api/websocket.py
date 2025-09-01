@@ -368,10 +368,10 @@ async def _gestionar_ws(
         except asyncio.CancelledError:
             log.info('🛑 Conexión WebSocket cancelada.')
             break
-        except Exception:
+        except Exception as e:
             fallos_consecutivos += 1
             total_reintentos += 1
-            log.exception('❌ Error en WebSocket')
+            log.error(f'❌ Error en WebSocket: {e}')
             log.info(
                 f'🔁 Reintentando conexión en {backoff} segundos... (total reintentos: {total_reintentos})'
             )
