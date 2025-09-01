@@ -54,7 +54,13 @@ class StartupManager:
     async def _validate_feeds(self) -> None:
         assert self.trader is not None and self.config is not None
         if self.config.modo_real and not self.trader.cliente:
-            raise RuntimeError('Cliente Binance no inicializado')
+            msg = (
+                "Cliente Binance no inicializado. "
+                "Verifica las claves API y las variables de entorno "
+                "BINANCE_API_KEY/BINANCE_SECRET."
+            )
+            self.log.error(msg)
+            raise RuntimeError(msg)
 
     async def _open_streams(self) -> None:
         assert self.trader is not None
