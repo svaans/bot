@@ -2,9 +2,10 @@
 from __future__ import annotations
 import asyncio
 import random
-from typing import Awaitable, Callable, Dict, Iterable, Any
+from typing import Awaitable, Callable, Dict, Iterable, Any, Deque
 from datetime import datetime, timezone, timedelta
 import time
+from collections import deque
 from binance_api.websocket import escuchar_velas
 from binance_api.cliente import fetch_ohlcv_async
 from core.utils.logger import configurar_logger
@@ -102,6 +103,7 @@ class DataFeed:
         self._consumer_tasks: Dict[str, asyncio.Task] = {}
         self.queue_put_timeout = queue_put_timeout
         registrar_reconexion_datafeed(self._reconectar_por_supervisor)
+        self._stream_restart_stats: Dict[str, Deque[float]] = {}
 
     @property
     def activos(self) ->list[str]:
@@ -469,6 +471,34 @@ class DataFeed:
                                 )
                             except Exception:
                                 log.exception(f'Error cancelando stream {sym}')
+                        stats = self._stream_restart_stats.setdefault(sym, deque())
+                        ts_now = time.time()
+                        stats.append(ts_now)
+                        while stats and ts_now - stats[0] > 300:
+                            stats.popleft()
+                        if len(stats) > self.max_stream_restarts and ts_now - stats[0] < 60:
+                            log.error(
+                                f"🚨 Circuit breaker: demasiados reinicios para stream {sym}"
+                            )
+                            try:
+                                await self.notificador.enviar_async(
+                                    f"🚨 Circuit breaker: demasiados reinicios para stream {sym}",
+                                    "CRITICAL",
+                                )
+                            except Exception:
+                                log.exception(
+                                    "Error enviando notificación de circuit breaker"
+                                )
+                                tick("data_feed")
+                            cons = self._consumer_tasks.get(sym)
+                            if cons and not cons.done():
+                                cons.cancel()
+                            self._consumer_tasks.pop(sym, None)
+                            self._queues.pop(sym, None)
+                            self._tasks.pop(sym, None)
+                            continue
+                        backoff = min(60, 2 ** (len(stats) - 1))
+                        await asyncio.sleep(backoff)
                         self._tasks[sym] = supervised_task(
                             lambda sym=sym: self.stream(sym, self._handler_actual),
                             f"stream_{sym}",
