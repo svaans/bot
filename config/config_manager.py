@@ -75,6 +75,7 @@ class Config:
     umbral_alerta_mem: float = 90.0
     ciclos_alerta_recursos: int = 5
     frecuencia_recursos: int = 60
+    timeout_sin_datos_factor: int = 5
 
 
 class ConfigManager:
@@ -151,4 +152,5 @@ class ConfigManager:
             umbral_alerta_mem=_cargar_float('UMBRAL_ALERTA_MEM', defaults.umbral_alerta_mem),
             ciclos_alerta_recursos=_cargar_int('CICLOS_ALERTA_RECURSOS', defaults.ciclos_alerta_recursos),
             frecuencia_recursos=_cargar_int('FRECUENCIA_RECURSOS', defaults.frecuencia_recursos),
+            timeout_sin_datos_factor=_cargar_int('TIMEOUT_SIN_DATOS_FACTOR', getattr(defaults, 'timeout_sin_datos_factor', 5)),
         )
