@@ -268,6 +268,10 @@ class DataFeed:
                     f"Handler de {symbol} superó {self.handler_timeout}s; omitiendo vela"
                     f" (total {self._handler_timeouts[symbol]})"
                 )
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                log.error(f"Error procesando vela en {symbol}: {e}")
             finally:
                 queue.task_done()
 
