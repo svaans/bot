@@ -21,7 +21,15 @@ async def main():
         startup = StartupManager()
         bot, tarea_bot, config = await startup.run()
     except Exception as e:
-        print(f'❌ {e}')
+        msg = str(e)
+        if 'Desincronización de reloj' in msg:
+            print('❌ Desincronización de reloj detectada. '
+                  'Sincroniza la hora del sistema (p.ej., usando NTP) y reinicia el bot.')
+        elif 'Storage no disponible' in msg:
+            print('❌ Almacenamiento no disponible. '
+                  'Verifica los permisos de escritura en el directorio de datos.')
+        else:
+            print(f'❌ {msg}')
         return
     observer = start_hot_reload(path=Path.cwd(), modules=None)
     if config.modo_real:
