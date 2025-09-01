@@ -291,18 +291,18 @@ class DataFeed:
                 )
                 beat(f'stream_{symbol}', 'backfill_end')
                 beat(f'stream_{symbol}', 'listen_start')
-                await asyncio.wait_for(
-                    escuchar_velas(
-                        symbol,
-                        self.intervalo,
-                        handler,
-                        self._last,
-                        self.tiempo_inactividad,
-                        self.ping_interval,
-                        cliente=self._cliente,
-                        mensaje_timeout=self.tiempo_inactividad,
-                    ),
-                    timeout=self.tiempo_inactividad + self.ping_interval + 5,
+                # El propio WebSocket gestiona los timeouts de inactividad via
+                # ``_watchdog``; evitar un ``wait_for`` externo mantiene una única
+                # fuente de verdad y simplifica el flujo de errores.
+                await escuchar_velas(
+                    symbol,
+                    self.intervalo,
+                    handler,
+                    self._last,
+                    self.tiempo_inactividad,
+                    self.ping_interval,
+                    cliente=self._cliente,
+                    mensaje_timeout=self.tiempo_inactividad,
                 )
                 beat(f'stream_{symbol}', 'listen_end')
                 log.warning(f'🔁 Conexión de {symbol} finalizada; reintentando en {backoff}s')
