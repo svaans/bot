@@ -5,13 +5,16 @@ import shutil
 import threading
 import re
 import json
+import logging
 import pandas as pd
 import psutil
 from datetime import datetime, timezone
+from typing import TYPE_CHECKING, Iterable, Callable
 from typing import TYPE_CHECKING
 from pandas.tseries.frequencies import to_offset
 from .logger import configurar_logger
 from core.modo import MODO_REAL
+from core.registro_metrico import registro_metrico
 if TYPE_CHECKING:
     from core.order_model import Order
 from decimal import Decimal, InvalidOperation, ROUND_HALF_EVEN
@@ -55,6 +58,52 @@ def timestamp_alineado(ts_ms: int, intervalo: str) -> bool:
     """
     periodo = intervalo_a_segundos(intervalo) * 1000
     return ts_ms % periodo == 0
+
+def validar_integridad_velas(
+    symbol: str,
+    tf: str,
+    candles: Iterable[dict],
+    log: logging.Logger,
+    registrar_candles_duplicadas: Callable[[str, int], None] | None = None,
+) -> bool:
+    """Verifica duplicados, huecos y desalineaciones en ``candles``.
+
+    Registra métricas y opcionalmente contabiliza duplicados mediante
+    ``registrar_candles_duplicadas``.
+    """
+    timestamps = sorted(int(float(c["timestamp"])) for c in candles if "timestamp" in c)
+    if len(timestamps) < 2:
+        return True
+    intervalo_ms = intervalo_a_segundos(tf) * 1000
+    dupes = gaps = desalineados = 0
+    prev = timestamps[0]
+    for curr in timestamps[1:]:
+        diff = curr - prev
+        if diff == 0:
+            dupes += 1
+        elif diff > intervalo_ms:
+            if diff % intervalo_ms == 0:
+                gaps += diff // intervalo_ms - 1
+            else:
+                desalineados += 1
+        elif diff % intervalo_ms != 0:
+            desalineados += 1
+        prev = curr
+    if dupes:
+        registro_metrico.registrar(
+            "velas_duplicadas", {"symbol": symbol, "tf": tf, "count": dupes}
+        )
+        if registrar_candles_duplicadas:
+            registrar_candles_duplicadas(symbol, dupes)
+        log.warning(f"[{symbol}] {dupes} velas duplicadas detectadas en {tf}")
+    if gaps:
+        registro_metrico.registrar(
+            "velas_gap", {"symbol": symbol, "tf": tf, "count": gaps}
+        )
+        log.warning(f"[{symbol}] Gap de {gaps} velas en {tf}")
+    if desalineados:
+        log.error(f"[{symbol}] Timestamps desalineados en {tf}: {desalineados}")
+    return dupes == 0 and gaps == 0 and desalineados == 0
 
 
 def safe_resample(df: pd.DataFrame, freq: str):
