@@ -6,7 +6,7 @@ from typing import Awaitable, Callable, Dict, Iterable, Any, Deque
 from datetime import datetime, timezone, timedelta
 import time
 from collections import deque
-from binance_api.websocket import escuchar_velas
+from binance_api.websocket import escuchar_velas, InactividadTimeoutError
 from binance_api.cliente import fetch_ohlcv_async
 from core.utils.logger import configurar_logger
 from core.utils import intervalo_a_segundos
@@ -321,6 +321,15 @@ class DataFeed:
             except asyncio.CancelledError:
                 beat(f'stream_{symbol}', 'cancel')
                 raise
+            except InactividadTimeoutError:
+                beat(f'stream_{symbol}', 'inactivity')
+                log.warning(
+                    f'🔕 Stream {symbol} reiniciado por inactividad; reintentando en {backoff}s'
+                )
+                fallos_consecutivos = 0
+                backoff = 1
+                await asyncio.sleep(backoff + random.random())
+                continue
             except Exception as e:
                 beat(f'stream_{symbol}', 'error')
                 fallos_consecutivos += 1
