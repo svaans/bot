@@ -318,7 +318,7 @@ class DataFeed:
                 try:
                     if fallos_consecutivos == 1 or fallos_consecutivos % 5 == 0:
                         await self.notificador.enviar_async(
-                            f'⚠️ Stream {symbol} en reconexión (intento {fallos_consecutivos})',
+                            f'🔄 Stream {symbol} en reconexión (intento {fallos_consecutivos})',
                             'WARN',
                         )
                 except Exception:
