@@ -1051,6 +1051,9 @@ class Trader:
             activos = 0
             ahora = datetime.now(UTC)
             for nombre, task in list(self._tareas.items()):
+                if nombre == 'data_feed' and getattr(self.data_feed, '_reiniciando', False):
+                    log.debug('⏳ DataFeed en reinicio; heartbeat no interviene')
+                    continue
                 if task.done():
                     if task.cancelled():
                         log.debug(
@@ -1090,6 +1093,9 @@ class Trader:
                     otra_activa = any(
                         t.get_name() == nombre for t in asyncio.all_tasks()
                     )
+                    if nombre == 'data_feed' and otra_activa:
+                        log.debug('🔁 DataFeed ya activo; no se reinicia desde heartbeat')
+                        continue
                     self._iniciar_tarea(nombre, self._factories[nombre])
                     log.debug(
                         f'🔄 Tarea {nombre} reiniciada tras finalizar (otra instancia activa: {otra_activa})'
@@ -1123,6 +1129,9 @@ class Trader:
                         otra_activa = any(
                             t.get_name() == nombre for t in asyncio.all_tasks()
                         )
+                        if nombre == 'data_feed' and otra_activa:
+                            log.debug('🔁 DataFeed ya activo tras reinicio; se omite reinicio por heartbeat')
+                            continue
                         self._iniciar_tarea(nombre, self._factories[nombre])
                         log.debug(
                             f'🔄 Tarea {nombre} reiniciada por inactividad (otra instancia activa: {otra_activa})'
