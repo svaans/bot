@@ -70,9 +70,15 @@ class StartupManager:
         assert self.trader is not None
         await self._wait_ws()
         if not await self._check_clock_drift():
-            raise RuntimeError('Desincronización de reloj >500ms')
+            raise RuntimeError(
+                'Desincronización de reloj >500ms. '
+                'Sincroniza la hora del sistema (por ejemplo, usando NTP).'
+            )
         if not await self._check_storage():
-            raise RuntimeError('Storage no disponible')
+            raise RuntimeError(
+                'Storage no disponible. '
+                'Verifica los permisos de escritura en el directorio de datos.'
+            )
         self.trader.habilitar_estrategias()
         self._snapshot()
 
