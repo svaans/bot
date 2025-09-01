@@ -23,3 +23,4 @@ UMBRAL_ALERTA_MEM = cfg.umbral_alerta_mem
 CICLOS_ALERTA_RECURSOS = cfg.ciclos_alerta_recursos
 UMBRAL_CONFIRMACION_MICRO = cfg.umbral_confirmacion_micro
 UMBRAL_CONFIRMACION_MACRO = cfg.umbral_confirmacion_macro
+TIMEOUT_SIN_DATOS_FACTOR = cfg.timeout_sin_datos_factor
