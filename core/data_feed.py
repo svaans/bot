@@ -305,16 +305,21 @@ class DataFeed:
                     mensaje_timeout=self.tiempo_inactividad,
                 )
                 beat(f'stream_{symbol}', 'listen_end')
-                log.warning(f'🔁 Conexión de {symbol} finalizada; reintentando en {backoff}s')
+                log.info(f'🔁 Conexión de {symbol} finalizada; reintentando en {backoff}s')
                 fallos_consecutivos = 0
                 backoff = 1
                 await asyncio.sleep(backoff + random.random())
             except asyncio.TimeoutError:
                 beat(f'stream_{symbol}', 'timeout')
-                log.warning(
-                    f'⌛ Timeout en stream {symbol}; reintentando en {backoff}s'
-                )
                 fallos_consecutivos += 1
+                if fallos_consecutivos > 2:
+                    log.warning(
+                        f'⌛ Timeout en stream {symbol}; reintentando en {backoff}s'
+                    )
+                else:
+                    log.info(
+                        f'⌛ Timeout en stream {symbol}; reintentando en {backoff}s'
+                    )
                 await asyncio.sleep(backoff + random.random())
                 backoff = min(backoff * 2, 60)
                 continue
