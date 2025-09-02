@@ -94,11 +94,19 @@ class StartupManager:
     async def _check_clock_drift(self) -> bool:
         try:
             async with aiohttp.ClientSession() as session:
-                async with session.get('https://api.binance.com/api/v3/time', timeout=5) as r:
+                async with session.get(
+                    "https://api.binance.com/api/v3/time", timeout=5
+                ) as r:
                     data = await r.json()
-            server = data.get('serverTime', 0) / 1000
+            server = data.get("serverTime", 0) / 1000
             drift = abs(server - time.time())
             return drift < 0.5
+        except (aiohttp.ClientError, asyncio.TimeoutError) as e:
+            self.log.warning(
+                "No se pudo obtener la hora de Binance: %s. Omitiendo verificación de reloj.",
+                e,
+            )
+            return True
         except Exception:
             return False
 
