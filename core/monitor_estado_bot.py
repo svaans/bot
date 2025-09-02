@@ -11,7 +11,7 @@ from core.utils.utils import configurar_logger
 from core.orders import real_orders
 from core.reporting import reporter_diario
 from core.risk.riesgo import cargar_estado_riesgo
-from core.supervisor import beat
+from core.supervisor import beat, tick
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 ORDENES_DB_PATH = os.getenv(
     'ORDENES_DB_PATH',
@@ -145,8 +145,12 @@ def monitorear_estado_bot(
         raise
 
 
-async def monitorear_estado_periodicamente(self, intervalo=300):
-    """Ejecuta ``monitorear_estado_bot`` de forma periódica sin bloquear el loop."""
+async def monitorear_estado_periodicamente(self, intervalo=300, heartbeat=30):
+    """Ejecuta ``monitorear_estado_bot`` de forma periódica sin bloquear el loop.
+
+    ``heartbeat`` controla cada cuántos segundos se emite ``tick('estado')``
+    durante la espera para evitar reinicios por inactividad.
+    """
     loop = asyncio.get_running_loop()
     while True:
         try:
@@ -161,7 +165,12 @@ async def monitorear_estado_periodicamente(self, intervalo=300):
             log.info('🧭 Monitoreo de estado completado.')
             log.debug(
                 f'📌 Órdenes abiertas: {list(self.ordenes_abiertas.keys())}')
-            await asyncio.sleep(intervalo)
+            restante = intervalo
+            while restante > 0:
+                sleep_time = min(heartbeat, restante)
+                await asyncio.sleep(sleep_time)
+                tick('estado')
+                restante -= sleep_time
         except asyncio.TimeoutError:
             log.warning('⌛ Monitoreo de estado excedió el tiempo')
             beat('estado', 'timeout')
