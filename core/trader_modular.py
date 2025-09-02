@@ -1722,6 +1722,11 @@ class Trader:
             60 * intervalo_a_segundos('5m') / base_segundos
         )
         await self._precargar_historico(velas=velas_precarga)
+        hay_futuros = False
+        for sym in symbols:
+            if await self.external_feeds.es_futuros(sym):
+                hay_futuros = True
+                break
         tareas: dict[str, Callable[[], Awaitable]] = {
             'data_feed': lambda: self.data_feed.escuchar(
                 symbols,
@@ -1732,12 +1737,13 @@ class Trader:
             'context_stream': lambda: self.context_stream.escuchar(
                 symbols, handle_context
             ),
-            'external_feeds': lambda: self.external_feeds.escuchar(symbols),
             'flush': lambda: real_orders.flush_periodico(),
             'rechazos_flush': lambda: self.rejection_handler.flush_periodically(
                 self._rechazos_intervalo_flush, self._stop_event
             ),
         }
+        if hay_futuros:
+            tareas['external_feeds'] = lambda: self.external_feeds.escuchar(symbols)
         if self.modo_real:
             tareas['sincronizar_ordenes'] = (
                 lambda: self._sincronizar_ordenes_periodicamente()
