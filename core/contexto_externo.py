@@ -47,11 +47,15 @@ class StreamContexto:
         monitor_interval: int = 30,
         inactivity_timeout: int = 300,
         cancel_timeout: float = 5,
+        open_timeout: int = 30,
+        connection_delay: float = 1.0,
     ) -> None:
         self.url_template = url_template or CONTEXT_WS_URL
         self.monitor_interval = max(1, monitor_interval)
         self.inactivity_timeout = inactivity_timeout
         self.cancel_timeout = cancel_timeout
+        self.open_timeout = open_timeout
+        self.connection_delay = connection_delay
         self._tasks: Dict[str, asyncio.Task] = {}
         self._last: Dict[str, datetime] = {}
         self._last_monotonic: Dict[str, float] = {}
@@ -72,7 +76,7 @@ class StreamContexto:
         try:
             async with websockets.connect(
                 url,
-                open_timeout=15,
+                open_timeout=self.open_timeout,
                 ping_interval=20,
                 ping_timeout=10,
                 close_timeout=5,
@@ -196,6 +200,7 @@ class StreamContexto:
                 lambda sym=sym: self._stream(sym, handler),
                 name=f"context_stream_{sym}",
             )
+            await asyncio.sleep(self.connection_delay)
         try:
             while self._running:
                 await asyncio.sleep(1)
