@@ -12,6 +12,7 @@ import pandas as pd
 from core.registro_metrico import registro_metrico
 from core.auditoria import registrar_auditoria
 from core.utils.utils import configurar_logger
+from core.supervisor import tick
 
 log = configurar_logger('rechazos')
 
@@ -94,6 +95,7 @@ class RejectionHandler:
         while not stop_event.is_set():
             await asyncio.sleep(intervalo)
             self.flush()
+            tick('rechazos_flush')
 
     def registrar_tecnico(
         self,
