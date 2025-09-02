@@ -1170,6 +1170,7 @@ class Trader:
                 log.debug('🔄 Sincronización de órdenes completada')
             except Exception as e:
                 log.warning(f'⚠️ Error al sincronizar órdenes: {e}')
+                tick('sincronizar_ordenes')
             await asyncio.sleep(intervalo)
 
     def _validar_puntaje(self, symbol: str, puntaje: float, umbral: float,
