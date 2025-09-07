@@ -20,7 +20,7 @@ from core.utils.utils import configurar_logger, intervalo_a_segundos
 # será necesario validar la secuencia de mensajes con el esquema
 # ``U <= lastUpdateId + 1 <= u`` y obtener un snapshot inicial vía
 # ``/api/v3/depth`` antes de procesar las actualizaciones.
-from core.supervisor import tick, tick_data
+from core.supervisor import tick, tick_data, registrar_ping
 from binance_api.cliente import fetch_ohlcv_async
 from core.registro_metrico import registro_metrico
 
@@ -661,6 +661,7 @@ async def _keepalive(ws, symbol, intervalo=30, log_interval=10):
                 await asyncio.wait_for(pong_waiter, timeout=10)
                 rtt = (time.perf_counter() - inicio) * 1000
                 log.debug(f'🏓 Pong recibido de {symbol} ({rtt:.1f} ms)')
+                registrar_ping(symbol, rtt)
                 if contador % log_interval == 0:
                     log.info(f'📡 RTT ping {symbol}: {rtt:.1f} ms')
             except Exception as e:

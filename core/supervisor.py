@@ -38,6 +38,7 @@ class Supervisor:
         self.task_factories: Dict[str, Callable[..., Awaitable]] = {}
         self.task_heartbeat: Dict[str, datetime] = {}
         self.task_intervals: Dict[str, Deque[float]] = defaultdict(lambda: deque(maxlen=100))
+        self.task_expected_interval: Dict[str, int] = {}
         self.task_cause: Dict[str, str] = {}
         self.task_cooldown: Dict[str, datetime] = {}
         self.task_backoff: Dict[str, int] = defaultdict(lambda: 5)
@@ -55,6 +56,12 @@ class Supervisor:
         self.main_loop: asyncio.AbstractEventLoop | None = None
         self._watchdog_interval_event = asyncio.Event()
         self._watchdog_interval = 10
+        self.PING_RTT_SAMPLES = 5
+        self.PING_RTT_THRESHOLD_MS = 500
+        self.ping_rtts: Dict[str, Deque[float]] = defaultdict(
+            lambda: deque(maxlen=self.PING_RTT_SAMPLES)
+        )
+        self.last_ping_alert: Dict[str, datetime] = {}
 
     # ------------------------------------------------------------------
     # Métodos de utilidad
@@ -136,6 +143,10 @@ class Supervisor:
 
         self.data_feed_reconnector = cb
 
+    def registrar_ping(self, symbol: str, rtt_ms: float) -> None:
+        """Almacena la latencia RTT de ``symbol`` para diagnóstico."""
+        self.ping_rtts[symbol].append(rtt_ms)
+
     # ------------------------------------------------------------------
     # Tareas de monitorización
     # ------------------------------------------------------------------
@@ -177,9 +188,13 @@ class Supervisor:
             if intervals:
                 idx = max(0, int(len(intervals) * 0.95) - 1)
                 p95 = sorted(intervals)[idx]
-                timeout_task = min(max(p95 * 3, 30), 300)
+                timeout_task = min(max(p95 * 3, 90), 300)
             else:
                 timeout_task = 120
+            expected = self.task_expected_interval.get(task_name)
+            if expected:
+                timeout_task = max(timeout_task, expected * 3)
+            timeout_task = max(timeout_task, 90)
             delta_task = (now - ts).total_seconds()
             if delta_task > timeout_task:
                 log.critical(
@@ -188,7 +203,13 @@ class Supervisor:
                     delta_task,
                     timeout_task,
                 )
-                await self.restart_task(task_name)
+                if task_name.startswith("stream_") and self.data_feed_reconnector:
+                    log.warning(
+                        "Inactividad detectada en %s; se delega en reconector",
+                        task_name,
+                    )
+                else:
+                    await self.restart_task(task_name)
         for sym, ts in self.data_heartbeat.items():
             sin_datos = (now - ts).total_seconds()
             log.debug(
@@ -246,6 +267,33 @@ class Supervisor:
                                 "No se pudo cancelar stream %s: %s", sym, e
                             )
                     self.inactive_symbols.add(sym)
+
+        for sym, rtts in list(self.ping_rtts.items()):
+            if len(rtts) >= self.PING_RTT_SAMPLES:
+                avg = sum(rtts) / len(rtts)
+                if avg > self.PING_RTT_THRESHOLD_MS:
+                    last_alert = self.last_ping_alert.get(sym)
+                    if not last_alert or (
+                        now - last_alert
+                    ).total_seconds() > self.ALERTA_SIN_DATOS_INTERVALO:
+                        log.warning(
+                            "⚠️ RTT ping alto para %s: %.1f ms", sym, avg
+                        )
+                        self.last_ping_alert[sym] = now
+                    if self.data_feed_reconnector:
+                        try:
+                            log.warning(
+                                "Solicitando reinicio de DataFeed para %s por RTT alto",
+                                sym,
+                            )
+                            await self.data_feed_reconnector(sym)
+                        except Exception as e:
+                            log.error(
+                                "No se pudo solicitar reinicio de DataFeed para %s: %s",
+                                sym,
+                                e,
+                            )
+                    rtts.clear()
 
     async def watchdog(self, timeout: int = 120, check_interval: int = 10) -> None:
         """Valida que el proceso siga activo e imprime trazas si se congela."""
@@ -399,12 +447,15 @@ class Supervisor:
         name: str | None = None,
         delay: int = 5,
         max_restarts: int | None = None,
+        expected_interval: int | None = None,
     ) -> asyncio.Task:
         """Crea una tarea supervisada que se reinicia automáticamente."""
 
         task_name = name or getattr(coro_factory, "__name__", "task")
         self.task_factories[task_name] = coro_factory
         self.task_backoff[task_name] = 5
+        if expected_interval is not None:
+            self.task_expected_interval[task_name] = expected_interval
         task = asyncio.create_task(
             self._restartable_runner(coro_factory, task_name, delay, max_restarts),
             name=task_name,
@@ -426,6 +477,7 @@ tick = _default_supervisor.tick
 tick_data = _default_supervisor.tick_data
 registrar_reinicio_inactividad = _default_supervisor.registrar_reinicio_inactividad
 registrar_reconexion_datafeed = _default_supervisor.registrar_reconexion_datafeed
+registrar_ping = _default_supervisor.registrar_ping
 set_watchdog_interval = _default_supervisor.set_watchdog_interval
 
 tasks = _default_supervisor.tasks
@@ -450,6 +502,7 @@ __all__ = [
     "tick_data",
     "registrar_reinicio_inactividad",
     "registrar_reconexion_datafeed",
+    "registrar_ping",
     "set_watchdog_interval",
     "tasks",
     "task_heartbeat",

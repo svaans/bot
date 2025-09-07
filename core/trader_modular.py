@@ -1039,11 +1039,17 @@ class Trader:
         )
         serie.append(float(valor))
 
-    def _iniciar_tarea(self, nombre: str, factory: Callable[[], Awaitable]
-        ) ->None:
+    def _iniciar_tarea(
+        self,
+        nombre: str,
+        factory: Callable[[], Awaitable],
+        expected_interval: int | None = None,
+    ) -> None:
         """Crea una tarea a partir de ``factory`` y la registra."""
         self._factories[nombre] = factory
-        self._tareas[nombre] = supervised_task(factory, nombre)
+        self._tareas[nombre] = supervised_task(
+            factory, nombre, expected_interval=expected_interval
+        )
         log.info(f'🚀 Tarea {nombre} iniciada')
 
     async def _vigilancia_tareas(self, intervalo: int = 60) -> None:
@@ -1773,7 +1779,11 @@ class Trader:
             tareas['aprendizaje'] = lambda : self._ciclo_aprendizaje()
         for nombre, factory in tareas.items():
             self._iniciar_tarea(nombre, factory)
-        self._iniciar_tarea('heartbeat', lambda : self._vigilancia_tareas(self.heartbeat_interval))
+        self._iniciar_tarea(
+            'heartbeat',
+            lambda: self._vigilancia_tareas(self.heartbeat_interval),
+            expected_interval=self.heartbeat_interval,
+        )
         await self._stop_event.wait()
 
     async def _procesar_vela(self, vela: dict) ->None:
