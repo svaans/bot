@@ -6,7 +6,11 @@ from typing import Awaitable, Callable, Dict, Iterable, Any, Deque
 from datetime import datetime, timezone, timedelta
 import time
 from collections import deque
-from binance_api.websocket import escuchar_velas, InactividadTimeoutError
+from binance_api.websocket import (
+    escuchar_velas,
+    escuchar_velas_combinado,
+    InactividadTimeoutError,
+)
 from binance_api.cliente import fetch_ohlcv_async
 from core.utils.logger import configurar_logger
 from core.utils import intervalo_a_segundos, validar_integridad_velas
@@ -74,6 +78,7 @@ class DataFeed:
         self.backpressure = backpressure
         registrar_reconexion_datafeed(self._reconectar_por_supervisor)
         self._stream_restart_stats: Dict[str, Deque[float]] = {}
+        self._combined = False
 
     @property
     def activos(self) ->list[str]:
@@ -98,6 +103,20 @@ class DataFeed:
             await self._handle_candle(symbol, candle)
 
         await self._relanzar_stream(symbol, wrapper)
+
+    async def stream_combined(
+        self, symbols: list[str], handler: Callable[[dict], Awaitable[None]]
+    ) -> None:
+        """Escucha velas de varios símbolos usando un único WebSocket."""
+
+        def make_wrapper(sym: str) -> Callable[[dict], Awaitable[None]]:
+            async def _wrapper(candle: dict) -> None:
+                await self._handle_candle(sym, candle)
+
+            return _wrapper
+
+        handlers = {sym: make_wrapper(sym) for sym in symbols}
+        await self._relanzar_streams_combinado(symbols, handlers)
 
     def _should_enqueue_candle(self, symbol: str, candle: dict, force: bool = False) -> bool:
         """Valida que la vela esté cerrada y no se haya procesado ya."""
@@ -376,6 +395,131 @@ class DataFeed:
                 await asyncio.sleep(backoff + random.random())
                 backoff = min(backoff * 2, 60)
 
+    
+    async def _relanzar_streams_combinado(
+        self, symbols: list[str], handlers: Dict[str, Callable[[dict], Awaitable[None]]]
+    ) -> None:
+        """Mantiene un loop de conexión combinado para varios símbolos."""
+        fallos_consecutivos = 0
+        backoff = 1
+        while True:
+            try:
+                for sym in symbols:
+                    beat(f'stream_{sym}', 'backfill_start')
+                await asyncio.gather(
+                    *[
+                        asyncio.wait_for(
+                            self._backfill_candles(sym),
+                            timeout=self.tiempo_inactividad,
+                        )
+                        for sym in symbols
+                    ]
+                )
+                for sym in symbols:
+                    beat(f'stream_{sym}', 'backfill_end')
+                    beat(f'stream_{sym}', 'listen_start')
+                await escuchar_velas_combinado(
+                    symbols,
+                    self.intervalo,
+                    handlers,
+                    self._last,
+                    self.tiempo_inactividad,
+                    self.ping_interval,
+                    cliente=self._cliente,
+                    mensaje_timeout=self.tiempo_inactividad,
+                    backpressure=self.backpressure,
+                )
+                for sym in symbols:
+                    beat(f'stream_{sym}', 'listen_end')
+                log.info(
+                    f'🔁 Conexión combinada finalizada; reintentando en {backoff}s'
+                )
+                fallos_consecutivos = 0
+                backoff = 1
+                await asyncio.sleep(backoff + random.random())
+            except asyncio.TimeoutError:
+                for sym in symbols:
+                    beat(f'stream_{sym}', 'timeout')
+                fallos_consecutivos += 1
+                if fallos_consecutivos > 2:
+                    log.warning(
+                        f'⌛ Timeout en stream combinado; reintentando en {backoff}s'
+                    )
+                else:
+                    log.info(
+                        f'⌛ Timeout en stream combinado; reintentando en {backoff}s'
+                    )
+                await asyncio.sleep(backoff + random.random())
+                backoff = min(backoff * 2, 60)
+                continue
+            except asyncio.CancelledError:
+                for sym in symbols:
+                    beat(f'stream_{sym}', 'cancel')
+                raise
+            except InactividadTimeoutError:
+                for sym in symbols:
+                    beat(f'stream_{sym}', 'inactivity')
+                log.warning(
+                    f'🔕 Stream combinado reiniciado por inactividad; reintentando en {backoff}s'
+                )
+                fallos_consecutivos = 0
+                backoff = 1
+                await asyncio.sleep(backoff + random.random())
+                continue
+            except Exception as e:
+                for sym in symbols:
+                    beat(f'stream_{sym}', 'error')
+                fallos_consecutivos += 1
+                try:
+                    if fallos_consecutivos == 1 or fallos_consecutivos % 5 == 0:
+                        await self.notificador.enviar_async(
+                            f'🔄 Stream combinado en reconexión (intento {fallos_consecutivos})',
+                            'WARN',
+                        )
+                except Exception:
+                    log.exception('Error enviando notificación de reconexión')
+                    tick('data_feed')
+                tick('data_feed')
+                if isinstance(e, AuthenticationError) and (
+                    getattr(e, 'code', None) == -2015 or '-2015' in str(e)
+                ):
+                    for sym in symbols:
+                        beat(f'stream_{sym}', 'auth')
+                    task_cooldown['stream_combinado'] = datetime.now(UTC) + timedelta(
+                        minutes=10
+                    )
+                    log.error(
+                        '❌ Auth fallida para stream combinado; esperando 600s'
+                    )
+                    await asyncio.sleep(600)
+                    backoff = 1
+                    continue
+                if isinstance(e, (AuthenticationError, NetworkError)):
+                    log.warning(
+                        f'⚠️ Stream combinado falló: {e}. Reintentando en {backoff}s'
+                    )
+                else:
+                    log.exception(
+                        f'⚠️ Stream combinado falló de forma inesperada. Reintentando en {backoff}s'
+                    )
+                if fallos_consecutivos >= self.max_stream_restarts:
+                    log.error(
+                        f'❌ Stream combinado superó el límite de {self.max_stream_restarts} intentos'
+                    )
+                    try:
+                        await self.notificador.enviar_async(
+                            f'❌ Stream combinado superó el límite de {self.max_stream_restarts} intentos',
+                            'CRITICAL',
+                        )
+                    except Exception:
+                        log.exception(
+                            'Error enviando notificación de límite de reconexiones'
+                        )
+                        tick('data_feed')
+                    raise
+                await asyncio.sleep(backoff + random.random())
+                backoff = min(backoff * 2, 60)
+
 
     async def iniciar(self) -> None:
         """Inicia el DataFeed usando la configuración almacenada."""
@@ -415,6 +559,28 @@ class DataFeed:
 
     async def _reiniciar_stream(self, symbol: str) -> None:
         """Reinicia el stream de ``symbol`` tras problemas en la cola."""
+        if self._combined:
+            task = next(iter(self._tasks.values()), None)
+            if not task or not self._running:
+                return
+            if not task.done():
+                task.cancel()
+                try:
+                    await asyncio.wait_for(task, timeout=self.cancel_timeout)
+                except asyncio.TimeoutError:
+                    log.warning("⏱️ Timeout cancelando stream combinado")
+                except Exception:
+                    log.exception('Error cancelando stream combinado')
+            nuevo = supervised_task(
+                lambda: self.stream_combined(self._symbols, self._handler_actual),
+                "stream_combinado",
+                max_restarts=0,
+            )
+            for sym in self._symbols:
+                self._tasks[sym] = nuevo
+                tick_data(sym, reinicio=True)
+            log.info("📡 stream combinado reiniciado por timeout de cola")
+            return
         task = self._tasks.get(symbol)
         if not task or not self._running:
             return
@@ -446,6 +612,39 @@ class DataFeed:
                 if not self._tasks:
                     continue
                 ahora = time.monotonic()
+                if self._combined:
+                    task = next(iter(self._tasks.values()), None)
+                    inactivo = any(
+                        (self._last_monotonic.get(sym) is not None)
+                        and (ahora - self._last_monotonic.get(sym)) > self.tiempo_inactividad
+                        for sym in self._symbols
+                    )
+                    if task and (task.done() or inactivo):
+                        log.warning(
+                            "🔄 Stream combinado inactivo o finalizado; relanzando"
+                        )
+                        if not task.done():
+                            task.cancel()
+                            try:
+                                await asyncio.wait_for(task, timeout=self.cancel_timeout)
+                            except asyncio.TimeoutError:
+                                log.warning("⏱️ Timeout cancelando stream combinado")
+                            except Exception:
+                                log.exception("Error cancelando stream combinado")
+                        nuevo = supervised_task(
+                            lambda: self.stream_combined(self._symbols, self._handler_actual),
+                            "stream_combinado",
+                            max_restarts=0,
+                        )
+                        for sym in self._symbols:
+                            self._tasks[sym] = nuevo
+                            tick_data(sym, reinicio=True)
+                            if inactivo:
+                                registrar_reinicio_inactividad(sym)
+                                self._reinicios_inactividad[sym] = (
+                                    self._reinicios_inactividad.get(sym, 0) + 1
+                                )
+                        continue
 
                 for sym, task in list(self._tasks.items()):
                     ultimo = self._last_monotonic.get(sym)
@@ -541,6 +740,7 @@ class DataFeed:
         await self.detener()
         self._handler_actual = handler
         self._symbols = symbols_list
+        self._combined = len(self._symbols) > 1
         if cliente is not None:
             self._cliente = cliente
         self._running = True
@@ -558,15 +758,24 @@ class DataFeed:
             self._monitor_global_task = asyncio.create_task(
                 self._monitor_global_inactividad()
             )
-        for sym in self._symbols:
-            if sym in self._tasks:
-                log.warning(f'⚠️ Stream duplicado para {sym}. Ignorando.')
-                continue
-            self._tasks[sym] = supervised_task(
-                lambda sym=sym: self.stream(sym, handler),
-                f'stream_{sym}',
+        if self._combined:
+            tarea = supervised_task(
+                lambda: self.stream_combined(self._symbols, handler),
+                "stream_combinado",
                 max_restarts=0,
             )
+            for sym in self._symbols:
+                self._tasks[sym] = tarea
+        else:
+            for sym in self._symbols:
+                if sym in self._tasks:
+                    log.warning(f'⚠️ Stream duplicado para {sym}. Ignorando.')
+                    continue
+                self._tasks[sym] = supervised_task(
+                    lambda sym=sym: self.stream(sym, handler),
+                    f'stream_{sym}',
+                    max_restarts=0,
+                )
         if self._tasks:
             while self._running and any(
                 not t.done() for t in self._tasks.values()
@@ -589,11 +798,11 @@ class DataFeed:
         self._running = False
     async def detener(self) -> None:
         """Cancela todos los streams en ejecución."""
-        tasks: list[asyncio.Task] = []
+        tasks: set[asyncio.Task] = set()
         if self._monitor_global_task:
-            tasks.append(self._monitor_global_task)
-        tasks.extend(self._tasks.values())
-        tasks.extend(self._consumer_tasks.values())
+            tasks.add(self._monitor_global_task)
+        tasks.update(self._tasks.values())
+        tasks.update(self._consumer_tasks.values())
 
         for task in tasks:
             task.cancel()
@@ -635,3 +844,4 @@ class DataFeed:
         self._reinicios_inactividad.clear()
         self._symbols = []
         self._running = False
+        self._combined = False
