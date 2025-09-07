@@ -23,6 +23,7 @@ from core.utils.utils import configurar_logger, intervalo_a_segundos
 from core.supervisor import tick, tick_data, registrar_ping
 from binance_api.cliente import fetch_ohlcv_async
 from core.registro_metrico import registro_metrico
+from core.utils.backoff import calcular_backoff
 
 
 class InactividadTimeoutError(Exception):
@@ -202,8 +203,12 @@ async def _gestionar_ws(
     fallos_consecutivos = 0
     total_reintentos = 0
     backoff = 5
+    primera_vez = True
     while True:
         try:
+            if primera_vez:
+                await asyncio.sleep(random.random())
+                primera_vez = False
             ws = await asyncio.wait_for(
                 websockets.connect(
                     url,
@@ -435,7 +440,7 @@ async def _gestionar_ws(
             tick('data_feed')
             await asyncio.sleep(backoff + random.random())
             previo = backoff
-            backoff = min(MAX_BACKOFF, backoff * 2)
+            backoff = calcular_backoff(backoff, fallos_consecutivos, MAX_BACKOFF)
             if backoff == MAX_BACKOFF and previo < MAX_BACKOFF:
                 log.warning(f'⚠️ Backoff máximo alcanzado: {MAX_BACKOFF}s')
             elif fallos_consecutivos >= 5:

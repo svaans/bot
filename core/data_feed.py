@@ -14,6 +14,7 @@ from binance_api.websocket import (
 from binance_api.cliente import fetch_ohlcv_async
 from core.utils.logger import configurar_logger
 from core.utils import intervalo_a_segundos, validar_integridad_velas, timestamp_alineado
+from core.utils.backoff import calcular_backoff
 from core.registro_metrico import registro_metrico
 from core.supervisor import (
     tick,
@@ -300,8 +301,12 @@ class DataFeed:
         """Mantiene un loop de conexión para ``symbol`` con backoff exponencial."""
         fallos_consecutivos = 0
         backoff = 1
+        primera_vez = True
         while True:
             try:
+                if primera_vez:
+                    await asyncio.sleep(random.random())
+                    primera_vez = False
                 beat(f'stream_{symbol}', 'backfill_start')
                 await asyncio.wait_for(
                     self._backfill_candles(symbol), timeout=self.tiempo_inactividad
@@ -342,7 +347,7 @@ class DataFeed:
                         f'⌛ Timeout en stream {symbol}; reintentando en {backoff}s'
                     )
                 await asyncio.sleep(backoff + random.random())
-                backoff = min(backoff * 2, 60)
+                backoff = calcular_backoff(backoff, fallos_consecutivos)
                 continue
             except asyncio.CancelledError:
                 beat(f'stream_{symbol}', 'cancel')
@@ -406,7 +411,7 @@ class DataFeed:
                         tick('data_feed')
                     raise
                 await asyncio.sleep(backoff + random.random())
-                backoff = min(backoff * 2, 60)
+                backoff = calcular_backoff(backoff, fallos_consecutivos)
 
     
     async def _relanzar_streams_combinado(
@@ -415,8 +420,12 @@ class DataFeed:
         """Mantiene un loop de conexión combinado para varios símbolos."""
         fallos_consecutivos = 0
         backoff = 1
+        primera_vez = True
         while True:
             try:
+                if primera_vez:
+                    await asyncio.sleep(random.random())
+                    primera_vez = False
                 for sym in symbols:
                     beat(f'stream_{sym}', 'backfill_start')
                 await asyncio.gather(
@@ -474,7 +483,7 @@ class DataFeed:
                         f'⌛ Timeout en stream combinado; reintentando en {backoff}s'
                     )
                 await asyncio.sleep(backoff + random.random())
-                backoff = min(backoff * 2, 60)
+                backoff = calcular_backoff(backoff, fallos_consecutivos)
                 continue
             except asyncio.CancelledError:
                 for sym in symbols:
@@ -542,7 +551,7 @@ class DataFeed:
                         tick('data_feed')
                     raise
                 await asyncio.sleep(backoff + random.random())
-                backoff = min(backoff * 2, 60)
+                backoff = calcular_backoff(backoff, fallos_consecutivos)
 
 
     async def iniciar(self) -> None:
