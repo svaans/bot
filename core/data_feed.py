@@ -311,6 +311,9 @@ class DataFeed:
                     cliente=self._cliente,
                     mensaje_timeout=self.tiempo_inactividad,
                     backpressure=self.backpressure,
+                    ultimo_timestamp=self._last_close_ts.get(symbol),
+                    ultimo_cierre=(self._ultimo_candle.get(symbol, {}).get('close')
+                                   if self._ultimo_candle.get(symbol) else None),
                 )
                 beat(f'stream_{symbol}', 'listen_end')
                 log.info(f'🔁 Conexión de {symbol} finalizada; reintentando en {backoff}s')
@@ -428,6 +431,17 @@ class DataFeed:
                     cliente=self._cliente,
                     mensaje_timeout=self.tiempo_inactividad,
                     backpressure=self.backpressure,
+                    ultimos={
+                        s: {
+                            'ultimo_timestamp': self._last_close_ts.get(s),
+                            'ultimo_cierre': (
+                                self._ultimo_candle.get(s, {}).get('close')
+                                if self._ultimo_candle.get(s)
+                                else None
+                            ),
+                        }
+                        for s in symbols
+                    },
                 )
                 for sym in symbols:
                     beat(f'stream_{sym}', 'listen_end')
@@ -532,7 +546,7 @@ class DataFeed:
 
     
     async def _reconectar_por_supervisor(self, symbol: str) -> None:
-        """Reinicia completamente el DataFeed ante falta global de datos."""
+        """Reinicia únicamente el stream afectado manteniendo el estado."""
         if not self._running or self._reiniciando:
             return
         self._reiniciando = True
@@ -541,18 +555,7 @@ class DataFeed:
         )
         self.reinicios_forzados_total += 1
         try:
-            symbols_previos = list(self._symbols)
-            handler_prev = self._handler_actual
-            cliente_prev = self._cliente
-            await self.detener()
-            if symbols_previos and handler_prev:
-                self._symbols = symbols_previos
-                self._handler_actual = handler_prev
-                self._cliente = cliente_prev
-                supervised_task(self.iniciar, "data_feed", max_restarts=0)
-                log.info(
-                    "✅ DataFeed reconectado con símbolos: %s", symbols_previos
-                )
+            await self._reiniciar_stream(symbol)
         finally:
             self._reiniciando = False
 
@@ -729,6 +732,7 @@ class DataFeed:
         symbols: Iterable[str],
         handler: Callable[[dict], Awaitable[None]],
         cliente: Any | None = None,
+        ultimos: dict[str, dict] | None = None,
     ) -> None:
         """Inicia un stream independiente por símbolo y espera a que finalicen.
 
@@ -743,6 +747,14 @@ class DataFeed:
         self._combined = len(self._symbols) > 1
         if cliente is not None:
             self._cliente = cliente
+        if ultimos:
+            for sym, data in ultimos.items():
+                ts = data.get('timestamp')
+                candle = data.get('candle')
+                if ts is not None:
+                    self._last_close_ts[sym] = ts
+                if candle:
+                    self._ultimo_candle[sym] = candle
         self._running = True
         self._queues = {sym: asyncio.Queue(maxsize=100) for sym in self._symbols}
         for sym in self._symbols:

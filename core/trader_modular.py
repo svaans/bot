@@ -1742,6 +1742,17 @@ class Trader:
                 symbols,
                 handle,
                 cliente=self.cliente if self.modo_real else None,
+                ultimos={
+                    s: {
+                        'timestamp': self.estado[s].ultimo_timestamp,
+                        'candle': (
+                            dict(self.estado[s].buffer[-1])
+                            if self.estado[s].buffer
+                            else None
+                        ),
+                    }
+                    for s in symbols
+                },
             ),
             'estado': lambda: monitorear_estado_periodicamente(self),
             'context_stream': lambda: self.context_stream.escuchar(

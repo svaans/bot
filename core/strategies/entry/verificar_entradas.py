@@ -14,7 +14,12 @@ from core.strategies.evaluador_tecnico import (
     cargar_pesos_tecnicos,
 )
 from indicators.helpers import get_rsi, get_momentum, get_atr
-from core.utils.utils import distancia_minima_valida, verificar_integridad_datos
+from binance_api.cliente import fetch_ohlcv_async
+from core.utils.utils import (
+    distancia_minima_valida,
+    verificar_integridad_datos,
+    intervalo_a_segundos,
+)
 from core.utils.cooldown import calcular_cooldown
 from core.contexto_externo import obtener_puntaje_contexto
 from core.metricas_semanales import metricas_tracker
@@ -176,9 +181,62 @@ async def verificar_entrada(trader, symbol: str, df: pd.DataFrame, estado) -> (
             log.info(f'[{symbol}] Datos incompletos reparados: {stats}')
             df = reparado
         else:
-            log.warning(f'[{symbol}] Datos corruptos irreparables: {stats}')
-            metricas_tracker.registrar_filtro('datos_invalidos')
-            return None
+            if stats.get('gaps_criticos'):
+                cliente = getattr(trader.data_feed, '_cliente', None) or getattr(trader, 'cliente', None)
+                if cliente:
+                    intervalo = trader.config.intervalo_velas
+                    intervalo_ms = intervalo_a_segundos(intervalo) * 1000
+                    diffs = df['timestamp'].diff()
+                    gaps = diffs[diffs > intervalo_ms]
+                    for idx in gaps.index:
+                        inicio_gap = int(df.loc[idx - 1, 'timestamp']) + intervalo_ms
+                        fin_gap = int(df.loc[idx, 'timestamp']) - intervalo_ms
+                        faltantes = int((fin_gap - inicio_gap) // intervalo_ms) + 1
+                        try:
+                            nuevas = await fetch_ohlcv_async(
+                                cliente,
+                                symbol,
+                                intervalo,
+                                since=inicio_gap,
+                                limit=faltantes,
+                            )
+                        except Exception as e:
+                            log.warning(f'[{symbol}] Error backfill crítico: {e}')
+                            metricas_tracker.registrar_filtro('datos_invalidos')
+                            return None
+                        df_nuevas = pd.DataFrame(
+                            [
+                                {
+                                    'timestamp': o[0],
+                                    'open': float(o[1]),
+                                    'high': float(o[2]),
+                                    'low': float(o[3]),
+                                    'close': float(o[4]),
+                                    'volume': float(o[5]),
+                                }
+                                for o in nuevas
+                            ]
+                        )
+                        df = (
+                            pd.concat([df, df_nuevas])
+                            .drop_duplicates(subset=['timestamp'])
+                            .sort_values('timestamp')
+                            .reset_index(drop=True)
+                        )
+                    if verificar_integridad_datos(df):
+                        log.info(f'[{symbol}] Hueco crítico reparado vía REST')
+                    else:
+                        log.warning(f'[{symbol}] Datos corruptos irreparables tras backfill: {stats}')
+                        metricas_tracker.registrar_filtro('datos_invalidos')
+                        return None
+                else:
+                    log.warning(f'[{symbol}] Sin cliente para backfill crítico')
+                    metricas_tracker.registrar_filtro('datos_invalidos')
+                    return None
+            else:
+                log.warning(f'[{symbol}] Datos corruptos irreparables: {stats}')
+                metricas_tracker.registrar_filtro('datos_invalidos')
+                return None
 
     config = adaptar_configuracion(symbol, df, trader.config_por_simbolo.get(symbol, {}))
     trader.config_por_simbolo[symbol] = config

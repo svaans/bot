@@ -453,6 +453,8 @@ async def escuchar_velas(
     cliente=None,
     mensaje_timeout: int | None = None,
     backpressure: bool = False,
+    ultimo_timestamp: int | None = None,
+    ultimo_cierre: float | None = None,
 ):
     """Escucha velas cerradas de ``symbol`` delegando la gestión al helper."""
     if not isinstance(symbol, str) or '/' not in symbol:
@@ -495,8 +497,8 @@ async def escuchar_velas(
         symbol: {
             'callback': callback,
             'parser': parser,
-            'ultimo_timestamp': None,
-            'ultimo_cierre': None,
+            'ultimo_timestamp': ultimo_timestamp,
+            'ultimo_cierre': ultimo_cierre,
             'intervalo': intervalo,
             'intervalo_ms': intervalo_ms,
         }
@@ -524,6 +526,7 @@ async def escuchar_velas_combinado(
     cliente=None,
     mensaje_timeout: int | None = None,
     backpressure: bool = False,
+    ultimos: dict[str, dict] | None = None,
 ):
     """Escucha velas de múltiples símbolos usando un stream combinado."""
     if not symbols:
@@ -575,8 +578,8 @@ async def escuchar_velas_combinado(
         ws_handlers[s] = {
             'callback': handlers[s],
             'parser': make_parser(s),
-            'ultimo_timestamp': None,
-            'ultimo_cierre': None,
+            'ultimo_timestamp': (ultimos.get(s, {}).get('ultimo_timestamp') if ultimos else None),
+            'ultimo_cierre': (ultimos.get(s, {}).get('ultimo_cierre') if ultimos else None),
             'intervalo': intervalo,
             'intervalo_ms': intervalo_ms,
         }
