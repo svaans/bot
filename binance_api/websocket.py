@@ -55,7 +55,7 @@ MAX_BACKOFF = 60
 MAX_BACKFILL_CANDLES = 100  # límite para backfill para evitar saturación
 BACKFILL_CONCURRENCY = 3
 _backfill_semaphore = asyncio.Semaphore(BACKFILL_CONCURRENCY)
-MESSAGE_QUEUE_SIZE = 1000
+MESSAGE_QUEUE_SIZE = 2000
 CALLBACK_TIMEOUT = 8
 
 PING_INTERVAL = int(os.getenv("WS_PING_INTERVAL", "20"))

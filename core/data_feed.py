@@ -818,7 +818,7 @@ class DataFeed:
                 if candle:
                     self._ultimo_candle[sym] = candle
         self._running = True
-        tam_q = int(os.getenv("DF_QUEUE_MAX", "1000"))
+        tam_q = int(os.getenv("DF_QUEUE_MAX", "2000"))
         self._queues = {sym: asyncio.Queue(maxsize=tam_q) for sym in self._symbols}
         for sym in self._symbols:
             self._consumer_tasks[sym] = supervised_task(
