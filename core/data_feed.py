@@ -13,7 +13,7 @@ from binance_api.websocket import (
 )
 from binance_api.cliente import fetch_ohlcv_async
 from core.utils.logger import configurar_logger
-from core.utils import intervalo_a_segundos, validar_integridad_velas
+from core.utils import intervalo_a_segundos, validar_integridad_velas, timestamp_alineado
 from core.registro_metrico import registro_metrico
 from core.supervisor import (
     tick,
@@ -44,6 +44,7 @@ class DataFeed:
         handler_timeout: float = 5,
         cancel_timeout: float = 5,
         backpressure: bool = False,
+        reset_cb: Callable[[str], None] | None = None,
     ) -> None:
         self.intervalo = intervalo
         self.intervalo_segundos = intervalo_a_segundos(intervalo)
@@ -79,6 +80,7 @@ class DataFeed:
         registrar_reconexion_datafeed(self._reconectar_por_supervisor)
         self._stream_restart_stats: Dict[str, Deque[float]] = {}
         self._combined = False
+        self._reset_cb = reset_cb
 
     @property
     def activos(self) ->list[str]:
@@ -94,6 +96,10 @@ class DataFeed:
     def queue_discards(self) -> Dict[str, int]:
         """Cantidad de velas descartadas por cola llena por símbolo."""
         return dict(self._queue_discards)
+    
+    def set_reset_callback(self, cb: Callable[[str], None]) -> None:
+        """Registra un callback para reiniciar el filtro de velas por símbolo."""
+        self._reset_cb = cb
     
 
     async def stream(self, symbol: str, handler: Callable[[dict], Awaitable[None]]) -> None:
@@ -127,6 +133,10 @@ class DataFeed:
         if ts is None:
             log.debug(f'[{symbol}] Vela sin timestamp: {candle}')
             return False
+        if not timestamp_alineado(ts, self.intervalo):
+            log.error(
+                f'❌ Timestamp desalineado en vela de {symbol}: {ts}'
+            )
         if not force and self._last_close_ts.get(symbol) == ts:
             log.debug(f'[{symbol}] Vela duplicada ignorada: {ts}')
             return False
@@ -582,6 +592,8 @@ class DataFeed:
             for sym in self._symbols:
                 self._tasks[sym] = nuevo
                 tick_data(sym, reinicio=True)
+                if self._reset_cb:
+                    self._reset_cb(sym)
             log.info("📡 stream combinado reiniciado por timeout de cola")
             return
         task = self._tasks.get(symbol)
@@ -602,6 +614,8 @@ class DataFeed:
         )
         log.info(f"📡 stream reiniciado para {symbol} por timeout de cola")
         tick_data(symbol, reinicio=True)
+        if self._reset_cb:
+            self._reset_cb(symbol)
                 
 
     async def _monitor_global_inactividad(self) -> None:
@@ -642,6 +656,8 @@ class DataFeed:
                         for sym in self._symbols:
                             self._tasks[sym] = nuevo
                             tick_data(sym, reinicio=True)
+                            if self._reset_cb:
+                                self._reset_cb(sym)
                             if inactivo:
                                 registrar_reinicio_inactividad(sym)
                                 self._reinicios_inactividad[sym] = (
@@ -714,6 +730,8 @@ class DataFeed:
                             f"Tareas después de reinicio: {list(self._tasks.keys())}"
                         )
                         tick_data(sym, reinicio=True)
+                        if self._reset_cb:
+                            self._reset_cb(sym)
                         if inactivo:
                             registrar_reinicio_inactividad(sym)
                             self._reinicios_inactividad[sym] = (

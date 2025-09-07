@@ -248,6 +248,7 @@ class Trader:
             s: {'diversidad_minima': getattr(config, 'diversidad_minima', 2)}
             for s in config.symbols
         }
+        self.data_feed.set_reset_callback(self._reset_candle_filter)
         try:
             self.pesos_por_simbolo: Dict[str, Dict[str, float]
                 ] = cargar_pesos_estrategias()
@@ -301,6 +302,12 @@ class Trader:
         else:
             log.debug('🔍 Modo prueba: se omite carga de estado persistente')
 
+    def _reset_candle_filter(self, symbol: str) -> None:
+        """Resetea el filtro de velas para ``symbol`` tras un reinicio."""
+        estado = self.estado.get(symbol)
+        if estado:
+            estado.candle_filter.reset()
+            
     def _load_json_file(self, path: str) ->dict[str, Any]:
         """Return file content as dict or empty dict on error."""
         if not os.path.exists(path):
