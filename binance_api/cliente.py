@@ -164,77 +164,100 @@ def binance_call(
             time.sleep(espera)
             attempt += 1
 
-async def _keepalive_listen_key(api_url: str, headers: dict[str, str], listen_key: str) -> None:
-    """Renews the listenKey periodically to keep the user stream alive."""
-    async with aiohttp.ClientSession() as session:
+# === reemplaza en cliente.py ===
+async def _start_user_stream(exchange) -> None:
+    """
+    Inicializa el user data stream de Binance con base URL correcta y tareas de keepalive/WS.
+    Soporta Spot y USDM Futures según exchange.options['defaultType'].
+    """
+    global _USER_STREAM_TASK, _KEEPALIVE_TASK
+    if _USER_STREAM_TASK and not _USER_STREAM_TASK.done():
+        return
+
+    default_type = (getattr(exchange, "options", {}) or {}).get("defaultType", "spot")
+    if default_type == "future":
+        rest_base = "https://fapi.binance.com"
+        ws_user_builder = lambda lk: f"wss://fstream.binance.com/stream?streams={lk}"
+        user_stream_path = "/fapi/v1/listenKey"
+    else:
+        rest_base = "https://api.binance.com"
+        ws_user_builder = lambda lk: f"wss://stream.binance.com:9443/ws/{lk}"
+        user_stream_path = "/api/v3/userDataStream"
+
+    headers = {"X-MBX-APIKEY": exchange.apiKey or ""}
+
+    async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=15)) as session:
+        try:
+            resp = await session.post(f"{rest_base}{user_stream_path}", headers=headers)
+            # Manejo explícito de no-200
+            if resp.status >= 400:
+                txt = await resp.text()
+                log.error(f"UserDataStream HTTP {resp.status}: {txt}")
+                return
+            data = await resp.json()
+        except Exception as e:
+            log.error(f"No se pudo iniciar user data stream: {e}")
+            return
+
+    listen_key = data.get("listenKey")
+    if not listen_key:
+        log.error("Respuesta sin listenKey al iniciar user data stream")
+        return
+
+    # Lanzar tareas
+    _USER_STREAM_TASK = asyncio.create_task(_user_stream_ws_generic(ws_user_builder(listen_key), exchange))
+    _KEEPALIVE_TASK = asyncio.create_task(_keepalive_listen_key_generic(rest_base, user_stream_path, headers, listen_key))
+
+
+async def _keepalive_listen_key_generic(rest_base: str, path: str, headers: dict[str, str], listen_key: str) -> None:
+    async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=10)) as session:
         while True:
             try:
-                await session.put(
-                    f"{api_url}/api/v3/userDataStream",
-                    headers=headers,
-                    params={"listenKey": listen_key},
-                )
+                r = await session.put(f"{rest_base}{path}", headers=headers, params={"listenKey": listen_key})
+                # Si falla, log breve para evitar ruido (se reintenta en el próximo ciclo)
+                if r.status >= 400:
+                    body = await r.text()
+                    log.error(f"Keepalive listenKey falló ({r.status}): {body}")
             except Exception as e:
                 log.error(f"Error renovando listenKey: {e}")
             await asyncio.sleep(30 * 60)
 
 
-async def _user_stream_ws(exchange, listen_key: str) -> None:
-    """Listens to the user data stream and updates local order cache."""
-    url = f"wss://stream.binance.com:9443/ws/{listen_key}"
+async def _user_stream_ws_generic(ws_url: str, exchange) -> None:
+    """Escucha user stream (Spot o Futures) y mantiene caché local de órdenes."""
     while True:
         try:
-            async with websockets.connect(url) as ws:
+            async with websockets.connect(ws_url) as ws:
                 async for msg in ws:
                     try:
                         data = json.loads(msg)
                     except Exception:
                         continue
-                    if data.get("e") != "executionReport":
+                    # Spot: eventos e="executionReport"
+                    # Futures: eventos pueden venir envueltos en {"stream":..., "data": {...}}
+                    payload = data.get("data") if "stream" in data else data
+                    if not isinstance(payload, dict):
                         continue
-                    status = data.get("X")
+                    evt = payload.get("e")
+                    if evt != "executionReport":
+                        continue
+                    status = payload.get("X")
                     if status not in {"FILLED", "EXPIRED"}:
                         continue
-                    raw = data.get("s", "")
+                    raw = payload.get("s", "")
                     try:
                         symbol = exchange.market_id_to_symbol(raw)
                     except Exception:
                         symbol = raw[:-4] + "/" + raw[-4:] if len(raw) > 4 else raw
                     try:
                         from core.orders import real_orders
-
                         real_orders.eliminar_orden(symbol, forzar_log=True)
                     except Exception as err:
-                        log.error(
-                            f"Error actualizando orden {symbol} desde user stream: {err}"
-                        )
+                        log.error(f"Error actualizando orden {symbol} desde user stream: {err}")
         except Exception as e:
             log.error(f"Error en websocket de user stream: {e}")
             await asyncio.sleep(5)
 
-
-async def _start_user_stream(exchange) -> None:
-    """Initializes the Binance user data stream and background tasks."""
-    global _USER_STREAM_TASK, _KEEPALIVE_TASK
-    if _USER_STREAM_TASK and not _USER_STREAM_TASK.done():
-        return
-    api_url = exchange.urls.get("api") or "https://api.binance.com"
-    headers = {"X-MBX-APIKEY": exchange.apiKey}
-    async with aiohttp.ClientSession() as session:
-        try:
-            resp = await session.post(f"{api_url}/api/v3/userDataStream", headers=headers)
-            data = await resp.json()
-        except Exception as e:
-            log.error(f"No se pudo iniciar user data stream: {e}")
-            return
-    listen_key = data.get("listenKey")
-    if not listen_key:
-        log.error("Respuesta sin listenKey al iniciar user data stream")
-        return
-    _USER_STREAM_TASK = asyncio.create_task(_user_stream_ws(exchange, listen_key))
-    _KEEPALIVE_TASK = asyncio.create_task(
-        _keepalive_listen_key(api_url, headers, listen_key)
-    )
 
 
 def auth_guard(default: Any = None):
