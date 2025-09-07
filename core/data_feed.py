@@ -40,7 +40,7 @@ class DataFeed:
         inactivity_intervals: int = 3,
         handler_timeout: float = 5,
         cancel_timeout: float = 5,
-        queue_put_timeout: float = 2,
+        backpressure: bool = False,
     ) -> None:
         self.intervalo = intervalo
         self.intervalo_segundos = intervalo_a_segundos(intervalo)
@@ -72,7 +72,7 @@ class DataFeed:
         self._reinicios_inactividad: Dict[str, int] = {}
         self._queues: Dict[str, asyncio.Queue] = {}
         self._consumer_tasks: Dict[str, asyncio.Task] = {}
-        self.queue_put_timeout = queue_put_timeout
+        self.backpressure = backpressure
         registrar_reconexion_datafeed(self._reconectar_por_supervisor)
         self._stream_restart_stats: Dict[str, Deque[float]] = {}
 
@@ -85,6 +85,11 @@ class DataFeed:
     def handler_timeouts(self) -> Dict[str, int]:
         """Contador de velas descartadas por exceder ``handler_timeout``."""
         return dict(self._handler_timeouts)
+    
+    @property
+    def queue_discards(self) -> Dict[str, int]:
+        """Cantidad de velas descartadas por cola llena por símbolo."""
+        return dict(self._queue_discards)
     
 
     async def stream(self, symbol: str, handler: Callable[[dict], Awaitable[None]]) -> None:
@@ -118,16 +123,20 @@ class DataFeed:
         qsize = queue.qsize()
         if queue.maxsize and qsize > queue.maxsize * 0.8:
             log.warning(
-                f"Queue {symbol} cerca del límite: {qsize}/{queue.maxsize}"
+                f"[{symbol}] queue_size={qsize}/{queue.maxsize}"
             )
         try:
-            await asyncio.wait_for(
-                queue.put(candle), timeout=self.queue_put_timeout
-            )
-        except asyncio.TimeoutError:
+            if self.backpressure:
+                await asyncio.wait_for(queue.put(candle), timeout=0.5)
+            else:
+                queue.put_nowait(candle)
+        except (asyncio.TimeoutError, asyncio.QueueFull):
             log.warning("Queue bloqueada; descartando 1")
             self._queue_discards[symbol] = (
                 self._queue_discards.get(symbol, 0) + 1
+            )
+            registro_metrico.registrar(
+                'queue_discards', {'symbol': symbol, 'count': self._queue_discards[symbol]}
             )
             try:
                 queue.get_nowait()
@@ -135,23 +144,9 @@ class DataFeed:
             except asyncio.QueueEmpty:
                 pass
             try:
-                await asyncio.wait_for(
-                    queue.put(candle), timeout=self.queue_put_timeout
-                )
-            except asyncio.TimeoutError:
-                log.error(
-                    f"Timeout en cola de {symbol}; reiniciando stream"
-                )
-                try:
-                    await self.notificador.enviar_async(
-                        f'⚠️ Timeout en cola de {symbol}; reiniciando stream',
-                        'WARN',
-                    )
-                except Exception:
-                    log.exception('Error enviando notificación de timeout de cola')
-                    tick('data_feed')
-                await self._reiniciar_stream(symbol)
-                return
+                queue.put_nowait(candle)
+            except asyncio.QueueFull:
+                pass
         self._last[symbol] = datetime.now(UTC)
         self._last_monotonic[symbol] = time.monotonic()
         self._mensajes_recibidos[symbol] = (
@@ -280,6 +275,7 @@ class DataFeed:
                     self.ping_interval,
                     cliente=self._cliente,
                     mensaje_timeout=self.tiempo_inactividad,
+                    backpressure=self.backpressure,
                 )
                 beat(f'stream_{symbol}', 'listen_end')
                 log.info(f'🔁 Conexión de {symbol} finalizada; reintentando en {backoff}s')

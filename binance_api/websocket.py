@@ -22,6 +22,7 @@ from core.utils.utils import configurar_logger, intervalo_a_segundos
 # ``/api/v3/depth`` antes de procesar las actualizaciones.
 from core.supervisor import tick, tick_data
 from binance_api.cliente import fetch_ohlcv_async
+from core.registro_metrico import registro_metrico
 
 
 class InactividadTimeoutError(Exception):
@@ -195,6 +196,7 @@ async def _gestionar_ws(
     ping_interval: int,
     mensaje_timeout: int | None,
     cliente=None,
+    backpressure: bool = False,
 ):
     """Gestiona un WebSocket genérico con reconexión y backfill (incluye bootstrap si ts=None)."""
     fallos_consecutivos = 0
@@ -236,6 +238,17 @@ async def _gestionar_ws(
 
             handlers_by_norm = {normalizar_symbolo(s): s for s in handlers}
             message_queue: asyncio.Queue = asyncio.Queue(maxsize=MESSAGE_QUEUE_SIZE)
+            queue_discards: dict[str, int] = {}
+
+            def _symbol_from_msg(msg: str) -> str | None:
+                try:
+                    data = json.loads(msg)
+                except Exception:
+                    return None
+                if 'stream' in data:
+                    norm = data['stream'].split('@')[0]
+                    return handlers_by_norm.get(norm)
+                return next(iter(handlers))
             consumer = asyncio.create_task(
                 _procesar_cola(message_queue, handlers, last_message, handlers_by_norm)
             )
@@ -347,10 +360,30 @@ async def _gestionar_ws(
                             msg = await asyncio.wait_for(ws.recv(), timeout=mensaje_timeout)
                         else:
                             msg = await ws.recv()
+                        qsize = message_queue.qsize()
+                        symbol = None
+                        if message_queue.maxsize and qsize > message_queue.maxsize * 0.8:
+                            symbol = _symbol_from_msg(msg)
+                            if symbol:
+                                log.warning(
+                                    f"[{symbol}] queue_size={qsize}/{message_queue.maxsize}"
+                                )
                         try:
-                            message_queue.put_nowait(msg)
-                        except asyncio.QueueFull:
-                            log.warning('📦 Cola de mensajes llena, descartando mensaje')
+                            if backpressure:
+                                await asyncio.wait_for(message_queue.put(msg), timeout=0.5)
+                            else:
+                                message_queue.put_nowait(msg)
+                        except (asyncio.TimeoutError, asyncio.QueueFull):
+                            symbol = symbol or _symbol_from_msg(msg)
+                            if symbol:
+                                queue_discards[symbol] = queue_discards.get(symbol, 0) + 1
+                                log.warning(
+                                    f"[{symbol}] Cola de mensajes llena, descartando mensaje ({queue_discards[symbol]})"
+                                )
+                                registro_metrico.registrar(
+                                    'queue_discards',
+                                    {'symbol': symbol, 'count': queue_discards[symbol]},
+                                )
                             tick('data_feed')
                         continue
                     except asyncio.TimeoutError:
@@ -419,6 +452,7 @@ async def escuchar_velas(
     ping_interval: int | None = None,
     cliente=None,
     mensaje_timeout: int | None = None,
+    backpressure: bool = False,
 ):
     """Escucha velas cerradas de ``symbol`` delegando la gestión al helper."""
     if not isinstance(symbol, str) or '/' not in symbol:
@@ -476,6 +510,7 @@ async def escuchar_velas(
         ping_interval,
         mensaje_timeout,
         cliente,
+        backpressure=backpressure,
     )
 
 
@@ -488,6 +523,7 @@ async def escuchar_velas_combinado(
     ping_interval: int | None = None,
     cliente=None,
     mensaje_timeout: int | None = None,
+    backpressure: bool = False,
 ):
     """Escucha velas de múltiples símbolos usando un stream combinado."""
     if not symbols:
@@ -553,6 +589,7 @@ async def escuchar_velas_combinado(
         ping_interval,
         mensaje_timeout,
         cliente,
+        backpressure=backpressure,
     )
 
 
