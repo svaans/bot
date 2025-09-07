@@ -2,6 +2,7 @@
 from __future__ import annotations
 import asyncio
 import random
+import os
 from typing import Awaitable, Callable, Dict, Iterable, Any, Deque
 from datetime import datetime, timezone, timedelta
 import time
@@ -42,7 +43,7 @@ class DataFeed:
         monitor_interval: int = 5,
         max_restarts: int = 5,
         inactivity_intervals: int = 3,
-        handler_timeout: float = 5,
+        handler_timeout: float = float(os.getenv("DF_HANDLER_TIMEOUT_SEC", "10.0")),
         cancel_timeout: float = 5,
         backpressure: bool = False,
         reset_cb: Callable[[str], None] | None = None,
@@ -73,6 +74,7 @@ class DataFeed:
         self._reiniciando = False
         self._handler_timeouts: Dict[str, int] = {}
         self._mensajes_recibidos: Dict[str, int] = {}
+        self._ultimo_log_descartes: Dict[str, float] = {}
         self._queue_discards: Dict[str, int] = {}
         self._reinicios_inactividad: Dict[str, int] = {}
         self._queues: Dict[str, asyncio.Queue] = {}
@@ -138,6 +140,7 @@ class DataFeed:
             log.error(
                 f'❌ Timestamp desalineado en vela de {symbol}: {ts}'
             )
+            return False
         if not force and self._last_close_ts.get(symbol) == ts:
             log.debug(f'[{symbol}] Vela duplicada ignorada: {ts}')
             return False
@@ -155,20 +158,22 @@ class DataFeed:
                 f"[{symbol}] queue_size={qsize}/{queue.maxsize}"
             )
         try:
-            if self.backpressure:
-                await asyncio.wait_for(queue.put(candle), timeout=0.5)
-            else:
-                queue.put_nowait(candle)
-        except (asyncio.TimeoutError, asyncio.QueueFull):
-            log.warning("Queue bloqueada; descartando 1")
-            self._queue_discards[symbol] = (
-                self._queue_discards.get(symbol, 0) + 1
-            )
+            queue.put_nowait(candle)
+        except asyncio.QueueFull:
+            now = time.monotonic()
+            last = self._ultimo_log_descartes.get(symbol, 0.0)
+            if now - last >= float(os.getenv("DF_QUEUE_DROP_LOG_INTERVAL", "5.0")):
+                log.warning(
+                    f"[{symbol}] Queue llena; descartando 1 (qsize={queue.qsize()}/{queue.maxsize})"
+                )
+                self._ultimo_log_descartes[symbol] = now
+            self._queue_discards[symbol] = self._queue_discards.get(symbol, 0) + 1
             registro_metrico.registrar(
-                'queue_discards', {'symbol': symbol, 'count': self._queue_discards[symbol]}
+                "queue_discards",
+                {"symbol": symbol, "count": self._queue_discards[symbol]},
             )
             try:
-                queue.get_nowait()
+                _ = queue.get_nowait()
                 queue.task_done()
             except asyncio.QueueEmpty:
                 pass
@@ -274,6 +279,8 @@ class DataFeed:
     ) -> None:
         """Procesa las velas encoladas para ``symbol`` de forma asíncrona."""
         queue = self._queues[symbol]
+        procesadas = 0
+        inicio = time.monotonic()
         while self._running:
             candle = await queue.get()
             try:
@@ -285,8 +292,8 @@ class DataFeed:
                     self._handler_timeouts.get(symbol, 0) + 1
                 )
                 log.error(
-                    f"Handler de {symbol} superó {self.handler_timeout}s; omitiendo vela"
-                    f" (total {self._handler_timeouts[symbol]})"
+                    f"Handler de {symbol} superó {self.handler_timeout}s; omitiendo vela",
+                    f" (total {self._handler_timeouts[symbol]})",
                 )
             except asyncio.CancelledError:
                 raise
@@ -294,13 +301,23 @@ class DataFeed:
                 log.error(f"Error procesando vela en {symbol}: {e}")
             finally:
                 queue.task_done()
-
+                procesadas += 1
+                ahora = time.monotonic()
+                if ahora - inicio >= 2.0:
+                    rate = procesadas / (ahora - inicio)
+                    qsize = queue.qsize()
+                    msg = f"[{symbol}] consumer_rate={rate:.1f}/s qsize={qsize}/{queue.maxsize}"
+                    if qsize:
+                        log.warning(msg)
+                    else:
+                        log.info(msg)
+                    procesadas = 0
+                    inicio = ahora
     async def _relanzar_stream(
         self, symbol: str, handler: Callable[[dict], Awaitable[None]]
     ) -> None:
         """Mantiene un loop de conexión para ``symbol`` con backoff exponencial."""
         fallos_consecutivos = 0
-        backoff = 1
         primera_vez = True
         while True:
             try:
@@ -331,35 +348,36 @@ class DataFeed:
                                    if self._ultimo_candle.get(symbol) else None),
                 )
                 beat(f'stream_{symbol}', 'listen_end')
-                log.info(f'🔁 Conexión de {symbol} finalizada; reintentando en {backoff}s')
+                delay = calcular_backoff(fallos_consecutivos)
+                log.info(
+                    f'🔁 Conexión de {symbol} finalizada; reintentando en {delay:.1f}s'
+                )
                 fallos_consecutivos = 0
-                backoff = 1
-                await asyncio.sleep(backoff + random.random())
+                await asyncio.sleep(delay)
             except asyncio.TimeoutError:
                 beat(f'stream_{symbol}', 'timeout')
                 fallos_consecutivos += 1
+                delay = calcular_backoff(fallos_consecutivos)
+                msg = (
+                    f'⌛ Timeout en stream {symbol}; reintentando en {delay:.1f}s'
+                )
                 if fallos_consecutivos > 2:
-                    log.warning(
-                        f'⌛ Timeout en stream {symbol}; reintentando en {backoff}s'
-                    )
+                    log.warning(msg)
                 else:
-                    log.info(
-                        f'⌛ Timeout en stream {symbol}; reintentando en {backoff}s'
-                    )
-                await asyncio.sleep(backoff + random.random())
-                backoff = calcular_backoff(backoff, fallos_consecutivos)
+                    log.info(msg)
+                await asyncio.sleep(delay)
                 continue
             except asyncio.CancelledError:
                 beat(f'stream_{symbol}', 'cancel')
                 raise
             except InactividadTimeoutError:
                 beat(f'stream_{symbol}', 'inactivity')
+                delay = calcular_backoff(fallos_consecutivos)
                 log.warning(
-                    f'🔕 Stream {symbol} reiniciado por inactividad; reintentando en {backoff}s'
+                    f'🔕 Stream {symbol} reiniciado por inactividad; reintentando en {delay:.1f}s'
                 )
                 fallos_consecutivos = 0
-                backoff = 1
-                await asyncio.sleep(backoff + random.random())
+                await asyncio.sleep(delay)
                 continue
             except Exception as e:
                 beat(f'stream_{symbol}', 'error')
@@ -382,16 +400,16 @@ class DataFeed:
                     task_cooldown[f'stream_{symbol}'] = datetime.now(UTC) + timedelta(minutes=10)
                     log.error(f'❌ Auth fallida para {symbol}; esperando 600s')
                     await asyncio.sleep(600)
-                    backoff = 1
                     continue
 
+                delay = calcular_backoff(fallos_consecutivos)
                 if isinstance(e, (AuthenticationError, NetworkError)):
                     log.warning(
-                        f'⚠️ Stream {symbol} falló: {e}. Reintentando en {backoff}s'
+                        f'⚠️ Stream {symbol} falló: {e}. Reintentando en {delay:.1f}s'
                     )
                 else:
                     log.exception(
-                        f'⚠️ Stream {symbol} falló de forma inesperada. Reintentando en {backoff}s'
+                        f'⚠️ Stream {symbol} falló de forma inesperada. Reintentando en {delay:.1f}s'
                     )
                     
                 if fallos_consecutivos >= self.max_stream_restarts:
@@ -410,8 +428,7 @@ class DataFeed:
                         log.exception('Error enviando notificación de límite de reconexiones')
                         tick('data_feed')
                     raise
-                await asyncio.sleep(backoff + random.random())
-                backoff = calcular_backoff(backoff, fallos_consecutivos)
+                await asyncio.sleep(delay)
 
     
     async def _relanzar_streams_combinado(
@@ -419,7 +436,6 @@ class DataFeed:
     ) -> None:
         """Mantiene un loop de conexión combinado para varios símbolos."""
         fallos_consecutivos = 0
-        backoff = 1
         primera_vez = True
         while True:
             try:
@@ -464,40 +480,39 @@ class DataFeed:
                 )
                 for sym in symbols:
                     beat(f'stream_{sym}', 'listen_end')
+                delay = calcular_backoff(fallos_consecutivos)
                 log.info(
-                    f'🔁 Conexión combinada finalizada; reintentando en {backoff}s'
+                    f'🔁 Conexión combinada finalizada; reintentando en {delay:.1f}s'
                 )
                 fallos_consecutivos = 0
-                backoff = 1
-                await asyncio.sleep(backoff + random.random())
+                await asyncio.sleep(delay)
             except asyncio.TimeoutError:
                 for sym in symbols:
                     beat(f'stream_{sym}', 'timeout')
                 fallos_consecutivos += 1
+                delay = calcular_backoff(fallos_consecutivos)
+                msg = (
+                    f'⌛ Timeout en stream combinado; reintentando en {delay:.1f}s'
+                )
                 if fallos_consecutivos > 2:
-                    log.warning(
-                        f'⌛ Timeout en stream combinado; reintentando en {backoff}s'
-                    )
+                    log.warning(msg)
                 else:
-                    log.info(
-                        f'⌛ Timeout en stream combinado; reintentando en {backoff}s'
-                    )
-                await asyncio.sleep(backoff + random.random())
-                backoff = calcular_backoff(backoff, fallos_consecutivos)
+                    log.info(msg)
+                await asyncio.sleep(delay)
                 continue
             except asyncio.CancelledError:
                 for sym in symbols:
                     beat(f'stream_{sym}', 'cancel')
+                delay = calcular_backoff(fallos_consecutivos)
                 raise
             except InactividadTimeoutError:
                 for sym in symbols:
                     beat(f'stream_{sym}', 'inactivity')
                 log.warning(
-                    f'🔕 Stream combinado reiniciado por inactividad; reintentando en {backoff}s'
+                    f'🔕 Stream combinado reiniciado por inactividad; reintentando en {delay:.1f}s'
                 )
                 fallos_consecutivos = 0
-                backoff = 1
-                await asyncio.sleep(backoff + random.random())
+                await asyncio.sleep(delay)
                 continue
             except Exception as e:
                 for sym in symbols:
@@ -525,15 +540,15 @@ class DataFeed:
                         '❌ Auth fallida para stream combinado; esperando 600s'
                     )
                     await asyncio.sleep(600)
-                    backoff = 1
                     continue
+                delay = calcular_backoff(fallos_consecutivos)
                 if isinstance(e, (AuthenticationError, NetworkError)):
                     log.warning(
-                        f'⚠️ Stream combinado falló: {e}. Reintentando en {backoff}s'
+                        f'⚠️ Stream combinado falló: {e}. Reintentando en {delay:.1f}s'
                     )
                 else:
                     log.exception(
-                        f'⚠️ Stream combinado falló de forma inesperada. Reintentando en {backoff}s'
+                        f'⚠️ Stream combinado falló de forma inesperada. Reintentando en {delay:.1f}s'
                     )
                 if fallos_consecutivos >= self.max_stream_restarts:
                     log.error(
@@ -550,8 +565,7 @@ class DataFeed:
                         )
                         tick('data_feed')
                     raise
-                await asyncio.sleep(backoff + random.random())
-                backoff = calcular_backoff(backoff, fallos_consecutivos)
+                await asyncio.sleep(delay)
 
 
     async def iniciar(self) -> None:
@@ -783,7 +797,8 @@ class DataFeed:
                 if candle:
                     self._ultimo_candle[sym] = candle
         self._running = True
-        self._queues = {sym: asyncio.Queue(maxsize=100) for sym in self._symbols}
+        tam_q = int(os.getenv("DF_QUEUE_MAX", "1000"))
+        self._queues = {sym: asyncio.Queue(maxsize=tam_q) for sym in self._symbols}
         for sym in self._symbols:
             self._consumer_tasks[sym] = supervised_task(
                 lambda sym=sym: self._consumer(sym, handler),

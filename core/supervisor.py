@@ -17,12 +17,15 @@ from collections import defaultdict, deque
 from datetime import datetime, timedelta, timezone
 from typing import Awaitable, Callable, Deque, Dict
 
+import os
+
 
 from config.config import INTERVALO_VELAS, TIMEOUT_SIN_DATOS_FACTOR
 from core.notificador import crear_notificador_desde_env
 from core.utils.logger import configurar_logger
 from core.utils.utils import intervalo_a_segundos
 from core.metrics import registrar_watchdog_restart
+from core.registro_metrico import registro_metrico
 
 
 UTC = timezone.utc
@@ -62,6 +65,11 @@ class Supervisor:
             lambda: deque(maxlen=self.PING_RTT_SAMPLES)
         )
         self.last_ping_alert: Dict[str, datetime] = {}
+        self.reconexiones_ws: Dict[str, int] = {}
+        self.reinicios_consumer: Dict[str, int] = {}
+        self.inactividad_detectada: Dict[str, int] = {}
+        self.cooldown_sec = float(os.getenv("SUPERVISOR_COOLDOWN_SEC", "15"))
+        self.close_timeout = float(os.getenv("WS_CLOSE_TIMEOUT", "5"))
 
     # ------------------------------------------------------------------
     # Métodos de utilidad
@@ -203,6 +211,13 @@ class Supervisor:
                     delta_task,
                     timeout_task,
                 )
+                self.inactividad_detectada[task_name] = (
+                    self.inactividad_detectada.get(task_name, 0) + 1
+                )
+                registro_metrico.registrar(
+                    "inactividad_detectada_total",
+                    {"role": task_name, "count": self.inactividad_detectada[task_name]},
+                )
                 if task_name.startswith("stream_") and self.data_feed_reconnector:
                     log.warning(
                         "Inactividad detectada en %s; se delega en reconector",
@@ -230,6 +245,14 @@ class Supervisor:
                         "⚠️ Sin datos de %s desde hace %.1f segundos",
                         sym,
                         sin_datos,
+                    )
+                    role = f"data_{sym}"
+                    self.inactividad_detectada[role] = (
+                        self.inactividad_detectada.get(role, 0) + 1
+                    )
+                    registro_metrico.registrar(
+                        "inactividad_detectada_total",
+                        {"role": role, "count": self.inactividad_detectada[role]},
                     )
                     self.last_data_alert[sym] = ahora
                     try:
@@ -400,7 +423,7 @@ class Supervisor:
             try:
                 task.cancel()
                 try:
-                    await asyncio.wait_for(task, timeout=5)
+                    await asyncio.wait_for(task, timeout=self.close_timeout)
                 except asyncio.TimeoutError:
                     log.warning("⏱️ Timeout cancelando %s", task_name)
                 except asyncio.CancelledError:
@@ -410,7 +433,6 @@ class Supervisor:
             except Exception:
                 pass
             finally:
-                # Eliminamos referencia a la tarea cancelada
                 if self.tasks.get(task_name) is task:
                     self.tasks.pop(task_name, None)
         registrar_watchdog_restart(task_name)
@@ -437,8 +459,22 @@ class Supervisor:
             factory = self.task_factories.get(task_name)
             if factory:
                 self.supervised_task(factory, name=task_name)
-            self.task_cooldown[task_name] = self._now() + timedelta(seconds=15)
+            self.task_cooldown[task_name] = self._now() + timedelta(seconds=self.cooldown_sec)
         asyncio.create_task(_starter(), name=f"{task_name}_restart")
+        if task_name.startswith("stream_"):
+            sym = task_name.split("stream_")[1]
+            self.reconexiones_ws[sym] = self.reconexiones_ws.get(sym, 0) + 1
+            registro_metrico.registrar(
+                "reconexiones_ws_total",
+                {"symbol": sym, "count": self.reconexiones_ws[sym]},
+            )
+        elif task_name.startswith("consumer_"):
+            sym = task_name.split("consumer_")[1]
+            self.reinicios_consumer[sym] = self.reinicios_consumer.get(sym, 0) + 1
+            registro_metrico.registrar(
+                "reinicios_consumer_total",
+                {"symbol": sym, "count": self.reinicios_consumer[sym]},
+            )
         self.task_backoff[task_name] = min(delay * 2, 120)
 
     def supervised_task(

@@ -28,6 +28,25 @@ _CIRCUIT_BREAKERS: dict[str, dict[str, Any]] = {}
 _USER_STREAM_TASK: asyncio.Task | None = None
 _KEEPALIVE_TASK: asyncio.Task | None = None
 
+_HTTP_SESSION: aiohttp.ClientSession | None = None
+
+
+def _get_session() -> aiohttp.ClientSession:
+    """Devuelve una sesión HTTP reutilizable."""
+    global _HTTP_SESSION
+    if _HTTP_SESSION is None or _HTTP_SESSION.closed:
+        connector = aiohttp.TCPConnector(
+            limit=int(os.getenv("HTTP_CONN_LIMIT", "100")),
+            ttl_dns_cache=int(os.getenv("HTTP_DNS_CACHE", "300")),
+        )
+        timeout = aiohttp.ClientTimeout(
+            total=float(os.getenv("HTTP_TOTAL_TIMEOUT", "15")),
+            connect=float(os.getenv("HTTP_CONNECT_TIMEOUT", "10")),
+            sock_read=float(os.getenv("HTTP_SOCK_READ_TIMEOUT", "10")),
+        )
+        _HTTP_SESSION = aiohttp.ClientSession(connector=connector, timeout=timeout)
+    return _HTTP_SESSION
+
 class BinanceError(Exception):
     """Excepción propia con código y sugerencia."""
 
@@ -186,18 +205,17 @@ async def _start_user_stream(exchange) -> None:
 
     headers = {"X-MBX-APIKEY": exchange.apiKey or ""}
 
-    async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=15)) as session:
-        try:
-            resp = await session.post(f"{rest_base}{user_stream_path}", headers=headers)
-            # Manejo explícito de no-200
-            if resp.status >= 400:
-                txt = await resp.text()
-                log.error(f"UserDataStream HTTP {resp.status}: {txt}")
-                return
-            data = await resp.json()
-        except Exception as e:
-            log.error(f"No se pudo iniciar user data stream: {e}")
+    session = _get_session()
+    try:
+        resp = await session.post(f"{rest_base}{user_stream_path}", headers=headers)
+        if resp.status >= 400:
+            txt = await resp.text()
+            log.error(f"UserDataStream HTTP {resp.status}: {txt}")
             return
+        data = await resp.json()
+    except Exception as e:
+        log.error(f"No se pudo iniciar user data stream: {e}")
+        return
 
     listen_key = data.get("listenKey")
     if not listen_key:
@@ -210,17 +228,18 @@ async def _start_user_stream(exchange) -> None:
 
 
 async def _keepalive_listen_key_generic(rest_base: str, path: str, headers: dict[str, str], listen_key: str) -> None:
-    async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=10)) as session:
-        while True:
-            try:
-                r = await session.put(f"{rest_base}{path}", headers=headers, params={"listenKey": listen_key})
-                # Si falla, log breve para evitar ruido (se reintenta en el próximo ciclo)
-                if r.status >= 400:
-                    body = await r.text()
-                    log.error(f"Keepalive listenKey falló ({r.status}): {body}")
-            except Exception as e:
-                log.error(f"Error renovando listenKey: {e}")
-            await asyncio.sleep(30 * 60)
+    session = _get_session()
+    while True:
+        try:
+            r = await session.put(
+                f"{rest_base}{path}", headers=headers, params={"listenKey": listen_key}
+            )
+            if r.status >= 400:
+                body = await r.text()
+                log.error(f"Keepalive listenKey falló ({r.status}): {body}")
+        except Exception as e:
+            log.error(f"Error renovando listenKey: {e}")
+        await asyncio.sleep(30 * 60)
 
 
 async def _user_stream_ws_generic(ws_url: str, exchange) -> None:

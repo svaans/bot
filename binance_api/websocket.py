@@ -1,5 +1,6 @@
 import asyncio
 import json
+import os
 import random
 from datetime import datetime, timezone
 from collections import deque
@@ -56,6 +57,13 @@ BACKFILL_CONCURRENCY = 3
 _backfill_semaphore = asyncio.Semaphore(BACKFILL_CONCURRENCY)
 MESSAGE_QUEUE_SIZE = 1000
 CALLBACK_TIMEOUT = 8
+
+PING_INTERVAL = int(os.getenv("WS_PING_INTERVAL", "20"))
+PING_TIMEOUT = int(os.getenv("WS_PING_TIMEOUT", "10"))
+OPEN_TIMEOUT = int(os.getenv("WS_OPEN_TIMEOUT", "10"))
+CLOSE_TIMEOUT = int(os.getenv("WS_CLOSE_TIMEOUT", "5"))
+MAX_BACKOFF = float(os.getenv("WS_BACKOFF_MAX", "60"))
+QUEUE_WARN_INTERVAL = float(os.getenv("WS_QUEUE_WARN_INTERVAL", "5.0"))
 
 def _registrar_reconexion() -> None:
     """Registra un intento de reconexión y alerta si la tasa es elevada."""
@@ -202,7 +210,6 @@ async def _gestionar_ws(
     """Gestiona un WebSocket genérico con reconexión y backfill (incluye bootstrap si ts=None)."""
     fallos_consecutivos = 0
     total_reintentos = 0
-    backoff = 5
     primera_vez = True
     while True:
         try:
@@ -212,21 +219,20 @@ async def _gestionar_ws(
             ws = await asyncio.wait_for(
                 websockets.connect(
                     url,
-                    open_timeout=10,
-                    close_timeout=10,
-                    ping_interval=None,
-                    ping_timeout=None,
+                    open_timeout=OPEN_TIMEOUT,
+                    close_timeout=CLOSE_TIMEOUT,
+                    ping_interval=PING_INTERVAL,
+                    ping_timeout=PING_TIMEOUT,
                     max_size=2 ** 20,
                     ssl=_SSL_CONTEXT,
                 ),
-                timeout=15,
+                timeout=OPEN_TIMEOUT + 5,
             )
             log.info(
                 f"🔌 WebSocket conectado a {url} a las {datetime.now(UTC).isoformat()}"
             )
             _habilitar_tcp_keepalive(ws)
             fallos_consecutivos = 0
-            backoff = 5
 
             # Inicializa marcadores de último mensaje para los watchdogs
             for s in handlers:
@@ -244,6 +250,7 @@ async def _gestionar_ws(
             handlers_by_norm = {normalizar_symbolo(s): s for s in handlers}
             message_queue: asyncio.Queue = asyncio.Queue(maxsize=MESSAGE_QUEUE_SIZE)
             queue_discards: dict[str, int] = {}
+            last_warn: dict[str, float] = {}
 
             def _symbol_from_msg(msg: str) -> str | None:
                 try:
@@ -370,9 +377,13 @@ async def _gestionar_ws(
                         if message_queue.maxsize and qsize > message_queue.maxsize * 0.8:
                             symbol = _symbol_from_msg(msg)
                             if symbol:
-                                log.warning(
-                                    f"[{symbol}] queue_size={qsize}/{message_queue.maxsize}"
-                                )
+                                ahora = time.monotonic()
+                                ultimo = last_warn.get(symbol, 0.0)
+                                if ahora - ultimo >= QUEUE_WARN_INTERVAL:
+                                    log.warning(
+                                        f"[{symbol}] queue_size={qsize}/{message_queue.maxsize}"
+                                    )
+                                    last_warn[symbol] = ahora
                         try:
                             if backpressure:
                                 await asyncio.wait_for(message_queue.put(msg), timeout=0.5)
@@ -434,18 +445,20 @@ async def _gestionar_ws(
         except Exception as e:
             fallos_consecutivos += 1
             total_reintentos += 1
+            delay = calcular_backoff(fallos_consecutivos, max_seg=MAX_BACKOFF)
             log.error(f'❌ Error en WebSocket: {e}')
-            log.info(f'🔁 Reintentando conexión en {backoff} segundos... (total reintentos: {total_reintentos})')
+            log.info(
+                f'🔁 Reintentando conexión en {delay:.1f} segundos... (total reintentos: {total_reintentos})'
+            )
             _registrar_reconexion()
             tick('data_feed')
-            await asyncio.sleep(backoff + random.random())
-            previo = backoff
-            backoff = calcular_backoff(backoff, fallos_consecutivos, MAX_BACKOFF)
-            if backoff == MAX_BACKOFF and previo < MAX_BACKOFF:
+            await asyncio.sleep(delay)
+            if delay >= MAX_BACKOFF and fallos_consecutivos > 1:
                 log.warning(f'⚠️ Backoff máximo alcanzado: {MAX_BACKOFF}s')
             elif fallos_consecutivos >= 5:
-                log.warning(f'⏳ {fallos_consecutivos} fallos consecutivos. Nuevo backoff: {backoff}s')
-
+                log.warning(
+                    f'⏳ {fallos_consecutivos} fallos consecutivos. Nuevo backoff: {delay:.1f}s'
+                )
 
 
 async def escuchar_velas(
@@ -652,7 +665,7 @@ async def _watchdog(
         tick_data(symbol)
 
 
-async def _keepalive(ws, symbol, intervalo=30, log_interval=10):
+async def _keepalive(ws, symbol, intervalo=PING_INTERVAL, log_interval=10):
     """Envía ping periódicamente para mantener viva la conexión."""
     contador = 0
     try:
@@ -663,7 +676,7 @@ async def _keepalive(ws, symbol, intervalo=30, log_interval=10):
                 log.debug(f'🏓 Enviando ping a {symbol}')
                 inicio = time.perf_counter()
                 pong_waiter = await ws.ping()
-                await asyncio.wait_for(pong_waiter, timeout=10)
+                await asyncio.wait_for(pong_waiter, timeout=PING_TIMEOUT)
                 rtt = (time.perf_counter() - inicio) * 1000
                 log.debug(f'🏓 Pong recibido de {symbol} ({rtt:.1f} ms)')
                 registrar_ping(symbol, rtt)
