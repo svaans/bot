@@ -153,7 +153,6 @@ class ConfigManager:
             umbral_alerta_mem=_cargar_float('UMBRAL_ALERTA_MEM', defaults.umbral_alerta_mem),
             ciclos_alerta_recursos=_cargar_int('CICLOS_ALERTA_RECURSOS', defaults.ciclos_alerta_recursos),
             frecuencia_recursos=_cargar_int('FRECUENCIA_RECURSOS', defaults.frecuencia_recursos),
-            timeout_sin_datos_factor=_cargar_int('TIMEOUT_SIN_DATOS_FACTOR', getattr(defaults, 'timeout_sin_datos_factor', 5)),
-            backfill_max_candles=_cargar_int('BACKFILL_MAX_CANDLES', getattr(defaults, 'backfill_max_candles', 1000)),
             timeout_sin_datos_factor=_cargar_int('TIMEOUT_SIN_DATOS_FACTOR', getattr(defaults, 'timeout_sin_datos_factor', 6)),
+            backfill_max_candles=_cargar_int('BACKFILL_MAX_CANDLES', getattr(defaults, 'backfill_max_candles', 1000)),
         )
