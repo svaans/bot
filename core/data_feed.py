@@ -292,8 +292,8 @@ class DataFeed:
                     self._handler_timeouts.get(symbol, 0) + 1
                 )
                 log.error(
-                    f"Handler de {symbol} superó {self.handler_timeout}s; omitiendo vela",
-                    f" (total {self._handler_timeouts[symbol]})",
+                    f"Handler de {symbol} superó {self.handler_timeout}s; omitiendo vela "
+                    f"(total {self._handler_timeouts[symbol]})"
                 )
             except asyncio.CancelledError:
                 raise
