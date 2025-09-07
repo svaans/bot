@@ -1797,12 +1797,17 @@ class Trader:
         symbol = vela.get('symbol')
         if not self._validar_config(symbol):
             return
-        serie = self.series_precio[symbol]
-        serie.append(vela.get('close'))
-        serie_pd = pd.Series(serie)
-        # Cálculos rolling sobre la serie
-        vela['sma_20'] = serie_pd.rolling(window=20).mean().iloc[-1]
-        vela['rsi'] = calcular_rsi(serie_pd, 14)
+        loop = asyncio.get_running_loop()
+
+        def _compute() -> dict:
+            serie = self.series_precio[symbol]
+            serie.append(vela.get('close'))
+            serie_pd = pd.Series(serie)
+            vela['sma_20'] = serie_pd.rolling(window=20).mean().iloc[-1]
+            vela['rsi'] = calcular_rsi(serie_pd, 14)
+            return vela
+
+        vela = await loop.run_in_executor(None, _compute)
         await procesar_vela(self, vela)
         return
 
