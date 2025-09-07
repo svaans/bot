@@ -289,21 +289,6 @@ class DataFeed:
         inicio = time.monotonic()
         while self._running:
             candle = await queue.get()
-            coalesced = 0
-            while True:
-                try:
-                    latest = queue.get_nowait()
-                    queue.task_done()
-                    candle = latest
-                    coalesced += 1
-                except asyncio.QueueEmpty:
-                    break
-            if coalesced:
-                self._coalesce_counts[symbol] = self._coalesce_counts.get(symbol, 0) + coalesced
-                registro_metrico.registrar(
-                    "coalesce_count",
-                    {"symbol": symbol, "count": self._coalesce_counts[symbol]},
-                )
             try:
                 await asyncio.wait_for(
                     handler(candle), timeout=self.handler_timeout
