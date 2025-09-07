@@ -146,7 +146,7 @@ class Trader:
             getattr(config, 'monitor_interval', 5),
             getattr(config, 'max_stream_restarts', 5),
             getattr(config, 'inactivity_intervals', 3),
-            handler_timeout=getattr(config, 'handler_timeout', 5),
+            handler_timeout=getattr(config, 'handler_timeout', 15),
         )
         self.engine = StrategyEngine()
         self.bus = EventBus()
