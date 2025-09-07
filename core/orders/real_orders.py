@@ -465,6 +465,75 @@ def sincronizar_ordenes_binance(
         registrar_orden(symbol, price, amount, sl, tp, {}, '', direccion, None)
     return cargar_ordenes()
 
+_ULTIMO_OPEN_ORDERS: dict[str, list] = {}
+_ULTIMO_OPEN_TS: dict[str, float] = {}
+
+
+def consultar_ordenes_abiertas(symbol: str) -> list[dict]:
+    """Consulta órdenes abiertas actuales para `symbol` con reintentos y registro detallado."""
+    from ccxt.base.errors import AuthenticationError, NetworkError
+
+    config = getattr(app_config, "cfg", None)
+    modo_real = getattr(config, "modo_real", True) if config else True
+    if not modo_real:
+        log.info(f'🔍 Modo simulado: sin órdenes reales para {symbol}')
+        return []
+
+    cliente = obtener_cliente(config)
+    now = time.time()
+    if symbol in _ULTIMO_OPEN_TS and (now - _ULTIMO_OPEN_TS[symbol]) < 0.5:
+        return _ULTIMO_OPEN_ORDERS.get(symbol, [])
+    _ULTIMO_OPEN_TS[symbol] = now
+
+    ordenes_api: list[dict] = []
+    for intento in range(1, 4):
+        try:
+            ordenes_api = cliente.fetch_open_orders(symbol)
+            break
+        except AuthenticationError as e:
+            log.error(f'❌ Error de autenticación al consultar órdenes: {e}')
+            return []
+        except NetworkError as e:
+            log.warning(
+                f'⚠️ Fallo de red consultando órdenes (intento {intento}/3): {e}'
+            )
+            asyncio.sleep(0.1 * intento)
+            continue
+        except Exception as e:
+            log.error(f'❌ Error inesperado consultando órdenes: {e}')
+            return []
+
+    if not ordenes_api:
+        log.info(f'⚠️ No hay órdenes abiertas para {symbol}')
+        _ULTIMO_OPEN_ORDERS[symbol] = []
+        return []
+
+    filtros = get_symbol_filters(symbol, cliente)
+    min_qty = filtros.get('min_qty', 0.0)
+    min_cost = filtros.get('min_notional', 0.0)
+    step = filtros.get('step_size', None)
+    tick = filtros.get('tick_size', None)
+    log.info(
+        f'🔎 Filtros {symbol}: min_qty={min_qty}, min_notional={min_cost}, stepSize={step}, tickSize={tick}'
+    )
+
+    ordenes_validas: list[dict] = []
+    for o in ordenes_api:
+        price = float(o.get('price') or o.get('average') or 0.0)
+        amount = float(o.get('amount') or o.get('remaining') or 0.0)
+        if amount < min_qty or price * amount < min_cost:
+            log.info(
+                f'⚠️ Orden abierta omitida {symbol}: cantidad {amount}, notional {price * amount:.2f} (< mínimos)'
+            )
+            continue
+        ordenes_validas.append(o)
+
+    _ULTIMO_OPEN_ORDERS[symbol] = ordenes_validas
+    log.info(
+        f'🔍 Órdenes abiertas encontradas para {symbol}: {len(ordenes_validas)}'
+    )
+    return ordenes_validas
+
 
 def reconciliar_trades_binance(simbolos: list[str] | None = None, limit: int = 50) -> None:
     try:

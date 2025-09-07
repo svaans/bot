@@ -79,6 +79,7 @@ from indicators.correlacion import correlacion_series
 from core.scoring import calcular_score_tecnico, PESOS_SCORE_TECNICO, ScoreBreakdown
 from binance_api.cliente import fetch_ticker_async
 from core import adaptador_umbral
+from observabilidad import metrics as obs_metrics
 from core.data.bootstrap import warmup_symbol
 log = configurar_logger('trader')
 LOG_DIR = os.getenv('LOG_DIR', 'logs')
@@ -164,6 +165,12 @@ class Trader:
         self.persistencia = PersistenciaTecnica(
             config.persistencia_minima, config.peso_extra_persistencia
         )
+        # Locks y cooldown de señales
+        self._symbol_locks: Dict[str, asyncio.Lock] = {sym: asyncio.Lock() for sym in activos}
+        self._last_buy_ts: Dict[str, float] = {}
+        self._last_sell_ts: Dict[str, float] = {}
+        self.cooldown_signals = int(os.getenv("COOLDOWN_S", "0"))
+        self._spread_history: Dict[str, List[float]] = {}
         self.rejection_handler = RejectionHandler(
             LOG_DIR, config.registro_tecnico_csv
         )
@@ -402,6 +409,7 @@ class Trader:
             return
         log.info(f"✅ Orden cerrada: {symbol} a {precio:.2f}€ por '{motivo}'")
         registrar_decision(symbol, 'exit')
+        obs_metrics.ORDERS_OPEN.labels(symbol=symbol).dec()
 
     async def _cerrar_y_reportar(self, orden, precio: float, motivo: str,
         tendencia: (str | None)=None, df: (pd.DataFrame | None)=None) ->None:
@@ -1599,19 +1607,45 @@ class Trader:
             return
         if self.capital_manager.cliente:
             try:
-                ticker = await asyncio.wait_for(
-                    fetch_ticker_async(self.capital_manager.cliente, symbol),
+                orderbook = await asyncio.wait_for(
+                    self.capital_manager.cliente.fetch_order_book(symbol, limit=5),
                     timeout=3,
                 )
-                precio_actual = float(ticker.get('last') or ticker.get('close') or precio)
+                ts_data = orderbook.get('timestamp')
+                if ts_data:
+                    edad = time.time() * 1000 - ts_data
+                    if edad > float(os.getenv("STALE_ORDERBOOK_MS", "1000")):
+                        log.warning(f'⛔ Datos de libro obsoletos para {symbol} ({edad:.0f}ms). Orden cancelada.')
+                        obs_metrics.ORDERS_CANCELLED.labels(reason="stale_orderbook").inc()
+                        return
+                best_bid = orderbook.get('bids', [[None]])[0][0]
+                best_ask = orderbook.get('asks', [[None]])[0][0]
+                if not best_bid or not best_ask:
+                    # Fallback a último precio conocido
+                    ticker = await fetch_ticker_async(self.capital_manager.cliente, symbol)
+                    precio_actual = float(ticker.get('last') or ticker.get('close') or precio)
+                else:
+                    precio_actual = float(best_ask if direccion == 'long' else best_bid)
                 spread = abs(precio_actual - precio) / precio if precio else 0.0
-                if spread > self.config.max_spread_ratio:
-                    log.warning(
-                        f'⛔ Spread {spread:.2%} supera límite en {symbol}. Orden cancelada.'
-                    )
+                obs_metrics.SPREAD_OBSERVED.labels(symbol=symbol).set(spread)
+                max_spread = getattr(self.config, 'max_spread_ratio', 0.0) or 0.0
+                if getattr(self.config, 'spread_dynamic', False):
+                    vals = self._spread_history.setdefault(symbol, [])
+                    now_ms = int(time.time() * 1000)
+                    vals.append(spread)
+                    # usar percentil P90 de los últimos 15 min
+                    if len(vals) > 1:
+                        threshold = sorted(vals)[int(0.9 * len(vals))]
+                        floor = float(os.getenv("SPREAD_MIN_RATIO", "0.001"))
+                        cap = float(os.getenv("SPREAD_MAX_RATIO", "0.05"))
+                        max_spread = max(floor, min(cap, threshold))
+                if spread > max_spread:
+                    log.warning(f'⛔ Spread {spread:.2%} supera límite ({max_spread:.2%}) en {symbol}. Orden cancelada.')
+                    obs_metrics.SPREAD_REJECTS.labels(symbol=symbol).inc()
+                    obs_metrics.ORDERS_CANCELLED.labels(reason="spread").inc()
                     return
             except Exception as e:
-                log.error(f'❌ No se pudo verificar spread para {symbol}: {e}')
+                log.error(f'❌ No se pudo obtener libro de órdenes para {symbol}: {e}')
         if isinstance(estrategias, dict):
             estrategias_dict = estrategias
         else:
@@ -1661,6 +1695,15 @@ class Trader:
             strategy_version=strategy_version,
         )
         registrar_decision(symbol, 'entry')
+        # Actualizar métricas de señales y órdenes
+        obs_metrics.ORDERS_SENT.labels(type=('buy' if direccion == 'long' else 'sell')).inc()
+        obs_metrics.ORDERS_OPEN.labels(symbol=symbol).inc()
+        obs_metrics.SIGNALS_TOTAL.labels(symbol=symbol, type=('buy' if direccion == 'long' else 'sell')).inc()
+        # Registrar timestamp de última señal por lado
+        if direccion == 'long':
+            self._last_buy_ts[symbol] = time.time()
+        else:
+            self._last_sell_ts[symbol] = time.time()
         self.capital_inicial_orden[symbol] = self.capital_por_simbolo.get(symbol, 0.0)
         estrategias_list = list(estrategias_dict.keys())
         log.info(
@@ -1683,25 +1726,44 @@ class Trader:
 
     async def evaluar_condiciones_de_entrada(self, symbol: str, df: pd.
         DataFrame, estado: EstadoSimbolo) ->(dict | None):
-        capital_total = sum(self.capital_inicial_diario.values())
-        if self.risk.riesgo_superado(capital_total):
-            log.warning('⛔ Límite de riesgo diario superado. Bloqueando nuevas entradas.')
-            if not self._limite_riesgo_notificado and self.notificador:
-                await safe_notify(
-                    self.notificador.enviar_async(
-                        '🚨 Límite de riesgo diario superado. Bot pausado.',
-                        'CRITICAL',
+        async with self._symbol_locks[symbol]:
+            capital_total = sum(self.capital_inicial_diario.values())
+            if self.risk.riesgo_superado(capital_total):
+                log.warning('⛔ Límite de riesgo diario superado. Bloqueando nuevas entradas.')
+                if not self._limite_riesgo_notificado and self.notificador:
+                    await safe_notify(
+                        self.notificador.enviar_async(
+                            '🚨 Límite de riesgo diario superado. Bot pausado.',
+                            'CRITICAL',
+                        )
                     )
-                )
-                self._limite_riesgo_notificado = True
-                await self._cerrar_posiciones_por_riesgo()
-            self._stop_event.set()
-            return None
-        if not self._validar_config(symbol):
-            return None
-        operacion = await verificar_entrada(self, symbol, df, estado)
-        if not operacion:
-            return None
+                    self._limite_riesgo_notificado = True
+                    await self._cerrar_posiciones_por_riesgo()
+                self._stop_event.set()
+                return None
+            if not self._validar_config(symbol):
+                return None
+            if self.cooldown_signals:
+                tendencia = getattr(estado, 'tendencia_detectada', None) or ''
+                nueva_señal = 'sell' if tendencia == 'bajista' else 'buy'
+                ahora = time.time()
+                if (
+                    nueva_señal == 'buy'
+                    and symbol in self._last_sell_ts
+                    and ahora - self._last_sell_ts[symbol] < self.cooldown_signals
+                ):
+                    log.info(f'[{symbol}] Señal BUY ignorada por cooldown tras SELL reciente')
+                    return None
+                if (
+                    nueva_señal == 'sell'
+                    and symbol in self._last_buy_ts
+                    and ahora - self._last_buy_ts[symbol] < self.cooldown_signals
+                ):
+                    log.info(f'[{symbol}] Señal SELL ignorada por cooldown tras BUY reciente')
+                    return None
+            operacion = await verificar_entrada(self, symbol, df, estado)
+            if not operacion:
+                return None
         abiertas_scores = {
             s: getattr(o, 'score_tecnico', 0.0) for s, o in self.orders.ordenes.items()
         }

@@ -19,6 +19,7 @@ from core.utils import intervalo_a_segundos, validar_integridad_velas, timestamp
 from core.utils.backoff import calcular_backoff
 from core.registro_metrico import registro_metrico
 from core.metrics import QUEUE_SIZE, INGEST_LATENCY
+from observabilidad import metrics as obs_metrics
 from core.supervisor import (
     tick,
     tick_data,
@@ -87,6 +88,11 @@ class DataFeed:
         self._stream_restart_stats: Dict[str, Deque[float]] = {}
         self._combined = False
         self._reset_cb = reset_cb
+        # Configuración de batch y métricas
+        self.batch_size = int(os.getenv("BATCH_SIZE_CONSUMER", "1"))
+        self._producer_stats: Dict[str, Dict[str, float]] = {}
+        self._queue_windows: Dict[str, list] = {}
+        self._last_window_reset: Dict[str, float] = {}
 
     @property
     def activos(self) ->list[str]:
@@ -170,6 +176,18 @@ class DataFeed:
         try:
             queue.put_nowait(candle)
             QUEUE_SIZE.labels(symbol=symbol).set(queue.qsize())
+            # Actualizar métrica de producción de velas (producer_rate)
+            stats = self._producer_stats.get(symbol)
+            now = time.monotonic()
+            if stats is None:
+                self._producer_stats[symbol] = {'last': now, 'count': 0}
+                stats = self._producer_stats[symbol]
+            stats['count'] += 1
+            if now - stats['last'] >= 2.0:
+                rate = stats['count'] / (now - stats['last'])
+                obs_metrics.PRODUCER_RATE.labels(symbol=symbol).set(rate)
+                stats['count'] = 0
+                stats['last'] = now
         except asyncio.QueueFull:
             now = time.monotonic()
             last = self._ultimo_log_descartes.get(symbol, 0.0)
@@ -179,6 +197,7 @@ class DataFeed:
                 )
                 self._ultimo_log_descartes[symbol] = now
             self._queue_discards[symbol] = self._queue_discards.get(symbol, 0) + 1
+            obs_metrics.QUEUE_DROPS.labels(symbol=symbol).inc()
             registro_metrico.registrar(
                 "queue_discards",
                 {"symbol": symbol, "count": self._queue_discards[symbol]},
@@ -293,6 +312,8 @@ class DataFeed:
     ) -> None:
         """Procesa las velas encoladas para ``symbol`` de forma asíncrona."""
         queue = self._queues[symbol]
+        self._queue_windows.setdefault(symbol, [])
+        self._last_window_reset.setdefault(symbol, time.monotonic())
         procesadas = 0
         inicio = time.monotonic()
         while self._running:
@@ -326,13 +347,46 @@ class DataFeed:
                 if ahora - inicio >= 2.0:
                     rate = procesadas / (ahora - inicio)
                     qsize = queue.qsize()
+                    obs_metrics.CONSUMER_RATE.labels(symbol=symbol).set(rate)
                     msg = f"[{symbol}] consumer_rate={rate:.1f}/s qsize={qsize}/{queue.maxsize}"
                     if qsize:
                         log.warning(msg)
                     else:
                         log.info(msg)
+                    # Actualizar watermarks de cola (últimos 60s)
+                    self._queue_windows[symbol].append(qsize)
+                    if ahora - self._last_window_reset[symbol] >= 60:
+                        vals = self._queue_windows[symbol]
+                        obs_metrics.QUEUE_SIZE_MIN.labels(symbol=symbol).set(min(vals) if vals else 0)
+                        obs_metrics.QUEUE_SIZE_MAX.labels(symbol=symbol).set(max(vals) if vals else 0)
+                        obs_metrics.QUEUE_SIZE_AVG.labels(symbol=symbol).set((sum(vals) / len(vals)) if vals else 0.0)
+                        self._queue_windows[symbol].clear()
+                        self._last_window_reset[symbol] = ahora
                     procesadas = 0
                     inicio = ahora
+                # Procesar mensajes adicionales en lote si `BATCH_SIZE_CONSUMER` > 1
+                for _ in range(self.batch_size - 1):
+                    if queue.empty():
+                        break
+                    try:
+                        next_candle = queue.get_nowait()
+                    except asyncio.QueueEmpty:
+                        break
+                    enqueue_ts2 = next_candle.pop("_enqueue_time", None)
+                    try:
+                        await asyncio.wait_for(handler(next_candle), timeout=self.handler_timeout)
+                    except asyncio.TimeoutError:
+                        self._handler_timeouts[symbol] = self._handler_timeouts.get(symbol, 0) + 1
+                        log.error(f"Handler de {symbol} superó {self.handler_timeout}s (batch); omitiendo vela")
+                    except Exception as e:
+                        log.error(f"Error procesando vela en {symbol} (batch): {e}")
+                    finally:
+                        queue.task_done()
+                        if enqueue_ts2 is not None:
+                            INGEST_LATENCY.labels(symbol=symbol).observe(time.monotonic() - enqueue_ts2)
+                        QUEUE_SIZE.labels(symbol=symbol).set(queue.qsize())
+                        procesadas += 1
+                        
     async def _relanzar_stream(
         self, symbol: str, handler: Callable[[dict], Awaitable[None]]
     ) -> None:

@@ -21,6 +21,8 @@ from core.strategies.entry.validaciones_tecnicas import hay_contradicciones
 from core.strategies.exit.gestor_salidas import evaluar_salidas
 from core.strategies.tendencia import detectar_tendencia
 from core.utils.utils import configurar_logger
+from core.estrategias import TENDENCIA_IDEAL
+from observabilidad import metrics as obs_metrics
 
 log = configurar_logger("engine", modo_silencioso=True)
 
@@ -107,7 +109,35 @@ class StrategyEngine:
             )
             contradiccion = contradiccion or rsi_contra
             if contradiccion:
-                log.warning(f"[{symbol}] Señales BUY y SELL simultáneas detectadas")
+                # Resolver conflicto de señales opuestas usando 'convicción'
+                bull_list = [
+                    e
+                    for e, act in estrategias_activas.items()
+                    if act and TENDENCIA_IDEAL.get(e) == "alcista"
+                ]
+                bear_list = [
+                    e
+                    for e, act in estrategias_activas.items()
+                    if act and TENDENCIA_IDEAL.get(e) == "bajista"
+                ]
+                peso_bull = sum(pesos_symbol.get(e, 1.0) for e in bull_list)
+                peso_bear = sum(pesos_symbol.get(e, 1.0) for e in bear_list)
+                if peso_bull > peso_bear * 1.1:
+                    contradiccion = False
+                    log.info(
+                        f"[{symbol}] Conflicto BUY/SELL resuelto a favor de BUY (estrategias: {bull_list})"
+                    )
+                elif peso_bear > peso_bull * 1.1:
+                    contradiccion = False
+                    log.info(
+                        f"[{symbol}] Conflicto BUY/SELL resuelto a favor de SELL (estrategias: {bear_list})"
+                    )
+                else:
+                    contradiccion = True
+                    log.warning(
+                        f"[{symbol}] Señales BUY y SELL simultáneas detectadas (empate)"
+                    )
+                    obs_metrics.SIGNALS_CONFLICT.labels(symbol=symbol).inc()
             score_tec, _ = calcular_score_tecnico(
                 df,
                 rsi_val,
