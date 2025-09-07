@@ -47,3 +47,4 @@ class DevelopmentConfig:
     ciclos_alerta_recursos: int = 5
     frecuencia_recursos: int = 60
     timeout_sin_datos_factor: int = 5
+    backfill_max_candles: int = 1000

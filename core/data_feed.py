@@ -22,11 +22,10 @@ from core.supervisor import (
 )
 from core.notificador import crear_notificador_desde_env
 from ccxt.base.errors import AuthenticationError, NetworkError
+from config.config import BACKFILL_MAX_CANDLES
 
 UTC = timezone.utc
 log = configurar_logger('datafeed', modo_silencioso=False)
-
-BACKFILL_MAX_CANDLES = 100
 
 
 class DataFeed:
@@ -175,20 +174,37 @@ class DataFeed:
         faltan = max(0, (ahora - last_ts) // intervalo_ms)
         if faltan <= 0:
             return
-        limit = min(faltan + 1, BACKFILL_MAX_CANDLES)
-        try:
-            ohlcv = await fetch_ohlcv_async(
-                self._cliente,
-                symbol,
-                self.intervalo,
-                since=last_ts + 1,
-                limit=limit,
+        restante_total = min(faltan + 1, BACKFILL_MAX_CANDLES)
+        since = last_ts + 1
+        ohlcv: list[list[float]] = []
+        total_chunks = (restante_total + 99) // 100
+        for idx in range(total_chunks):
+            limite_chunk = min(100, restante_total)
+            try:
+                chunk = await fetch_ohlcv_async(
+                    self._cliente,
+                    symbol,
+                    self.intervalo,
+                    since=since,
+                    limit=limite_chunk,
+                )
+            except (AuthenticationError, NetworkError) as e:
+                log.warning(f'❌ Error obteniendo backfill para {symbol}: {e}')
+                return
+            except Exception:
+                log.exception(f'❌ Error inesperado obteniendo backfill para {symbol}')
+                return
+            log.info(
+                f'[{symbol}] Backfill chunk {idx + 1}/{total_chunks} con {len(chunk)} velas'
             )
-        except (AuthenticationError, NetworkError) as e:
-            log.warning(f'❌ Error obteniendo backfill para {symbol}: {e}')
-            return
-        except Exception:
-            log.exception(f'❌ Error inesperado obteniendo backfill para {symbol}')
+            if not chunk:
+                break
+            ohlcv.extend(chunk)
+            restante_total -= len(chunk)
+            since = chunk[-1][0] + 1
+            if len(chunk) < limite_chunk or restante_total <= 0:
+                break
+        if not ohlcv:
             return
         validar_integridad_velas(
             symbol,

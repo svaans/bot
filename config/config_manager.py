@@ -76,6 +76,7 @@ class Config:
     ciclos_alerta_recursos: int = 5
     frecuencia_recursos: int = 60
     timeout_sin_datos_factor: int = 5
+    backfill_max_candles: int = 1000
 
 
 class ConfigManager:
@@ -153,4 +154,5 @@ class ConfigManager:
             ciclos_alerta_recursos=_cargar_int('CICLOS_ALERTA_RECURSOS', defaults.ciclos_alerta_recursos),
             frecuencia_recursos=_cargar_int('FRECUENCIA_RECURSOS', defaults.frecuencia_recursos),
             timeout_sin_datos_factor=_cargar_int('TIMEOUT_SIN_DATOS_FACTOR', getattr(defaults, 'timeout_sin_datos_factor', 5)),
+            backfill_max_candles=_cargar_int('BACKFILL_MAX_CANDLES', getattr(defaults, 'backfill_max_candles', 1000)),
         )
