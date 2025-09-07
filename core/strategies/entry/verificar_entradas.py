@@ -22,13 +22,22 @@ from core.scoring import DecisionTrace, DecisionReason
 log = configurar_logger('verificar_entrada')
 UTC = timezone.utc
 
-def _reparar_huecos(df: pd.DataFrame,
-                    max_gap_multiplo: int = 2,
-                    max_velas_toleradas: int = 2) -> tuple[pd.DataFrame, bool, dict]:
-    """
-    Rellena huecos pequeños generando velas sintéticas (OHLC = close previo, vol=0).
-    Acepta hasta 'max_velas_toleradas' huecos donde el delta <= max_gap_multiplo * intervalo_ms.
-    Devuelve: (df_reparado, ok, stats)
+def _reparar_huecos(
+    df: pd.DataFrame,
+    max_gap_multiplo: int = 3,
+    max_huecos_tolerados: int = 2,
+    max_velas_consecutivas: int = 2,
+) -> tuple[pd.DataFrame, bool, dict]:
+    """Repara huecos pequeños generando velas sintéticas.
+
+    Acepta como máximo ``max_huecos_tolerados`` gaps donde el delta entre velas sea
+    menor o igual a ``max_gap_multiplo`` veces el intervalo y el número de velas
+    faltantes consecutivas no exceda ``max_velas_consecutivas``.
+
+    Devuelve:
+        ``df_reparado``: DataFrame con huecos rellenos.
+        ``ok``: ``True`` si la reparación fue posible.
+        ``stats``: información de diagnóstico.
     """
     if df.empty or 'timestamp' not in df.columns:
         return df, False, {"motivo": "df_vacio"}
@@ -62,7 +71,15 @@ def _reparar_huecos(df: pd.DataFrame,
         # Hueco(s) demasiado grande(s) -> no reparamos
         return df2, False, {"intervalo_ms": intervalo_ms, "gaps_criticos": len(criticos)}
 
-    if len(tolerables) > max_velas_toleradas:
+    # Verificar cantidad de velas consecutivas perdidas en cada hueco
+    velas_consecutivas = [(g // intervalo_ms) - 1 for g in tolerables]
+    if any(vc > max_velas_consecutivas for vc in velas_consecutivas):
+        return df2, False, {
+            "intervalo_ms": intervalo_ms,
+            "max_velas_consecutivas": max(velas_consecutivas),
+        }
+
+    if len(tolerables) > max_huecos_tolerados:
         # Demasiados huecos aunque pequeños
         return df2, False, {"intervalo_ms": intervalo_ms, "gaps_tolerables": len(tolerables)}
 
@@ -156,10 +173,10 @@ async def verificar_entrada(trader, symbol: str, df: pd.DataFrame, estado) -> (
     if not verificar_integridad_datos(df):
         reparado, ok, stats = _reparar_huecos(df)
         if ok and verificar_integridad_datos(reparado):
-            log.info(f'[{symbol}] 🩹 Reparados huecos menores: {stats}')
+            log.info(f'[{symbol}] Datos incompletos reparados: {stats}')
             df = reparado
         else:
-            log.warning(f'[{symbol}] Datos de mercado incompletos o corruptos')
+            log.warning(f'[{symbol}] Datos corruptos irreparables: {stats}')
             metricas_tracker.registrar_filtro('datos_invalidos')
             return None
 
