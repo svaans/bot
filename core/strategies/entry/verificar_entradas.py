@@ -22,6 +22,72 @@ from core.scoring import DecisionTrace, DecisionReason
 log = configurar_logger('verificar_entrada')
 UTC = timezone.utc
 
+def _reparar_huecos(df: pd.DataFrame,
+                    max_gap_multiplo: int = 2,
+                    max_velas_toleradas: int = 2) -> tuple[pd.DataFrame, bool, dict]:
+    """
+    Rellena huecos pequeños generando velas sintéticas (OHLC = close previo, vol=0).
+    Acepta hasta 'max_velas_toleradas' huecos donde el delta <= max_gap_multiplo * intervalo_ms.
+    Devuelve: (df_reparado, ok, stats)
+    """
+    if df.empty or 'timestamp' not in df.columns:
+        return df, False, {"motivo": "df_vacio"}
+
+    df2 = df.sort_values('timestamp').copy()
+    # Asegurar tipos y monotonicidad
+    df2['timestamp'] = pd.to_numeric(df2['timestamp'], errors='coerce')
+    df2 = df2.dropna(subset=['timestamp'])
+    df2 = df2.drop_duplicates(subset=['timestamp'])
+
+    if len(df2) < 2:
+        return df2, False, {"motivo": "muy_pocos_datos"}
+
+    # Inferir intervalo por mediana de diferencias
+    diffs = df2['timestamp'].diff().dropna()
+    intervalo_ms = int(diffs.median())
+    if intervalo_ms <= 0:
+        return df2, False, {"motivo": "intervalo_invalido"}
+
+    # Detectar huecos
+    gaps = diffs[diffs > intervalo_ms].to_list()
+    if not gaps:
+        return df2, True, {"intervalo_ms": intervalo_ms, "gaps": 0}
+
+    # Limitar tolerancias
+    tolerable_ms = max_gap_multiplo * intervalo_ms
+    tolerables = [g for g in gaps if g <= tolerable_ms]
+    criticos = [g for g in gaps if g > tolerable_ms]
+
+    if criticos:
+        # Hueco(s) demasiado grande(s) -> no reparamos
+        return df2, False, {"intervalo_ms": intervalo_ms, "gaps_criticos": len(criticos)}
+
+    if len(tolerables) > max_velas_toleradas:
+        # Demasiados huecos aunque pequeños
+        return df2, False, {"intervalo_ms": intervalo_ms, "gaps_tolerables": len(tolerables)}
+
+    # Rellenar rejilla completa y sintetizar faltantes
+    idx = pd.to_datetime(df2['timestamp'], unit='ms')
+    full_idx = pd.date_range(idx.iloc[0], idx.iloc[-1], freq=f'{intervalo_ms}ms')
+    df2 = df2.set_index(idx).reindex(full_idx)
+
+    # Para velas faltantes, generamos OHLC a partir del close previo y vol=0
+    df2['close'] = df2['close'].ffill()
+    for col in ('open', 'high', 'low'):
+        df2[col] = df2[col].fillna(df2['close'])
+    if 'volume' in df2.columns:
+        df2['volume'] = df2['volume'].fillna(0)
+
+    # Volver a timestamp ms
+    df2 = df2.reset_index(drop=False).rename(columns={'index': 'dt'})
+    df2['timestamp'] = (df2['dt'].astype('int64') // 10**6).astype('int64')
+    df2 = df2.drop(columns=['dt'])
+
+    return df2, True, {
+        "intervalo_ms": intervalo_ms,
+        "gaps_reparados": len(tolerables),
+    }
+
 
 def _tendencia_principal(tendencias: list[str | None]) -> tuple[str | None, float]:
     """Devuelve la tendencia predominante y su proporción."""
@@ -70,16 +136,33 @@ def validar_marcos(symbol_state: dict) -> bool:
         return False
     return True
 
-async def verificar_entrada(trader, symbol: str, df: pd.DataFrame, estado) ->(
+async def verificar_entrada(trader, symbol: str, df: pd.DataFrame, estado) -> (
     dict | None):
     """
     Evalúa condiciones de entrada y devuelve info de operación
     si cumple todos los filtros, de lo contrario None.
     """
-    if not verificar_integridad_datos(df):
-        log.warning(f'[{symbol}] Datos de mercado incompletos o corruptos')
+
+    # Normalización mínima previa
+    if df is None or df.empty:
+        log.warning(f'[{symbol}] DF vacío')
         metricas_tracker.registrar_filtro('datos_invalidos')
         return None
+    df = df.sort_values('timestamp').copy()
+    df['timestamp'] = pd.to_numeric(df['timestamp'], errors='coerce')
+    df = df.dropna(subset=['timestamp']).drop_duplicates(subset=['timestamp'])
+
+    # Integridad básica; si falla intentamos reparación de huecos tolerables
+    if not verificar_integridad_datos(df):
+        reparado, ok, stats = _reparar_huecos(df)
+        if ok and verificar_integridad_datos(reparado):
+            log.info(f'[{symbol}] 🩹 Reparados huecos menores: {stats}')
+            df = reparado
+        else:
+            log.warning(f'[{symbol}] Datos de mercado incompletos o corruptos')
+            metricas_tracker.registrar_filtro('datos_invalidos')
+            return None
+
     config = adaptar_configuracion(symbol, df, trader.config_por_simbolo.get(symbol, {}))
     trader.config_por_simbolo[symbol] = config
     tendencia = obtener_tendencia(symbol, df)
