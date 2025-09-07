@@ -49,7 +49,7 @@ _ajustar_limite_archivos()
 _SSL_CONTEXT = ssl.create_default_context(cafile=certifi.where())
 
 RECONNECT_WINDOW = 300  # 5 minutos
-RECONNECT_THRESHOLD = 250
+RECONNECT_THRESHOLD = 100
 _reconnect_history: deque[float] = deque()
 MAX_BACKOFF = 60
 MAX_BACKFILL_CANDLES = 100  # límite para backfill para evitar saturación
@@ -446,6 +446,8 @@ async def _gestionar_ws(
             fallos_consecutivos += 1
             total_reintentos += 1
             delay = calcular_backoff(fallos_consecutivos, max_seg=MAX_BACKOFF)
+            if fallos_consecutivos >= 3:
+                delay = max(delay, 5)  # asegurarse de no reintentar demasiado rápido
             log.error(f'❌ Error en WebSocket: {e}')
             log.info(
                 f'🔁 Reintentando conexión en {delay:.1f} segundos... (total reintentos: {total_reintentos})'
