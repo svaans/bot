@@ -52,8 +52,8 @@ MAX_BACKOFF = 60
 MAX_BACKFILL_CANDLES = 100  # límite para backfill para evitar saturación
 BACKFILL_CONCURRENCY = 3
 _backfill_semaphore = asyncio.Semaphore(BACKFILL_CONCURRENCY)
-MESSAGE_QUEUE_SIZE = 100
-CALLBACK_TIMEOUT = 5
+MESSAGE_QUEUE_SIZE = 1000
+CALLBACK_TIMEOUT = 8
 
 def _registrar_reconexion() -> None:
     """Registra un intento de reconexión y alerta si la tasa es elevada."""
@@ -158,6 +158,7 @@ async def _procesar_cola(
             queue.task_done()
             continue
 
+        # Relleno de gaps previo a emitir la vela actual
         h['ultimo_timestamp'] = await _rellenar_gaps(
             h['callback'],
             symbol,
@@ -166,17 +167,23 @@ async def _procesar_cola(
             vela['timestamp'],
             h['intervalo_ms'],
         )
+
+        # Emitimos la vela actual con timeout defensivo
         try:
             await asyncio.wait_for(h['callback'](vela), timeout=callback_timeout)
         except Exception as e:
             log.warning(f'❌ Callback falló: {e}')
             queue.task_done()
             continue
+
+        # Actualizamos estado y latidos (incluye tick_data por símbolo)
         h['ultimo_timestamp'] = vela['timestamp']
         h['ultimo_cierre'] = vela['close']
         last_message[symbol] = time.monotonic()
         tick('data_feed')
+        tick_data(symbol)  # <--- añadido: latido por símbolo en cada vela
         queue.task_done()
+
 
 
 
@@ -189,20 +196,7 @@ async def _gestionar_ws(
     mensaje_timeout: int | None,
     cliente=None,
 ):
-    """Gestiona un WebSocket genérico con reconexión y backfill.
-
-    Cada elemento de ``handlers`` debe contener:
-    ``callback`` -- función async que recibe la vela normalizada.
-
-    ``parser`` -- función que recibe el mensaje crudo y devuelve la vela
-    normalizada o ``None``.
-
-    ``ultimo_timestamp`` y ``ultimo_cierre`` -- utilizados para generar
-    velas sintéticas y backfillear en reconexiones.
-
-    ``intervalo`` e ``intervalo_ms`` -- necesarios para el backfill vía
-    :func:`fetch_ohlcv_async`.
-    """
+    """Gestiona un WebSocket genérico con reconexión y backfill (incluye bootstrap si ts=None)."""
     fallos_consecutivos = 0
     total_reintentos = 0
     backoff = 5
@@ -226,8 +220,12 @@ async def _gestionar_ws(
             _habilitar_tcp_keepalive(ws)
             fallos_consecutivos = 0
             backoff = 5
+
+            # Inicializa marcadores de último mensaje para los watchdogs
             for s in handlers:
                 last_message[s] = time.monotonic()
+
+            # Watchdogs por símbolo + keepalive ping
             watchdogs = [
                 asyncio.create_task(_watchdog(ws, s, last_message, tiempo_maximo))
                 for s in handlers
@@ -242,45 +240,80 @@ async def _gestionar_ws(
                 _procesar_cola(message_queue, handlers, last_message, handlers_by_norm)
             )
 
+            # === Bootstrap & Backfill =========================================
             backfill_tasks = []
             if cliente:
                 for s, h in handlers.items():
                     ts = h.get('ultimo_timestamp')
-                    if ts is None:
-                        continue
 
-                    async def _backfill_symbol(symbol=s, h=h):
+                    async def _backfill_symbol(symbol=s, h=h, ts=ts):
+                        """
+                        - Si ts es None: bootstrap (trae últimas K velas recientes).
+                        - Si ts no es None: backfill desde ts+1 hasta ahora (máx. MAX_BACKFILL_CANDLES).
+                        """
                         intentos = 0
                         espera = 1
                         while True:
                             try:
-                                ahora = int(datetime.now(UTC).timestamp() * 1000)
-                                faltan = max(1, (ahora - h['ultimo_timestamp']) // h['intervalo_ms'])
-                                limite = min(faltan, MAX_BACKFILL_CANDLES)
-                                async with _backfill_semaphore:
-                                    ohlcv = await asyncio.wait_for(
-                                        fetch_ohlcv_async(
-                                            cliente,
-                                            symbol=symbol,
-                                            timeframe=h['intervalo'],
-                                            since=h['ultimo_timestamp'] + 1,
-                                            limit=limite,
-                                        ),
-                                        timeout=10,
-                                    )
-                                for o in ohlcv:
-                                    tss = o[0]
-                                    if tss > h['ultimo_timestamp']:
-                                        h['ultimo_timestamp'] = await _rellenar_gaps(
-                                            h['callback'],
-                                            symbol,
-                                            h['ultimo_timestamp'],
-                                            h['ultimo_cierre'],
-                                            tss,
-                                            h['intervalo_ms'],
+                                if ts is None:
+                                    # Bootstrap: velas recientes para arrancar con contexto
+                                    K = min(60, MAX_BACKFILL_CANDLES)
+                                    async with _backfill_semaphore:
+                                        ohlcv = await asyncio.wait_for(
+                                            fetch_ohlcv_async(
+                                                cliente,
+                                                symbol=symbol,
+                                                timeframe=h['intervalo'],
+                                                since=None,
+                                                limit=K,
+                                            ),
+                                            timeout=10,
                                         )
-                                        await h['callback'](
-                                            {
+                                    # Empuja en orden (antiguo -> reciente)
+                                    for o in ohlcv:
+                                        tss = o[0]
+                                        vela = {
+                                            'symbol': symbol,
+                                            'timestamp': tss,
+                                            'open': float(o[1]),
+                                            'high': float(o[2]),
+                                            'low': float(o[3]),
+                                            'close': float(o[4]),
+                                            'volume': float(o[5]),
+                                        }
+                                        await h['callback'](vela)
+                                        h['ultimo_timestamp'] = tss
+                                        h['ultimo_cierre'] = vela['close']
+                                        tick('data_feed')
+                                        tick_data(symbol)
+                                else:
+                                    # Backfill normal desde ts conocido
+                                    ahora = int(datetime.now(UTC).timestamp() * 1000)
+                                    faltan = max(1, (ahora - h['ultimo_timestamp']) // h['intervalo_ms'])
+                                    limite = min(faltan, MAX_BACKFILL_CANDLES)
+                                    async with _backfill_semaphore:
+                                        ohlcv = await asyncio.wait_for(
+                                            fetch_ohlcv_async(
+                                                cliente,
+                                                symbol=symbol,
+                                                timeframe=h['intervalo'],
+                                                since=h['ultimo_timestamp'] + 1,
+                                                limit=limite,
+                                            ),
+                                            timeout=10,
+                                        )
+                                    for o in ohlcv:
+                                        tss = o[0]
+                                        if tss > h['ultimo_timestamp']:
+                                            h['ultimo_timestamp'] = await _rellenar_gaps(
+                                                h['callback'],
+                                                symbol,
+                                                h['ultimo_timestamp'],
+                                                h['ultimo_cierre'],
+                                                tss,
+                                                h['intervalo_ms'],
+                                            )
+                                            vela = {
                                                 'symbol': symbol,
                                                 'timestamp': tss,
                                                 'open': float(o[1]),
@@ -289,22 +322,24 @@ async def _gestionar_ws(
                                                 'close': float(o[4]),
                                                 'volume': float(o[5]),
                                             }
-                                        )
-                                        h['ultimo_timestamp'] = tss
-                                        h['ultimo_cierre'] = float(o[4])
+                                            await h['callback'](vela)
+                                            h['ultimo_timestamp'] = tss
+                                            h['ultimo_cierre'] = vela['close']
+                                            tick('data_feed')
+                                            tick_data(symbol)
                                 break
                             except Exception as e:
                                 intentos += 1
                                 if intentos >= 3:
-                                    log.warning(
-                                        f'❌ Error al backfillear {symbol} tras {intentos} intentos: {e}'
-                                    )
+                                    log.warning(f'❌ Error al backfillear {symbol} tras {intentos} intentos: {e}')
                                     tick('data_feed')
                                     break
                                 await asyncio.sleep(espera + random.random())
                                 espera *= 2
 
                     backfill_tasks.append(asyncio.create_task(_backfill_symbol()))
+            # ===================================================================
+
             try:
                 while True:
                     try:
@@ -319,27 +354,19 @@ async def _gestionar_ws(
                             tick('data_feed')
                         continue
                     except asyncio.TimeoutError:
-                        log.warning(
-                            f'⏰ Sin datos en {mensaje_timeout}s, forzando reconexión'
-                        )
+                        log.warning(f'⏰ Sin datos en {mensaje_timeout}s, forzando reconexión')
                         await ws.close()
                         break
                     except ConnectionClosed as e:
-                        log.warning(
-                            f"🚪 WebSocket cerrado — Código: {e.code}, Motivo: {e.reason}"
-                        )
+                        log.warning(f"🚪 WebSocket cerrado — Código: {e.code}, Motivo: {e.reason}")
                         await ws.close()
                         break
                     except Exception as e:
                         log.warning(f'❌ Error recibiendo datos: {e}')
                         await ws.close()
                         break
-
-                    pass
             finally:
-                log.info(
-                    f"🔻 WebSocket desconectado de {url} a las {datetime.now(UTC).isoformat()}"
-                )
+                log.info(f"🔻 WebSocket desconectado de {url} a las {datetime.now(UTC).isoformat()}")
                 for t in backfill_tasks:
                     try:
                         await t
@@ -354,9 +381,7 @@ async def _gestionar_ws(
                     except InactividadTimeoutError:
                         raise
                     except Exception as e:
-                        log.debug(
-                            f'Error al esperar tarea cancelada: {e}'
-                        )
+                        log.debug(f'Error al esperar tarea cancelada: {e}')
                         tick('data_feed')
                 log.debug(f'Tareas activas tras cierre: {len(asyncio.all_tasks())}')
                 try:
@@ -372,9 +397,7 @@ async def _gestionar_ws(
             fallos_consecutivos += 1
             total_reintentos += 1
             log.error(f'❌ Error en WebSocket: {e}')
-            log.info(
-                f'🔁 Reintentando conexión en {backoff} segundos... (total reintentos: {total_reintentos})'
-            )
+            log.info(f'🔁 Reintentando conexión en {backoff} segundos... (total reintentos: {total_reintentos})')
             _registrar_reconexion()
             tick('data_feed')
             await asyncio.sleep(backoff + random.random())
@@ -383,9 +406,8 @@ async def _gestionar_ws(
             if backoff == MAX_BACKOFF and previo < MAX_BACKOFF:
                 log.warning(f'⚠️ Backoff máximo alcanzado: {MAX_BACKOFF}s')
             elif fallos_consecutivos >= 5:
-                log.warning(
-                    f'⏳ {fallos_consecutivos} fallos consecutivos. Nuevo backoff: {backoff}s'
-                )
+                log.warning(f'⏳ {fallos_consecutivos} fallos consecutivos. Nuevo backoff: {backoff}s')
+
 
 
 async def escuchar_velas(

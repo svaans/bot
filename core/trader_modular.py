@@ -1162,15 +1162,24 @@ class Trader:
     async def _sincronizar_ordenes_periodicamente(self, intervalo: int = 60) -> None:
         while not self._cerrado:
             try:
+                # Latido al inicio del ciclo (evita falsos "inactivo" si esta llamada tarda)
+                tick('sincronizar_ordenes', 'start')
+
                 await asyncio.to_thread(
                     real_orders.sincronizar_ordenes_binance,
                     self.config.symbols,
                     self.config,
                 )
                 log.debug('🔄 Sincronización de órdenes completada')
+
+                # Latido en camino exitoso (CRÍTICO)
+                tick('sincronizar_ordenes', 'ok')
+
             except Exception as e:
                 log.warning(f'⚠️ Error al sincronizar órdenes: {e}')
-                tick('sincronizar_ordenes')
+                # Mantén el latido también en error (ya lo tenías)
+                tick('sincronizar_ordenes', 'error')
+
             await asyncio.sleep(intervalo)
 
     def _validar_puntaje(self, symbol: str, puntaje: float, umbral: float,
