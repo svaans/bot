@@ -429,7 +429,12 @@ async def escuchar_velas(
     if last_message is None:
         last_message = {}
     if tiempo_maximo is None:
-        tiempo_maximo = max(intervalo_a_segundos(intervalo) * 4, 60)
+        base_timeout = intervalo_a_segundos(intervalo) * 5
+        if base_timeout < 300:
+            log.info(
+                f'⌛ Timeout de inactividad extendido a 300s para {symbol}'
+            )
+        tiempo_maximo = max(base_timeout, 300)
     if ping_interval is None:
         ping_interval = 30
     if mensaje_timeout is None:
@@ -500,7 +505,12 @@ async def escuchar_velas_combinado(
     if last_message is None:
         last_message = {}
     if tiempo_maximo is None:
-        tiempo_maximo = max(intervalo_a_segundos(intervalo) * 4, 60)
+        base_timeout = intervalo_a_segundos(intervalo) * 5
+        if base_timeout < 300:
+            log.info(
+                '⌛ Timeout de inactividad extendido a 300s para stream combinado'
+            )
+        tiempo_maximo = max(base_timeout, 300)
     if ping_interval is None:
         ping_interval = 30
     if mensaje_timeout is None:

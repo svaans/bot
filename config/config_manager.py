@@ -67,7 +67,7 @@ class Config:
     heartbeat_interval: int = 60
     monitor_interval: int = 5
     max_stream_restarts: int = 5
-    inactivity_intervals: int = 3
+    inactivity_intervals: int = 5
     handler_timeout: int = 5
     frecuencia_tendencia: int = 1
     frecuencia_correlaciones: int = 300
