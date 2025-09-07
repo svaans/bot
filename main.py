@@ -7,6 +7,7 @@ from core.hot_reload import start_hot_reload, stop_hot_reload
 from core.supervisor import start_supervision
 from core.notificador import crear_notificador_desde_env
 from core.startup_manager import StartupManager
+from core.metrics import iniciar_exporter
 
 
 def mostrar_banner():
@@ -16,6 +17,7 @@ def mostrar_banner():
 
 
 async def main():
+    iniciar_exporter()
     start_supervision()
     try:
         startup = StartupManager()

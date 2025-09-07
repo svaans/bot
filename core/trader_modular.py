@@ -1797,6 +1797,9 @@ class Trader:
         symbol = vela.get('symbol')
         if not self._validar_config(symbol):
             return
+        log.debug(
+            f"[{symbol}] Procesando vela trace_id={vela.get('trace_id')}"
+        )
         loop = asyncio.get_running_loop()
 
         def _compute() -> dict:

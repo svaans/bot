@@ -47,6 +47,8 @@ class Supervisor:
         self.task_backoff: Dict[str, int] = defaultdict(lambda: 5)
         self.task_restart_times: Dict[str, Deque[datetime]] = defaultdict(deque)
         self.data_heartbeat: Dict[str, datetime] = {}
+        self.stop_event = asyncio.Event()
+        self.reinicios_watchdog: Dict[str, int] = {}
         self.TIMEOUT_SIN_DATOS = max(
             intervalo_a_segundos(INTERVALO_VELAS) * TIMEOUT_SIN_DATOS_FACTOR, 300
         )
@@ -198,11 +200,11 @@ class Supervisor:
                 p95 = sorted(intervals)[idx]
                 timeout_task = min(max(p95 * 3, 90), 300)
             else:
-                timeout_task = 120
+                timeout_task = timeout
             expected = self.task_expected_interval.get(task_name)
             if expected:
                 timeout_task = max(timeout_task, expected * 3)
-            timeout_task = max(timeout_task, 90)
+            timeout_task = max(timeout_task, timeout)
             delta_task = (now - ts).total_seconds()
             if delta_task > timeout_task:
                 log.critical(
@@ -322,10 +324,8 @@ class Supervisor:
         """Valida que el proceso siga activo e imprime trazas si se congela."""
 
         self._watchdog_interval = check_interval
-        while True:
+        while not self.stop_event.is_set():
             await self._watchdog_once(timeout)
-
-            
             try:
                 await asyncio.wait_for(
                     self._watchdog_interval_event.wait(),
@@ -374,8 +374,6 @@ class Supervisor:
         task = asyncio.current_task()
         try:
             while True:
-                # Latido antes de iniciar el trabajo para prevenir falsos inactivos
-                self.beat(task_name, "start")
                 try:
                     result = coro_factory()
                     if asyncio.iscoroutine(result):
@@ -436,6 +434,16 @@ class Supervisor:
                 if self.tasks.get(task_name) is task:
                     self.tasks.pop(task_name, None)
         registrar_watchdog_restart(task_name)
+        self.reinicios_watchdog[task_name] = (
+            self.reinicios_watchdog.get(task_name, 0) + 1
+        )
+        factory = self.task_factories.get(task_name)
+        if factory:
+            self.supervised_task(factory, name=task_name)
+        try:
+            self.notificador.enviar(f"Reiniciando tarea {task_name}")
+        except Exception:
+            pass
         now = self._now()
         times = self.task_restart_times[task_name]
         times.append(now)
@@ -498,7 +506,15 @@ class Supervisor:
         )
         self.tasks[task_name] = task
         return task
+    
+    async def shutdown(self) -> None:
+        """Detiene todas las tareas supervisadas."""
 
+        self.stop_event.set()
+        for t in list(self.tasks.values()):
+            t.cancel()
+        if self.tasks:
+            await asyncio.gather(*self.tasks.values(), return_exceptions=True)
 
 # ----------------------------------------------------------------------
 #  API de compatibilidad
@@ -515,6 +531,7 @@ registrar_reinicio_inactividad = _default_supervisor.registrar_reinicio_inactivi
 registrar_reconexion_datafeed = _default_supervisor.registrar_reconexion_datafeed
 registrar_ping = _default_supervisor.registrar_ping
 set_watchdog_interval = _default_supervisor.set_watchdog_interval
+shutdown = _default_supervisor.shutdown
 
 tasks = _default_supervisor.tasks
 task_heartbeat = _default_supervisor.task_heartbeat
@@ -540,6 +557,7 @@ __all__ = [
     "registrar_reconexion_datafeed",
     "registrar_ping",
     "set_watchdog_interval",
+    "shutdown",
     "tasks",
     "task_heartbeat",
     "data_heartbeat",

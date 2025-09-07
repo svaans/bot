@@ -15,7 +15,7 @@ import os
 from collections import defaultdict
 from typing import Dict
 
-from prometheus_client import Counter, Gauge
+from prometheus_client import Counter, Gauge, Histogram, start_http_server
 
 from core.registro_metrico import registro_metrico
 from core.utils.logger import configurar_logger
@@ -74,6 +74,18 @@ FEEDS_OPEN_INTEREST_MISSING = Counter(
 FEEDS_MISSING_RATE = Gauge(
     "feeds_missing_rate",
     "Tasa de feeds ausentes por minuto",
+    ["symbol"],
+)
+
+# Métricas de DataFeed
+QUEUE_SIZE = Gauge(
+    "datafeed_queue_size",
+    "Tamaño de cola de DataFeed",
+    ["symbol"],
+)
+INGEST_LATENCY = Histogram(
+    "datafeed_ingest_latency_seconds",
+    "Latencia desde recepción hasta procesamiento",
     ["symbol"],
 )
 
@@ -274,3 +286,11 @@ def subscribe_simulated_order_metrics(bus) -> None:
 
     bus.subscribe('orden_simulada_creada', _on_open)
     bus.subscribe('orden_simulada_cerrada', _on_close)
+
+
+def iniciar_exporter() -> None:
+    """Inicia el servidor HTTP para exponer métricas."""
+
+    port = int(os.getenv("METRICS_PORT", "8000"))
+    start_http_server(port)
+    log.info(f"Prometheus exporter escuchando en puerto {port}")

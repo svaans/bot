@@ -7,6 +7,7 @@ from typing import Awaitable, Callable, Dict, Iterable, Any, Deque
 from datetime import datetime, timezone, timedelta
 import time
 from collections import deque
+from uuid import uuid4
 from binance_api.websocket import (
     escuchar_velas,
     escuchar_velas_combinado,
@@ -17,6 +18,7 @@ from core.utils.logger import configurar_logger
 from core.utils import intervalo_a_segundos, validar_integridad_velas, timestamp_alineado
 from core.utils.backoff import calcular_backoff
 from core.registro_metrico import registro_metrico
+from core.metrics import QUEUE_SIZE, INGEST_LATENCY
 from core.supervisor import (
     tick,
     tick_data,
@@ -163,8 +165,11 @@ class DataFeed:
             log.warning(
                 f"[{symbol}] queue_size={qsize}/{queue.maxsize}"
             )
+        candle.setdefault("trace_id", uuid4().hex)
+        candle["_enqueue_time"] = time.monotonic()
         try:
             queue.put_nowait(candle)
+            QUEUE_SIZE.labels(symbol=symbol).set(queue.qsize())
         except asyncio.QueueFull:
             now = time.monotonic()
             last = self._ultimo_log_descartes.get(symbol, 0.0)
@@ -185,6 +190,7 @@ class DataFeed:
                 pass
             try:
                 queue.put_nowait(candle)
+                QUEUE_SIZE.labels(symbol=symbol).set(queue.qsize())
             except asyncio.QueueFull:
                 pass
         self._last[symbol] = datetime.now(UTC)
@@ -201,7 +207,9 @@ class DataFeed:
             'volume': candle.get('volume'),
         }
         log.debug(
-            f'[{symbol}] Recibida vela: timestamp={candle.get("timestamp")}')
+            f'[{symbol}] Recibida vela trace_id={candle.get("trace_id")}: '
+            f'timestamp={candle.get("timestamp")}'
+        )
         tick_data(symbol)
     async def _backfill_candles(self, symbol: str) -> None:
         """Recupera y procesa velas faltantes tras una reconexión."""
@@ -289,6 +297,7 @@ class DataFeed:
         inicio = time.monotonic()
         while self._running:
             candle = await queue.get()
+            enqueue_ts = candle.pop("_enqueue_time", None)
             try:
                 await asyncio.wait_for(
                     handler(candle), timeout=self.handler_timeout
@@ -307,6 +316,11 @@ class DataFeed:
                 log.error(f"Error procesando vela en {symbol}: {e}")
             finally:
                 queue.task_done()
+                if enqueue_ts is not None:
+                    INGEST_LATENCY.labels(symbol=symbol).observe(
+                        time.monotonic() - enqueue_ts
+                    )
+                QUEUE_SIZE.labels(symbol=symbol).set(queue.qsize())
                 procesadas += 1
                 ahora = time.monotonic()
                 if ahora - inicio >= 2.0:
