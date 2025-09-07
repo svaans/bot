@@ -550,30 +550,43 @@ async def _watchdog(
     ws,
     symbol: str,
     last_message: dict[str, float],
-    tiempo_maximo: int,
+    tiempo_maximo: float,
 ):
-    """Cierra ``ws`` si no se reciben datos por ``tiempo_maximo`` segundos."""
-    """
-    Si no llega ninguna vela en tiempo_maximo (segundos), cierra el websocket para reiniciar.
-    """
+    """Cierra el WS si no se reciben datos en ``tiempo_maximo`` segundos (usa reloj monotónico)."""
     try:
-        intervalo = min(5, max(1, tiempo_maximo / 5))
+        # Revisión: intervalo de sondeo razonable y siempre >0
+        intervalo = max(1.0, min(5.0, float(tiempo_maximo) / 5.0))
         while True:
             await asyncio.sleep(intervalo)
+
+            ahora_mono = time.monotonic()
             ultimo = last_message.get(symbol)
+
+            # Inicializa si aún no hay marca
             if ultimo is None:
-                last_message[symbol] = time.monotonic()
+                last_message[symbol] = ahora_mono
                 continue
-            if time.monotonic() - ultimo > tiempo_maximo:
+
+            # Autodefensa: si alguien metió un datetime u otro tipo, re-inicializa
+            if not isinstance(ultimo, (int, float)):
+                log.debug(f'⛑️ Corrigiendo tipo de last_message[{symbol}]={type(ultimo).__name__}')
+                last_message[symbol] = ahora_mono
+                continue
+
+            elapsed = ahora_mono - float(ultimo)
+            if elapsed > float(tiempo_maximo):
                 log.warning(
-                    f'⚠️ No se recibieron velas en {tiempo_maximo}s para {symbol}, forzando reconexión.'
+                    f'⚠️ No se recibieron velas en {tiempo_maximo:.0f}s para {symbol}, forzando reconexión.'
                 )
-                await ws.close()
-                tick('data_feed')
-                tick_data(symbol)
+                try:
+                    await ws.close()
+                finally:
+                    tick('data_feed')
+                    tick_data(symbol)
                 raise InactividadTimeoutError(
-                    f'Sin velas en {tiempo_maximo}s para {symbol}'
+                    f'Sin velas en {tiempo_maximo:.0f}s para {symbol}'
                 )
+
     except asyncio.CancelledError:
         raise
     except InactividadTimeoutError:
@@ -582,6 +595,7 @@ async def _watchdog(
         log.warning(f'Excepción inesperada en watchdog de {symbol}: {e}')
         tick('data_feed')
         tick_data(symbol)
+
 
 async def _keepalive(ws, symbol, intervalo=30, log_interval=10):
     """Envía ping periódicamente para mantener viva la conexión."""
