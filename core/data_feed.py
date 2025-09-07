@@ -76,6 +76,7 @@ class DataFeed:
         self._mensajes_recibidos: Dict[str, int] = {}
         self._ultimo_log_descartes: Dict[str, float] = {}
         self._queue_discards: Dict[str, int] = {}
+        self._coalesce_counts: Dict[str, int] = {}
         self._reinicios_inactividad: Dict[str, int] = {}
         self._queues: Dict[str, asyncio.Queue] = {}
         self._consumer_tasks: Dict[str, asyncio.Task] = {}
@@ -99,6 +100,11 @@ class DataFeed:
     def queue_discards(self) -> Dict[str, int]:
         """Cantidad de velas descartadas por cola llena por símbolo."""
         return dict(self._queue_discards)
+    
+    @property
+    def coalesce_counts(self) -> Dict[str, int]:
+        """Cantidad de velas colapsadas (coalescidas) por símbolo."""
+        return dict(self._coalesce_counts)
     
     def set_reset_callback(self, cb: Callable[[str], None]) -> None:
         """Registra un callback para reiniciar el filtro de velas por símbolo."""
@@ -283,6 +289,21 @@ class DataFeed:
         inicio = time.monotonic()
         while self._running:
             candle = await queue.get()
+            coalesced = 0
+            while True:
+                try:
+                    latest = queue.get_nowait()
+                    queue.task_done()
+                    candle = latest
+                    coalesced += 1
+                except asyncio.QueueEmpty:
+                    break
+            if coalesced:
+                self._coalesce_counts[symbol] = self._coalesce_counts.get(symbol, 0) + coalesced
+                registro_metrico.registrar(
+                    "coalesce_count",
+                    {"symbol": symbol, "count": self._coalesce_counts[symbol]},
+                )
             try:
                 await asyncio.wait_for(
                     handler(candle), timeout=self.handler_timeout
