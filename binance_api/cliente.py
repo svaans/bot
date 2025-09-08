@@ -498,6 +498,15 @@ async def fetch_ticker_async(cliente, *args, **kwargs):
     return await loop.run_in_executor(None, cliente.fetch_ticker, *args, **kwargs)
 
 
+async def fetch_order_book_async(cliente, *args, **kwargs):
+    """Versión asíncrona de ``fetch_order_book`` con reintentos."""
+    if isinstance(cliente, BinanceClient):
+        return await cliente.fetch_order_book(*args, **kwargs)
+    loop = asyncio.get_running_loop()
+    func = functools.partial(cliente.fetch_order_book, *args, **kwargs)
+    return await loop.run_in_executor(None, func)
+    
+
 async def load_markets_async(cliente, *args, **kwargs):
     if isinstance(cliente, BinanceClient):
         return await cliente.load_markets(*args, **kwargs)
