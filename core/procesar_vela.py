@@ -38,7 +38,7 @@ UTC = timezone.utc
 _indicadores_locks: defaultdict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
 
 _vela_locks: defaultdict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
-MAX_BUFFER_VELAS = int(os.getenv('MAX_BUFFER_VELAS', 360))
+MAX_BUFFER_VELAS = int(os.getenv('MAX_BUFFER_VELAS', 180))
 MAX_ESTRATEGIAS_BUFFER = MAX_BUFFER_VELAS
 
 

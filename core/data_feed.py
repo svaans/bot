@@ -325,21 +325,31 @@ class DataFeed:
                 and queue.maxsize
                 and queue.qsize() > queue.maxsize * 0.8
             ):
-                while queue.qsize() > queue.maxsize * 0.8:
+                discarded = 1  # la vela obtenida será reemplazada
+                last: dict | None = None
+                while True:
                     try:
-                        _ = queue.get_nowait()
+                        next_candle = queue.get_nowait()
                     except asyncio.QueueEmpty:
                         break
+                    if queue.empty():
+                        last = next_candle
+                        break
                     queue.task_done()
-                    self._queue_discards[symbol] = self._queue_discards.get(symbol, 0) + 1
-                    obs_metrics.QUEUE_DROPS.labels(symbol=symbol).inc()
-                    registro_metrico.registrar(
-                        "queue_discards",
-                        {"symbol": symbol, "count": self._queue_discards[symbol]},
-                    )
-                    log.warning(
-                        f"[{symbol}] consumer_backlog: descartando vela antigua (total {self._queue_discards[symbol]})"
-                    )
+                    discarded += 1
+                queue.task_done()  # descartar la vela inicial
+                self._queue_discards[symbol] = (
+                    self._queue_discards.get(symbol, 0) + discarded
+                )
+                obs_metrics.QUEUE_DROPS.labels(symbol=symbol).inc(discarded)
+                registro_metrico.registrar(
+                    "queue_discards",
+                    {"symbol": symbol, "count": self._queue_discards[symbol]},
+                )
+                log.warning(
+                    f"[{symbol}] consumer_backlog: descartando {discarded} velas antiguas (total {self._queue_discards[symbol]})"
+                )
+                candle = last if last is not None else candle
                 QUEUE_SIZE.labels(symbol=symbol).set(queue.qsize())
             try:
                 await asyncio.wait_for(
@@ -893,7 +903,7 @@ class DataFeed:
                 if candle:
                     self._ultimo_candle[sym] = candle
         self._running = True
-        tam_q = int(os.getenv("DF_QUEUE_MAX", "2000"))
+        tam_q = int(os.getenv("DF_QUEUE_MAX", "500"))
         self._queues = {sym: asyncio.Queue(maxsize=tam_q) for sym in self._symbols}
         for sym in self._symbols:
             self._consumer_tasks[sym] = supervised_task(
