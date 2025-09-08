@@ -58,6 +58,7 @@ class Config:
     max_perdidas_diarias: int = 6
     volumen_min_relativo: float = 1.0
     max_spread_ratio: float = 0.003
+    spread_dynamic: bool = True
     timeout_verificar_salidas: int = 20
     timeout_evaluar_condiciones: int = 15
     timeout_cerrar_operacion: int = 20
@@ -136,6 +137,7 @@ class ConfigManager:
             max_perdidas_diarias=_cargar_int('MAX_PERDIDAS_DIARIAS', defaults.max_perdidas_diarias),
             volumen_min_relativo=_cargar_float('VOLUMEN_MIN_RELATIVO', defaults.volumen_min_relativo),
             max_spread_ratio=_cargar_float('MAX_SPREAD_RATIO', defaults.max_spread_ratio),
+            spread_dynamic=os.getenv('SPREAD_DYNAMIC', str(getattr(defaults, 'spread_dynamic', True))).lower() == 'true',
             timeout_verificar_salidas=_cargar_int('TIMEOUT_VERIFICAR_SALIDAS', defaults.timeout_verificar_salidas),
             timeout_evaluar_condiciones=_cargar_int('TIMEOUT_EVALUAR_CONDICIONES', defaults.timeout_evaluar_condiciones),
             timeout_cerrar_operacion=_cargar_int('TIMEOUT_CERRAR_OPERACION', defaults.timeout_cerrar_operacion),

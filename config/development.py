@@ -27,7 +27,8 @@ class DevelopmentConfig:
     umbral_piramide: float = 0.006
     max_perdidas_diarias: int = 6
     volumen_min_relativo: float = 1.0
-    max_spread_ratio: float = 0.003
+    max_spread_ratio: float = 0.003  # valor base
+    spread_dynamic: bool = True  # activar ajuste dinámico de spread
     diversidad_minima: int = 2
     timeout_verificar_salidas: int = 20
     timeout_evaluar_condiciones: int = 15
