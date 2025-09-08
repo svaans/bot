@@ -93,6 +93,7 @@ class DataFeed:
         self._producer_stats: Dict[str, Dict[str, float]] = {}
         self._queue_windows: Dict[str, list] = {}
         self._last_window_reset: Dict[str, float] = {}
+        self.drop_oldest = os.getenv("DF_BACKPRESSURE_DROP", "true").lower() == "true"
 
     @property
     def activos(self) ->list[str]:
@@ -319,6 +320,27 @@ class DataFeed:
         while self._running:
             candle = await queue.get()
             enqueue_ts = candle.pop("_enqueue_time", None)
+            if (
+                self.drop_oldest
+                and queue.maxsize
+                and queue.qsize() > queue.maxsize * 0.8
+            ):
+                while queue.qsize() > queue.maxsize * 0.8:
+                    try:
+                        _ = queue.get_nowait()
+                    except asyncio.QueueEmpty:
+                        break
+                    queue.task_done()
+                    self._queue_discards[symbol] = self._queue_discards.get(symbol, 0) + 1
+                    obs_metrics.QUEUE_DROPS.labels(symbol=symbol).inc()
+                    registro_metrico.registrar(
+                        "queue_discards",
+                        {"symbol": symbol, "count": self._queue_discards[symbol]},
+                    )
+                    log.warning(
+                        f"[{symbol}] consumer_backlog: descartando vela antigua (total {self._queue_discards[symbol]})"
+                    )
+                QUEUE_SIZE.labels(symbol=symbol).set(queue.qsize())
             try:
                 await asyncio.wait_for(
                     handler(candle), timeout=self.handler_timeout

@@ -1,115 +1,94 @@
-"""Métricas adicionales de observabilidad.
-
-Incluye contadores y gauges expuestos vía Prometheus para los distintos
-componentes del bot. Inicialmente se empleaba sólo para el ``DataFeed``,
-pero ahora también registra métricas del ``StrategyEngine`` y del módulo
-``Trader``.
-"""
+"""Métricas Prometheus para observabilidad del bot."""
 
 from prometheus_client import Counter, Gauge
+from asyncio import sleep as async_sleep
+import time
 
-# Tasa de producción de velas por símbolo (velas por segundo)
+# Métricas de DataFeed
 PRODUCER_RATE = Gauge(
     "datafeed_producer_rate",
-    "Tasa de producción de velas por segundo",
+    "Velocidad de producción de velas (eventos/segundo)",
     ["symbol"],
 )
-
-# Conteo de velas descartadas por cola llena
+CONSUMER_RATE = Gauge(
+    "datafeed_consumer_rate",
+    "Velocidad de consumo de velas (eventos/segundo)",
+    ["symbol"],
+)
 QUEUE_DROPS = Counter(
     "datafeed_queue_drops_total",
     "Velas descartadas por cola llena",
     ["symbol"],
 )
-
-# Tasa de consumo de velas por símbolo (velas por segundo)
-CONSUMER_RATE = Gauge(
-    "datafeed_consumer_rate",
-    "Tasa de procesamiento de velas por segundo",
-    ["symbol"],
-)
-
-# Watermarks de tamaño de cola en ventana de 60 segundos
 QUEUE_SIZE_MIN = Gauge(
     "datafeed_queue_size_min",
-    "Tamaño mínimo de la cola en ventana de 60s",
+    "Tamaño mínimo de cola en ventana reciente",
     ["symbol"],
 )
 QUEUE_SIZE_MAX = Gauge(
     "datafeed_queue_size_max",
-    "Tamaño máximo de la cola en ventana de 60s",
+    "Tamaño máximo de cola en ventana reciente",
     ["symbol"],
 )
 QUEUE_SIZE_AVG = Gauge(
     "datafeed_queue_size_avg",
-    "Tamaño promedio de la cola en ventana de 60s",
+    "Tamaño promedio de cola en ventana reciente",
     ["symbol"],
 )
 
-# =============================== Trader ===============================
-# Métricas relacionadas con la operación y las señales de trading.
+# Métricas de señales
+SIGNALS_TOTAL = Counter(
+    "signals_total",
+    "Señales de entrada generadas por tipo",
+    ["symbol", "type"],
+)
+SIGNALS_CONFLICT = Counter(
+    "signals_conflict_total",
+    "Conflictos de señales buy/sell detectados",
+    ["symbol"],
+)
 
-# Spread observado para cada entrada (como ratio)
+# Métricas de spread
 SPREAD_OBSERVED = Gauge(
-    "trader_spread_observed_ratio",
-    "Spread observado antes de ejecutar una orden",
+    "spread_observed_ratio",
+    "Spread observado en el último intento de entrada",
     ["symbol"],
 )
-
-# Rechazos de orden por superar el spread permitido
 SPREAD_REJECTS = Counter(
-    "trader_spread_rejects_total",
-    "Órdenes rechazadas por spread excesivo",
+    "spread_rejections_total",
+    "Órdenes canceladas por spread excesivo",
     ["symbol"],
 )
 
-# Órdenes canceladas diferenciadas por motivo
+# Métricas de órdenes
+ORDERS_OPEN = Gauge(
+    "orders_open",
+    "Órdenes abiertas activas por símbolo",
+    ["symbol"],
+)
+ORDERS_SENT = Counter(
+    "orders_sent_total",
+    "Órdenes enviadas al exchange por tipo",
+    ["type"],
+)
 ORDERS_CANCELLED = Counter(
-    "trader_orders_cancelled_total",
+    "orders_cancelled_total",
     "Órdenes canceladas por motivo",
     ["reason"],
 )
 
-# Órdenes enviadas al exchange por tipo (buy/sell)
-ORDERS_SENT = Counter(
-    "trader_orders_sent_total",
-    "Órdenes enviadas clasificadas por tipo",
-    ["type"],
+# Monitoreo de latencia del loop
+EVENT_LOOP_LAG_MS = Gauge(
+    "event_loop_lag_ms",
+    "Latencia del loop de eventos (ms)",
 )
 
-# Órdenes actualmente abiertas por símbolo
-ORDERS_OPEN = Gauge(
-    "trader_orders_open",
-    "Órdenes abiertas activas por símbolo",
-    ["symbol"],
-)
 
-# Señales generadas por símbolo y tipo (buy/sell)
-SIGNALS_TOTAL = Counter(
-    "trader_signals_total",
-    "Total de señales generadas por símbolo y tipo",
-    ["symbol", "type"],
-)
-
-# Conflictos de señales BUY/SELL detectados en el motor de estrategias
-SIGNALS_CONFLICT = Counter(
-    "trader_signals_conflict_total",
-    "Conflictos de señales BUY/SELL detectados",
-    ["symbol"],
-)
-
-__all__ = [
-    "PRODUCER_RATE",
-    "QUEUE_DROPS",
-    "CONSUMER_RATE",
-    "QUEUE_SIZE_MIN",
-    "QUEUE_SIZE_MAX",
-    "QUEUE_SIZE_AVG",
-    "SPREAD_OBSERVED",
-    "SPREAD_REJECTS",
-    "ORDERS_CANCELLED",
-    "ORDERS_SENT",
-    "ORDERS_OPEN",
-    "SIGNALS_TOTAL",
-    "SIGNALS_CONFLICT",
-]
+async def monitor_event_loop_lag(interval: float = 0.5) -> None:
+    """Monitorea la latencia del loop de eventos y actualiza la métrica."""
+    while True:
+        start = time.monotonic()
+        await async_sleep(interval)
+        lag_ms = (time.monotonic() - start - interval) * 1000
+        EVENT_LOOP_LAG_MS.set(lag_ms)
+        
