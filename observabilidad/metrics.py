@@ -20,6 +20,11 @@ QUEUE_DROPS = Counter(
     "Velas descartadas por cola llena",
     ["symbol"],
 )
+HANDLER_TIMEOUTS = Counter(
+    "datafeed_handler_timeouts_total",
+    "Velas descartadas por timeout en handler",
+    ["symbol"],
+)
 QUEUE_SIZE_MIN = Gauge(
     "datafeed_queue_size_min",
     "Tamaño mínimo de cola en ventana reciente",

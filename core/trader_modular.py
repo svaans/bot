@@ -2,6 +2,7 @@
 from __future__ import annotations
 import asyncio
 import time
+from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass, replace, field
 from typing import Dict, Callable, Awaitable, Any, List
 from collections import OrderedDict, deque, defaultdict
@@ -86,6 +87,15 @@ LOG_DIR = os.getenv('LOG_DIR', 'logs')
 UTC = timezone.utc
 
 
+def _compute_indicadores(serie: list[float]) -> dict[str, float]:
+    """Calcula indicadores simples para la serie de precios dada."""
+    serie_pd = pd.Series(serie)
+    return {
+        "sma_20": float(serie_pd.rolling(window=20).mean().iloc[-1]),
+        "rsi": float(calcular_rsi(serie_pd, 14)),
+    }
+
+
 def _ts_ms(v: object) -> int:
     """Convertir cualquier marca de tiempo a milisegundos UTC."""
     if isinstance(v, (int, float)):
@@ -147,8 +157,9 @@ class Trader:
             getattr(config, 'monitor_interval', 5),
             getattr(config, 'max_stream_restarts', 5),
             getattr(config, 'inactivity_intervals', 3),
-            handler_timeout=getattr(config, 'handler_timeout', 15),
+            handler_timeout=getattr(config, 'handler_timeout', 0.8),
         )
+        self._indicator_executor = ProcessPoolExecutor()
         self.engine = StrategyEngine()
         self.bus = EventBus()
         self.risk = RiskManager(config.umbral_riesgo_diario, self.bus)
@@ -1870,15 +1881,14 @@ class Trader:
         )
         loop = asyncio.get_running_loop()
 
-        def _compute() -> dict:
-            serie = self.series_precio[symbol]
-            serie.append(vela.get('close'))
-            serie_pd = pd.Series(serie)
-            vela['sma_20'] = serie_pd.rolling(window=20).mean().iloc[-1]
-            vela['rsi'] = calcular_rsi(serie_pd, 14)
-            return vela
-
-        vela = await loop.run_in_executor(None, _compute)
+        serie = self.series_precio[symbol]
+        serie.append(vela.get('close'))
+        indicadores = await loop.run_in_executor(
+            self._indicator_executor,
+            _compute_indicadores,
+            list(serie),
+        )
+        vela.update(indicadores)
         await procesar_vela(self, vela)
         return
 
@@ -1898,6 +1908,7 @@ class Trader:
         real_orders.flush_operaciones()
         self.rejection_handler.flush()
         registro_metrico.exportar()
+        self._indicator_executor.shutdown(wait=False)
         await self._guardar_estado_persistente()
 
     async def _guardar_estado_persistente(self) -> None:

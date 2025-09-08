@@ -46,7 +46,7 @@ class DataFeed:
         monitor_interval: int = 5,
         max_restarts: int = 5,
         inactivity_intervals: int = 3,
-        handler_timeout: float = float(os.getenv("DF_HANDLER_TIMEOUT_SEC", "15.0")),
+        handler_timeout: float = float(os.getenv("DF_HANDLER_TIMEOUT_SEC", "0.8")),
         cancel_timeout: float = 5,
         backpressure: bool = False,
         reset_cb: Callable[[str], None] | None = None,
@@ -359,6 +359,11 @@ class DataFeed:
                 self._handler_timeouts[symbol] = (
                     self._handler_timeouts.get(symbol, 0) + 1
                 )
+                obs_metrics.HANDLER_TIMEOUTS.labels(symbol=symbol).inc()
+                registro_metrico.registrar(
+                    "handler_timeouts",
+                    {"symbol": symbol, "count": self._handler_timeouts[symbol]},
+                )
                 log.error(
                     f"Handler de {symbol} superó {self.handler_timeout}s; omitiendo vela "
                     f"(total {self._handler_timeouts[symbol]})"
@@ -409,7 +414,14 @@ class DataFeed:
                         await asyncio.wait_for(handler(next_candle), timeout=self.handler_timeout)
                     except asyncio.TimeoutError:
                         self._handler_timeouts[symbol] = self._handler_timeouts.get(symbol, 0) + 1
-                        log.error(f"Handler de {symbol} superó {self.handler_timeout}s (batch); omitiendo vela")
+                        obs_metrics.HANDLER_TIMEOUTS.labels(symbol=symbol).inc()
+                        registro_metrico.registrar(
+                            "handler_timeouts",
+                            {"symbol": symbol, "count": self._handler_timeouts[symbol]},
+                        )
+                        log.error(
+                            f"Handler de {symbol} superó {self.handler_timeout}s (batch); omitiendo vela"
+                        )
                     except Exception as e:
                         log.error(f"Error procesando vela en {symbol} (batch): {e}")
                     finally:
