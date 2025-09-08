@@ -77,7 +77,7 @@ from core.procesar_vela import (
 from indicators.rsi import calcular_rsi
 from indicators.correlacion import correlacion_series
 from core.scoring import calcular_score_tecnico, PESOS_SCORE_TECNICO, ScoreBreakdown
-from binance_api.cliente import fetch_ticker_async
+from binance_api.cliente import fetch_ticker_async, fetch_order_book_async
 from core import adaptador_umbral
 from observabilidad import metrics as obs_metrics
 from core.data.bootstrap import warmup_symbol
@@ -1608,7 +1608,9 @@ class Trader:
         if self.capital_manager.cliente:
             try:
                 orderbook = await asyncio.wait_for(
-                    self.capital_manager.cliente.fetch_order_book(symbol, limit=5),
+                    fetch_order_book_async(
+                        self.capital_manager.cliente, symbol, limit=5
+                    ),
                     timeout=3,
                 )
                 ts_data = orderbook.get('timestamp')
