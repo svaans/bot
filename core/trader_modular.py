@@ -16,7 +16,7 @@ import pandas as pd
 from config.config_manager import Config
 from core.data import DataFeed
 from core.strategies import StrategyEngine
-from core.risk import RiskManager
+from core.risk import RiskManager, SpreadGuard
 from core.position_manager import PositionManager
 from core.notification_manager import NotificationManager
 from core.capital_manager import CapitalManager
@@ -170,7 +170,14 @@ class Trader:
         self._last_buy_ts: Dict[str, float] = {}
         self._last_sell_ts: Dict[str, float] = {}
         self.cooldown_signals = int(os.getenv("COOLDOWN_S", "0"))
-        self._spread_history: Dict[str, List[float]] = {}
+        self.spread_guard: SpreadGuard | None = None
+        if getattr(config, "spread_dynamic", False) and getattr(config, "max_spread_ratio", 0.0):
+            self.spread_guard = SpreadGuard(
+                config.max_spread_ratio,
+                max_limit=float(os.getenv("SPREAD_MAX_RATIO", "0.05")),
+                window=int(os.getenv("SPREAD_GUARD_WINDOW", "50")),
+                hysteresis=float(os.getenv("SPREAD_GUARD_HYSTERESIS", "0.1")),
+            )
         self.rejection_handler = RejectionHandler(
             LOG_DIR, config.registro_tecnico_csv
         )
@@ -1630,19 +1637,16 @@ class Trader:
                     precio_actual = float(best_ask if direccion == 'long' else best_bid)
                 spread = abs(precio_actual - precio) / precio if precio else 0.0
                 obs_metrics.SPREAD_OBSERVED.labels(symbol=symbol).set(spread)
-                max_spread = getattr(self.config, 'max_spread_ratio', 0.0) or 0.0
-                if getattr(self.config, 'spread_dynamic', False):
-                    vals = self._spread_history.setdefault(symbol, [])
-                    now_ms = int(time.time() * 1000)
-                    vals.append(spread)
-                    # usar percentil P90 de los últimos 15 min
-                    if len(vals) > 1:
-                        threshold = sorted(vals)[int(0.9 * len(vals))]
-                        floor = float(os.getenv("SPREAD_MIN_RATIO", "0.001"))
-                        cap = float(os.getenv("SPREAD_MAX_RATIO", "0.05"))
-                        max_spread = max(floor, min(cap, threshold))
-                if spread > max_spread:
-                    log.warning(f'⛔ Spread {spread:.2%} supera límite ({max_spread:.2%}) en {symbol}. Orden cancelada.')
+                if self.spread_guard:
+                    permitido = self.spread_guard.allows(symbol, spread)
+                    max_spread = self.spread_guard.current_limit(symbol)
+                else:
+                    max_spread = getattr(self.config, 'max_spread_ratio', 0.0) or 0.0
+                    permitido = spread <= max_spread
+                if not permitido:
+                    log.warning(
+                        f'⛔ Spread {spread:.2%} supera límite ({max_spread:.2%}) en {symbol}. Orden cancelada.'
+                    )
                     obs_metrics.SPREAD_REJECTS.labels(symbol=symbol).inc()
                     obs_metrics.ORDERS_CANCELLED.labels(reason="spread").inc()
                     return

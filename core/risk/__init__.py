@@ -8,6 +8,7 @@ from .riesgo import (
     actualizar_perdida,
     riesgo_superado,
 )
+from .spread_guard import SpreadGuard
 from .sizing import MarketInfo, size_order
 from .risk import trade_risk, total_exposure, within_limits
 __all__ = [
@@ -19,6 +20,7 @@ __all__ = [
     "guardar_estado_riesgo_seguro",
     "actualizar_perdida",
     "riesgo_superado",
+    "SpreadGuard",
     "MarketInfo",
     "size_order",
     "trade_risk",
