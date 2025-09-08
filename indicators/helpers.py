@@ -1,3 +1,16 @@
+"""Helpers y utilidades comunes para indicadores técnicos.
+
+Este módulo incluye funciones de normalización, filtros y un mecanismo de
+cacheo ligero para evitar recalcular indicadores sobre el mismo ``DataFrame``.
+El cache se implementa usando ``DataFrame.attrs`` pero envuelve los valores en
+una clase con una comparación segura para evitar errores como
+``ValueError: The truth value of a Series is ambiguous`` cuando Pandas intenta
+comparar atributos que contienen ``Series``.
+"""
+
+from dataclasses import dataclass
+from typing import Any, Callable, Hashable
+
 import pandas as pd
 from indicators.momentum import calcular_momentum
 from indicators.atr import calcular_atr
@@ -62,11 +75,33 @@ def sanitize_series(
     return serie
 
 
-def _cached_value(df: pd.DataFrame, key: tuple, compute):
+@dataclass
+class _CacheEntry:
+    """Contenedor ligero para valores de indicadores en cache.
+
+    Define ``__eq__`` para evitar que Pandas intente comparar internamente
+    ``Series`` o ``DataFrames`` almacenados en ``attrs``, lo que provocaría
+    errores de verdad ambigua."""
+
+    value: Any
+
+    def __eq__(self, other: object) -> bool:  # pragma: no cover - trivial
+        return self is other
+
+
+def _cached_value(
+    df: pd.DataFrame, key: tuple, compute: Callable[[pd.DataFrame], Any]
+) -> Any:
+    """Obtiene un valor en cache asociado al ``DataFrame``.
+
+    Si no existe, lo calcula usando ``compute`` y lo almacena envuelto en
+    ``_CacheEntry`` para evitar comparaciones problemáticas de Pandas."""
     cache = df.attrs.setdefault('_indicators_cache', {})
-    if key not in cache:
-        cache[key] = compute(df)
-    return cache[key]
+    entry = cache.get(key)
+    if entry is None:
+        entry = _CacheEntry(compute(df))
+        cache[key] = entry
+    return entry.value
 
 
 def clear_cache(df: pd.DataFrame) -> None:
