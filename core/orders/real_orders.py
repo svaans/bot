@@ -38,7 +38,7 @@ from core.utils.utils import configurar_logger, guardar_orden_real
 from core.utils.logger import log_decision
 from core.supervisor import tick
 from . import real_orders
-from core.notificador import crear_notificador_desde_env
+from core.notification_manager import crear_notification_manager_desde_env
 from core.adaptador_dinamico import calcular_tp_sl_adaptativos
 from config.exit_defaults import load_exit_config
 from config import config as app_config
@@ -53,7 +53,7 @@ except ImportError:
     class InsufficientFunds(Exception):
         pass
 log = configurar_logger('ordenes')
-notificador = crear_notificador_desde_env()
+notificador = crear_notification_manager_desde_env()
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 ORDENES_DB_PATH = os.getenv(
     'ORDENES_DB_PATH',
