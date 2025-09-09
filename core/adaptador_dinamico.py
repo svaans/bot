@@ -9,13 +9,13 @@ import os
 import json
 import numpy as np
 import pandas as pd
-from scipy.stats import linregress
 from indicators.retornos_volatilidad import (
     retornos_log,
     retornos_simples,
     verificar_consistencia,
     volatilidad_welford,
 )
+from core.utils.market_utils import calcular_slope_pct
 from core.utils.utils import configurar_logger
 from core.market_regime import detectar_regimen
 from core.ajustador_riesgo import (
@@ -51,15 +51,12 @@ def _adaptar_configuracion_base(symbol: str, df: pd.DataFrame, base_config: dict
     else:
         volatilidad = 0
     cierre_reciente = df['close'].tail(10)
-    try:
-        slope = linregress(range(len(cierre_reciente)), cierre_reciente).slope
-    except ValueError:
-        slope = 0
+    slope_pct = calcular_slope_pct(cierre_reciente)
+    precio_ref = cierre_reciente.iloc[-1] if len(cierre_reciente) else 0.0
+    slope = slope_pct * precio_ref
     config['ajuste_volatilidad'] = round(min(5.0, 1 + volatilidad * 10), 2)
     factor_dinamico = base_config.get('factor_umbral', 1.0) * (1 + volatilidad)
     config['factor_umbral'] = round(min(3.0, max(0.3, factor_dinamico)), 2)
-    precio_ref = precios.iloc[-1] if len(precios) else 0.0
-    slope_pct = slope / precio_ref if precio_ref else 0.0
     sl_base = base_config.get('sl_ratio', 1.5)
     tp_base = base_config.get('tp_ratio', 3.0)
     riesgo_base = base_config.get('riesgo_maximo_diario', RIESGO_MAXIMO_DIARIO_BASE)
