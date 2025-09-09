@@ -100,19 +100,16 @@
 87. `core/utils/` contiene funciones generales de apoyo.
 88. `core/config_manager/` centraliza lectura de parámetros en ejecución.
 89. La comunicación interna se basa en `asyncio` para operación concurrente.
-90. Cada módulo expone interfaces claras documentadas con docstrings.
-
-## 7. Indicadores Técnicos (indicators/)
-91. Los indicadores técnicos calculan señales numéricas a partir de series de precios.
-92. `adx.py` mide la fuerza de tendencia utilizando el índice direccional promedio.
-93. `atr.py` y `atr_breakout.py` calculan la volatilidad mediante rango verdadero promedio.
-94. `bollinger.py` implementa las Bandas de Bollinger para identificar sobrecompra o sobreventa.
-95. `correlacion.py` evalúa la relación entre pares de activos.
-96. `divergencia_rsi.py` detecta divergencias entre precio y RSI.
-97. `ema.py` y `ema_bajista.py` aplican medias móviles exponenciales.
-98. `ema_stochrsi.py` suaviza el Stochastic RSI con EMA.
-99. `estocastico.py` calcula el oscilador estocástico completo.
-100. `helpers.py` provee utilidades comunes a múltiples indicadores.
+77. `core/scoring.py` produce un score global a partir de señales.
+78. `core/metricas_semanales.py` resume estadísticas semanales.
+79. `core/procesar_vela.py` transforma velas brutas en eventos de análisis.
+80. `core/hot_reload.py` permite recargar módulos sin detener el bot.
+81. `core/contexto_externo.py` provee datos externos para estrategias.
+82. `core/mode.py` selecciona entre modos real y simulado.
+83. `core/market_regime.py` detecta el régimen del mercado actual.
+84. `core/persistencia_tecnica.py` guarda resultados de indicadores en almacenamiento.
+85. `core/data/` aloja datos auxiliares utilizados por el motor.
+86. `core/utils/` contiene funciones generales de apoyo.
 101. `ichimoku.py` implementa el sistema de Ichimoku Kinko Hyo.
 102. `incremental.py` gestiona cálculos incrementales eficientes.
 103. `macd.py` produce la convergencia y divergencia de medias móviles.
