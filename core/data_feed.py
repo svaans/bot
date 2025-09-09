@@ -29,7 +29,7 @@ from core.supervisor import (
     beat,
     task_cooldown,
 )
-from core.notificador import crear_notificador_desde_env
+from core.notification_manager import crear_notification_manager_desde_env
 from ccxt.base.errors import AuthenticationError, NetworkError
 from config.config import BACKFILL_MAX_CANDLES
 
@@ -70,7 +70,7 @@ class DataFeed:
         self._handler_actual: Callable[[dict], Awaitable[None]] | None = None
         self._running = False
         self._cliente: Any | None = None
-        self.notificador = crear_notificador_desde_env()
+        self.notificador = crear_notification_manager_desde_env()
         self._symbols: list[str] = []
         self.reinicios_forzados_total = 0
         self.handler_timeout = handler_timeout
