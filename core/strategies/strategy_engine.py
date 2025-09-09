@@ -3,7 +3,7 @@ from __future__ import annotations
 from core.strategies.pesos import gestor_pesos
 from typing import Dict
 from core.adaptador_umbral import calcular_umbral_adaptativo
-from core.score_tecnico import calcular_score_tecnico
+from core.scoring import calcular_score_tecnico
 from core.utils.utils import validar_dataframe
 from core.strategies.entry.validadores import (
     validar_volumen,
