@@ -241,19 +241,6 @@ def _actualizar_porcentaje(symbol: str) -> float:
     return pct
 
 
-def obtener_velas_rechazadas() -> Dict[str, Dict[str, int]]:
-    """Retorna los contadores de velas rechazadas."""
-
-    return {s: dict(r) for s, r in _velas_rechazadas.items()}
-
-
-def reset_velas_metrics() -> None:
-    """Reinicia los contadores internos de velas."""
-
-    _velas_total.clear()
-    _velas_rechazadas.clear()
-
-
 def subscribe_simulated_order_metrics(bus) -> None:
     """Suscribe métricas a eventos de órdenes simuladas."""
 
