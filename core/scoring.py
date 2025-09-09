@@ -114,19 +114,4 @@ def calcular_score_tecnico(
         bd.tendencia = peso_tend
 
     return bd.total, bd
-    
-class TechnicalScorer:
-    """Utilidad para calcular el puntaje técnico de forma orientada a objetos."""
-
-    @staticmethod
-    def calcular(
-        df: pd.DataFrame,
-        rsi: Optional[float],
-        momentum: Optional[float],
-        slope: Optional[float],
-        tendencia: str,
-        direccion: str = "long",
-    ) -> tuple[float, ScoreBreakdown]:
-        """Delegado estático al cálculo procedural."""
-        return calcular_score_tecnico(df, rsi, momentum, slope, tendencia, direccion)
 
