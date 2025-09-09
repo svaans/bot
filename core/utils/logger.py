@@ -165,27 +165,4 @@ def log_decision(logger: logging.Logger, accion: str, operation_id: str | None,
     logger.info(json.dumps(payload, ensure_ascii=False))
 
 
-def log_resumen_operacion(tipo, symbol, **kwargs):
-    log = logging.getLogger('resumen')
-    if tipo == 'entrada':
-        log.info(
-            f"🟢 Entrada {symbol} | Puntaje: {kwargs.get('puntaje')} / {kwargs.get('umbral'):.2f} | Peso: {kwargs.get('peso')} | Diversidad: {kwargs.get('diversidad')} | Estrategias: {kwargs.get('estrategias')}"
-            )
-    elif tipo == 'bloqueo':
-        log.info(
-            f"🚫 Entrada BLOQUEADA {symbol} | Puntaje: {kwargs.get('puntaje')} / {kwargs.get('umbral')} | Razón: {kwargs.get('razon')}"
-            )
-    elif tipo == 'sl':
-        log.warning(
-            f"🛑 Stop Loss ejecutado {symbol} | Precio: {kwargs.get('precio')} | SL: {kwargs.get('stop_loss')}"
-            )
-    elif tipo == 'tp':
-        log.info(
-            f"🎯 Take Profit alcanzado {symbol} | Precio: {kwargs.get('precio')} | TP: {kwargs.get('take_profit')}"
-            )
-    elif tipo == 'cierre':
-        log.info(
-            f"📤 Cierre operación {symbol} | Entrada: {kwargs.get('entrada')} | Salida: {kwargs.get('salida')} | Retorno: {kwargs.get('retorno')}% | Motivo: {kwargs.get('motivo')}"
-            )
-    elif tipo == 'persistencia':
-        log.info(f'🔁 Señales técnicas fuertes repetidas {symbol}')
+
