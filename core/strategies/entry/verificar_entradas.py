@@ -10,7 +10,6 @@ from core.estrategias import filtrar_por_direccion
 from core.strategies.tendencia import obtener_tendencia
 from core.strategies.evaluador_tecnico import (
     evaluar_puntaje_tecnico,
-    calcular_umbral_adaptativo as calc_umbral_tecnico,
     cargar_pesos_tecnicos,
 )
 from indicators.helpers import get_rsi, get_momentum, get_atr
@@ -453,23 +452,11 @@ async def verificar_entrada(trader, symbol: str, df: pd.DataFrame, estado) -> (
     eval_tecnica = await evaluar_puntaje_tecnico(symbol, df, precio, sl, tp)
     score_total = eval_tecnica['score_total']
     score_normalizado = eval_tecnica.get('score_normalizado')
-    if 'volume' in df.columns:
-        ventana_vol = min(50, len(df))
-        vol_media = df['volume'].rolling(ventana_vol).mean().iloc[-1]
-        vol = df['volume'].iloc[-1] / (vol_media or 1)
-    else:
-        vol = 0
-    # Las validaciones de volumen ya se realizan en el motor de estrategias y
-    # afectan al score técnico, por lo que aquí solo calculamos la relación para
-    # ajustar el umbral dinámico.
-    volatilidad = df['close'].pct_change().tail(20).std()
     pesos_simbolo = await cargar_pesos_tecnicos(symbol)
     score_max = sum(pesos_simbolo.values())
     if score_normalizado is None:
         score_normalizado = score_total / score_max if score_max else score_total
-    umbral_tecnico = calc_umbral_tecnico(score_max, tendencia, volatilidad,
-        vol, estrategias_persistentes)
-    umbral_normalizado = umbral_tecnico / score_max if score_max else umbral_tecnico
+    umbral_normalizado = umbral / score_max if score_max else umbral
     if score_normalizado < umbral_normalizado:
         trace = DecisionTrace(
             score_normalizado, umbral_normalizado, DecisionReason.BELOW_THRESHOLD, puntos_tecnicos
