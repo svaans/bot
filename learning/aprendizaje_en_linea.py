@@ -4,7 +4,8 @@ import pandas as pd
 from collections import defaultdict
 from dotenv import dotenv_values
 from core.strategies.pesos import gestor_pesos
-from core.adaptador_dinamico import calcular_umbral_adaptativo, calcular_tp_sl_adaptativos
+from core.adaptador_umbral import calcular_umbral_adaptativo
+from core.adaptador_dinamico import calcular_tp_sl_adaptativos
 from config.configuracion import cargar_configuracion_simbolo, guardar_configuracion_simbolo
 from core.utils.utils import configurar_logger
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -92,8 +93,7 @@ def actualizar_pesos_dinamicos(symbol: str, historial: list):
         if isinstance(estrategias, str):
             estrategias = json.loads(estrategias.replace("'", '"'))
         if estrategias:
-            umbral = calcular_umbral_adaptativo(symbol, df_fake,
-                estrategias, nuevos_pesos, persistencia=0.0)
+            umbral = calcular_umbral_adaptativo(symbol, df_fake)
             print(f'📈 Umbral estimado para {symbol}: {umbral:.2f}')
             config_actual = cargar_configuracion_simbolo(symbol) or {}
             config_actual['umbral_adaptativo'] = round(float(umbral), 2)
