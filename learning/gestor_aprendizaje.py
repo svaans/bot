@@ -5,7 +5,6 @@ from datetime import datetime
 from .analisis_resultados import analizar_estrategias_en_ordenes
 from core.strategies.ajustador_pesos import ajustar_pesos_por_desempeno
 from core.strategies.pesos import gestor_pesos
-from core.adaptador_dinamico import calcular_umbral_adaptativo
 from dotenv import dotenv_values
 CONFIG = dotenv_values('config/claves.env')
 MODO_REAL = CONFIG.get('MODO_REAL', 'False') == 'True'
