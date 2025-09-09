@@ -2,7 +2,7 @@ import pandas as pd
 from core.strategies.tendencia import detectar_tendencia
 from core.estrategias import obtener_estrategias_por_tendencia, ESTRATEGIAS_POR_TENDENCIA
 from core.utils.utils import validar_dataframe
-from core.adaptador_dinamico import calcular_umbral_adaptativo
+from core.adaptador_umbral import calcular_umbral_adaptativo
 from core.strategies.entry.gestor_entradas import evaluar_estrategias
 from core.strategies.pesos import gestor_pesos
 from core.utils import configurar_logger
@@ -100,8 +100,7 @@ async def salida_stoploss(orden: dict, df: pd.DataFrame, config: dict=None) ->di
         factor_umbral = cfg['factor_umbral_sl']
         min_estrategias_relevantes = cfg['min_estrategias_relevantes_sl']
         pesos_symbol = pesos.get(symbol, {})
-        umbral = calcular_umbral_adaptativo(symbol, df, estrategias_activas,
-            pesos_symbol, persistencia=0.0, config=cfg)
+        umbral = calcular_umbral_adaptativo(symbol, df)
         esperadas = ESTRATEGIAS_POR_TENDENCIA.get(tendencia, [])
         activas_relevantes = [e for e in activas if e in esperadas]
         condiciones_validas = len(activas_relevantes
@@ -184,8 +183,7 @@ async def verificar_salida_stoploss(orden: dict, df: pd.DataFrame, config: (dict
     puntaje = evaluacion.get('puntaje_total', 0) if evaluacion else 0
     activas = [k for k, v in estrategias_activas.items() if v]
     pesos_symbol = pesos.get(symbol, {})
-    umbral = calcular_umbral_adaptativo(symbol, df, estrategias_activas,
-        pesos_symbol, persistencia=0.0, config=cfg)
+    umbral = calcular_umbral_adaptativo(symbol, df)
     factor_umbral = cfg['factor_umbral_sl']
     min_estrategias_relevantes = cfg['min_estrategias_relevantes_sl']
     esperadas = ESTRATEGIAS_POR_TENDENCIA.get(tendencia, [])
