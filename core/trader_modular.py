@@ -2,7 +2,6 @@
 from __future__ import annotations
 import asyncio
 import time
-from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass, replace, field
 from typing import Dict, Callable, Awaitable, Any, List
 from collections import OrderedDict, deque, defaultdict
@@ -76,7 +75,6 @@ from core.procesar_vela import (
     MAX_ESTRATEGIAS_BUFFER,
 )
 from indicators.rsi import calcular_rsi
-from indicators.correlacion import correlacion_series
 from core.scoring import calcular_score_tecnico, PESOS_SCORE_TECNICO, ScoreBreakdown
 from binance_api.cliente import fetch_ticker_async, fetch_order_book_async
 from core import adaptador_umbral
@@ -85,22 +83,6 @@ from core.data.bootstrap import warmup_symbol
 log = configurar_logger('trader')
 LOG_DIR = os.getenv('LOG_DIR', 'logs')
 UTC = timezone.utc
-
-
-def _compute_indicadores(serie: list[float]) -> dict[str, float]:
-    """Calcula indicadores simples para la serie de precios dada."""
-    serie_pd = pd.Series(serie)
-    return {
-        "sma_20": float(serie_pd.rolling(window=20).mean().iloc[-1]),
-        "rsi": float(calcular_rsi(serie_pd, 14)),
-    }
-
-
-def _ts_ms(v: object) -> int:
-    """Convertir cualquier marca de tiempo a milisegundos UTC."""
-    if isinstance(v, (int, float)):
-        return int(v)
-    return int(pd.to_datetime(v, utc=True).view('int64') // 1_000_000)
 
 
 async def safe_notify(coro: Awaitable, timeout: int = 3):
@@ -159,7 +141,6 @@ class Trader:
             getattr(config, 'inactivity_intervals', 3),
             handler_timeout=getattr(config, 'handler_timeout', 0.8),
         )
-        self._indicator_executor = ProcessPoolExecutor()
         self.engine = StrategyEngine()
         self.bus = EventBus()
         self.risk = RiskManager(config.umbral_riesgo_diario, self.bus)
@@ -212,9 +193,6 @@ class Trader:
         self.fraccion_kelly = calcular_fraccion_kelly()
         factor_kelly = self.risk.multiplicador_kelly()
         self.fraccion_kelly *= factor_kelly
-        self.series_precio: dict[str, deque] = defaultdict(
-            lambda: deque(maxlen=MAX_BUFFER_VELAS)
-        )
         # Históricos adicionales para BTC y otros índices macro si se dispone.
         self.historicos_macro: dict[str, deque] = defaultdict(
             lambda: deque(maxlen=self.max_filas_historico)
@@ -984,7 +962,11 @@ class Trader:
         return sum(
             1
             for v in estado.buffer
-            if _ts_ms(v.get('timestamp')) >= limite and v.get('estrategias_activas')
+            if (
+                v_ts if isinstance((v_ts := v.get('timestamp')), (int, float))
+                else int(pd.to_datetime(v_ts, utc=True).view('int64') // 1_000_000)
+            ) >= limite
+            and v.get('estrategias_activas')
         )
 
     def _obtener_historico(self, symbol: str,
@@ -1879,16 +1861,7 @@ class Trader:
         log.debug(
             f"[{symbol}] Procesando vela trace_id={vela.get('trace_id')}"
         )
-        loop = asyncio.get_running_loop()
-
-        serie = self.series_precio[symbol]
-        serie.append(vela.get('close'))
-        indicadores = await loop.run_in_executor(
-            self._indicator_executor,
-            _compute_indicadores,
-            list(serie),
-        )
-        vela.update(indicadores)
+        
         await procesar_vela(self, vela)
         return
 
@@ -1908,7 +1881,6 @@ class Trader:
         real_orders.flush_operaciones()
         self.rejection_handler.flush()
         registro_metrico.exportar()
-        self._indicator_executor.shutdown(wait=False)
         await self._guardar_estado_persistente()
 
     async def _guardar_estado_persistente(self) -> None:
