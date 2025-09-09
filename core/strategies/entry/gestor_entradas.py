@@ -12,7 +12,7 @@ from .loader import cargar_estrategias
 from indicators.correlacion import calcular_correlacion
 from core.strategies.entry.validador_entradas import verificar_liquidez_orden
 from core.estrategias import obtener_estrategias_por_tendencia, calcular_sinergia
-from core.score_tecnico import calcular_score_tecnico
+from core.scoring import calcular_score_tecnico
 from core.utils import configurar_logger
 log = configurar_logger('entradas')
 _FUNCIONES = cargar_estrategias()
