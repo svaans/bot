@@ -207,28 +207,7 @@ def registrar_warmup_progress(symbol: str, progress: float) -> None:
     )
 
     
-def decisions_total() -> Dict[str, Dict[str, int]]:
-    """Retorna una copia de los contadores de decisiones."""
 
-    return {s: dict(a) for s, a in _decisions.items()}
-
-
-def orders_total() -> Dict[str, int]:
-    """Retorna una copia de los contadores de órdenes."""
-
-    return dict(_orders)
-
-
-def buy_rejected_insufficient_funds_total() -> int:
-    """Retorna el total de compras rechazadas por fondos insuficientes."""
-
-    return _buy_rejected_insufficient_funds
-
-
-def correlacion_btc() -> Dict[str, float]:
-    """Retorna la última correlación registrada con BTC por símbolo."""
-
-    return dict(_correlacion_btc)
 
 
 def registrar_vela_recibida(symbol: str) -> None:
