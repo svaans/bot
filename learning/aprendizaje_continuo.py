@@ -10,7 +10,8 @@ from learning.entrenador_estrategias import actualizar_pesos_estrategias_symbol
 from learning.recalibrar_semana import recalibrar_pesos_semana
 from core.strategies.pesos import gestor_pesos
 from config.configuracion import cargar_configuracion_simbolo, guardar_configuracion_simbolo
-from core.adaptador_dinamico import calcular_umbral_adaptativo, calcular_tp_sl_adaptativos
+from core.adaptador_umbral import calcular_umbral_adaptativo
+from core.adaptador_dinamico import calcular_tp_sl_adaptativos
 from core.risk import RiskManager
 CONFIG = dotenv_values('config/claves.env')
 MODO_REAL = CONFIG.get('MODO_REAL', 'False') == 'True'
@@ -57,9 +58,7 @@ def _actualizar_config(symbol: str, df: pd.DataFrame) ->None:
     if df.empty:
         return
     config = cargar_configuracion_simbolo(symbol) or {}
-    pesos_symbol = gestor_pesos.obtener_pesos_symbol(symbol)
-    estrategias = list(pesos_symbol.keys())
-    umbral = calcular_umbral_adaptativo(symbol, df, estrategias, pesos_symbol)
+    umbral = calcular_umbral_adaptativo(symbol, df)
     config['umbral_adaptativo'] = round(float(umbral), 2)
     precio_actual = float(df['close'].iloc[-1]
         ) if 'close' in df.columns else None
