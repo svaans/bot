@@ -21,7 +21,7 @@ import os
 
 
 from config.config import INTERVALO_VELAS, TIMEOUT_SIN_DATOS_FACTOR
-from core.notificador import crear_notificador_desde_env
+from core.notification_manager import crear_notification_manager_desde_env
 from core.utils.logger import configurar_logger
 from core.utils.utils import intervalo_a_segundos
 from core.metrics import registrar_watchdog_restart
@@ -56,7 +56,7 @@ class Supervisor:
         self.last_data_alert: Dict[str, datetime] = {}
         self.reinicios_inactividad: Dict[str, int] = {}
         self.inactive_symbols: set[str] = set()
-        self.notificador = crear_notificador_desde_env()
+        self.notificador = crear_notification_manager_desde_env()
         self.data_feed_reconnector: Callable[[str], Awaitable[None]] | None = None
         self.main_loop: asyncio.AbstractEventLoop | None = None
         self._watchdog_interval_event = asyncio.Event()
