@@ -28,7 +28,7 @@ from .analisis_previo_salida import permitir_cierre_tecnico, evaluar_condiciones
 from .analisis_salidas import patron_tecnico_fuerte
 from core.strategies.exit.filtro_salidas import validar_necesidad_de_salida
 from core.config_manager.dinamica import adaptar_configuracion
-from core.adaptador_dinamico import calcular_umbral_adaptativo
+from core.adaptador_umbral import calcular_umbral_adaptativo
 from core.metricas_semanales import metricas_tracker
 from config.exit_defaults import load_exit_config
 import time
@@ -314,7 +314,7 @@ async def _aplicar_salidas_adicionales(trader, orden, df) -> bool:
         estrategias = evaluacion.get('estrategias_activas', {})
         puntaje = evaluacion.get('puntaje_total', 0)
         pesos_symbol = trader.pesos_por_simbolo.get(symbol, {})
-        umbral = calcular_umbral_adaptativo(symbol, df, estrategias, pesos_symbol, persistencia=0.0)
+        umbral = calcular_umbral_adaptativo(symbol, df)
         if not validar_necesidad_de_salida(df, orden.to_dict(), estrategias, puntaje=puntaje, umbral=umbral, config=config_actual):
             log.info(f"❌ Cierre por '{razon}' evitado: condiciones técnicas aún válidas.")
             return False
