@@ -131,21 +131,6 @@ async def evaluar_puntaje_tecnico(symbol: str, df: pd.DataFrame, precio: float,
     return {'score_total': round(total, 2), 'score_normalizado': round(score_normalizado, 2), 'detalles': detalles}
 
 
-def calcular_umbral_adaptativo(score_maximo_esperado: float, tendencia: str,
-    volatilidad: float, volumen: float, estrategias_activas: dict) ->float:
-    """Calcula un umbral técnico dinámico simple."""
-    base = score_maximo_esperado * 0.5
-    if volumen > 1:
-        base *= 0.95
-    if tendencia in {'alcista', 'bajista'}:
-        base *= 0.9
-    base *= 1 + min(max(volatilidad * 5, 0.0), 0.3)
-    activos = [v for v in estrategias_activas.values() if v]
-    if activos and len(activos) < 3:
-        base *= 1.1
-    return round(base, 2)
-
-
 async def actualizar_pesos_tecnicos(symbol: str, detalles: dict, retorno: float,
     factor: float = 0.05) -> None:
     """Ajusta pesos del JSON según rendimiento de la operación.
