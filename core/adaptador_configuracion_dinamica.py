@@ -3,7 +3,8 @@ from __future__ import annotations
 import pandas as pd
 import numpy as np
 from core.utils.utils import configurar_logger
-from indicators.helpers import get_atr, get_rsi, get_slope
+from indicators.helpers import get_rsi
+from core.utils.market_utils import calcular_atr_pct, calcular_slope_pct
 from core.ajustador_riesgo import (
     ajustar_sl_tp_riesgo,
     es_modo_agresivo,
@@ -45,20 +46,16 @@ def _adaptar_configuracion_indicadores(symbol: str, df: pd.DataFrame, base_confi
     base_config = base_config or {}
     df = df.tail(60).copy()
     close_actual = df['close'].iloc[-1]
-    atr = get_atr(df)
     rsi = get_rsi(df)
-    ma30 = df['close'].rolling(30).mean().dropna()
-    slope = get_slope(pd.DataFrame({'close': ma30})
-        ) if not ma30.empty else 0.0
-    if atr is None or rsi is None:
+    if rsi is None:
         log.warning(f'[{symbol}] Indicadores insuficientes para adaptación.')
         return {}
-    atr_pct = atr / close_actual if close_actual else 0.0
+    ma30 = df['close'].rolling(30).mean().dropna()
+    atr_pct = calcular_atr_pct(df)
     if atr_pct > 0.05:
         log.warning(f'[{symbol}] Volatilidad extrema detectada: {atr_pct:.4f}')
         atr_pct = 0.05
-    atr_pct = max(0.0, atr_pct)
-    slope_pct = slope / close_actual if close_actual else 0.0
+    slope_pct = calcular_slope_pct(ma30)
     volumen_actual = float(df['volume'].iloc[-1])
     volumen_prom_30 = float(df['volume'].rolling(30).mean().iloc[-1])
     volumen_relativo = (volumen_actual / volumen_prom_30 if volumen_prom_30
