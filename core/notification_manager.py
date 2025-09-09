@@ -3,6 +3,8 @@ from core.notificador import Notificador
 
 from typing import Any
 import asyncio
+import os
+from dotenv import load_dotenv
 from prometheus_client import Counter
 from core.utils.logger import configurar_logger
 from core.event_bus import EventBus
@@ -76,3 +78,16 @@ class NotificationManager:
                     await self._on_notify({'mensaje': resumen})
 
         asyncio.create_task(_resumir())
+
+
+def crear_notification_manager_desde_env() -> "NotificationManager":
+    """Crea un ``NotificationManager`` leyendo las variables de entorno.
+
+    Las credenciales se cargan desde ``config/claves.env`` si está presente.
+    """
+
+    load_dotenv("config/claves.env")
+    token = os.getenv("TELEGRAM_TOKEN", "")
+    chat_id = os.getenv("TELEGRAM_CHAT_ID", "")
+    modo_test = os.getenv("MODO_TEST_NOTIFICADOR", "false").lower() == "true"
+    return NotificationManager(token=token, chat_id=chat_id, modo_test=modo_test)
