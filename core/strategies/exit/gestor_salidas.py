@@ -212,6 +212,5 @@ async def verificar_filtro_tecnico(symbol, df, estrategias_activas, pesos_symbol
         return False
     activas = [k for k, v in evaluacion['estrategias_activas'].items() if v]
     puntaje = evaluacion['puntaje_total']
-    umbral = calcular_umbral_adaptativo(symbol, df, evaluacion[
-        'estrategias_activas'], pesos_symbol, persistencia=0.0, config=config)
+    umbral = calcular_umbral_adaptativo(symbol, df)
     return len(activas) >= 1 and puntaje >= 0.4 * umbral
