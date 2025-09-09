@@ -5,7 +5,7 @@ import traceback
 from pathlib import Path
 from core.hot_reload import start_hot_reload, stop_hot_reload
 from core.supervisor import start_supervision
-from core.notificador import crear_notificador_desde_env
+from core.notification_manager import crear_notification_manager_desde_env
 from core.startup_manager import StartupManager
 from core.metrics import iniciar_exporter
 
@@ -40,7 +40,7 @@ async def main():
         print('🟡 Modo SIMULADO activado')
     mostrar_banner()
     print(f'🚀 Iniciando bot de trading... Modo real: {config.modo_real}')
-    notificador = crear_notificador_desde_env()
+    notificador = crear_notification_manager_desde_env()
     stop_event = asyncio.Event()
     tarea_stop = asyncio.create_task(stop_event.wait())
 
