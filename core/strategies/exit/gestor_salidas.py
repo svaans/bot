@@ -5,8 +5,7 @@ from datetime import datetime, timezone
 from core.utils.utils import validar_dataframe
 from core.strategies.tendencia import detectar_tendencia
 from core.strategies.entry.gestor_entradas import evaluar_estrategias
-from core.adaptador_dinamico import calcular_umbral_adaptativo
-from core.adaptador_umbral import calcular_umbral_salida_adaptativo
+from core.adaptador_umbral import calcular_umbral_adaptativo, calcular_umbral_salida_adaptativo
 from core.strategies.pesos import obtener_peso_salida
 from core.utils import configurar_logger
 log = configurar_logger('gestor_salidas')
