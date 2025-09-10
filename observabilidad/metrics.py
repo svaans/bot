@@ -82,6 +82,12 @@ ORDERS_CANCELLED = Counter(
     ["reason"],
 )
 
+PNL_DISCREPANCIA_SHORT = Gauge(
+    "pnl_discrepancia_short",
+    "Diferencia entre PnL esperado y aplicado en cierres cortos",
+    ["symbol"],
+)
+
 # Monitoreo de latencia del loop
 EVENT_LOOP_LAG_MS = Gauge(
     "event_loop_lag_ms",
