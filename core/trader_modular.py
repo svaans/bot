@@ -630,6 +630,19 @@ class Trader:
         ) + ganancia
         capital_final = self.capital_por_simbolo[orden.symbol]
         info['capital_final'] = capital_final
+        discrepancia = pnl_diff - (capital_base * retorno_estimado)
+        if orden.direccion in ("short", "venta"):
+            obs_metrics.PNL_DISCREPANCIA_SHORT.labels(symbol=orden.symbol).set(
+                discrepancia
+            )
+        log.debug(
+            "RETORNO PARCIAL %s dir=%s pe=%s precio=%s ret=%.6f",
+            orden.symbol,
+            orden.direccion,
+            orden.precio_entrada,
+            precio,
+            retorno_unitario,
+        )
         log.info(
             f'✅ CIERRE PARCIAL: {orden.symbol} | Beneficio: {ganancia:.2f} €')
         registro_metrico.registrar('cierre_parcial', {'symbol': orden.symbol,
