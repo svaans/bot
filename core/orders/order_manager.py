@@ -15,6 +15,7 @@ from core.event_bus import EventBus
 from core.metrics import (
     registrar_orden,
     registrar_buy_rejected_insufficient_funds,
+	registrar_partial_close_collision,
 )
 from core.registro_metrico import registro_metrico
 from binance_api.cliente import obtener_cliente
@@ -758,86 +759,96 @@ class OrderManager:
 
     async def cerrar_parcial_async(self, symbol: str, cantidad: float, precio: float, motivo: str) -> bool:
         """Cierra parcialmente la orden activa."""
-        orden = self.ordenes.get(symbol)
-        if not orden or orden.cantidad_abierta <= 0:
-            log.warning(f'⚠️ Se intentó cierre parcial sin orden activa en {symbol}')
-            return False
-
-        cantidad = min(cantidad, orden.cantidad_abierta)
-        if cantidad < 1e-08:
-            log.warning(f'⚠️ Cantidad demasiado pequeña para vender: {cantidad}')
-            return False
-        
-        operation_id = self._generar_operation_id(symbol)
-
-        if self.modo_real:
+        lock = self._locks.setdefault(symbol, asyncio.Lock())
+        if lock.locked():
+            registrar_partial_close_collision(symbol)
+            log.warning(f'⚠️ Cierre parcial concurrente en {symbol}, se encola el segundo intento')
+        async with lock:
+            orden = self.ordenes.get(symbol)
+            order_id = getattr(orden, 'operation_id', 'N/A') if orden else 'N/A'
+            log.debug(f'🔒 Enter cerrar_parcial lock {symbol} id={order_id}')
             try:
-                ejecutado, fee, pnl = await self._ejecutar_market_retry('sell', symbol, cantidad, operation_id)
-                cantidad = ejecutado
-                orden.fee_total = getattr(orden, 'fee_total', 0.0) + fee
-                orden.pnl_operaciones = getattr(orden, 'pnl_operaciones', 0.0) + pnl
-            except Exception as e:
-                log.error(f'❌ Error en venta parcial de {symbol}: {e}')
-                if self.bus:
-                    await self.bus.publish('notify', {'mensaje': f'❌ Venta parcial fallida en {symbol}: {e}', 'operation_id': operation_id})
-                log_decision(log, 'cerrar_parcial', operation_id, {'symbol': symbol, 'cantidad': cantidad}, {}, 'reject', {'reason': str(e)})
-                return False
-        else:
-            diff = (precio - orden.precio_entrada) * cantidad
-            if orden.direccion in ('short', 'venta'):
-                diff = -diff
-            orden.pnl_operaciones = getattr(orden, 'pnl_operaciones', 0.0) + diff
+                if not orden or orden.cantidad_abierta <= 0:
+                    log.warning(f'⚠️ Se intentó cierre parcial sin orden activa en {symbol}')
+                    return False
 
-        orden.cantidad_abierta -= cantidad
+                cantidad = min(cantidad, orden.cantidad_abierta)
+                if cantidad < 1e-08:
+                    log.warning(f'⚠️ Cantidad demasiado pequeña para vender: {cantidad}')
+                    return False
 
-        log.info(f'📤 Cierre parcial de {symbol}: {cantidad} @ {precio:.2f} | {motivo}')
-        if self.bus:
-            mensaje = f"""📤 Venta parcial {symbol}\nCantidad: {cantidad}\nPrecio: {precio:.2f}\nMotivo: {motivo}"""
-            await self.bus.publish('notify', {'mensaje': mensaje, 'operation_id': operation_id})
-
-        if orden.cantidad_abierta <= 0:
-            orden.precio_cierre = precio
-            orden.fecha_cierre = datetime.now(UTC).isoformat()
-            orden.motivo_cierre = motivo
-            base = orden.precio_entrada * orden.cantidad if orden.cantidad else 0.0
-            retorno = (orden.pnl_operaciones / base) if base else 0.0
-            orden.retorno_total = retorno
-            self.historial.setdefault(symbol, []).append(orden.to_dict())
-            if len(self.historial[symbol]) > self.max_historial:
-                self.historial[symbol] = self.historial[symbol][-self.max_historial:]
-            if retorno < 0 and self.bus:
-                await self.bus.publish('registrar_perdida', {'symbol': symbol, 'perdida': retorno})
-            log.info(f'📤 Orden cerrada para {symbol} @ {precio:.2f} | {motivo}')
-            if self.bus:
+                operation_id = self._generar_operation_id(symbol)
+				
                 if self.modo_real:
-                    mensaje = (
-                        f"""📤 Venta {symbol}\nEntrada: {orden.precio_entrada:.2f} Salida: {precio:.2f}\nRetorno: {retorno * 100:.2f}%\nMotivo: {motivo}"""
-                    )
-                    await self.bus.publish('notify', {'mensaje': mensaje, 'operation_id': operation_id})
+                    try:
+                        ejecutado, fee, pnl = await self._ejecutar_market_retry('sell', symbol, cantidad, operation_id)
+                        cantidad = ejecutado
+                        orden.fee_total = getattr(orden, 'fee_total', 0.0) + fee
+                        orden.pnl_operaciones = getattr(orden, 'pnl_operaciones', 0.0) + pnl
+                    except Exception as e:
+                        log.error(f'❌ Error en venta parcial de {symbol}: {e}')
+                        if self.bus:
+                            await self.bus.publish('notify', {'mensaje': f'❌ Venta parcial fallida en {symbol}: {e}', 'operation_id': operation_id})
+                        log_decision(log, 'cerrar_parcial', operation_id, {'symbol': symbol, 'cantidad': cantidad}, {}, 'reject', {'reason': str(e)})
+                        return False
                 else:
-                    await self.bus.publish(
-                        'orden_simulada_cerrada',
-                        {
-                            'symbol': symbol,
-                            'precio_cierre': precio,
-                            'retorno': retorno,
-                            'motivo': motivo,
-                            'operation_id': operation_id,
-                        },
-                    )
-            self.ordenes.pop(symbol, None)
+                    diff = (precio - orden.precio_entrada) * cantidad
+                    if orden.direccion in ('short', 'venta'):
+                        diff = -diff
+                    orden.pnl_operaciones = getattr(orden, 'pnl_operaciones', 0.0) + diff
 
-            if self.modo_real:
-                try:
-                    await asyncio.to_thread(real_orders.eliminar_orden, symbol)
-                except Exception as e:
-                    log.error(f'❌ Error eliminando orden {symbol} de SQLite: {e}')
-            registrar_orden('closed')
-            log_decision(log, 'cerrar_parcial', operation_id, {'symbol': symbol, 'cantidad': cantidad}, {}, 'accept', {'retorno': retorno})
-        else:
-            registrar_orden('partial')
-            log_decision(log, 'cerrar_parcial', operation_id, {'symbol': symbol, 'cantidad': cantidad}, {}, 'accept', {'parcial': True})
-        return True
+            	orden.cantidad_abierta -= cantidad
+
+                log.info(f'📤 Cierre parcial de {symbol}: {cantidad} @ {precio:.2f} | {motivo}')
+                if self.bus:
+                    mensaje = f"""📤 Venta parcial {symbol}\nCantidad: {cantidad}\nPrecio: {precio:.2f}\nMotivo: {motivo}"""
+                    await self.bus.publish('notify', {'mensaje': mensaje, 'operation_id': operation_id})
+
+                if orden.cantidad_abierta <= 0:
+                    orden.precio_cierre = precio
+                    orden.fecha_cierre = datetime.now(UTC).isoformat()
+                    orden.motivo_cierre = motivo
+                    base = orden.precio_entrada * orden.cantidad if orden.cantidad else 0.0
+                    retorno = (orden.pnl_operaciones / base) if base else 0.0
+                    orden.retorno_total = retorno
+                    self.historial.setdefault(symbol, []).append(orden.to_dict())
+                    if len(self.historial[symbol]) > self.max_historial:
+                        self.historial[symbol] = self.historial[symbol][-self.max_historial:]
+                    if retorno < 0 and self.bus:
+                        await self.bus.publish('registrar_perdida', {'symbol': symbol, 'perdida': retorno})
+                    log.info(f'📤 Orden cerrada para {symbol} @ {precio:.2f} | {motivo}')
+                    if self.bus:
+                        if self.modo_real:
+                            mensaje = (
+                                f"""📤 Venta {symbol}\nEntrada: {orden.precio_entrada:.2f} Salida: {precio:.2f}\nRetorno: {retorno * 100:.2f}%\nMotivo: {motivo}"""
+                            )
+                            await self.bus.publish('notify', {'mensaje': mensaje, 'operation_id': operation_id})
+                        else:
+                            await self.bus.publish(
+                                'orden_simulada_cerrada',
+                                {
+                                    'symbol': symbol,
+                                    'precio_cierre': precio,
+                                    'retorno': retorno,
+                                    'motivo': motivo,
+                                    'operation_id': operation_id,
+                                },
+                            )
+                    self.ordenes.pop(symbol, None)
+
+                    if self.modo_real:
+                        try:
+                            await asyncio.to_thread(real_orders.eliminar_orden, symbol)
+                        except Exception as e:
+                            log.error(f'❌ Error eliminando orden {symbol} de SQLite: {e}')
+                    registrar_orden('closed')
+                    log_decision(log, 'cerrar_parcial', operation_id, {'symbol': symbol, 'cantidad': cantidad}, {}, 'accept', {'retorno': retorno})
+                else:
+                    registrar_orden('partial')
+                    log_decision(log, 'cerrar_parcial', operation_id, {'symbol': symbol, 'cantidad': cantidad}, {}, 'accept', {'parcial': True})
+                return True
+            finally:
+                log.debug(f'🔓 Exit cerrar_parcial lock {symbol} id={order_id}')
 
     def obtener(self, symbol: str) -> Optional[Order]:
         return self.ordenes.get(symbol)
