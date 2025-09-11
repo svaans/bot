@@ -112,6 +112,11 @@ PARTIAL_CLOSE_COLLISION = Counter(
     ["symbol"],
 )
 
+CONTADOR_REGISTRO_ERRORES = Counter(
+    "order_register_errors_total",
+    "Errores al registrar órdenes",
+)
+
 UMBRAL_VELAS_RECHAZADAS = float(os.getenv("UMBRAL_VELAS_RECHAZADAS", 5))
 
 log = configurar_logger("metrics")
@@ -149,6 +154,13 @@ def registrar_partial_close_collision(symbol: str) -> None:
 
     PARTIAL_CLOSE_COLLISION.labels(symbol=symbol).inc()
     registro_metrico.registrar("partial_close_collision", {"symbol": symbol})
+
+
+def registrar_registro_error() -> None:
+    """Incrementa ``order_register_errors_total``."""
+
+    CONTADOR_REGISTRO_ERRORES.inc()
+    registro_metrico.registrar("order_register_error", {})
 
 
 def registrar_candles_duplicadas(symbol: str, count: int) -> None:

@@ -41,6 +41,16 @@ QUEUE_SIZE_AVG = Gauge(
     ["symbol"],
 )
 
+# Reconexiones fallidas y bandera de feed detenido
+DATAFEED_FAILED_RESTARTS = Counter(
+    "datafeed_reconexiones_fallidas_total",
+    "Intentos fallidos de reconexión del datafeed",
+)
+FEED_STOPPED = Gauge(
+    "alerta_feed_detenido",
+    "Bandera que indica si el feed se ha detenido por circuito abierto",
+)
+
 # Métricas de señales
 SIGNALS_TOTAL = Counter(
     "signals_total",

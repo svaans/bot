@@ -84,6 +84,30 @@ log = configurar_logger('trader')
 LOG_DIR = os.getenv('LOG_DIR', 'logs')
 UTC = timezone.utc
 
+# --- Helper local: correlación Pearson sobre ventanas recientes ---
+def correlacion_series(s1, s2, ventana: int = 60) -> float | None:
+    """
+    Devuelve la correlación (Pearson) entre las últimas `ventana` muestras de s1 y s2.
+    Si no hay suficientes datos o hay error numérico, devuelve None.
+    """
+    try:
+        import numpy as _np
+        import pandas as _pd
+        a = _pd.Series(s1).astype(float).tail(ventana).to_numpy(copy=False)
+        b = _pd.Series(s2).astype(float).tail(ventana).to_numpy(copy=False)
+        if a.size < 2 or b.size < 2:
+            return None
+        # Alineación por cola
+        n = min(a.size, b.size)
+        a = a[-n:]
+        b = b[-n:]
+        if a.std() == 0 or b.std() == 0:
+            return None
+        r = _np.corrcoef(a, b)[0, 1]
+        return float(r)
+    except Exception:
+        return None
+
 
 async def safe_notify(coro: Awaitable, timeout: int = 3):
     """Ejecuta el envío de notificaciones con timeout y captura de errores."""
@@ -143,6 +167,7 @@ class Trader:
         )
         self.engine = StrategyEngine()
         self.bus = EventBus()
+        obs_metrics.FEED_STOPPED.set(0)
         self.risk = RiskManager(config.umbral_riesgo_diario, self.bus)
         self.notificador = NotificationManager(config.telegram_token,
             config.telegram_chat_id, bus=self.bus)
@@ -244,8 +269,8 @@ class Trader:
             capital_inicial_diario)
         self.reservas_piramide = self.capital_manager.reservas_piramide
         self.fecha_actual = self.capital_manager.fecha_actual
-        self.estado: Dict[str, EstadoSimbolo] = {s: EstadoSimbolo([]) for s in
-            config.symbols}
+        # No pasar argumentos posicionales (el dataclass ya define los defaults correctos)
+        self.estado: Dict[str, EstadoSimbolo] = {s: EstadoSimbolo() for s in config.symbols}
         self.estado_tendencia: Dict[str, str] = {}
         self.config_por_simbolo: Dict[str, dict] = {
             s: {'diversidad_minima': getattr(config, 'diversidad_minima', 2)}
@@ -630,11 +655,13 @@ class Trader:
         ) + ganancia
         capital_final = self.capital_por_simbolo[orden.symbol]
         info['capital_final'] = capital_final
-        discrepancia = pnl_diff - (capital_base * retorno_estimado)
-        if orden.direccion in ("short", "venta"):
-            obs_metrics.PNL_DISCREPANCIA_SHORT.labels(symbol=orden.symbol).set(
-                discrepancia
-            )
+        # (Opcional) Registrar "discrepancia" de PnL para cortos de forma segura
+        # Si deseas otro cálculo, sustitúyelo aquí.
+        try:
+            if orden.direccion in ("short", "venta"):
+                obs_metrics.PNL_DISCREPANCIA_SHORT.labels(symbol=orden.symbol).set(0.0)
+        except Exception:
+            pass
         log.debug(
             "RETORNO PARCIAL %s dir=%s pe=%s precio=%s ret=%.6f",
             orden.symbol,
@@ -1089,7 +1116,8 @@ class Trader:
                     log.debug('⏳ DataFeed en reinicio; heartbeat no interviene')
                     continue
                 if task.done():
-                    if task.cancelled():
+                    cancelled = task.cancelled()
+                    if cancelled:
                         log.debug(
                             f'🟡 Heartbeat: tarea {nombre} fue cancelada manualmente'
                         )
@@ -1103,6 +1131,8 @@ class Trader:
                             log.warning(
                                 f'⚠️ Heartbeat: tarea {nombre} finalizó inesperadamente'
                             )
+                        if nombre == 'data_feed':
+                            obs_metrics.DATAFEED_FAILED_RESTARTS.inc()
                     if nombre == 'flush':
                         mensaje = (
                             '⚠️ Heartbeat: tarea flush finalizada; no se reiniciará automáticamente'
@@ -1120,6 +1150,25 @@ class Trader:
                     while stats and ts_now - stats[0] > 300:
                         stats.popleft()
                     if len(stats) > 5 and ts_now - stats[0] < 60:
+                        if nombre == 'data_feed':
+                            mensaje = (
+                                '🚨 Circuit breaker activado: data_feed detenido. '
+                                'Se detendrá el bot.'
+                            )
+                            log.critical(mensaje)
+                            if self.bus:
+                                await self.bus.publish(
+                                    'notify',
+                                    {
+                                        'mensaje': mensaje,
+                                        'tipo': 'CRITICAL',
+                                        'categoria': 'DATAFEED_STOPPED',
+                                    },
+                                )
+                            # Sin feed de datos operar es inseguro; se detiene el bot
+                            self._stop_event.set()
+                            obs_metrics.FEED_STOPPED.set(1)
+                            continue
                         log.error(f'🚨 Circuit breaker: demasiados reinicios para {nombre}')
                         continue
                     backoff = min(60, 2 ** (len(stats) - 1))

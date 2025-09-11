@@ -16,6 +16,7 @@ from core.metrics import (
     registrar_orden,
     registrar_buy_rejected_insufficient_funds,
 	registrar_partial_close_collision,
+    registrar_registro_error,
 )
 from core.registro_metrico import registro_metrico
 from binance_api.cliente import obtener_cliente
@@ -476,6 +477,7 @@ class OrderManager:
                     if cantidad > 0:
                         if self.modo_real:
                             registrado = False
+                            last_error: Exception | None = None
                             for _ in range(3):
                                 try:
                                     await asyncio.to_thread(
@@ -493,16 +495,27 @@ class OrderManager:
                                     registrado = True
                                     break
                                 except Exception as e:
+                                    last_error = e
+                                    registrar_registro_error()
                                     log.error(f'❌ Error registrando orden {symbol}: {e}')
-                            if self.bus:
-                                await self.bus.publish(
-                                    'notify',
-                                    {
-                                        'mensaje': f'❌ Error registrando orden {symbol}: {e}',
-                                        'tipo': 'CRITICAL',
-                                        'operation_id': operation_id,
-                                    },
+                            if not registrado:
+                                msg = (
+                                    str(last_error)
+                                    if last_error is not None
+                                    else 'Error desconocido'
                                 )
+                                log.error(
+                                    f'❌ Error registrando orden {symbol}: {msg}'
+                                )
+                                if self.bus:
+                                    await self.bus.publish(
+                                        'notify',
+                                        {
+                                            'mensaje': f'❌ Error registrando orden {symbol}: {msg}',
+                                            'tipo': 'CRITICAL',
+                                            'operation_id': operation_id,
+                                        },
+                                    )
                             await asyncio.sleep(1)
 
                             if registrado:
