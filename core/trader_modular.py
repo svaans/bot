@@ -277,6 +277,7 @@ class Trader:
             for s in config.symbols
         }
         self.data_feed.set_reset_callback(self._reset_candle_filter)
+        self.data_feed.set_estado(self.estado)
         try:
             self.pesos_por_simbolo: Dict[str, Dict[str, float]
                 ] = cargar_pesos_estrategias()

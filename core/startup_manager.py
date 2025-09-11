@@ -4,6 +4,7 @@ import time
 from contextlib import suppress
 from pathlib import Path
 from typing import Optional
+from dataclasses import replace
 
 import aiohttp
 
@@ -24,11 +25,14 @@ class StartupManager:
         self.log = configurar_logger('startup')
 
     async def run(self) -> tuple[Trader, asyncio.Task, Config]:
-        executed = []
+        executed = [self._stop_trader]
         try:
             await self._load_config()
             executed.append(self._stop_trader)
             await self._bootstrap()
+            assert self.trader is not None
+            if not self.trader.data_feed.verificar_continuidad():
+                raise RuntimeError('Backfill inicial no contiguo')
             await self._validate_feeds()
             await self._open_streams()
             executed.append(self._stop_streams)
@@ -67,13 +71,14 @@ class StartupManager:
         self.task = asyncio.create_task(self.trader.ejecutar())
 
     async def _enable_strategies(self) -> None:
-        assert self.trader is not None
-        await self._wait_ws()
+        assert self.trader is not None and self.config is not None
+        await self._wait_ws(self.config.ws_timeout)
         if not await self._check_clock_drift():
-            raise RuntimeError(
-                'Desincronización de reloj >500ms. '
-                'Sincroniza la hora del sistema (por ejemplo, usando NTP).'
-            )
+            self.log.critical('Desincronización de reloj >500ms. Trading real deshabilitado')
+            self.config = replace(self.config, modo_real=False)
+            self.trader.config = self.config
+            self.trader.modo_real = False
+            self.trader.cliente = None
         if not await self._check_storage():
             raise RuntimeError(
                 'Storage no disponible. '
@@ -82,7 +87,7 @@ class StartupManager:
         self.trader.habilitar_estrategias()
         self._snapshot()
 
-    async def _wait_ws(self, timeout: float = 10.0) -> None:
+    async def _wait_ws(self, timeout: float) -> None:
         assert self.trader is not None
         start = time.time()
         while time.time() - start < timeout:

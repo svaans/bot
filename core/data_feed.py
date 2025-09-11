@@ -99,6 +99,7 @@ class DataFeed:
         self._queue_windows: Dict[str, list] = {}
         self._last_window_reset: Dict[str, float] = {}
         self.drop_oldest = os.getenv("DF_BACKPRESSURE_DROP", "true").lower() == "true"
+        self._estado: Dict[str, Any] | None = None
 
     @property
     def activos(self) ->list[str]:
@@ -123,6 +124,20 @@ class DataFeed:
     def set_reset_callback(self, cb: Callable[[str], None]) -> None:
         """Registra un callback para reiniciar el filtro de velas por símbolo."""
         self._reset_cb = cb
+
+    def set_estado(self, estado: Dict[str, Any]) -> None:
+        """Inyecta el estado del trader para validaciones."""
+        self._estado = estado
+
+    def verificar_continuidad(self) -> bool:
+        """Comprueba que los buffers precargados no tengan gaps ni duplicados."""
+        if self._estado is None:
+            return True
+        ok = True
+        for symbol, est in self._estado.items():
+            if not validar_integridad_velas(symbol, self.intervalo, est.buffer, log):
+                ok = False
+        return ok
     
 
     async def stream(self, symbol: str, handler: Callable[[dict], Awaitable[None]]) -> None:

@@ -70,6 +70,7 @@ class Config:
     max_stream_restarts: int = 5
     inactivity_intervals: int = 5
     handler_timeout: float = 0.8
+    ws_timeout: int = 30
     frecuencia_tendencia: int = 1
     frecuencia_correlaciones: int = 300
     umbral_alerta_cpu: float = 85.0
@@ -149,6 +150,7 @@ class ConfigManager:
             inactivity_intervals=_cargar_int('INACTIVITY_INTERVALS', defaults.inactivity_intervals),
             max_stream_restarts=_cargar_int('MAX_STREAM_RESTARTS', defaults.max_stream_restarts),
             handler_timeout=_cargar_float('HANDLER_TIMEOUT', defaults.handler_timeout),
+            ws_timeout=_cargar_int('WS_TIMEOUT', getattr(defaults, 'ws_timeout', 30)),
             frecuencia_tendencia=_cargar_int('FRECUENCIA_TENDENCIA', defaults.frecuencia_tendencia),
             frecuencia_correlaciones=_cargar_int('FRECUENCIA_CORRELACIONES', defaults.frecuencia_correlaciones),
             umbral_alerta_cpu=_cargar_float('UMBRAL_ALERTA_CPU', defaults.umbral_alerta_cpu),
