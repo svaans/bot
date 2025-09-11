@@ -966,13 +966,6 @@ class DataFeed:
                 )
             else:
                 log.debug(f"Tarea {nombre} estado: {estado}")
-        consumer_list = list(self._consumer_tasks.values())
-        for task in consumer_list:
-            task.cancel()
-        await asyncio.gather(*consumer_list, return_exceptions=True)
-        self._consumer_tasks.clear()
-        self._queues.clear()
-        self._running = False
     async def detener(self) -> None:
         """Cancela todos los streams en ejecución."""
         tasks: set[asyncio.Task] = set()
