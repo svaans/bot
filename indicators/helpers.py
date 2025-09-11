@@ -101,7 +101,7 @@ def _cached_value(
     if entry is None:
         entry = _CacheEntry(compute(df))
         cache[key] = entry
-    return entry.value
+    return entry.value if isinstance(entry, _CacheEntry) else entry
 
 
 def clear_cache(df: pd.DataFrame) -> None:
