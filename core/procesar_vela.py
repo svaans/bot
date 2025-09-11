@@ -245,6 +245,13 @@ async def _procesar_candle(trader, symbol: str, intervalo: str, estado, vela: di
         else:
             trader._mem_high_cycles = 0
 
+
+async def _procesar_candle_con_lock(trader, symbol: str, intervalo: str, estado, vela: dict) -> None:
+    """Procesa una vela asegurando el lock por símbolo."""
+    lock = _vela_locks[f'{symbol}:{intervalo}']
+    async with lock:
+        await _procesar_candle(trader, symbol, intervalo, estado, vela)
+        
 async def procesar_vela(trader, vela: dict) -> None:
     symbol = vela.get('symbol') if isinstance(vela, dict) else None
     intervalo = getattr(trader.config, 'intervalo_velas', '')
@@ -303,5 +310,13 @@ async def procesar_vela(trader, vela: dict) -> None:
         if warn:
             log.warning(f'Alto ratio de velas descartadas para {symbol}')
             estado.candle_filter.reset()
-        for vela_proc in ready:
-            await _procesar_candle(trader, symbol, intervalo, estado, vela_proc)
+        if not ready:
+            return
+        primera, *resto = ready
+        await _procesar_candle(trader, symbol, intervalo, estado, primera)
+        for vela_proc in resto:
+            asyncio.create_task(
+                _procesar_candle_con_lock(
+                    trader, symbol, intervalo, estado, vela_proc
+                )
+            )
