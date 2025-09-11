@@ -497,7 +497,10 @@ class OrderManager:
                                 except Exception as e:
                                     last_error = e
                                     registrar_registro_error()
-                                    log.error(f'❌ Error registrando orden {symbol}: {e}')
+                                    log.error(
+                                        'Error registrando orden',
+                                        extra={'symbol': symbol, 'error': str(e)},
+                                    )
                             if not registrado:
                                 msg = (
                                     str(last_error)
@@ -505,7 +508,8 @@ class OrderManager:
                                     else 'Error desconocido'
                                 )
                                 log.error(
-                                    f'❌ Error registrando orden {symbol}: {msg}'
+                                    'Error registrando orden',
+                                    extra={'symbol': symbol, 'error': msg},
                                 )
                                 if self.bus:
                                     await self.bus.publish(
@@ -775,19 +779,31 @@ class OrderManager:
         lock = self._locks.setdefault(symbol, asyncio.Lock())
         if lock.locked():
             registrar_partial_close_collision(symbol)
-            log.warning(f'⚠️ Cierre parcial concurrente en {symbol}, se encola el segundo intento')
+            log.warning(
+                'Cierre parcial concurrente; se encola segundo intento',
+                extra={'symbol': symbol},
+            )
         async with lock:
             orden = self.ordenes.get(symbol)
             order_id = getattr(orden, 'operation_id', 'N/A') if orden else 'N/A'
-            log.debug(f'🔒 Enter cerrar_parcial lock {symbol} id={order_id}')
+            log.debug(
+                'Enter cerrar_parcial lock',
+                extra={'symbol': symbol, 'order_id': order_id},
+            )
             try:
                 if not orden or orden.cantidad_abierta <= 0:
-                    log.warning(f'⚠️ Se intentó cierre parcial sin orden activa en {symbol}')
+                    log.warning(
+                        'Se intentó cierre parcial sin orden activa',
+                        extra={'symbol': symbol},
+                    )
                     return False
 
                 cantidad = min(cantidad, orden.cantidad_abierta)
                 if cantidad < 1e-08:
-                    log.warning(f'⚠️ Cantidad demasiado pequeña para vender: {cantidad}')
+                    log.warning(
+                        'Cantidad demasiado pequeña para vender',
+                        extra={'symbol': symbol, 'cantidad': cantidad},
+                    )
                     return False
 
                 operation_id = self._generar_operation_id(symbol)
@@ -799,7 +815,10 @@ class OrderManager:
                         orden.fee_total = getattr(orden, 'fee_total', 0.0) + fee
                         orden.pnl_operaciones = getattr(orden, 'pnl_operaciones', 0.0) + pnl
                     except Exception as e:
-                        log.error(f'❌ Error en venta parcial de {symbol}: {e}')
+                        log.error(
+                            'Error en venta parcial',
+                            extra={'symbol': symbol, 'error': str(e)},
+                        )
                         if self.bus:
                             await self.bus.publish('notify', {'mensaje': f'❌ Venta parcial fallida en {symbol}: {e}', 'operation_id': operation_id})
                         log_decision(log, 'cerrar_parcial', operation_id, {'symbol': symbol, 'cantidad': cantidad}, {}, 'reject', {'reason': str(e)})
