@@ -533,6 +533,10 @@ registrar_ping = _default_supervisor.registrar_ping
 set_watchdog_interval = _default_supervisor.set_watchdog_interval
 shutdown = _default_supervisor.shutdown
 
+async def stop_supervision() -> None:
+    """Detiene todas las tareas supervisadas."""
+    await _default_supervisor.shutdown()
+
 tasks = _default_supervisor.tasks
 task_heartbeat = _default_supervisor.task_heartbeat
 data_heartbeat = _default_supervisor.data_heartbeat
@@ -558,6 +562,7 @@ __all__ = [
     "registrar_ping",
     "set_watchdog_interval",
     "shutdown",
+    "stop_supervision",
     "tasks",
     "task_heartbeat",
     "data_heartbeat",

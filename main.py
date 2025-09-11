@@ -4,7 +4,7 @@ import signal
 import traceback
 from pathlib import Path
 from core.hot_reload import start_hot_reload, stop_hot_reload
-from core.supervisor import start_supervision
+from core.supervisor import start_supervision, stop_supervision
 from core.notification_manager import crear_notification_manager_desde_env
 from core.startup_manager import StartupManager
 from core.metrics import iniciar_exporter
@@ -17,8 +17,6 @@ def mostrar_banner():
 
 
 async def main():
-    iniciar_exporter()
-    start_supervision()
     try:
         startup = StartupManager()
         bot, tarea_bot, config = await startup.run()
@@ -33,6 +31,8 @@ async def main():
         else:
             print(f'❌ {msg}')
         return
+    exporter_server = iniciar_exporter()
+    start_supervision()
     observer = start_hot_reload(path=Path.cwd(), modules=None)
     if config.modo_real:
         print('🟢 Modo REAL activado')
@@ -47,6 +47,10 @@ async def main():
     def detener_bot():
         print('\n🛑 Señal de detención recibida.')
         stop_event.set()
+        try:
+            bot.solicitar_parada()
+        except Exception:
+            pass
     if platform.system() != 'Windows':
         loop = asyncio.get_running_loop()
         loop.add_signal_handler(signal.SIGINT, detener_bot)
@@ -81,12 +85,21 @@ async def main():
                     print(f'⏳ Reinicio del bot en {delay}s (intento {retries}/{max_retries})')
                     await asyncio.sleep(delay)
                     print('🔄 Reiniciando bot...')
-                    tarea_bot = asyncio.create_task(bot.ejecutar())
+                    try:
+                        await asyncio.wait_for(bot.cerrar(), timeout=15)
+                    except Exception:
+                        pass
+                    startup = StartupManager()
+                    bot, tarea_bot, config = await startup.run()
                     continue
                 else:
                     print('✅ Bot finalizado sin errores.')
                 break
             if tarea_stop in done:
+                try:
+                    bot.solicitar_parada()
+                except Exception:
+                    pass
                 break
     except asyncio.CancelledError:
         print('🛑 Cancelación detectada.')
@@ -99,7 +112,13 @@ async def main():
         if pending:
             await asyncio.gather(*pending, return_exceptions=True)
         stop_hot_reload(observer)
-        await bot.cerrar()
+        try:
+            await asyncio.wait_for(bot.cerrar(), timeout=15)
+            await stop_supervision()
+            exporter_server.shutdown()
+            exporter_server.server_close()
+        except asyncio.TimeoutError:
+            print('⏰ Timeout al cerrar el bot.')
         print('👋 Bot finalizado correctamente.')
 
 

@@ -1938,6 +1938,10 @@ class Trader:
         )
         await self._stop_event.wait()
 
+    def solicitar_parada(self) -> None:
+        """Solicita al trader que detenga su ejecución."""
+        self._stop_event.set()
+
     async def _procesar_vela(self, vela: dict) ->None:
         symbol = vela.get('symbol')
         if not self._validar_config(symbol):

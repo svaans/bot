@@ -14,6 +14,7 @@ from __future__ import annotations
 import os
 from collections import defaultdict
 from typing import Dict
+from wsgiref.simple_server import WSGIServer
 
 from prometheus_client import Counter, Gauge, Histogram, start_http_server
 
@@ -279,9 +280,16 @@ def subscribe_simulated_order_metrics(bus) -> None:
     bus.subscribe('orden_simulada_cerrada', _on_close)
 
 
-def iniciar_exporter() -> None:
-    """Inicia el servidor HTTP para exponer métricas."""
+def iniciar_exporter() -> WSGIServer:
+    """Inicia el servidor HTTP para exponer métricas.
+
+    Returns
+    -------
+    WSGIServer
+        Instancia del servidor HTTP que expone las métricas.
+    """
 
     port = int(os.getenv("METRICS_PORT", "8000"))
-    start_http_server(port)
+    server, _ = start_http_server(port)
     log.info(f"Prometheus exporter escuchando en puerto {port}")
+    return server
