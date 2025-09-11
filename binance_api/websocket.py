@@ -388,7 +388,8 @@ async def _gestionar_ws(
                             if backpressure:
                                 await asyncio.wait_for(message_queue.put(msg), timeout=0.5)
                             else:
-                                message_queue.put_nowait(msg)
+                                # Esperar hasta poder encolar en lugar de descartarlo inmediatamente
+                                await asyncio.wait_for(message_queue.put(msg), timeout=1.0)
                         except (asyncio.TimeoutError, asyncio.QueueFull):
                             symbol = symbol or _symbol_from_msg(msg)
                             if symbol:
