@@ -49,6 +49,7 @@ class DataFeed:
         handler_timeout: float = float(os.getenv("DF_HANDLER_TIMEOUT_SEC", "1.0")),
         cancel_timeout: float = 5,
         backpressure: bool = False,
+        batch_size: int | None = None,
         reset_cb: Callable[[str], None] | None = None,
     ) -> None:
         self.intervalo = intervalo
@@ -89,7 +90,11 @@ class DataFeed:
         self._combined = False
         self._reset_cb = reset_cb
         # Configuración de batch y métricas
-        self.batch_size = int(os.getenv("BATCH_SIZE_CONSUMER", "1"))
+        env_batch = int(os.getenv("BATCH_SIZE_CONSUMER", "3"))
+        if batch_size is not None:
+            self.batch_size = max(1, batch_size)
+        else:
+            self.batch_size = max(1, env_batch)
         self._producer_stats: Dict[str, Dict[str, float]] = {}
         self._queue_windows: Dict[str, list] = {}
         self._last_window_reset: Dict[str, float] = {}
