@@ -797,7 +797,7 @@ class OrderManager:
                         diff = -diff
                     orden.pnl_operaciones = getattr(orden, 'pnl_operaciones', 0.0) + diff
 
-            	orden.cantidad_abierta -= cantidad
+                orden.cantidad_abierta -= cantidad
 
                 log.info(f'📤 Cierre parcial de {symbol}: {cantidad} @ {precio:.2f} | {motivo}')
                 if self.bus:
