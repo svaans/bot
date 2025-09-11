@@ -876,7 +876,9 @@ class Trader:
                 log.info(f'📈 No se pudo precargar histórico desde Binance: {e}')
         for symbol in self.estado.keys():
             try:
-                df = await warmup_symbol(symbol, self.config.intervalo_velas, cliente)
+                df = await warmup_symbol(
+                    symbol, self.config.intervalo_velas, cliente, velas
+                )
             except BaseError as e:
                 log.warning(f'⚠️ Error cargando histórico para {symbol}: {e}')
                 continue
