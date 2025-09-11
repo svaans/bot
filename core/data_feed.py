@@ -16,6 +16,7 @@ from binance_api.websocket import (
 from binance_api.cliente import fetch_ohlcv_async
 from core.utils.logger import configurar_logger
 from core.utils import intervalo_a_segundos, validar_integridad_velas, timestamp_alineado
+from core.utils.warmup import splice_with_last
 from core.utils.backoff import calcular_backoff
 from core.registro_metrico import registro_metrico
 from core.metrics import QUEUE_SIZE, INGEST_LATENCY
@@ -936,6 +937,23 @@ class DataFeed:
                     self._last_close_ts[sym] = ts
                 if candle:
                     self._ultimo_candle[sym] = candle
+        if self._estado:
+            for sym in symbols_list:
+                est = self._estado.get(sym)
+                if not est or not getattr(est, "buffer", None):
+                    continue
+                warmup = [(c["timestamp"], c) for c in est.buffer if "timestamp" in c]
+                last_ts = self._last_close_ts.get(sym)
+                last_candle = self._ultimo_candle.get(sym)
+                try:
+                    merged = splice_with_last(warmup, last_ts, last_candle, self.intervalo)
+                except ValueError as exc:
+                    log.error(f"[{sym}] Warmup inconsistente: {exc}")
+                    raise
+                est.buffer.clear()
+                est.buffer.extend(c for _, c in merged)
+                if merged:
+                    self._last_close_ts[sym] = merged[-1][0]
         self._running = True
         tam_q = int(os.getenv("DF_QUEUE_MAX", "500"))
         self._queues = {sym: asyncio.Queue(maxsize=tam_q) for sym in self._symbols}
