@@ -1113,31 +1113,35 @@ class Trader:
             ahora = datetime.now(UTC)
             for nombre, task in list(self._tareas.items()):
                 if nombre == 'data_feed' and getattr(self.data_feed, '_reiniciando', False):
-                    log.debug('⏳ DataFeed en reinicio; heartbeat no interviene')
+                    log.debug(
+                        'DataFeed en reinicio; heartbeat no interviene',
+                        extra={'task': 'data_feed'},
+                    )
                     continue
                 if task.done():
                     cancelled = task.cancelled()
                     if cancelled:
                         log.debug(
-                            f'🟡 Heartbeat: tarea {nombre} fue cancelada manualmente'
+                            'Heartbeat: tarea cancelada manualmente',
+                            extra={'task': nombre},
                         )
                     else:
                         exc = task.exception()
                         if exc:
                             log.warning(
-                                f'⚠️ Heartbeat: tarea {nombre} terminó con error: {exc}'
+                                'Heartbeat: tarea terminó con error',
+                                extra={'task': nombre, 'error': str(exc)},
                             )
                         else:
                             log.warning(
-                                f'⚠️ Heartbeat: tarea {nombre} finalizó inesperadamente'
+                                'Heartbeat: tarea finalizó inesperadamente',
+                                extra={'task': nombre},
                             )
                         if nombre == 'data_feed':
                             obs_metrics.DATAFEED_FAILED_RESTARTS.inc()
                     if nombre == 'flush':
-                        mensaje = (
-                            '⚠️ Heartbeat: tarea flush finalizada; no se reiniciará automáticamente'
-                        )
-                        log.error(mensaje)
+                        mensaje = 'Heartbeat: tarea flush finalizada; no se reiniciará automáticamente'
+                        log.error(mensaje, extra={'task': 'flush'})
                         if self.notificador:
                             await safe_notify(
                                 self.notificador.enviar_async(mensaje, 'CRITICAL')
@@ -1169,7 +1173,10 @@ class Trader:
                             self._stop_event.set()
                             obs_metrics.FEED_STOPPED.set(1)
                             continue
-                        log.error(f'🚨 Circuit breaker: demasiados reinicios para {nombre}')
+                        log.error(
+                            'Circuit breaker: demasiados reinicios',
+                            extra={'task': nombre},
+                        )
                         continue
                     backoff = min(60, 2 ** (len(stats) - 1))
                     await asyncio.sleep(backoff)
@@ -1177,7 +1184,10 @@ class Trader:
                         t.get_name() == nombre for t in asyncio.all_tasks()
                     )
                     if nombre == 'data_feed' and otra_activa:
-                        log.debug('🔁 DataFeed ya activo; no se reinicia desde heartbeat')
+                        log.debug(
+                            'DataFeed ya activo; no se reinicia desde heartbeat',
+                            extra={'task': 'data_feed'},
+                        )
                         continue
                     self._iniciar_tarea(nombre, self._factories[nombre])
                     log.debug(
@@ -1204,7 +1214,8 @@ class Trader:
                             stats.popleft()
                         if len(stats) > 5 and ts_now - stats[0] < 60:
                             log.error(
-                                f'🚨 Circuit breaker: demasiados reinicios para {nombre}'
+                                'Circuit breaker: demasiados reinicios',
+                                extra={'task': nombre},
                             )
                             continue
                         backoff = min(60, 2 ** (len(stats) - 1))
