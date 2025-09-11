@@ -46,7 +46,7 @@ class DataFeed:
         monitor_interval: int = 5,
         max_restarts: int = 5,
         inactivity_intervals: int = 3,
-        handler_timeout: float = float(os.getenv("DF_HANDLER_TIMEOUT_SEC", "0.8")),
+        handler_timeout: float = float(os.getenv("DF_HANDLER_TIMEOUT_SEC", "1.0")),
         cancel_timeout: float = 5,
         backpressure: bool = False,
         reset_cb: Callable[[str], None] | None = None,
