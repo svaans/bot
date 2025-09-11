@@ -286,6 +286,7 @@ class Trader:
         self.historial_cierres: Dict[str, dict] = {}
         self.capital_inicial_orden: Dict[str, float] = {}
         self._tareas: dict[str, asyncio.Task] = {}
+        self._tareas_velas: set[asyncio.Task] = set()
         self._restart_stats: defaultdict[str, deque] = defaultdict(deque)
         self._sin_datos_alertado: set[str] = set()
         self._factories: dict[str, Callable[[], Awaitable]] = {}
@@ -1868,7 +1869,17 @@ class Trader:
         """Inicia el procesamiento de todos los símbolos."""
 
         async def handle(candle: dict) ->None:
-            await self._procesar_vela(candle)
+            task = asyncio.create_task(self._procesar_vela(candle))
+            self._tareas_velas.add(task)
+
+            def _done(t: asyncio.Task) -> None:
+                self._tareas_velas.discard(t)
+                try:
+                    t.result()
+                except Exception as e:
+                    log.error(f"Error procesando vela: {e}")
+
+            task.add_done_callback(_done)
 
         async def handle_context(symbol: str, score: float) -> None:
             self.puntajes_contexto[symbol] = score
@@ -1950,6 +1961,11 @@ class Trader:
                 await self.external_feeds.detener()
             tarea.cancel()
         await asyncio.gather(*self._tareas.values(), return_exceptions=True)
+        for t in list(self._tareas_velas):
+            t.cancel()
+        if self._tareas_velas:
+            await asyncio.gather(*self._tareas_velas, return_exceptions=True)
+        self._tareas_velas.clear()
         await self.bus.close()
         real_orders.flush_operaciones()
         self.rejection_handler.flush()
