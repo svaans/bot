@@ -56,13 +56,13 @@ async def main():
         loop.add_signal_handler(signal.SIGINT, detener_bot)
         loop.add_signal_handler(signal.SIGTERM, detener_bot)
 
-    pending = set()
+    pending_wait = set()
     max_retries = 5
     retries = 0
     backoff_base = 5
     try:
         while True:
-            done, pending = await asyncio.wait(
+            done, pending_wait = await asyncio.wait(
                 [tarea_bot, tarea_stop],
                 return_when=asyncio.FIRST_COMPLETED,
             )
@@ -91,6 +91,7 @@ async def main():
                         pass
                     startup = StartupManager()
                     bot, tarea_bot, config = await startup.run()
+                    retries = 0
                     continue
                 else:
                     print('✅ Bot finalizado sin errores.')
@@ -107,18 +108,21 @@ async def main():
         print('🛑 Interrupción por teclado detectada.')
     finally:
         stop_event.set()
-        for t in pending:
+        for t in pending_wait:
             t.cancel()
-        if pending:
-            await asyncio.gather(*pending, return_exceptions=True)
+        if pending_wait:
+            await asyncio.gather(*pending_wait, return_exceptions=True)
         stop_hot_reload(observer)
         try:
             await asyncio.wait_for(bot.cerrar(), timeout=15)
-            await stop_supervision()
-            exporter_server.shutdown()
-            exporter_server.server_close()
         except asyncio.TimeoutError:
             print('⏰ Timeout al cerrar el bot.')
+        finally:
+            try:
+                await stop_supervision()
+            finally:
+                exporter_server.shutdown()
+                exporter_server.server_close()
         print('👋 Bot finalizado correctamente.')
 
 
