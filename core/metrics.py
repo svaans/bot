@@ -106,6 +106,12 @@ BINANCE_WEIGHT_USED_1M = Gauge(
     "Peso utilizado en el último minuto según Binance",
 )
 
+PARTIAL_CLOSE_COLLISION = Counter(
+    "partial_close_collision_total",
+    "Intentos concurrentes de cierre parcial por símbolo",
+    ["symbol"],
+)
+
 UMBRAL_VELAS_RECHAZADAS = float(os.getenv("UMBRAL_VELAS_RECHAZADAS", 5))
 
 log = configurar_logger("metrics")
@@ -136,6 +142,13 @@ def registrar_buy_rejected_insufficient_funds() -> None:
     global _buy_rejected_insufficient_funds
     _buy_rejected_insufficient_funds += 1
     registro_metrico.registrar("buy_rejected", {"reason": "insufficient_funds"})
+
+
+def registrar_partial_close_collision(symbol: str) -> None:
+    """Incrementa ``partial_close_collision_total`` para ``symbol``."""
+
+    PARTIAL_CLOSE_COLLISION.labels(symbol=symbol).inc()
+    registro_metrico.registrar("partial_close_collision", {"symbol": symbol})
 
 
 def registrar_candles_duplicadas(symbol: str, count: int) -> None:
