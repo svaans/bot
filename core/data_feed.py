@@ -214,10 +214,12 @@ class DataFeed:
             except asyncio.QueueEmpty:
                 pass
             try:
-                queue.put_nowait(candle)
+                await asyncio.wait_for(queue.put(candle), timeout=1.0)
                 QUEUE_SIZE.labels(symbol=symbol).set(queue.qsize())
-            except asyncio.QueueFull:
-                pass
+            except Exception:
+                log.error(
+                    f"[{symbol}] No se pudo encolar nueva vela tras espera; descartando"
+                )
         self._last[symbol] = datetime.now(UTC)
         self._last_monotonic[symbol] = time.monotonic()
         self._mensajes_recibidos[symbol] = (

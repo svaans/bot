@@ -404,9 +404,12 @@ async def _gestionar_ws(
                             tick('data_feed')
                         continue
                     except asyncio.TimeoutError:
-                        log.warning(f'⏰ Sin datos en {mensaje_timeout}s, forzando reconexión')
-                        await ws.close()
-                        break
+                        log.warning(
+                            f'⏰ Sin datos en {mensaje_timeout}s, aplicando backoff y reconexión'
+                        )
+                        raise InactividadTimeoutError(
+                            f'Sin datos en {mensaje_timeout}s'
+                        )
                     except ConnectionClosed as e:
                         log.warning(f"🚪 WebSocket cerrado — Código: {e.code}, Motivo: {e.reason}")
                         await ws.close()
@@ -430,6 +433,8 @@ async def _gestionar_ws(
                         await t
                     except InactividadTimeoutError:
                         raise
+                    except asyncio.CancelledError:
+                        pass
                     except Exception as e:
                         log.debug(f'Error al esperar tarea cancelada: {e}')
                         tick('data_feed')
