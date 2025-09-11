@@ -90,6 +90,12 @@ INGEST_LATENCY = Histogram(
     ["symbol"],
 )
 
+# Métricas de Trader
+TRADER_QUEUE_SIZE = Gauge(
+    "trader_queue_size",
+    "Tamaño de la cola interna del Trader",
+)
+
 WATCHDOG_RESTARTS = Counter(
     "watchdog_restarts_total",
     "Reinicios de tareas provocados por el watchdog",

@@ -50,7 +50,11 @@ from core.config_manager.dinamica import adaptar_configuracion
 from ccxt.base.errors import BaseError
 from core.reporting import reporter_diario
 from core.registro_metrico import registro_metrico
-from core.metrics import registrar_decision, registrar_correlacion_btc
+from core.metrics import (
+    registrar_decision,
+    registrar_correlacion_btc,
+    TRADER_QUEUE_SIZE,
+)
 from core.supervisor import (
     supervised_task,
     task_heartbeat,
@@ -287,7 +291,12 @@ class Trader:
         self.historial_cierres: Dict[str, dict] = {}
         self.capital_inicial_orden: Dict[str, float] = {}
         self._tareas: dict[str, asyncio.Task] = {}
-        self._tareas_velas: set[asyncio.Task] = set()
+        queue_max = int(os.getenv("TRADER_QUEUE_MAX", "1000"))
+        self._candle_queue: asyncio.Queue[dict] = asyncio.Queue(
+            maxsize=queue_max
+        )
+        self._workers: list[asyncio.Task] = []
+        self._max_concurrency = int(os.getenv("TRADER_MAX_CONCURRENCY", "10"))
         self._restart_stats: defaultdict[str, deque] = defaultdict(deque)
         self._sin_datos_alertado: set[str] = set()
         self._factories: dict[str, Callable[[], Awaitable]] = {}
@@ -1868,19 +1877,13 @@ class Trader:
 
     async def ejecutar(self) ->None:
         """Inicia el procesamiento de todos los símbolos."""
+        for _ in range(self._max_concurrency):
+            worker = asyncio.create_task(self._worker_loop())
+            self._workers.append(worker)
 
         async def handle(candle: dict) ->None:
-            task = asyncio.create_task(self._procesar_vela(candle))
-            self._tareas_velas.add(task)
-
-            def _done(t: asyncio.Task) -> None:
-                self._tareas_velas.discard(t)
-                try:
-                    t.result()
-                except Exception as e:
-                    log.error(f"Error procesando vela: {e}")
-
-            task.add_done_callback(_done)
+            await self._candle_queue.put(candle)
+            TRADER_QUEUE_SIZE.set(self._candle_queue.qsize())
 
         async def handle_context(symbol: str, score: float) -> None:
             self.puntajes_contexto[symbol] = score
@@ -1943,6 +1946,20 @@ class Trader:
         """Solicita al trader que detenga su ejecución."""
         self._stop_event.set()
 
+    async def _worker_loop(self) -> None:
+        while True:
+            candle = await self._candle_queue.get()
+            if candle is None:
+                self._candle_queue.task_done()
+                break
+            try:
+                await self._procesar_vela(candle)
+            except Exception as e:
+                log.error(f"Error procesando vela: {e}")
+            finally:
+                self._candle_queue.task_done()
+                TRADER_QUEUE_SIZE.set(self._candle_queue.qsize())
+
     async def _procesar_vela(self, vela: dict) ->None:
         symbol = vela.get('symbol')
         if not self._validar_config(symbol):
@@ -1966,11 +1983,11 @@ class Trader:
                 await self.external_feeds.detener()
             tarea.cancel()
         await asyncio.gather(*self._tareas.values(), return_exceptions=True)
-        for t in list(self._tareas_velas):
-            t.cancel()
-        if self._tareas_velas:
-            await asyncio.gather(*self._tareas_velas, return_exceptions=True)
-        self._tareas_velas.clear()
+        await self._candle_queue.join()
+        for _ in self._workers:
+            await self._candle_queue.put(None)
+        await asyncio.gather(*self._workers, return_exceptions=True)
+        self._workers.clear()
         await self.bus.close()
         real_orders.flush_operaciones()
         self.rejection_handler.flush()
