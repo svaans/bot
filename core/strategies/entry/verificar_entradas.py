@@ -1,5 +1,6 @@
 from __future__ import annotations
 from datetime import datetime, timezone
+import asyncio
 import pandas as pd
 from core.utils import configurar_logger, safe_resample
 from core.adaptador_dinamico import calcular_tp_sl_adaptativos
@@ -187,49 +188,49 @@ async def verificar_entrada(trader, symbol: str, df: pd.DataFrame, estado) -> (
                     intervalo_ms = intervalo_a_segundos(intervalo) * 1000
                     diffs = df['timestamp'].diff()
                     gaps = diffs[diffs > intervalo_ms]
-                    for idx in gaps.index:
-                        inicio_gap = int(df.loc[idx - 1, 'timestamp']) + intervalo_ms
-                        fin_gap = int(df.loc[idx, 'timestamp']) - intervalo_ms
-                        faltantes = int((fin_gap - inicio_gap) // intervalo_ms) + 1
-                        try:
-                            nuevas = await fetch_ohlcv_async(
-                                cliente,
-                                symbol,
-                                intervalo,
-                                since=inicio_gap,
-                                limit=faltantes,
+                    async def _backfill_critico() -> None:
+                        for idx in gaps.index:
+                            inicio_gap = int(df.loc[idx - 1, 'timestamp']) + intervalo_ms
+                            fin_gap = int(df.loc[idx, 'timestamp']) - intervalo_ms
+                            faltantes = int((fin_gap - inicio_gap) // intervalo_ms) + 1
+                            try:
+                                nuevas = await fetch_ohlcv_async(
+                                    cliente,
+                                    symbol,
+                                    intervalo,
+                                    since=inicio_gap,
+                                    limit=faltantes,
+                                )
+                            except Exception as e:
+                                log.warning(f'[{symbol}] Error backfill crítico: {e}')
+                                return
+                            df_nuevas = pd.DataFrame(
+                                [
+                                    {
+                                        'timestamp': o[0],
+                                        'open': float(o[1]),
+                                        'high': float(o[2]),
+                                        'low': float(o[3]),
+                                        'close': float(o[4]),
+                                        'volume': float(o[5]),
+                                    }
+                                    for o in nuevas
+                                ]
                             )
-                        except Exception as e:
-                            log.warning(f'[{symbol}] Error backfill crítico: {e}')
-                            metricas_tracker.registrar_filtro('datos_invalidos')
-                            return None
-                        df_nuevas = pd.DataFrame(
-                            [
-                                {
-                                    'timestamp': o[0],
-                                    'open': float(o[1]),
-                                    'high': float(o[2]),
-                                    'low': float(o[3]),
-                                    'close': float(o[4]),
-                                    'volume': float(o[5]),
-                                }
-                                for o in nuevas
-                            ]
-                        )
-                        df = (
-                            pd.concat([df, df_nuevas])
-                            .drop_duplicates(subset=['timestamp'])
-                            .sort_values('timestamp')
-                            .reset_index(drop=True)
-                        )
-                    if verificar_integridad_datos(df):
-                        log.info(f'[{symbol}] Hueco crítico reparado vía REST')
-                    else:
-                        log.warning(f'[{symbol}] Datos corruptos irreparables tras backfill: {stats}')
-                        metricas_tracker.registrar_filtro('datos_invalidos')
-                        return None
-                else:
-                    log.warning(f'[{symbol}] Sin cliente para backfill crítico')
+                        estado.df = (
+                                pd.concat([estado.df, df_nuevas])
+                                .drop_duplicates(subset=['timestamp'])
+                                .sort_values('timestamp')
+                                .reset_index(drop=True)
+                            )
+                        if verificar_integridad_datos(estado.df):
+                            log.info(f'[{symbol}] Hueco crítico reparado vía REST')
+                        else:
+                            log.warning(
+                                f'[{symbol}] Datos corruptos irreparables tras backfill: {stats}'
+                            )
+
+                    asyncio.create_task(_backfill_critico())
                     metricas_tracker.registrar_filtro('datos_invalidos')
                     return None
             else:
@@ -259,19 +260,22 @@ async def verificar_entrada(trader, symbol: str, df: pd.DataFrame, estado) -> (
         log.info(f'[{symbol}] Contradicción entre marcos temporales.')
         metricas_tracker.registrar_filtro('marcos_temporales')
         return None
-    engine_eval = await trader.engine.evaluar_entrada(
-        symbol,
-        df,
-        tendencia=tendencia,
-        config={
-            **config,
-            "contradicciones_bloquean_entrada": getattr(
-                trader, "contradicciones_bloquean_entrada", True
-            ),
-            "usar_score_tecnico": getattr(trader, "usar_score_tecnico", True),
-        },
-        pesos_symbol=trader.pesos_por_simbolo.get(symbol, {}),
-    )
+    async def _engine_eval() -> dict:
+        return await trader.engine.evaluar_entrada(
+            symbol,
+            df,
+            tendencia=tendencia,
+            config={
+                **config,
+                "contradicciones_bloquean_entrada": getattr(
+                    trader, "contradicciones_bloquean_entrada", True
+                ),
+                "usar_score_tecnico": getattr(trader, "usar_score_tecnico", True),
+            },
+            pesos_symbol=trader.pesos_por_simbolo.get(symbol, {}),
+        )
+
+    engine_eval = await asyncio.to_thread(lambda: asyncio.run(_engine_eval()))
     estrategias = engine_eval.get('estrategias_activas', {})
     if not estrategias:
         log.warning(f'[{symbol}] Sin estrategias activas tras engine.')
