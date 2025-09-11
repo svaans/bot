@@ -172,7 +172,7 @@ async def verificar_entrada(trader, symbol: str, df: pd.DataFrame, estado) -> (
         return None
     df = df.sort_values('timestamp').copy()
     df['timestamp'] = pd.to_numeric(df['timestamp'], errors='coerce')
-    df = df.dropna(subset=['timestamp']).drop_duplicates(subset=['timestamp'])
+    df = df.dropna(subset=['timestamp']).drop_duplicates(subset=['timestamp']).reset_index(drop=True)
 
     # Integridad básica; si falla intentamos reparación de huecos tolerables
     if not verificar_integridad_datos(df):
@@ -190,6 +190,9 @@ async def verificar_entrada(trader, symbol: str, df: pd.DataFrame, estado) -> (
                     gaps = diffs[diffs > intervalo_ms]
                     async def _backfill_critico() -> None:
                         for idx in gaps.index:
+                            if idx <= 0 or len(df) < 2:
+                                log.warning(f'[{symbol}] Datos insuficientes para backfill crítico')
+                                return
                             inicio_gap = int(df.loc[idx - 1, 'timestamp']) + intervalo_ms
                             fin_gap = int(df.loc[idx, 'timestamp']) - intervalo_ms
                             faltantes = int((fin_gap - inicio_gap) // intervalo_ms) + 1
