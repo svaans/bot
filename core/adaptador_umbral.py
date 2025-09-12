@@ -14,8 +14,7 @@ from typing import Deque, Dict, Optional
 
 import pandas as pd
 from prometheus_client import Counter, Gauge
-
-from indicators import rsi as indicador_rsi, slope as indicador_slope
+from indicators.helpers import get_rsi, get_slope
 from indicators.retornos_volatilidad import (
     retornos_log,
     retornos_simples,
@@ -148,8 +147,20 @@ def calcular_umbral_adaptativo(
             return 1.0
         return 1 - min(valor * 0.1, 0.3)
 
-    rsi_val = contexto.get("rsi") if contexto else indicador_rsi(df)
-    slope_val = contexto.get("slope") if contexto else indicador_slope(df)
+    rsi_val = (
+        contexto["rsi"]
+        if (contexto and "rsi" in contexto and contexto["rsi"] is not None)
+        else get_rsi(df)
+    )
+    slope_val = (
+        contexto["slope"]
+        if (contexto and "slope" in contexto and contexto["slope"] is not None)
+        else get_slope(df)
+    )
+    if isinstance(rsi_val, pd.Series):
+        rsi_val = rsi_val.iloc[-1]
+    if isinstance(slope_val, pd.Series):
+        slope_val = slope_val.iloc[-1]
     pers_val = contexto.get("persistencia") if contexto else None
 
     umbral = base * factor
