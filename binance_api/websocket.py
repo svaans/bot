@@ -12,7 +12,10 @@ import ssl
 import websockets
 from websockets.exceptions import ConnectionClosed
 import certifi
-import resource
+try:
+    import resource  # type: ignore
+except Exception:  # pragma: no cover - fallback for non-POSIX systems
+    resource = None
 
 UTC = timezone.utc
 
@@ -36,6 +39,8 @@ log = configurar_logger('websocket')
 
 def _ajustar_limite_archivos(min_limit: int = 4096) -> None:
     """Intenta aumentar el límite de descriptores si es demasiado bajo."""
+    if resource is None:
+        return
     try:
         soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
         if soft < min_limit:
@@ -227,7 +232,7 @@ async def _gestionar_ws(
                     url,
                     open_timeout=OPEN_TIMEOUT,
                     close_timeout=CLOSE_TIMEOUT,
-                    ping_interval=PING_INTERVAL,
+                    ping_interval=ping_interval,
                     ping_timeout=PING_TIMEOUT,
                     max_size=2 ** 20,
                     ssl=_SSL_CONTEXT,
