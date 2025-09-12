@@ -45,9 +45,9 @@ class DataFeed:
         self,
         intervalo: str,
         monitor_interval: int = 5,
-        max_restarts: int = 5,
-        inactivity_intervals: int = 3,
-        handler_timeout: float = float(os.getenv("DF_HANDLER_TIMEOUT_SEC", "1.0")),
+        max_restarts: int = 10,
+        inactivity_intervals: int = 10,
+        handler_timeout: float = float(os.getenv("DF_HANDLER_TIMEOUT_SEC", "2.0")),
         cancel_timeout: float = 5,
         backpressure: bool = False,
         batch_size: int | None = None,
@@ -104,10 +104,6 @@ class DataFeed:
         self._producer_stats: Dict[str, Dict[str, float]] = {}
         self._queue_windows: Dict[str, list] = {}
         self._last_window_reset: Dict[str, float] = {}
-        self.drop_oldest = (
-            os.getenv("DF_BACKPRESSURE_DROP", "false").lower() == "true"
-            and not self.backpressure
-        )
         self._estado: Dict[str, Any] | None = None
 
     @property
@@ -359,37 +355,33 @@ class DataFeed:
         while self._running:
             candle = await queue.get()
             enqueue_ts = candle.pop("_enqueue_time", None)
-            if (
-                self.drop_oldest
-                and queue.maxsize
-                and queue.qsize() > queue.maxsize * 0.8
-            ):
-                discarded = 1  # la vela obtenida será reemplazada
-                last: dict | None = None
-                while True:
+            if queue.maxsize and queue.qsize() > queue.maxsize * 0.8:
+                log.warning(f"[{symbol}] backlog alto; entrando en catch_up")
+                descartadas = 1  # la vela ya obtenida
+                queue.task_done()
+                while not queue.empty():
                     try:
-                        next_candle = queue.get_nowait()
+                        queue.get_nowait()
+                        queue.task_done()
+                        descartadas += 1
                     except asyncio.QueueEmpty:
                         break
-                    if queue.empty():
-                        last = next_candle
-                        break
-                    queue.task_done()
-                    discarded += 1
-                queue.task_done()  # descartar la vela inicial
+                QUEUE_SIZE.labels(symbol=symbol).set(queue.qsize())
                 self._queue_discards[symbol] = (
-                    self._queue_discards.get(symbol, 0) + discarded
+                    self._queue_discards.get(symbol, 0) + descartadas
                 )
-                obs_metrics.QUEUE_DROPS.labels(symbol=symbol).inc(discarded)
+                obs_metrics.QUEUE_DROPS.labels(symbol=symbol).inc(descartadas)
                 registro_metrico.registrar(
                     "queue_discards",
                     {"symbol": symbol, "count": self._queue_discards[symbol]},
                 )
-                log.warning(
-                    f"[{symbol}] consumer_backlog: descartando {discarded} velas antiguas (total {self._queue_discards[symbol]})"
-                )
-                candle = last if last is not None else candle
-                QUEUE_SIZE.labels(symbol=symbol).set(queue.qsize())
+                try:
+                    await asyncio.wait_for(
+                        self._backfill_candles(symbol), timeout=self.tiempo_inactividad
+                    )
+                except Exception:
+                    log.exception(f"[{symbol}] error en catch_up/backfill")
+                continue  # reintentar bucle con cola saneada
             try:
                 await asyncio.wait_for(
                     handler(candle), timeout=self.handler_timeout
