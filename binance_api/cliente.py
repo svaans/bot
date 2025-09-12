@@ -521,3 +521,10 @@ async def fetch_ohlcv_async(cliente, *args, **kwargs):
     loop = asyncio.get_running_loop()
     func = functools.partial(cliente.fetch_ohlcv, *args, **kwargs)
     return await loop.run_in_executor(None, func)
+
+
+async def close_http_session() -> None:
+    """Cierra la sesión HTTP reutilizable si sigue abierta."""
+    global _HTTP_SESSION
+    if _HTTP_SESSION and not _HTTP_SESSION.closed:
+        await _HTTP_SESSION.close()
