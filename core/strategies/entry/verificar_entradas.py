@@ -184,6 +184,26 @@ def _handle_integrity_failure(trader, symbol: str, df: pd.DataFrame, stats: dict
         log.warning(f'[{symbol}] Datos corruptos irreparables: {stats}')
         metricas_tracker.registrar_filtro('datos_invalidos')
 
+def _sanear_df(df: pd.DataFrame) -> tuple[bool, pd.DataFrame]:
+    """Ejecuta ``verificar_integridad_datos`` de forma defensiva.
+
+    Acepta el DataFrame original y devuelve una tupla ``(ok, df_reparado)``.
+    Maneja ambos contratos de ``verificar_integridad_datos`` y captura
+    excepciones, retornando el DataFrame original si algo falla.
+    """
+    try:
+        res = verificar_integridad_datos(df)
+        if isinstance(res, tuple):
+            ok, reparado = res
+        else:
+            ok, reparado = True, res
+    except Exception as e:
+        log.warning(f'⚠️ Error en verificar_integridad_datos: {e}')
+        return False, df
+    if reparado is None or getattr(reparado, 'empty', False):
+        return False, df
+    return ok, reparado
+
 def _tendencia_principal(tendencias: list[str | None]) -> tuple[str | None, float]:
     """Devuelve la tendencia predominante y su proporción."""
     valores = [t for t in tendencias if t]
@@ -251,17 +271,18 @@ async def verificar_entrada(trader, symbol: str, df: pd.DataFrame, estado) -> (
     ok, df = verificar_integridad_datos(df)
     if not ok:
         reparado, ok, stats = _reparar_huecos(df)
-    if ok:
-        ok_reparado, reparado = verificar_integridad_datos(reparado)
-        if ok_reparado:
-            log.info(f'[{symbol}] Datos incompletos reparados: {stats}')
-            df = reparado
+        if ok:
+            ok_reparado, reparado = _sanear_df(reparado)
+            if ok_reparado:
+                log.info(f'[{symbol}] Datos incompletos reparados: {stats}')
+                df = reparado
+            else:
+                log.info(f'🚫 [{symbol}] Rechazo por datos inválidos/insuficientes tras reparación')
+                _handle_integrity_failure(trader, symbol, df, stats, estado)
+                return None
         else:
             _handle_integrity_failure(trader, symbol, df, stats, estado)
             return None
-    else:
-        _handle_integrity_failure(trader, symbol, df, stats, estado)
-        return None
 
     config = adaptar_configuracion(symbol, df, trader.config_por_simbolo.get(symbol, {}))
     trader.config_por_simbolo[symbol] = config
