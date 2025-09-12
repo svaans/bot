@@ -1,29 +1,53 @@
 import json
 import os
-from dataclasses import dataclass, field
-from typing import Dict, Optional
-import pandas as pd
+from ast import literal_eval
 from collections import defaultdict
+from dataclasses import dataclass, field
 from math import isclose
+from typing import Dict, Iterable, Optional
+
+import pandas as pd
 from core.utils.utils import configurar_logger
 log = configurar_logger('pesos')
 
 
-def normalizar_pesos(pesos_actuales: Dict[str, float], total: float=100,
-    peso_min: float=0.5, factor_temporal: Optional[float]=None) ->Dict[str,
-    float]:
-    """Normaliza los pesos, respetando un mínimo y aplicando factor temporal si se indica."""
-    pesos_temporales = {estrategia: (valor * factor_temporal if
-        factor_temporal else valor) for estrategia, valor in pesos_actuales
-        .items()}
-    pesos_min = {estrategia: max(valor, peso_min) for estrategia, valor in
-        pesos_temporales.items()}
-    suma_actual = sum(pesos_min.values())
-    if isclose(suma_actual, 0.0, rel_tol=1e-12, abs_tol=1e-12):
-        return {estrategia: (0.0) for estrategia in pesos_min}
-    factor = total / suma_actual
-    return {estrategia: round(valor * factor, 4) for estrategia, valor in
-        pesos_min.items()}
+def normalizar_pesos(
+    pesos_actuales: Dict[str, float],
+    total: float = 100,
+    peso_min: float = 0.5,
+    factor_temporal: Optional[float] = None,
+) -> Dict[str, float]:
+    """Normaliza los pesos respetando un mínimo final mediante pegging iterativo."""
+    if factor_temporal:
+        pesos_actuales = {k: v * factor_temporal for k, v in pesos_actuales.items()}
+
+    restantes = dict(pesos_actuales)
+    asignados: Dict[str, float] = {}
+    total_restante = total
+
+    while restantes:
+        suma = sum(restantes.values())
+        if isclose(suma, 0.0, rel_tol=1e-12, abs_tol=1e-12):
+            for k in restantes:
+                asignados[k] = peso_min
+            break
+        factor = total_restante / suma
+        escalados = {k: v * factor for k, v in restantes.items()}
+        menores = {k: v for k, v in escalados.items() if v < peso_min}
+        if not menores:
+            asignados.update(escalados)
+            break
+        for k in menores:
+            asignados[k] = peso_min
+            del restantes[k]
+            total_restante -= peso_min
+            if total_restante <= 0:
+                for k2 in restantes:
+                    asignados[k2] = peso_min
+                restantes.clear()
+                break
+
+    return {k: round(v, 4) for k, v in asignados.items()}
 
 
 @dataclass
@@ -42,7 +66,7 @@ class GestorPesos:
             log.error(f'❌ No se encontró archivo de pesos: {self.ruta}')
             raise ValueError('Archivo de pesos inexistente')
         try:
-            with open(self.ruta, 'r') as f:
+            with open(self.ruta, 'r', encoding='utf-8') as f:
                 datos = json.load(f)
         except json.JSONDecodeError as e:
             log.error(f'❌ Error cargando pesos desde JSON: {e}')
@@ -56,9 +80,9 @@ class GestorPesos:
         ruta_base = 'config/estrategias_pesos_base.json'
         if not os.path.exists(ruta_base):
             raise ValueError('No hay copia base para recuperar pesos')
-        with open(ruta_base, 'r') as base:
+        with open(ruta_base, 'r', encoding='utf-8') as base:
             datos = json.load(base)
-        with open(self.ruta, 'w') as reparado:
+        with open(self.ruta, 'w', encoding='utf-8') as reparado:
             json.dump(datos, reparado, indent=4)
         log.info('🔄 Pesos restaurados desde copia base')
         return datos
@@ -66,7 +90,7 @@ class GestorPesos:
     def guardar(self, pesos: Dict[str, Dict[str, float]]) ->None:
         """Guarda los pesos actualizados en disco."""
         try:
-            with open(self.ruta, 'w') as f:
+            with open(self.ruta, 'w', encoding='utf-8') as f:
                 json.dump(pesos, f, indent=4)
             self.pesos = pesos
             log.info('✅ Pesos guardados.')
@@ -79,8 +103,12 @@ class GestorPesos:
     def obtener_pesos_symbol(self, symbol: str) ->Dict[str, float]:
         return self.pesos.get(symbol, {})
 
-    def calcular_desde_backtest(self, simbolos, carpeta='backtesting',
-        escala=20) ->None:
+    def calcular_desde_backtest(
+        self,
+        simbolos: Iterable[str] | list[str],
+        carpeta: str = 'backtesting',
+        escala: int = 20,
+    ) -> None:
         """Recalcula pesos desde los CSV de órdenes ganadoras por símbolo."""
         pesos_por_symbol = {}
         for symbol in simbolos:
@@ -90,7 +118,7 @@ class GestorPesos:
                 log.warning(f'❌ Archivo no encontrado: {ruta}')
                 continue
             try:
-                df = pd.read_csv(ruta)
+                df = pd.read_csv(ruta, encoding='utf-8')
             except pd.errors.EmptyDataError:
                 log.warning(f'⚠️ Archivo vacío: {ruta}')
                 continue
@@ -99,8 +127,7 @@ class GestorPesos:
                 if fila.get('resultado') != 'ganancia':
                     continue
                 try:
-                    estrategias = json.loads(fila['estrategias_activas'].
-                        replace("'", '"'))
+                    estrategias = literal_eval(fila['estrategias_activas'])
                     for estrategia, activa in estrategias.items():
                         if activa:
                             conteo[estrategia] += 1
@@ -136,7 +163,7 @@ class GestorPesosSalidas:
             log.error(f'❌ No se encontró archivo de pesos: {self.ruta}')
             raise ValueError('Archivo de pesos inexistente')
         try:
-            with open(self.ruta, 'r') as fh:
+            with open(self.ruta, 'r', encoding='utf-8') as fh:
                 datos = json.load(fh)
         except json.JSONDecodeError as e:
             log.error(f'❌ Error cargando pesos de salida: {e}')
@@ -151,14 +178,23 @@ class GestorPesosSalidas:
 
 try:
     gestor_pesos = GestorPesos()
+except ValueError as e:
+    log.warning(f'Inicializando GestorPesos vacío: {e}')
+    gestor_pesos = GestorPesos.__new__(GestorPesos)
+    gestor_pesos.ruta = 'config/estrategias_pesos.json'
+    gestor_pesos.pesos = {}
+
+try:
     gestor_pesos_salidas = GestorPesosSalidas()
 except ValueError as e:
-    log.error(e)
-    raise
+    log.warning(f'Inicializando GestorPesosSalidas vacío: {e}')
+    gestor_pesos_salidas = GestorPesosSalidas.__new__(GestorPesosSalidas)
+    gestor_pesos_salidas.ruta = 'config/pesos_salidas.json'
+    gestor_pesos_salidas.pesos = {}
 
 
-def cargar_pesos_estrategias() ->Dict[str, Dict[str, float]]:
-    return GestorPesos().pesos
+def cargar_pesos_estrategias() -> Dict[str, Dict[str, float]]:
+    return gestor_pesos.pesos
 
 
 def obtener_peso_salida(razon: str, symbol: str) ->float:
