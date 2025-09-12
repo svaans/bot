@@ -26,6 +26,7 @@ from core.metricas_semanales import metricas_tracker
 from core.scoring import DecisionTrace, DecisionReason
 log = configurar_logger('verificar_entrada')
 UTC = timezone.utc
+MAX_BACKFILL_CANDLES = 100
 
 def _reparar_huecos(
     df: pd.DataFrame,
@@ -197,6 +198,7 @@ async def verificar_entrada(trader, symbol: str, df: pd.DataFrame, estado) -> (
                             inicio_gap = int(df.loc[idx - 1, 'timestamp']) + intervalo_ms
                             fin_gap = int(df.loc[idx, 'timestamp']) - intervalo_ms
                             faltantes = int((fin_gap - inicio_gap) // intervalo_ms) + 1
+                            faltantes = min(faltantes, MAX_BACKFILL_CANDLES)
                             try:
                                 nuevas = await fetch_ohlcv_async(
                                     cliente,
@@ -409,8 +411,8 @@ async def verificar_entrada(trader, symbol: str, df: pd.DataFrame, estado) -> (
     if not diversidad_ok:
         umbral_peso_unico = config.get('umbral_peso_estrategia_unica',
             peso_min_total * 1.5) or (peso_min_total * 1.5)
-        umbral_score_unico = config.get('umbral_score_estrategia_unica',
-            trader.umbral_score_tecnico * 1.5) or (trader.umbral_score_tecnico * 1.5)
+        umbral_score_base = getattr(trader, 'umbral_score_tecnico', 1.0) * 1.5
+        umbral_score_unico = config.get('umbral_score_estrategia_unica', umbral_score_base) or umbral_score_base
         high_weight = peso_total >= umbral_peso_unico
         high_score = (
             (score_tecnico if score_tecnico is not None else 0) >= umbral_score_unico
@@ -469,6 +471,7 @@ async def verificar_entrada(trader, symbol: str, df: pd.DataFrame, estado) -> (
     eval_tecnica = await evaluar_puntaje_tecnico(symbol, df, precio, sl, tp)
     score_total = eval_tecnica['score_total']
     score_normalizado = eval_tecnica.get('score_normalizado')
+    detalles = eval_tecnica.get('detalles', {})
     pesos_simbolo = await cargar_pesos_tecnicos(symbol)
     score_max = sum(pesos_simbolo.values())
     if score_normalizado is None:
@@ -476,7 +479,7 @@ async def verificar_entrada(trader, symbol: str, df: pd.DataFrame, estado) -> (
     umbral_normalizado = umbral / score_max if score_max else umbral
     if score_normalizado < umbral_normalizado:
         trace = DecisionTrace(
-            score_normalizado, umbral_normalizado, DecisionReason.BELOW_THRESHOLD, puntos_tecnicos
+            score_normalizado, umbral_normalizado, DecisionReason.BELOW_THRESHOLD, detalles
         )
         log.info(f'[{symbol}] Trace: {trace.to_json()}')
         metricas_tracker.registrar_filtro('score_tecnico')
