@@ -293,12 +293,11 @@ class Trader:
         self.historial_cierres: Dict[str, dict] = {}
         self.capital_inicial_orden: Dict[str, float] = {}
         self._tareas: dict[str, asyncio.Task] = {}
-        queue_max = int(os.getenv("TRADER_QUEUE_MAX", "1000"))
-        self._candle_queue: asyncio.Queue[dict] = asyncio.Queue(
-            maxsize=queue_max
+        self._tareas_velas: set[asyncio.Task] = set()
+        self._sem_velas = asyncio.Semaphore(
+            getattr(self.config, 'max_velas_concurrentes', 100)
         )
-        self._workers: list[asyncio.Task] = []
-        self._max_concurrency = int(os.getenv("TRADER_MAX_CONCURRENCY", "10"))
+        self._max_tasks_velas = getattr(self.config, 'max_tasks_velas', 500)
         self._restart_stats: defaultdict[str, deque] = defaultdict(deque)
         self._sin_datos_alertado: set[str] = set()
         self._factories: dict[str, Callable[[], Awaitable]] = {}
@@ -876,10 +875,14 @@ class Trader:
                 log.info('📈 Precargando histórico usando cliente temporal')
             except Exception as e:
                 log.info(f'📈 No se pudo precargar histórico desde Binance: {e}')
+        base_ms = intervalo_a_segundos(self.config.intervalo_velas) * 1000
         for symbol in self.estado.keys():
             try:
                 df = await warmup_symbol(
-                    symbol, self.config.intervalo_velas, cliente, velas
+                    symbol,
+                    self.config.intervalo_velas,
+                    cliente,
+                    min_bars=velas,
                 )
             except BaseError as e:
                 log.warning(f'⚠️ Error cargando histórico para {symbol}: {e}')
@@ -887,9 +890,42 @@ class Trader:
             except Exception as e:
                 log.warning(f'⚠️ Error inesperado cargando histórico para {symbol}: {e}')
                 continue
-            for fila in df.to_dict('records'):
-                self.estado[symbol].buffer.append(fila)
+            df = df.sort_values('timestamp')
+            df = df[df['timestamp'] % base_ms == 0].drop_duplicates(subset=['timestamp'])
+            while len(df) < velas:
+                faltan = velas - len(df)
+                since = int(df['timestamp'].iloc[0]) - base_ms * faltan if not df.empty else None
+                try:
+                    ohlcv = await fetch_ohlcv_async(
+                        cliente,
+                        symbol,
+                        self.config.intervalo_velas,
+                        since=since,
+                        limit=faltan,
+                    )
+                except Exception as e:
+                    log.warning(f'⚠️ Error backfilling {symbol}: {e}')
+                    break
+                df_extra = pd.DataFrame(
+                    ohlcv,
+                    columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'],
+                )
+                df_extra = df_extra[df_extra['timestamp'] % base_ms == 0]
+                df = (
+                    pd.concat([df_extra, df], ignore_index=True)
+                    .drop_duplicates(subset=['timestamp'])
+                    .sort_values('timestamp')
+                )
             if not df.empty:
+                ts = df['timestamp'].to_numpy()
+                diffs = np.diff(ts)
+                esperado = base_ms
+                gaps = int((diffs != esperado).sum())
+                if gaps > 0 or len(df) < velas:
+                    log.error(f'❌ Backfill no contiguo para {symbol}: {gaps} gaps')
+                    raise RuntimeError(f'Backfill inicial no contiguo: {symbol}')
+                for fila in df.tail(velas).to_dict('records'):
+                    self.estado[symbol].buffer.append(fila)
                 self.estado[symbol].ultimo_timestamp = int(df['timestamp'].iloc[-1])
                 self.estado[symbol].df = df.drop(columns=['symbol'], errors='ignore')
                 self.config_por_simbolo[symbol] = adaptar_configuracion(
@@ -1881,13 +1917,15 @@ class Trader:
 
     async def ejecutar(self) ->None:
         """Inicia el procesamiento de todos los símbolos."""
-        for _ in range(self._max_concurrency):
-            worker = asyncio.create_task(self._worker_loop())
-            self._workers.append(worker)
-
-        async def handle(candle: dict) ->None:
-            await self._candle_queue.put(candle)
-            TRADER_QUEUE_SIZE.set(self._candle_queue.qsize())
+        async def handle(candle: dict) -> None:
+            async with self._sem_velas:
+                if len(self._tareas_velas) > self._max_tasks_velas:
+                    log.warning('⚠️ Backpressure: demasiadas velas pendientes')
+                    await asyncio.sleep(0.05)
+                task = asyncio.create_task(self._procesar_vela(candle))
+                self._tareas_velas.add(task)
+                task.add_done_callback(self._tareas_velas.discard)
+                TRADER_QUEUE_SIZE.set(len(self._tareas_velas))
 
         async def handle_context(symbol: str, score: float) -> None:
             self.puntajes_contexto[symbol] = score
@@ -1906,6 +1944,12 @@ class Trader:
             if await self.external_feeds.es_futuros(sym):
                 hay_futuros = True
                 break
+        def _ultimo_alineado(s: str) -> int | None:
+            ts = self.estado[s].ultimo_timestamp
+            base = base_segundos * 1000
+            if ts is None:
+                return None
+            return ts - (ts % base)
         tareas: dict[str, Callable[[], Awaitable]] = {
             'data_feed': lambda: self.data_feed.escuchar(
                 symbols,
@@ -1913,10 +1957,13 @@ class Trader:
                 cliente=self.cliente if self.modo_real else None,
                 ultimos={
                     s: {
-                        'timestamp': self.estado[s].ultimo_timestamp,
+                        'timestamp': _ultimo_alineado(s),
                         'candle': (
                             dict(self.estado[s].buffer[-1])
                             if self.estado[s].buffer
+                            and self.estado[s].buffer[-1].get('timestamp', 1)
+                            % (base_segundos * 1000)
+                            == 0
                             else None
                         ),
                     }
@@ -1953,20 +2000,6 @@ class Trader:
         """Solicita al trader que detenga su ejecución."""
         self._stop_event.set()
 
-    async def _worker_loop(self) -> None:
-        while True:
-            candle = await self._candle_queue.get()
-            if candle is None:
-                self._candle_queue.task_done()
-                break
-            try:
-                await self._procesar_vela(candle)
-            except Exception as e:
-                log.error(f"Error procesando vela: {e}")
-            finally:
-                self._candle_queue.task_done()
-                TRADER_QUEUE_SIZE.set(self._candle_queue.qsize())
-
     async def _procesar_vela(self, vela: dict) ->None:
         symbol = vela.get('symbol')
         if not self._validar_config(symbol):
@@ -1990,11 +2023,8 @@ class Trader:
                 await self.external_feeds.detener()
             tarea.cancel()
         await asyncio.gather(*self._tareas.values(), return_exceptions=True)
-        await self._candle_queue.join()
-        for _ in self._workers:
-            await self._candle_queue.put(None)
-        await asyncio.gather(*self._workers, return_exceptions=True)
-        self._workers.clear()
+        await asyncio.gather(*self._tareas_velas, return_exceptions=True)
+        self._tareas_velas.clear()
         await self.bus.close()
         real_orders.flush_operaciones()
         self.rejection_handler.flush()
