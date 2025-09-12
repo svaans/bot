@@ -62,7 +62,26 @@ ORDENES_DB_PATH = os.getenv(
 RUTA_DB = ORDENES_DB_PATH
 _CACHE_ORDENES: dict[str, Order] | None = None
 _VENTAS_FALLIDAS: set[str] = set()
+_VENTAS_FALLIDAS_LOCK = threading.Lock()
 _BUFFER_OPERACIONES: list[dict] = []
+
+
+def venta_fallida(symbol: str) -> bool:
+    """Indica si hubo una venta fallida previa para `symbol`."""
+    with _VENTAS_FALLIDAS_LOCK:
+        return symbol in _VENTAS_FALLIDAS
+
+
+def registrar_venta_fallida(symbol: str) -> None:
+    """Registra `symbol` como venta fallida."""
+    with _VENTAS_FALLIDAS_LOCK:
+        _VENTAS_FALLIDAS.add(symbol)
+
+
+def limpiar_venta_fallida(symbol: str) -> None:
+    """Elimina `symbol` del registro de ventas fallidas."""
+    with _VENTAS_FALLIDAS_LOCK:
+        _VENTAS_FALLIDAS.discard(symbol)
 _BUFFER_LOCK = threading.Lock()
 _MAX_BUFFER = int(os.getenv('MAX_BUFFER_OPERATIONS', '10') or 10)
 _FLUSH_INTERVAL = int(os.getenv('FLUSH_INTERVAL', '300') or 300)
@@ -89,6 +108,7 @@ def _connect_db() -> sqlite3.Connection:
     try:
         conn.execute('PRAGMA journal_mode=WAL')
         conn.execute('PRAGMA synchronous=NORMAL')
+        conn.execute('PRAGMA busy_timeout=5000')
     except sqlite3.Error as e:
         log.warning(f'⚠️ No se pudieron aplicar PRAGMA en SQLite: {e}')
     return conn
@@ -162,14 +182,18 @@ def _acumular_metricas(operation_id: str, response: dict) -> dict[str, float]:
         # Fees
         fee_info = trade.get("fee") or {}
         fee_cost = fee_info.get("cost")
+        currency = fee_info.get("currency")
         if fee_cost is None:
             rate = fee_info.get("rate")
-            currency = fee_info.get("currency")
             if rate is not None:
                 if currency == base:
                     fee_cost = float(rate) * amount
-                else:
+                elif currency == quote:
                     fee_cost = float(rate) * cost
+                else:
+                    fee_cost = 0.0
+        elif currency not in (base, quote):
+            fee_cost = 0.0
         fee_cost = float(fee_cost or 0.0)
         metricas["fee"] += fee_cost
 
@@ -181,6 +205,9 @@ def _acumular_metricas(operation_id: str, response: dict) -> dict[str, float]:
     # Some responses include aggregated fees outside of ``trades``
     for fee in response.get("fees", []) or []:
         try:
+            currency = fee.get("currency")
+            if currency not in (base, quote):
+                continue
             costo = float(fee.get("cost") or 0.0)
         except Exception:
             continue
@@ -467,6 +494,8 @@ def sincronizar_ordenes_binance(
 
 _ULTIMO_OPEN_ORDERS: dict[str, list] = {}
 _ULTIMO_OPEN_TS: dict[str, float] = {}
+_ULTIMO_OPEN_ORDERS_LOCK = threading.Lock()
+_ULTIMO_OPEN_TS_LOCK = threading.Lock()
 
 
 def consultar_ordenes_abiertas(symbol: str) -> list[dict]:
@@ -481,9 +510,12 @@ def consultar_ordenes_abiertas(symbol: str) -> list[dict]:
 
     cliente = obtener_cliente(config)
     now = time.time()
-    if symbol in _ULTIMO_OPEN_TS and (now - _ULTIMO_OPEN_TS[symbol]) < 0.5:
-        return _ULTIMO_OPEN_ORDERS.get(symbol, [])
-    _ULTIMO_OPEN_TS[symbol] = now
+    with _ULTIMO_OPEN_TS_LOCK:
+        last_ts = _ULTIMO_OPEN_TS.get(symbol)
+        if last_ts and (now - last_ts) < 0.5:
+            with _ULTIMO_OPEN_ORDERS_LOCK:
+                return list(_ULTIMO_OPEN_ORDERS.get(symbol, []))
+        _ULTIMO_OPEN_TS[symbol] = now
 
     ordenes_api: list[dict] = []
     for intento in range(1, 4):
@@ -505,7 +537,8 @@ def consultar_ordenes_abiertas(symbol: str) -> list[dict]:
 
     if not ordenes_api:
         log.info(f'⚠️ No hay órdenes abiertas para {symbol}')
-        _ULTIMO_OPEN_ORDERS[symbol] = []
+        with _ULTIMO_OPEN_ORDERS_LOCK:
+            _ULTIMO_OPEN_ORDERS[symbol] = []
         return []
 
     filtros = get_symbol_filters(symbol, cliente)
@@ -528,7 +561,8 @@ def consultar_ordenes_abiertas(symbol: str) -> list[dict]:
             continue
         ordenes_validas.append(o)
 
-    _ULTIMO_OPEN_ORDERS[symbol] = ordenes_validas
+    with _ULTIMO_OPEN_ORDERS_LOCK:
+        _ULTIMO_OPEN_ORDERS[symbol] = ordenes_validas
     log.info(
         f'🔍 Órdenes abiertas encontradas para {symbol}: {len(ordenes_validas)}'
     )
@@ -874,7 +908,7 @@ def ejecutar_orden_market_sell(symbol: str, cantidad: float, operation_id: str |
     """Ejecuta una venta de mercado validando saldo y devuelve detalles."""
     entrada = {'symbol': symbol, 'cantidad': cantidad}
 
-    if symbol in _VENTAS_FALLIDAS:
+    if venta_fallida(symbol):
         log.warning(f'⏭️ Venta omitida para {symbol} por intento previo fallido de saldo.')
         log_decision(
             log,
@@ -924,7 +958,7 @@ def ejecutar_orden_market_sell(symbol: str, cantidad: float, operation_id: str |
                 f'⛔ Venta rechazada por mínimos: {symbol} → cantidad: {cantidad_vender:.8f}, '
                 f'mínimos: amount={min_amount}, notional={min_cost}'
             )
-            _VENTAS_FALLIDAS.add(symbol)
+            registrar_venta_fallida(symbol)
             try:
                 notificador.enviar(f'Venta rechazada por mínimos en {symbol}', 'WARNING')
             except Exception:
@@ -974,7 +1008,7 @@ def ejecutar_orden_market_sell(symbol: str, cantidad: float, operation_id: str |
             extra={'symbol': symbol, 'timeframe': None},
         )
 
-        _VENTAS_FALLIDAS.discard(symbol)
+        limpiar_venta_fallida(symbol)
 
         salida = {
             'ejecutado': ejecutado,
@@ -990,7 +1024,7 @@ def ejecutar_orden_market_sell(symbol: str, cantidad: float, operation_id: str |
 
     except InsufficientFunds as e:
         log.error(f'❌ Venta rechazada por saldo insuficiente en {symbol}: {e}')
-        _VENTAS_FALLIDAS.add(symbol)
+        registrar_venta_fallida(symbol)
         try:
             notificador.enviar(f'Venta rechazada por saldo insuficiente en {symbol}', 'CRITICAL')
         except Exception:

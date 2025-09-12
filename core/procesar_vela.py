@@ -69,29 +69,35 @@ async def _procesar_candle(trader, symbol: str, intervalo: str, estado, vela: di
     else:
         estado.df.loc[estado.df_idx] = snapshot
         estado.df_idx = (estado.df_idx + 1) % MAX_BUFFER_VELAS
+    recien_lleno = (
+        len(estado.df) == MAX_BUFFER_VELAS and not getattr(estado, "_ring_ready", False)
+    )
+    if recien_lleno:
+        estado._ring_ready = True
+
     lock_ind = _indicadores_locks[symbol]
     espera = time.perf_counter()
     async with lock_ind:
         estado.indicadores_wait_ms += (time.perf_counter() - espera) * 1000
         estado.indicadores_calls += 1
-        await asyncio.to_thread(clear_cache, estado.df)
+        if recien_lleno:
+            await asyncio.to_thread(clear_cache, estado.df)
         await asyncio.to_thread(get_rsi, estado)
         await asyncio.to_thread(get_momentum, estado)
         await asyncio.to_thread(get_atr, estado)
+
     if len(estado.df) < MAX_BUFFER_VELAS:
-        df = await asyncio.to_thread(
-            lambda: estado.df.drop(columns=['estrategias_activas'], errors='ignore')
-        )
+        base = estado.df
     else:
         idx = estado.df_idx
         orden = np.r_[idx:MAX_BUFFER_VELAS, 0:idx]
-        df = await asyncio.to_thread(
-            lambda: (
-                estado.df.iloc[orden]
-                .reset_index(drop=True)
-                .drop(columns=['estrategias_activas'], errors='ignore')
-            )
-        )
+        base = estado.df.iloc[orden].reset_index(drop=True)
+
+    df = await asyncio.to_thread(
+        lambda: base.drop(columns=["estrategias_activas"], errors="ignore")
+        if "estrategias_activas" in base.columns
+        else base
+    )
     if df.empty or 'close' not in df.columns:
         log.error(f"❌ DataFrame inválido para {symbol}: {df}")
         return
@@ -253,18 +259,17 @@ async def _procesar_candle_con_lock(trader, symbol: str, intervalo: str, estado,
         await _procesar_candle(trader, symbol, intervalo, estado, vela)
         
 async def procesar_vela(trader, vela: dict) -> None:
-    symbol = vela.get('symbol') if isinstance(vela, dict) else None
-    intervalo = getattr(trader.config, 'intervalo_velas', '')
-    ts_extra = vela.get('timestamp') if isinstance(vela, dict) else None
     if not isinstance(vela, dict):
         log.error(f"❌ Formato de vela inválido: {vela}")
         registrar_vela_rechazada('desconocido', 'formato_invalido')
         return
+    
     symbol = vela.get('symbol')
     if symbol is None:
         log.error(f"❌ Vela sin símbolo: {vela}")
-        registrar_vela_rechazada('desconocido', 'sin_symbolo')
+        registrar_vela_rechazada('desconocido', 'sin_simbolo')
         return
+    
     registrar_vela_recibida(symbol)
     intervalo = getattr(trader.config, 'intervalo_velas', '')
     lock = _vela_locks[f'{symbol}:{intervalo}']

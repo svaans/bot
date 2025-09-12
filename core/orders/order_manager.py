@@ -696,10 +696,10 @@ class OrderManager:
                                 venta_exitosa = True
                             elif ejecutado > 0 and restante > 0:
                                 log.error(f'❌ Venta parcial pendiente ejecutable para {symbol}: restante={restante}')
-                                real_orders._VENTAS_FALLIDAS.add(symbol)
+                                real_orders.registrar_venta_fallida(symbol)
                             else:
                                 log.error(f'❌ Venta no ejecutada para {symbol} (sin fills)')
-                                real_orders._VENTAS_FALLIDAS.add(symbol)
+                                real_orders.registrar_venta_fallida(symbol)
 
                             if self.bus and not venta_exitosa:
                                 await self.bus.publish('notify', {'mensaje': f'❌ Venta fallida en {symbol}', 'operation_id': operation_id})
