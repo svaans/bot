@@ -55,13 +55,20 @@ def pending_symbols() -> Set[str]:
 
 
 async def warmup_symbol(symbol: str, tf: str, cliente, min_bars: int = MIN_BARS) -> pd.DataFrame:
-    """Carga ``min_bars`` de histórico para ``symbol`` usando caché cuando es válido."""
+    """Carga ``min_bars`` de histórico para ``symbol`` usando caché cuando es válido.
+
+    Si la caché contiene menos velas de las requeridas, se ignora y se solicita
+    nuevamente el histórico completo. De esta forma nos aseguramos de que el
+    parámetro ``min_bars`` tenga efecto aun cuando existan archivos previos.
+    """
     _config[symbol] = (tf, cliente, min_bars)
     path = _cache_path(symbol, tf)
     df: Optional[pd.DataFrame] = None
     if path.exists() and (asyncio.get_event_loop().time() - path.stat().st_mtime) < CACHE_TTL:
         try:
-            df = pd.read_csv(path)
+            tmp = pd.read_csv(path)
+            if len(tmp) >= min_bars:
+                df = tmp
         except Exception:
             log.exception(f'Error leyendo caché {path}, ignorando')
     if df is None:

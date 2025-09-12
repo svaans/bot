@@ -168,6 +168,7 @@ class Trader:
             getattr(config, 'max_stream_restarts', 5),
             getattr(config, 'inactivity_intervals', 3),
             handler_timeout=getattr(config, 'handler_timeout', 0.8),
+            backpressure=True,
         )
         self.engine = StrategyEngine()
         self.bus = EventBus()
@@ -1896,6 +1897,9 @@ class Trader:
             60 * intervalo_a_segundos('5m') / base_segundos
         )
         await self._precargar_historico(velas=velas_precarga)
+        if not self.data_feed.verificar_continuidad():
+            log.error('❌ Gaps temporales críticos detectados tras warmup')
+            return
         hay_futuros = False
         for sym in symbols:
             if await self.external_feeds.es_futuros(sym):

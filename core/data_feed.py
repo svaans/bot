@@ -99,7 +99,9 @@ class DataFeed:
         self._producer_stats: Dict[str, Dict[str, float]] = {}
         self._queue_windows: Dict[str, list] = {}
         self._last_window_reset: Dict[str, float] = {}
-        self.drop_oldest = os.getenv("DF_BACKPRESSURE_DROP", "true").lower() == "true"
+        self.drop_oldest = (
+            os.getenv("DF_BACKPRESSURE_DROP", "true").lower() == "true" and not self.backpressure
+        )
         self._estado: Dict[str, Any] | None = None
 
     @property
@@ -195,47 +197,55 @@ class DataFeed:
             )
         candle.setdefault("trace_id", uuid4().hex)
         candle["_enqueue_time"] = time.monotonic()
-        try:
-            queue.put_nowait(candle)
-            QUEUE_SIZE.labels(symbol=symbol).set(queue.qsize())
-            # Actualizar métrica de producción de velas (producer_rate)
+
+        def _update_producer_stats() -> None:
             stats = self._producer_stats.get(symbol)
             now = time.monotonic()
             if stats is None:
-                self._producer_stats[symbol] = {'last': now, 'count': 0}
+                self._producer_stats[symbol] = {"last": now, "count": 0}
                 stats = self._producer_stats[symbol]
-            stats['count'] += 1
-            if now - stats['last'] >= 2.0:
-                rate = stats['count'] / (now - stats['last'])
+            stats["count"] += 1
+            if now - stats["last"] >= 2.0:
+                rate = stats["count"] / (now - stats["last"])
                 obs_metrics.PRODUCER_RATE.labels(symbol=symbol).set(rate)
-                stats['count'] = 0
-                stats['last'] = now
-        except asyncio.QueueFull:
-            now = time.monotonic()
-            last = self._ultimo_log_descartes.get(symbol, 0.0)
-            if now - last >= float(os.getenv("DF_QUEUE_DROP_LOG_INTERVAL", "5.0")):
-                log.warning(
-                    f"[{symbol}] Queue llena; descartando 1 (qsize={queue.qsize()}/{queue.maxsize})"
-                )
-                self._ultimo_log_descartes[symbol] = now
-            self._queue_discards[symbol] = self._queue_discards.get(symbol, 0) + 1
-            obs_metrics.QUEUE_DROPS.labels(symbol=symbol).inc()
-            registro_metrico.registrar(
-                "queue_discards",
-                {"symbol": symbol, "count": self._queue_discards[symbol]},
-            )
+                stats["count"] = 0
+                stats["last"] = now
+
+        if self.backpressure:
+            await queue.put(candle)
+            QUEUE_SIZE.labels(symbol=symbol).set(queue.qsize())
+            _update_producer_stats()
+        else:
             try:
-                _ = queue.get_nowait()
-                queue.task_done()
-            except asyncio.QueueEmpty:
-                pass
-            try:
-                await asyncio.wait_for(queue.put(candle), timeout=1.0)
+                queue.put_nowait(candle)
                 QUEUE_SIZE.labels(symbol=symbol).set(queue.qsize())
-            except Exception:
-                log.error(
-                    f"[{symbol}] No se pudo encolar nueva vela tras espera; descartando"
+                _update_producer_stats()
+            except asyncio.QueueFull:
+                now = time.monotonic()
+                last = self._ultimo_log_descartes.get(symbol, 0.0)
+                if now - last >= float(os.getenv("DF_QUEUE_DROP_LOG_INTERVAL", "5.0")):
+                    log.warning(
+                        f"[{symbol}] Queue llena; descartando 1 (qsize={queue.qsize()}/{queue.maxsize})"
+                    )
+                    self._ultimo_log_descartes[symbol] = now
+                self._queue_discards[symbol] = self._queue_discards.get(symbol, 0) + 1
+                obs_metrics.QUEUE_DROPS.labels(symbol=symbol).inc()
+                registro_metrico.registrar(
+                    "queue_discards",
+                    {"symbol": symbol, "count": self._queue_discards[symbol]},
                 )
+                try:
+                    _ = queue.get_nowait()
+                    queue.task_done()
+                except asyncio.QueueEmpty:
+                    pass
+                try:
+                    await asyncio.wait_for(queue.put(candle), timeout=1.0)
+                    QUEUE_SIZE.labels(symbol=symbol).set(queue.qsize())
+                except Exception:
+                    log.error(
+                        f"[{symbol}] No se pudo encolar nueva vela tras espera; descartando"
+                    )
         self._last[symbol] = datetime.now(UTC)
         self._last_monotonic[symbol] = time.monotonic()
         self._mensajes_recibidos[symbol] = (
