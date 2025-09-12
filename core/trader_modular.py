@@ -165,9 +165,9 @@ class Trader:
         self.data_feed = DataFeed(
             config.intervalo_velas,
             getattr(config, 'monitor_interval', 5),
-            getattr(config, 'max_stream_restarts', 5),
-            getattr(config, 'inactivity_intervals', 3),
-            handler_timeout=getattr(config, 'handler_timeout', 0.8),
+            getattr(config, 'max_stream_restarts', 10),
+            getattr(config, 'inactivity_intervals', 10),
+            handler_timeout=getattr(config, 'handler_timeout', 2.0),
             backpressure=getattr(config, 'df_backpressure', True),
         )
         self.engine = StrategyEngine()
