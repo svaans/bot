@@ -16,7 +16,7 @@ from collections import defaultdict
 from typing import Dict
 from wsgiref.simple_server import WSGIServer
 
-from prometheus_client import Counter, Gauge, Histogram, start_http_server
+from prometheus_client import Counter, Gauge, Histogram, start_wsgi_server
 
 from core.registro_metrico import registro_metrico
 from core.utils.logger import configurar_logger
@@ -287,15 +287,15 @@ def subscribe_simulated_order_metrics(bus) -> None:
 
 
 def iniciar_exporter() -> WSGIServer:
-    """Inicia el servidor HTTP para exponer métricas.
+    """Inicia el servidor WSGI para exponer métricas.
 
     Returns
     -------
     WSGIServer
-        Instancia del servidor HTTP que expone las métricas.
+        Instancia del servidor que expone las métricas.
     """
 
     port = int(os.getenv("METRICS_PORT", "8000"))
-    server, _ = start_http_server(port)
+    server = start_wsgi_server(port)
     log.info(f"Prometheus exporter escuchando en puerto {port}")
     return server
