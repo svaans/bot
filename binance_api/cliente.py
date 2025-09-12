@@ -109,8 +109,12 @@ def binance_call(
             exchange = getattr(fn, "__self__", None)
             used = 0
             if exchange and getattr(exchange, "last_response", None):
+                hdrs = exchange.last_response.headers or {}
                 try:
-                    used = int(exchange.last_response.headers.get("X-MBX-USED-WEIGHT-1m", 0))
+                    used = int(
+                        hdrs.get("X-MBX-USED-WEIGHT-1m")
+                        or hdrs.get("X-MBX-USED-IP-WEIGHT-1m", 0)
+                    )
                 except Exception:
                     used = 0
             registrar_binance_weight(used)
@@ -246,7 +250,9 @@ async def _user_stream_ws_generic(ws_url: str, exchange) -> None:
     """Escucha user stream (Spot o Futures) y mantiene caché local de órdenes."""
     while True:
         try:
-            async with websockets.connect(ws_url) as ws:
+            async with websockets.connect(
+                ws_url, ping_interval=20, ping_timeout=10
+            ) as ws:
                 async for msg in ws:
                     try:
                         data = json.loads(msg)
