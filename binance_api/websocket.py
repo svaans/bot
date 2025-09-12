@@ -56,7 +56,6 @@ _SSL_CONTEXT = ssl.create_default_context(cafile=certifi.where())
 RECONNECT_WINDOW = 300  # 5 minutos
 RECONNECT_THRESHOLD = 100
 _reconnect_history: deque[float] = deque()
-MAX_BACKOFF = 60
 MAX_BACKFILL_CANDLES = 100  # límite para backfill para evitar saturación
 BACKFILL_CONCURRENCY = 3
 _backfill_semaphore = asyncio.Semaphore(BACKFILL_CONCURRENCY)
@@ -403,6 +402,9 @@ async def _gestionar_ws(
                                         f"[{symbol}] queue_size={qsize}/{message_queue.maxsize}"
                                     )
                                     last_warn[symbol] = ahora
+                        symbol = symbol or _symbol_from_msg(msg)
+                        if symbol:
+                            last_message[symbol] = time.monotonic()
                         try:
                             if backpressure:
                                 # Backpressure REAL: bloquear hasta que la cola acepte
