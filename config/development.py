@@ -38,9 +38,9 @@ class DevelopmentConfig:
     max_timeouts_salidas: int = 3
     heartbeat_interval: int = 60
     monitor_interval: int = 5
-    max_stream_restarts: int = 5
-    inactivity_intervals: int = 5
-    handler_timeout: float = 0.8
+    max_stream_restarts: int = 10
+    inactivity_intervals: int = 10
+    handler_timeout: float = 2.0
     ws_timeout: int = 30
     frecuencia_tendencia: int = 3
     frecuencia_correlaciones: int = 300
