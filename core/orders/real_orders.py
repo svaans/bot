@@ -497,7 +497,7 @@ def consultar_ordenes_abiertas(symbol: str) -> list[dict]:
             log.warning(
                 f'⚠️ Fallo de red consultando órdenes (intento {intento}/3): {e}'
             )
-            asyncio.sleep(0.1 * intento)
+            time.sleep(0.1 * intento)
             continue
         except Exception as e:
             log.error(f'❌ Error inesperado consultando órdenes: {e}')
@@ -545,7 +545,7 @@ def reconciliar_trades_binance(simbolos: list[str] | None = None, limit: int = 5
             min_amount = filtros.get('min_qty', 0.0)
             min_cost = filtros.get('min_notional', 0.0)
             try:
-                trades = cliente.fetch_my_trades(s.replace('/', ''), limit=limit)
+                trades = cliente.fetch_my_trades(s, limit=limit)
             except Exception:
                 continue
             for t in trades:
@@ -561,7 +561,7 @@ def reconciliar_trades_binance(simbolos: list[str] | None = None, limit: int = 5
                 sl = tp = 0.0
                 if side == 'buy':
                     try:
-                        ohlcv = cliente.fetch_ohlcv(s.replace('/', ''), timeframe='1h', limit=100)
+                        ohlcv = cliente.fetch_ohlcv(s, timeframe='1h', limit=100)
                         df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
                         cfg = load_exit_config(s)
                         sl, tp = calcular_tp_sl_adaptativos(s, df, cfg, precio_actual=price)
@@ -734,7 +734,7 @@ def ejecutar_orden_market(symbol: str, cantidad: float, operation_id: str | None
         filtros = get_symbol_filters(symbol, cliente)
         step_size = filtros.get('step_size', 0.0)
         min_cost = filtros.get('min_notional', 0.0)
-        ticker = cliente.fetch_ticker(symbol.replace('/', ''))
+        ticker = cliente.fetch_ticker(symbol)
         precio = float(ticker.get('last') or ticker.get('close') or 0)
         precio, cantidad = normalizar_precio_cantidad(filtros, precio, cantidad, 'compra')
         if cantidad <= 0:
@@ -786,7 +786,7 @@ def ejecutar_orden_market(symbol: str, cantidad: float, operation_id: str | None
         params = {}
         if operation_id:
             params['newClientOrderId'] = operation_id
-        response = cliente.create_market_buy_order(symbol.replace('/', ''), cantidad, params)
+        response = cliente.create_market_buy_order(symbol, cantidad, params)
         ejecutado = float(response.get('amount') or response.get('filled') or 0)
         if ejecutado <= 0:
             ejecutado = cantidad
@@ -825,7 +825,7 @@ def ejecutar_orden_market(symbol: str, cantidad: float, operation_id: str | None
         log.error(f'❌ Error en Binance al ejecutar compra en {symbol}: {e}')
 
         try:
-            trades = cliente.fetch_my_trades(symbol.replace('/', ''), limit=1)
+            trades = cliente.fetch_my_trades(symbol, limit=1)
             trade = trades[-1] if trades else None
             ejecutado = float(trade.get('amount') or trade.get('qty') or 0) if trade else 0
             if ejecutado > 0:
@@ -915,7 +915,7 @@ def ejecutar_orden_market_sell(symbol: str, cantidad: float, operation_id: str |
 
         min_amount = filtros.get('min_qty', 0.0)
         min_cost = filtros.get('min_notional', 0.0)
-        ticker = cliente.fetch_ticker(symbol.replace('/', ''))
+        ticker = cliente.fetch_ticker(symbol)
         precio = float(ticker.get('last') or ticker.get('close') or 0)
         precio, cantidad_vender = normalizar_precio_cantidad(filtros, precio, cantidad_vender, 'venta')
 
@@ -948,7 +948,7 @@ def ejecutar_orden_market_sell(symbol: str, cantidad: float, operation_id: str |
         if operation_id:
             params['newClientOrderId'] = operation_id
 
-        response = cliente.create_market_sell_order(symbol.replace('/', ''), cantidad_vender, params)
+        response = cliente.create_market_sell_order(symbol, cantidad_vender, params)
         ejecutado = float(response.get('amount') or response.get('filled') or 0)
         if ejecutado <= 0:
             ejecutado = cantidad_vender
@@ -1098,11 +1098,11 @@ def ejecutar_orden_limit(
 
         if side == "buy":
             orden = cliente.create_limit_buy_order(
-                symbol.replace("/", ""), cantidad, precio, params
+                symbol, cantidad, precio, params
             )
         else:
             orden = cliente.create_limit_sell_order(
-                symbol.replace("/", ""), cantidad, precio, params
+                symbol, cantidad, precio, params
             )
 
         order_id = orden.get("id")
@@ -1111,7 +1111,7 @@ def ejecutar_orden_limit(
 
         # Espera activa hasta timeout comprobando fills
         while time.time() - inicio < timeout:
-            estado = cliente.fetch_order(order_id, symbol.replace("/", ""))
+            estado = cliente.fetch_order(order_id, symbol)
             filled = float(estado.get("filled") or 0.0)
             if estado.get("status") in {"closed", "canceled"} or filled >= cantidad:
                 break
@@ -1119,7 +1119,7 @@ def ejecutar_orden_limit(
         else:
             # timeout -> cancelar, re-preciar y reintentar
             try:
-                cancel_info = cliente.cancel_order(order_id, symbol.replace("/", ""))
+                cancel_info = cliente.cancel_order(order_id, symbol)
             except Exception as e:
                 log.warning(f"⚠️ No se pudo cancelar orden {order_id}: {e}")
                 cancel_info = {}
@@ -1130,7 +1130,7 @@ def ejecutar_orden_limit(
             )
             if filled_cancel == 0.0:
                 try:
-                    final_estado = cliente.fetch_order(order_id, symbol.replace("/", ""))
+                    final_estado = cliente.fetch_order(order_id, symbol)
                     filled_cancel = float(final_estado.get("filled") or 0.0)
                 except Exception:
                     filled_cancel = 0.0

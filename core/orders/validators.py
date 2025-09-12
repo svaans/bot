@@ -15,7 +15,7 @@ def remainder_executable(symbol: str, price: float, quantity: float) -> bool:
     try:
         cliente = obtener_cliente()
         markets = cliente.load_markets()
-        market = markets.get(symbol.replace('/', ''), {})
+        market = markets.get(symbol, {})
         limits = market.get('limits', {})
         min_qty = float((limits.get('amount') or {}).get('min') or 0.0)
         min_notional = float((limits.get('cost') or {}).get('min') or 0.0)
