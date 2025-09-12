@@ -103,6 +103,7 @@ async def _rellenar_gaps(
     """Genera velas sintéticas para cubrir huecos entre ``ultimo_ts`` y ``nuevo_ts``.
 
     Las velas generadas tendrán volumen 0 y precios planos igualados a ``ultimo_cierre``.
+    Se marcan con ``synthetic=True`` para auditar y distinguirlas.
     Devuelve el último timestamp emitido (o el original si no había hueco).
     """
     if ultimo_ts is None or ultimo_cierre is None:
@@ -119,6 +120,7 @@ async def _rellenar_gaps(
                 'low': ultimo_cierre,
                 'close': ultimo_cierre,
                 'volume': 0.0,
+                'synthetic': True,
             }
         )
         ultimo_ts = gap
@@ -385,6 +387,8 @@ async def _gestionar_ws(
                         qsize = message_queue.qsize()
                         symbol = None
                         if message_queue.maxsize and qsize > message_queue.maxsize * 0.8:
+                            if not backpressure:
+                                await asyncio.sleep(0.02)  # micro-backoff para drenar
                             symbol = _symbol_from_msg(msg)
                             if symbol:
                                 ahora = time.monotonic()
