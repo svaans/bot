@@ -5,6 +5,7 @@ import json
 import random
 import re
 import time
+import math
 from typing import Any, Callable
 
 import aiohttp
@@ -133,7 +134,7 @@ def binance_call(
                 headers = getattr(getattr(exc, "response", None), "headers", {}) or {}
                 retry_after = headers.get("Retry-After")
                 try:
-                    wait = int(retry_after)
+                    wait = math.ceil(float(retry_after))
                 except Exception:
                     wait = 60
                 state["until"] = time.time() + wait
@@ -348,6 +349,9 @@ class BinanceClient:
     async def fetch_ticker(self, *args, **kwargs):
         return await self.execute(self.exchange.fetch_ticker, *args, **kwargs)
 
+    async def fetch_order_book(self, *args, **kwargs):
+        return await self.execute(self.exchange.fetch_order_book, *args, **kwargs)
+
     async def load_markets(self, *args, **kwargs):
         return await self.execute(self.exchange.load_markets, *args, **kwargs)
 
@@ -420,6 +424,7 @@ def crear_cliente(config: Config | None = None):
         'fetch_ticker': False,
         'load_markets': False,
         'fetch_ohlcv': False,
+        'fetch_order_book': False,
     }
     for nombre, firmado in wrappers.items():
         _wrap(nombre, firmado)
