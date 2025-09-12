@@ -165,4 +165,21 @@ def log_decision(logger: logging.Logger, accion: str, operation_id: str | None,
     logger.info(json.dumps(payload, ensure_ascii=False))
 
 
+def detener_logger() -> None:
+    """Detiene el ``QueueListener`` y cierra los manejadores globales.
+
+    Útil en pruebas unitarias que inicializan el logger varias veces en el
+    mismo proceso.
+    """
+    global _LISTENER, _LOG_QUEUE, archivo_global, loggers_configurados
+    if _LISTENER is not None:
+        _LISTENER.stop()
+        _LISTENER = None
+    if archivo_global is not None:
+        archivo_global.close()
+        archivo_global = None
+    _LOG_QUEUE = None
+    loggers_configurados.clear()
+
+
 
