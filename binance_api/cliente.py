@@ -425,6 +425,9 @@ def crear_cliente(config: Config | None = None):
         'load_markets': False,
         'fetch_ohlcv': False,
         'fetch_order_book': False,
+        'fetch_my_trades': True,
+        'cancel_order': True,
+        'fetch_order': False,
     }
     for nombre, firmado in wrappers.items():
         _wrap(nombre, firmado)

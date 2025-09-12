@@ -1084,12 +1084,18 @@ def ejecutar_orden_limit(
         params_base["newClientOrderId"] = operation_id
 
     filtros = get_symbol_filters(symbol, cliente)
+    min_qty = filtros.get("min_qty", 0.0)
 
-    cantidad_original = cantidad
+    restante = cantidad
+    ejecutado_total = 0.0
+    precio_actual = precio
+    metricas = {"fee": 0.0, "pnl": 0.0}
+    slippage = 0.0
+
     for intento in range(1, max_reintentos + 1):
         # Normaliza precio/cantidad para cumplir filtros del exchange
-        precio, cantidad = normalizar_precio_cantidad(
-            filtros, precio, cantidad, "compra" if side == "buy" else "venta"
+        precio_actual, cantidad_norm = normalizar_precio_cantidad(
+            filtros, precio_actual, restante, "compra" if side == "buy" else "venta"
         )
 
         params = params_base.copy()
@@ -1097,62 +1103,43 @@ def ejecutar_orden_limit(
             params["newClientOrderId"] = f"{operation_id}-{intento}"
 
         if side == "buy":
-            orden = cliente.create_limit_buy_order(
-                symbol, cantidad, precio, params
-            )
+            orden = cliente.create_limit_buy_order(symbol, cantidad_norm, precio_actual, params)
         else:
-            orden = cliente.create_limit_sell_order(
-                symbol, cantidad, precio, params
-            )
+            orden = cliente.create_limit_sell_order(symbol, cantidad_norm, precio_actual, params)
 
         order_id = orden.get("id")
         inicio = time.time()
-        estado = orden
+        estado: dict[str, Any] = orden
 
         # Espera activa hasta timeout comprobando fills
         while time.time() - inicio < timeout:
             estado = cliente.fetch_order(order_id, symbol)
-            filled = float(estado.get("filled") or 0.0)
-            if estado.get("status") in {"closed", "canceled"} or filled >= cantidad:
+            filled_tmp = float(estado.get("filled") or 0.0)
+            if estado.get("status") in {"closed", "canceled"} or filled_tmp >= cantidad_norm:
                 break
             time.sleep(1)
         else:
-            # timeout -> cancelar, re-preciar y reintentar
+            # timeout -> cancelar y obtener estado final
             try:
-                cancel_info = cliente.cancel_order(order_id, symbol)
+                estado = cliente.cancel_order(order_id, symbol)
             except Exception as e:
                 log.warning(f"⚠️ No se pudo cancelar orden {order_id}: {e}")
-                cancel_info = {}
-            filled_cancel = float(
-                cancel_info.get("filled")
-                or cancel_info.get("executedQty")
-                or 0.0
-            )
-            if filled_cancel == 0.0:
+                estado = {}
+            if float(estado.get("filled") or estado.get("executedQty") or 0.0) == 0.0:
                 try:
-                    final_estado = cliente.fetch_order(order_id, symbol)
-                    filled_cancel = float(final_estado.get("filled") or 0.0)
+                    estado = cliente.fetch_order(order_id, symbol)
                 except Exception:
-                    filled_cancel = 0.0
-            if filled_cancel > 0:
-                cantidad = max(cantidad - filled_cancel, 0.0)
+                    estado = {}
 
-            if intento >= max_reintentos:
-                break
+        ejecutado = float(estado.get("filled") or estado.get("executedQty") or 0.0)
+        ejecutado_total += ejecutado
+        restante = max(restante - ejecutado, 0.0)
 
-            if side == "buy":
-                precio *= 1 + offset_reprice
-            else:
-                precio *= 1 - offset_reprice
-            continue
+        if operation_id:
+            metricas = _acumular_metricas(operation_id, estado)
 
-        # Evaluar resultado
-        ejecutado = float(estado.get("filled") or 0.0)
-        restante = max(cantidad - ejecutado, 0.0)
-        status = "FILLED" if restante <= 1e-8 else "PARTIAL"
-
-        precio_fill = float(estado.get("price") or estado.get("average") or precio)
-        slippage = abs(precio_fill - precio) / precio if precio else 0.0
+        precio_fill = float(estado.get("price") or estado.get("average") or precio_actual)
+        slippage = abs(precio_fill - precio_actual) / precio_actual if precio_actual else 0.0
         if slippage > _MAX_SLIPPAGE_PCT:
             log.warning(f"⚠️ Slippage alto en {symbol}: {slippage:.2%} (máx {_MAX_SLIPPAGE_PCT:.2%})")
             try:
@@ -1160,36 +1147,42 @@ def ejecutar_orden_limit(
             except Exception:
                 pass
 
-        metricas = {"fee": 0.0, "pnl": 0.0}
+        if restante < min_qty or restante <= 0:
+            break
+        if intento >= max_reintentos:
+            break
+
+        # Ajustar precio y continuar con la cantidad restante
+        if side == "buy":
+            precio_actual *= 1 + offset_reprice
+        else:
+            precio_actual *= 1 - offset_reprice
+
+    if restante >= min_qty:
+        log.warning(
+            f"⚠️ Fallback a orden de mercado en {symbol} tras {max_reintentos} intentos limit fallidos"
+        )
+        if side == "buy":
+            res_market = ejecutar_orden_market(symbol, restante, operation_id)
+        else:
+            res_market = ejecutar_orden_market_sell(symbol, restante, operation_id)
+        ejecutado_total += res_market.get("ejecutado", 0.0)
+        restante = res_market.get("restante", 0.0)
+        slippage = res_market.get("slippage", slippage)
         if operation_id:
-            metricas = _acumular_metricas(operation_id, estado)
+            metricas["fee"] = res_market.get("fee", metricas.get("fee", 0.0))
+            metricas["pnl"] = res_market.get("pnl", metricas.get("pnl", 0.0))
 
-        return {
-            "ejecutado": ejecutado,
-            "restante": restante,
-            "status": status,
-            "min_qty": filtros.get("min_qty", 0.0),
-            "fee": metricas["fee"],
-            "pnl": metricas["pnl"],
-            "slippage": slippage,
-        }
-
-    # Fallback a MARKET tras reintentos fallidos
-    if cantidad <= 0:
-        ejecutado_total = cantidad_original
-        return {
-            "ejecutado": ejecutado_total,
-            "restante": 0.0,
-            "status": "FILLED",
-            "min_qty": filtros.get("min_qty", 0.0),
-            "fee": 0.0,
-            "pnl": 0.0,
-            "slippage": 0.0,
-        }
-    log.warning(f"⚠️ Fallback a orden de mercado en {symbol} tras {max_reintentos} intentos limit fallidos")
-    if side == "buy":
-        return ejecutar_orden_market(symbol, cantidad, operation_id)
-    return ejecutar_orden_market_sell(symbol, cantidad, operation_id)
+    status = "FILLED" if restante <= 1e-8 else "PARTIAL"
+    return {
+        "ejecutado": ejecutado_total,
+        "restante": restante,
+        "status": status,
+        "min_qty": min_qty,
+        "fee": metricas.get("fee", 0.0),
+        "pnl": metricas.get("pnl", 0.0),
+        "slippage": slippage,
+    }
 
 
 
