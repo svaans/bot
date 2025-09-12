@@ -10,7 +10,6 @@ import pandas as pd
 import psutil
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Iterable, Callable
-from typing import TYPE_CHECKING
 from pandas.tseries.frequencies import to_offset
 from .logger import configurar_logger
 from core.modo import MODO_REAL
@@ -192,37 +191,46 @@ def validar_dataframe(df, columnas):
         col in columnas)
 
 
-def verificar_integridad_datos(df: pd.DataFrame, max_gap_pct: float = 0.5) -> bool:
+def verificar_integridad_datos(
+    df: pd.DataFrame, max_gap_pct: float = 0.5
+) -> tuple[bool, pd.DataFrame]:
     """Comprueba valores nulos y gaps en ``df``.
 
+    Devuelve una tupla ``(ok, df_limpio)`` sin modificar el DataFrame original.
+
     Si se detectan NaNs, gaps temporales amplios o variaciones extremas,
-    se considera que el DataFrame no es fiable para operar."""
+    ``ok`` será ``False``.
+    """
     if df is None or df.empty:
-        return False
-    if df.isna().any().any():
+        return False, df
+
+    df_limpio = df.dropna().copy()
+    if len(df_limpio) != len(df):
         log.warning('⚠️ DataFrame con NaNs detectado — limpiando')
-        df.dropna(inplace=True)
-        if df.empty or df.isna().any().any():
-            log.warning('⚠️ DataFrame vacío o con NaNs tras limpieza')
-            return False
-    if 'timestamp' in df.columns:
+    if df_limpio.empty:
+        log.warning('⚠️ DataFrame vacío o con NaNs tras limpieza')
+        return False, df_limpio
+
+    if 'timestamp' in df_limpio.columns:
         # ``timestamp`` llega en milisegundos desde epoch; sin especificar la
         # unidad Pandas asume nanosegundos, lo que puede generar fechas de 1970
         # o valores NaT y producir falsos positivos al buscar gaps.
-        ts = pd.to_datetime(df['timestamp'], unit='ms', errors='coerce')
+        ts = pd.to_datetime(df_limpio['timestamp'], unit='ms', errors='coerce')
         if ts.isna().any():
-            return False
+            return False, df_limpio
         ts = ts.sort_values()
         diffs = ts.diff().dt.total_seconds().dropna()
         if not diffs.empty and diffs.max() > diffs.median() * 2:
             log.warning('⚠️ Gaps temporales excesivos detectados')
-            return False
-    if 'close' in df.columns:
-        cambios = df['close'].pct_change().dropna()
+            return False, df_limpio
+
+    if 'close' in df_limpio.columns:
+        cambios = df_limpio['close'].pct_change().dropna()
         if not cambios.empty and cambios.abs().max() > max_gap_pct:
             log.warning('⚠️ Variaciones atípicas detectadas')
-            return False
-    return True
+            return False, df_limpio
+
+    return True, df_limpio
 
 
 def validar_tp(tp: float, precio: float, max_relativo: float=1.05,

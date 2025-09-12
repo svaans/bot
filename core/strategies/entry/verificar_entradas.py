@@ -112,6 +112,78 @@ def _reparar_huecos(
     }
 
 
+def _handle_integrity_failure(trader, symbol: str, df: pd.DataFrame, stats: dict, estado) -> None:
+    if stats.get('gaps_criticos'):
+        cliente = getattr(trader.data_feed, '_cliente', None) or getattr(trader, 'cliente', None)
+        if cliente:
+            intervalo = trader.config.intervalo_velas
+            intervalo_ms = intervalo_a_segundos(intervalo) * 1000
+            diffs = df['timestamp'].diff()
+            gaps = diffs[diffs > intervalo_ms]
+
+            async def _backfill_critico() -> None:
+                dfs_nuevas: list[pd.DataFrame] = []
+                for idx in gaps.index:
+                    if idx <= 0 or len(df) < 2:
+                        log.warning(f'[{symbol}] Datos insuficientes para backfill crítico')
+                        return
+                    inicio_gap = int(df.loc[idx - 1, 'timestamp']) + intervalo_ms
+                    fin_gap = int(df.loc[idx, 'timestamp']) - intervalo_ms
+                    faltantes = int((fin_gap - inicio_gap) // intervalo_ms) + 1
+                    faltantes = min(faltantes, MAX_BACKFILL_CANDLES)
+                    try:
+                        nuevas = await fetch_ohlcv_async(
+                            cliente,
+                            symbol,
+                            intervalo,
+                            since=inicio_gap,
+                            limit=faltantes,
+                        )
+                    except Exception as e:
+                        log.warning(f'[{symbol}] Error backfill crítico: {e}')
+                        return
+                    dfs_nuevas.append(
+                        pd.DataFrame(
+                            [
+                                {
+                                    'timestamp': o[0],
+                                    'open': float(o[1]),
+                                    'high': float(o[2]),
+                                    'low': float(o[3]),
+                                    'close': float(o[4]),
+                                    'volume': float(o[5]),
+                                }
+                                for o in nuevas
+                            ]
+                        )
+                    )
+                if not dfs_nuevas:
+                    return
+                estado.df = (
+                    pd.concat([estado.df, *dfs_nuevas])
+                    .drop_duplicates(subset=['timestamp'])
+                    .sort_values('timestamp')
+                    .reset_index(drop=True)
+                )
+                ok_estado, estado.df = verificar_integridad_datos(estado.df)
+                if ok_estado:
+                    log.info(f'[{symbol}] Hueco crítico reparado vía REST')
+                else:
+                    log.warning(
+                        f'[{symbol}] Datos corruptos irreparables tras backfill: {stats}'
+                    )
+
+            asyncio.create_task(_backfill_critico())
+            metricas_tracker.registrar_filtro('datos_invalidos')
+            return
+        else:
+            log.warning(f'[{symbol}] Datos corruptos irreparables: {stats}')
+            metricas_tracker.registrar_filtro('datos_invalidos')
+            return
+    else:
+        log.warning(f'[{symbol}] Datos corruptos irreparables: {stats}')
+        metricas_tracker.registrar_filtro('datos_invalidos')
+
 def _tendencia_principal(tendencias: list[str | None]) -> tuple[str | None, float]:
     """Devuelve la tendencia predominante y su proporción."""
     valores = [t for t in tendencias if t]
@@ -176,77 +248,20 @@ async def verificar_entrada(trader, symbol: str, df: pd.DataFrame, estado) -> (
     df = df.dropna(subset=['timestamp']).drop_duplicates(subset=['timestamp']).reset_index(drop=True)
 
     # Integridad básica; si falla intentamos reparación de huecos tolerables
-    if not verificar_integridad_datos(df):
+    ok, df = verificar_integridad_datos(df)
+    if not ok:
         reparado, ok, stats = _reparar_huecos(df)
-        if ok and verificar_integridad_datos(reparado):
+    if ok:
+        ok_reparado, reparado = verificar_integridad_datos(reparado)
+        if ok_reparado:
             log.info(f'[{symbol}] Datos incompletos reparados: {stats}')
             df = reparado
         else:
-            if stats.get('gaps_criticos'):
-                cliente = getattr(trader.data_feed, '_cliente', None) or getattr(trader, 'cliente', None)
-                if cliente:
-                    intervalo = trader.config.intervalo_velas
-                    intervalo_ms = intervalo_a_segundos(intervalo) * 1000
-                    diffs = df['timestamp'].diff()
-                    gaps = diffs[diffs > intervalo_ms]
-                    async def _backfill_critico() -> None:
-                        dfs_nuevas: list[pd.DataFrame] = []
-                        for idx in gaps.index:
-                            if idx <= 0 or len(df) < 2:
-                                log.warning(f'[{symbol}] Datos insuficientes para backfill crítico')
-                                return
-                            inicio_gap = int(df.loc[idx - 1, 'timestamp']) + intervalo_ms
-                            fin_gap = int(df.loc[idx, 'timestamp']) - intervalo_ms
-                            faltantes = int((fin_gap - inicio_gap) // intervalo_ms) + 1
-                            faltantes = min(faltantes, MAX_BACKFILL_CANDLES)
-                            try:
-                                nuevas = await fetch_ohlcv_async(
-                                    cliente,
-                                    symbol,
-                                    intervalo,
-                                    since=inicio_gap,
-                                    limit=faltantes,
-                                )
-                            except Exception as e:
-                                log.warning(f'[{symbol}] Error backfill crítico: {e}')
-                                return
-                            dfs_nuevas.append(
-                                pd.DataFrame(
-                                    [
-                                        {
-                                            'timestamp': o[0],
-                                            'open': float(o[1]),
-                                            'high': float(o[2]),
-                                            'low': float(o[3]),
-                                            'close': float(o[4]),
-                                            'volume': float(o[5]),
-                                        }
-                                        for o in nuevas
-                                    ]
-                                )
-                            )
-                        if not dfs_nuevas:
-                            return
-                        estado.df = (
-                                pd.concat([estado.df, *dfs_nuevas])
-                                .drop_duplicates(subset=['timestamp'])
-                                .sort_values('timestamp')
-                                .reset_index(drop=True)
-                            )
-                        if verificar_integridad_datos(estado.df):
-                            log.info(f'[{symbol}] Hueco crítico reparado vía REST')
-                        else:
-                            log.warning(
-                                f'[{symbol}] Datos corruptos irreparables tras backfill: {stats}'
-                            )
-
-                    asyncio.create_task(_backfill_critico())
-                    metricas_tracker.registrar_filtro('datos_invalidos')
-                    return None
-            else:
-                log.warning(f'[{symbol}] Datos corruptos irreparables: {stats}')
-                metricas_tracker.registrar_filtro('datos_invalidos')
-                return None
+            _handle_integrity_failure(trader, symbol, df, stats, estado)
+            return None
+    else:
+        _handle_integrity_failure(trader, symbol, df, stats, estado)
+        return None
 
     config = adaptar_configuracion(symbol, df, trader.config_por_simbolo.get(symbol, {}))
     trader.config_por_simbolo[symbol] = config
