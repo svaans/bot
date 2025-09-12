@@ -24,7 +24,9 @@ def _calcular_tendencia_base(
     df["ema_fast"] = df["close"].ewm(span=10, adjust=False).mean()
     df["ema_slow"] = df["close"].ewm(span=30, adjust=False).mean()
     delta = df["ema_fast"].iloc[-1] - df["ema_slow"].iloc[-1]
-    slope = (df["ema_slow"].iloc[-1] - df["ema_slow"].iloc[-5]) / 5
+    slope_raw = (df["ema_slow"].iloc[-1] - df["ema_slow"].iloc[-5]) / 5
+    price = df["close"].iloc[-1]
+    slope = slope_raw / price if price else 0.0
     rsi = get_rsi(df)
     close_std = df["close"].std()
     umbral = max(close_std * 0.02, 0.1)
@@ -44,9 +46,11 @@ def _calcular_tendencia_base(
         elif rsi < 42:
             puntos_bajista += 1
     adx = calcular_adx(df)
-    if adx > 20:
-        puntos_alcista += 1
-        puntos_bajista += 1
+    if adx is not None and adx > 20:
+        if delta > 0 and slope > 0:
+            puntos_alcista += 1
+        elif delta < 0 and slope < 0:
+            puntos_bajista += 1
 
     return delta, slope, rsi, adx, puntos_alcista, puntos_bajista
 
@@ -85,8 +89,8 @@ def detectar_tendencia(symbol: str, df: pd.DataFrame) -> tuple[str, dict[str, bo
             "tendencia": tendencia,
             "delta_ema": round(delta, 6),
             "slope_local": round(slope, 6),
-            "rsi": round(rsi, 2) if rsi else None,
-            "adx": round(adx, 2) if adx else None,
+            "rsi": round(rsi, 2) if rsi is not None else None,
+            "adx": round(adx, 2) if adx is not None else None,
         }
     )
     return tendencia, estrategias_activas
@@ -105,7 +109,8 @@ def obtener_tendencia(symbol: str, df: pd.DataFrame) -> str:
                 f"⏳ Warmup {symbol}: {len(df)}/{MIN_BARS} velas; posponiendo evaluación"
             )
             mark_warned(symbol)
-        return "lateral"
+        if len(df) < 30:
+            return "lateral"
 
     tendencia, _ = detectar_tendencia(symbol, df)
     return tendencia
@@ -145,11 +150,15 @@ async def señales_repetidas(
     peso_max = sum(estrategias_func.values()) or 1.0
     contador = 0
     for i in range(-ventanas, 0):
+        symbol_dbg = None
         try:
             ventana = df.iloc[i - 30 : i]
             if ventana.empty or len(ventana) < 10:
                 continue
-            symbol = df.iloc[i]["symbol"]
+            symbol_dbg = (
+                df.iloc[i].get("symbol") if "symbol" in df.columns else "<desconocido>"
+            )
+            symbol = symbol_dbg
             tendencia, _ = detectar_tendencia(symbol, ventana)
             evaluacion = await evaluar_estrategias(symbol, ventana, tendencia)
             if not evaluacion:
@@ -163,6 +172,8 @@ async def señales_repetidas(
             if len(estrategias_validas) >= min_estrategias:
                 contador += 1
         except Exception as e:
-            log.warning(f"⚠️ Fallo al evaluar repetición de señales en {symbol}: {e}")
+            log.warning(
+                f"⚠️ Fallo al evaluar repetición de señales en {symbol_dbg}: {e}"
+            )
             continue
     return contador
