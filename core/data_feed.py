@@ -85,7 +85,12 @@ class DataFeed:
         self._reinicios_inactividad: Dict[str, int] = {}
         self._queues: Dict[str, asyncio.Queue] = {}
         self._consumer_tasks: Dict[str, asyncio.Task] = {}
-        self.backpressure = backpressure
+        if backpressure is None:
+            self.backpressure = (
+                os.getenv("DF_BACKPRESSURE", "true").lower() == "true"
+            )
+        else:
+            self.backpressure = backpressure
         registrar_reconexion_datafeed(self._reconectar_por_supervisor)
         self._stream_restart_stats: Dict[str, Deque[float]] = {}
         self._combined = False
@@ -100,7 +105,8 @@ class DataFeed:
         self._queue_windows: Dict[str, list] = {}
         self._last_window_reset: Dict[str, float] = {}
         self.drop_oldest = (
-            os.getenv("DF_BACKPRESSURE_DROP", "true").lower() == "true" and not self.backpressure
+            os.getenv("DF_BACKPRESSURE_DROP", "false").lower() == "true"
+            and not self.backpressure
         )
         self._estado: Dict[str, Any] | None = None
 
@@ -965,7 +971,7 @@ class DataFeed:
                 if merged:
                     self._last_close_ts[sym] = merged[-1][0]
         self._running = True
-        tam_q = int(os.getenv("DF_QUEUE_MAX", "500"))
+        tam_q = int(os.getenv("DF_QUEUE_MAX", "2000"))
         self._queues = {sym: asyncio.Queue(maxsize=tam_q) for sym in self._symbols}
         for sym in self._symbols:
             self._consumer_tasks[sym] = supervised_task(

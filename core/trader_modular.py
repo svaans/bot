@@ -168,7 +168,7 @@ class Trader:
             getattr(config, 'max_stream_restarts', 5),
             getattr(config, 'inactivity_intervals', 3),
             handler_timeout=getattr(config, 'handler_timeout', 0.8),
-            backpressure=True,
+            backpressure=getattr(config, 'df_backpressure', True),
         )
         self.engine = StrategyEngine()
         self.bus = EventBus()

@@ -79,6 +79,7 @@ class Config:
     frecuencia_recursos: int = 60
     timeout_sin_datos_factor: int = 6
     backfill_max_candles: int = 1000
+    df_backpressure: bool = True
 
 
 class ConfigManager:
@@ -159,4 +160,5 @@ class ConfigManager:
             frecuencia_recursos=_cargar_int('FRECUENCIA_RECURSOS', defaults.frecuencia_recursos),
             timeout_sin_datos_factor=_cargar_int('TIMEOUT_SIN_DATOS_FACTOR', getattr(defaults, 'timeout_sin_datos_factor', 6)),
             backfill_max_candles=_cargar_int('BACKFILL_MAX_CANDLES', getattr(defaults, 'backfill_max_candles', 1000)),
+            df_backpressure=os.getenv('DF_BACKPRESSURE', 'true').lower() == 'true',
         )
