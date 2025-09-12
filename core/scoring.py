@@ -2,7 +2,7 @@
 from __future__ import annotations
 from dataclasses import dataclass, asdict
 from enum import Enum
-from typing import Optional
+from typing import Optional, Union
 import json
 from math import isfinite
 import pandas as pd
@@ -50,20 +50,24 @@ class DecisionTrace:
     score: float
     threshold: float
     reason: DecisionReason
-    breakdown: ScoreBreakdown
+    breakdown: Union[ScoreBreakdown, dict]
 
     def to_json(self) -> str:
         """Serializa la traza en JSON ordenado para idempotencia."""
-        payload = {
-            "score": round(self.score, 6),
-            "threshold": round(self.threshold, 6),
-            "reason": self.reason.value,
-            "breakdown": {
+        if isinstance(self.breakdown, ScoreBreakdown):
+            breakdown_dict = {
                 "rsi": round(self.breakdown.rsi, 6),
                 "momentum": round(self.breakdown.momentum, 6),
                 "slope": round(self.breakdown.slope, 6),
                 "tendencia": round(self.breakdown.tendencia, 6),
-            },
+            }
+        else:
+            breakdown_dict = {k: round(float(v), 6) for k, v in self.breakdown.items()}
+        payload = {
+            "score": round(self.score, 6),
+            "threshold": round(self.threshold, 6),
+            "reason": self.reason.value,
+            "breakdown": breakdown_dict,
         }
         return json.dumps(payload, sort_keys=True)
 
