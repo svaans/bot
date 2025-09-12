@@ -1,7 +1,7 @@
 import os
-import asyncio
+import time
 from pathlib import Path
-from typing import Dict, Tuple, Optional, Set
+from typing import Any, Dict, Tuple, Optional, Set
 import pandas as pd
 from binance_api.cliente import fetch_ohlcv_async
 from core.metrics import registrar_warmup_progress
@@ -15,7 +15,7 @@ CACHE_TTL = int(os.getenv('WARMUP_CACHE_TTL', '300'))
 _cache_dir = Path('estado/cache')
 _cache_dir.mkdir(parents=True, exist_ok=True)
 
-_config: Dict[str, Tuple[str, any, int]] = {}
+_config: Dict[str, Tuple[str, Any, int]] = {}
 _pending_fetch: Set[str] = set()
 _warned: Set[str] = set()
 _progress: Dict[str, float] = {}
@@ -64,9 +64,19 @@ async def warmup_symbol(symbol: str, tf: str, cliente, min_bars: int = MIN_BARS)
     _config[symbol] = (tf, cliente, min_bars)
     path = _cache_path(symbol, tf)
     df: Optional[pd.DataFrame] = None
-    if path.exists() and (asyncio.get_event_loop().time() - path.stat().st_mtime) < CACHE_TTL:
+    if path.exists() and (time.time() - path.stat().st_mtime) < CACHE_TTL:
         try:
-            tmp = pd.read_csv(path)
+            tmp = pd.read_csv(
+                path,
+                dtype={
+                    'timestamp': 'int64',
+                    'open': 'float',
+                    'high': 'float',
+                    'low': 'float',
+                    'close': 'float',
+                    'volume': 'float',
+                },
+            )
             if len(tmp) >= min_bars:
                 df = tmp
         except Exception:
