@@ -169,6 +169,7 @@ class Trader:
             getattr(config, 'inactivity_intervals', 10),
             handler_timeout=getattr(config, 'handler_timeout', 2.0),
             backpressure=getattr(config, 'df_backpressure', True),
+            drop_oldest=getattr(config, 'df_backpressure_drop', True),
         )
         self.engine = StrategyEngine()
         self.bus = EventBus()
