@@ -1,9 +1,10 @@
 import os
 import time
+import asyncio
 from pathlib import Path
-from typing import Any, Dict, Tuple, Optional, Set
+from typing import Any, Dict, Tuple, Optional, Set, Iterable
 import pandas as pd
-from binance_api.cliente import fetch_ohlcv_async
+from binance_api.cliente import fetch_ohlcv_async, obtener_cliente
 from core.metrics import registrar_warmup_progress
 from core.utils.utils import configurar_logger
 
@@ -95,6 +96,25 @@ async def warmup_symbol(symbol: str, tf: str, cliente, min_bars: int = MIN_BARS)
                 log.exception(f'Error guardando caché {path}')
     _update_progress(symbol, len(df), min_bars)
     return df.tail(min_bars)
+
+
+async def warmup_inicial(
+    symbols: Iterable[str], tf: str = "5m", min_bars: int | None = None
+) -> None:
+    """Calienta símbolos en paralelo y asegura progreso mínimo.
+
+    Se lanza al arrancar para evitar advertencias de datos insuficientes
+    antes de evaluar estrategias.
+    """
+    cliente = obtener_cliente()
+    target = min_bars if min_bars is not None else MIN_BARS
+    await asyncio.gather(
+        *(warmup_symbol(s, tf, cliente, min_bars=target) for s in symbols)
+    )
+    umbral = 0.9
+    for s in symbols:
+        if get_progress(s) < umbral:
+            await warmup_symbol(s, tf, cliente, min_bars=target)
 
 
 def mark_warned(symbol: str) -> None:

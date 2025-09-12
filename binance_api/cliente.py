@@ -201,7 +201,7 @@ async def _start_user_stream(exchange) -> None:
     default_type = (getattr(exchange, "options", {}) or {}).get("defaultType", "spot")
     if default_type == "future":
         rest_base = "https://fapi.binance.com"
-        ws_user_builder = lambda lk: f"wss://fstream.binance.com/stream?streams={lk}"
+        ws_user_builder = lambda lk: f"wss://fstream.binance.com/ws/{lk}"
         user_stream_path = "/fapi/v1/listenKey"
     else:
         rest_base = "https://api.binance.com"
@@ -252,7 +252,13 @@ async def _user_stream_ws_generic(ws_url: str, exchange) -> None:
     while True:
         try:
             async with websockets.connect(
-                ws_url, ping_interval=20, ping_timeout=10
+                ws_url,
+                open_timeout=int(os.getenv("WS_OPEN_TIMEOUT", "30")),
+                ping_interval=20,
+                ping_timeout=10,
+                close_timeout=5,
+                max_queue=1024,
+                compression="deflate",
             ) as ws:
                 async for msg in ws:
                     try:

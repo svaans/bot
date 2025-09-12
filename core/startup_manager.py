@@ -1,6 +1,7 @@
 import asyncio
 import json
 import time
+import os
 from contextlib import suppress
 from pathlib import Path
 from typing import Optional
@@ -11,6 +12,7 @@ import aiohttp
 from config.config_manager import ConfigManager, Config
 from core.trader_modular import Trader
 from core.utils.utils import configurar_logger
+from core.data.bootstrap import warmup_inicial
 
 SNAPSHOT_PATH = Path('estado/startup_snapshot.json')
 
@@ -52,7 +54,12 @@ class StartupManager:
         self.trader = Trader(self.config)  # type: ignore[arg-type]
 
     async def _bootstrap(self) -> None:
-        assert self.trader is not None
+        assert self.trader is not None and self.config is not None
+        await warmup_inicial(
+            self.config.symbols,
+            self.config.intervalo_velas,
+            min_bars=int(os.getenv("MIN_BARS", "200")),
+        )
         await self.trader._precargar_historico()
 
     async def _validate_feeds(self) -> None:
