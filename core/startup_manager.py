@@ -58,7 +58,7 @@ class StartupManager:
         await warmup_inicial(
             self.config.symbols,
             self.config.intervalo_velas,
-            min_bars=int(os.getenv("MIN_BARS", "200")),
+            min_bars=int(os.getenv("MIN_BARS", "400")),
         )
         await self.trader._precargar_historico()
 

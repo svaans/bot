@@ -80,7 +80,7 @@ class StreamContexto:
                 ping_interval=20,
                 ping_timeout=10,
                 close_timeout=5,
-                max_queue=1000,
+                max_queue=0,
                 compression="deflate",
             ) as ws:
                 log.info(f'🔌 Contexto conectado para {symbol}')

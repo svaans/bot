@@ -10,7 +10,7 @@ from core.utils.utils import configurar_logger
 
 log = configurar_logger('bootstrap')
 
-MIN_BARS = int(os.getenv('MIN_BARS', '200'))
+MIN_BARS = int(os.getenv('MIN_BARS', '400'))
 CACHE_TTL = int(os.getenv('WARMUP_CACHE_TTL', '300'))
 
 _cache_dir = Path('estado/cache')

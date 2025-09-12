@@ -257,7 +257,7 @@ async def _user_stream_ws_generic(ws_url: str, exchange) -> None:
                 ping_interval=20,
                 ping_timeout=10,
                 close_timeout=5,
-                max_queue=1024,
+                max_queue=0,
                 compression="deflate",
             ) as ws:
                 async for msg in ws:

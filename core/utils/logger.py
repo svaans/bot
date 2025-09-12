@@ -8,6 +8,7 @@ from logging.handlers import (
 import queue
 import json
 from datetime import datetime, timezone
+import time
 from pathlib import Path
 from dotenv import load_dotenv
 
@@ -54,6 +55,24 @@ FAST_MODE = os.getenv("LOG_FAST") == "1"
 DEBUG_SAMPLE = int(os.getenv("LOG_SAMPLE_DEBUG", "1"))
 _LOG_QUEUE: queue.Queue | None = None
 _LISTENER: QueueListener | None = None
+
+
+# Registro de últimos logs para limitar spam
+_last_log: dict[str, float] = {}
+
+
+def _should_log(key: str, every: float = 3.0) -> bool:
+    """Devuelve ``True`` si han pasado ``every`` segundos desde el último log.
+
+    Permite reducir el ruido de logs repetitivos. ``key`` identifica el
+    evento a controlar.
+    """
+    now = time.time()
+    prev = _last_log.get(key, 0.0)
+    if now - prev >= every:
+        _last_log[key] = now
+        return True
+    return False
 
 
 class JsonFormatter(logging.Formatter):

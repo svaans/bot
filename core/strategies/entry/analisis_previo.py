@@ -1,6 +1,7 @@
 import pandas as pd
 from core.utils.utils import configurar_logger
 from indicators.helpers import get_rsi
+from core.utils.logger import _should_log
 UMBRAL_PERDIDA_DIA = -0.02
 UMBRAL_CERCANIA_EXTREMO = 0.003
 UMBRAL_CUERPO_DOJI = 0.3
@@ -12,7 +13,8 @@ log = configurar_logger('analisis_previo')
 def validar_condiciones_tecnicas_extra(symbol: str, datos: pd.DataFrame,
     precio: float, sl: float, tp: float) ->bool:
     if datos is None or len(datos) < 30:
-        log.warning(f'[{symbol}] Datos insuficientes para validación previa.')
+        if _should_log(f"datos_insuf_validacion:{symbol}", every=2.0):
+            log.warning(f'[{symbol}] Datos insuficientes para validación previa.')
         return False
     datos = datos.tail(60).copy()
     vela = datos.iloc[-1]

@@ -234,6 +234,7 @@ async def _gestionar_ws(
                     ping_interval=ping_interval,
                     ping_timeout=PING_TIMEOUT,
                     max_size=2 ** 20,
+                    max_queue=0,
                     ssl=_SSL_CONTEXT,
                 ),
                 timeout=OPEN_TIMEOUT + 5,

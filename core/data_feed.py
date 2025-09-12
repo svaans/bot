@@ -14,12 +14,17 @@ from binance_api.websocket import (
     InactividadTimeoutError,
 )
 from binance_api.cliente import fetch_ohlcv_async
-from core.utils.logger import configurar_logger
+from core.utils.logger import configurar_logger, _should_log
 from core.utils import intervalo_a_segundos, validar_integridad_velas, timestamp_alineado
 from core.utils.warmup import splice_with_last
 from core.utils.backoff import calcular_backoff
 from core.registro_metrico import registro_metrico
-from core.metrics import QUEUE_SIZE, INGEST_LATENCY
+from core.metrics import (
+    QUEUE_SIZE,
+    INGEST_LATENCY,
+    registrar_watchdog_restart,
+    registrar_vela_rechazada,
+)
 from observabilidad import metrics as obs_metrics
 from core.supervisor import (
     tick,
@@ -86,6 +91,8 @@ class DataFeed:
         self._reinicios_inactividad: Dict[str, int] = {}
         self._queues: Dict[str, asyncio.Queue] = {}
         self._consumer_tasks: Dict[str, asyncio.Task] = {}
+        self._consumer_last: Dict[str, float] = {}
+        self._monitor_consumers_task: asyncio.Task | None = None
         if backpressure is None:
             self.backpressure = (
                 os.getenv("DF_BACKPRESSURE", "true").lower() == "true"
@@ -364,34 +371,41 @@ class DataFeed:
         inicio = time.monotonic()
         while self._running:
             candle = await queue.get()
+            self._consumer_last[symbol] = time.monotonic()
             enqueue_ts = candle.pop("_enqueue_time", None)
-            if queue.maxsize and queue.qsize() > queue.maxsize * 0.8:
-                log.warning(f"[{symbol}] backlog alto; entrando en catch_up")
-                descartadas = 1  # la vela ya obtenida
-                queue.task_done()
-                while not queue.empty():
-                    try:
-                        queue.get_nowait()
-                        queue.task_done()
-                        descartadas += 1
-                    except asyncio.QueueEmpty:
-                        break
-                QUEUE_SIZE.labels(symbol=symbol).set(queue.qsize())
-                self._queue_discards[symbol] = (
-                    self._queue_discards.get(symbol, 0) + descartadas
-                )
-                obs_metrics.QUEUE_DROPS.labels(symbol=symbol).inc(descartadas)
-                registro_metrico.registrar(
-                    "queue_discards",
-                    {"symbol": symbol, "count": self._queue_discards[symbol]},
-                )
-                try:
-                    await asyncio.wait_for(
-                        self._backfill_candles(symbol), timeout=self.tiempo_inactividad
-                    )
-                except Exception:
-                    log.exception(f"[{symbol}] error en catch_up/backfill")
-                continue  # reintentar bucle con cola saneada
+            # --- FAST-FORWARD CUANDO HAY BACKPRESSURE ---
+            try:
+                maxsize = getattr(queue, "maxsize", 0) or 0
+                qsz = queue.qsize()
+                if maxsize and qsz / maxsize >= 0.8:
+                    last = candle
+                    dropped = 0
+                    while True:
+                        try:
+                            extra = queue.get_nowait()
+                            queue.task_done()
+                            last = extra
+                            dropped += 1
+                        except asyncio.QueueEmpty:
+                            break
+                    if dropped:
+                        self._queue_discards[symbol] = (
+                            self._queue_discards.get(symbol, 0) + dropped
+                        )
+                        obs_metrics.QUEUE_DROPS.labels(symbol=symbol).inc(dropped)
+                        registro_metrico.registrar(
+                            "queue_discards",
+                            {"symbol": symbol, "count": self._queue_discards[symbol]},
+                        )
+                        registrar_vela_rechazada(symbol, "backpressure")
+                        if _should_log(f"backpressure:{symbol}", every=2.0):
+                            log.warning(
+                                f"[{symbol}] fast-forward: dropped {dropped} old candles (kept latest)."
+                            )
+                    candle = last
+            except Exception as e:
+                log.debug(f"fast-forward skip failed: {e}")
+            # --- FIN FAST-FORWARD ---
             try:
                 await asyncio.wait_for(
                     handler(candle), timeout=self.handler_timeout
@@ -925,6 +939,45 @@ class DataFeed:
             raise
         except Exception:
             log.exception("Error inesperado en _monitor_global_inactividad")
+
+
+    async def _monitor_consumers(self, timeout: int = 30) -> None:
+        """Reinicia consumidores que no procesan velas en ``timeout`` segundos."""
+        try:
+            while True:
+                await asyncio.sleep(5)
+                if not self._running:
+                    break
+                ahora = time.monotonic()
+                for sym in list(self._symbols):
+                    ultimo = self._consumer_last.get(sym)
+                    if ultimo is None:
+                        continue
+                    if ahora - ultimo > timeout:
+                        registrar_watchdog_restart(f"consumer_{sym}")
+                        if _should_log(f"consumer_watchdog:{sym}", every=2.0):
+                            log.warning(
+                                f"[{sym}] consumer sin progreso; reiniciando…"
+                            )
+                        task = self._consumer_tasks.get(sym)
+                        if task and not task.done():
+                            task.cancel()
+                            try:
+                                await asyncio.wait_for(task, timeout=self.cancel_timeout)
+                            except Exception:
+                                log.exception(
+                                    f"Error cancelando consumer {sym}"
+                                )
+                        self._consumer_tasks[sym] = supervised_task(
+                            lambda sym=sym: self._consumer(sym, self._handler_actual),
+                            f"consumer_{sym}",
+                            max_restarts=0,
+                        )
+                        self._consumer_last[sym] = ahora
+        except asyncio.CancelledError:
+            pass
+        except Exception:
+            log.exception("Error en monitor_consumers")
             tick('data_feed')
 
     async def escuchar(
@@ -982,6 +1035,13 @@ class DataFeed:
                 max_restarts=0,
             )
         if (
+            self._monitor_consumers_task is None
+            or self._monitor_consumers_task.done()
+        ):
+            self._monitor_consumers_task = asyncio.create_task(
+                self._monitor_consumers()
+            )
+        if (
             self._monitor_global_task is None
             or self._monitor_global_task.done()
         ):
@@ -1024,6 +1084,8 @@ class DataFeed:
         tasks: set[asyncio.Task] = set()
         if self._monitor_global_task:
             tasks.add(self._monitor_global_task)
+        if self._monitor_consumers_task:
+            tasks.add(self._monitor_consumers_task)
         tasks.update(self._tasks.values())
         tasks.update(self._consumer_tasks.values())
 
@@ -1043,6 +1105,8 @@ class DataFeed:
             tasks.clear()
 
         self._monitor_global_task = None
+        self._monitor_consumers_task = None
+        self._consumer_last.clear()
         self._tasks.clear()
         for sym in set(
             list(self._mensajes_recibidos.keys())

@@ -3,6 +3,7 @@ from __future__ import annotations
 import pandas as pd
 import numpy as np
 from core.utils.utils import configurar_logger
+from core.utils.logger import _should_log
 from indicators.helpers import get_rsi
 from core.utils.market_utils import calcular_atr_pct, calcular_slope_pct
 from core.ajustador_riesgo import (
@@ -41,14 +42,16 @@ def _alertar_inconsistencias(symbol: str, sl: float, tp: float) ->None:
 def _adaptar_configuracion_indicadores(symbol: str, df: pd.DataFrame, base_config: dict | None=None) ->dict:
     """Ajusta los parámetros del bot según contexto de mercado."""
     if not _validar_dataframe(df):
-        log.warning(f'[{symbol}] Datos insuficientes para adaptación dinámica.')
+        if _should_log(f"datos_insuficientes:{symbol}", every=2.0):
+            log.warning(f'[{symbol}] Datos insuficientes para adaptación dinámica.')
         return {}
     base_config = base_config or {}
     df = df.tail(60).copy()
     close_actual = df['close'].iloc[-1]
     rsi = get_rsi(df)
     if rsi is None:
-        log.warning(f'[{symbol}] Indicadores insuficientes para adaptación.')
+        if _should_log(f"indicadores_insuf:{symbol}", every=2.0):
+            log.warning(f'[{symbol}] Indicadores insuficientes para adaptación.')
         return {}
     ma30 = df['close'].rolling(30).mean().dropna()
     atr_pct = calcular_atr_pct(df)
