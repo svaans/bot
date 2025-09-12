@@ -134,6 +134,7 @@ async def _procesar_cola(
     last_message: dict[str, float],
     handlers_by_norm: dict[str, str],
     callback_timeout: int = CALLBACK_TIMEOUT,
+    backpressure: bool = False,
 ):
     while True:
         raw = await queue.get()
@@ -178,9 +179,12 @@ async def _procesar_cola(
             h['intervalo_ms'],
         )
 
-        # Emitimos la vela actual con timeout defensivo
+        # Emitimos la vela actual; cuando hay backpressure no aplicamos timeout
         try:
-            await asyncio.wait_for(h['callback'](vela), timeout=callback_timeout)
+            if backpressure:
+                await h['callback'](vela)
+            else:
+                await asyncio.wait_for(h['callback'](vela), timeout=callback_timeout)
         except Exception as e:
             log.warning(f'❌ Callback falló: {e}')
             queue.task_done()
@@ -262,7 +266,13 @@ async def _gestionar_ws(
                     return handlers_by_norm.get(norm)
                 return next(iter(handlers))
             consumer = asyncio.create_task(
-                _procesar_cola(message_queue, handlers, last_message, handlers_by_norm)
+                _procesar_cola(
+                    message_queue,
+                    handlers,
+                    last_message,
+                    handlers_by_norm,
+                    backpressure=backpressure,
+                )
             )
 
             # === Bootstrap & Backfill =========================================
@@ -386,11 +396,12 @@ async def _gestionar_ws(
                                     last_warn[symbol] = ahora
                         try:
                             if backpressure:
-                                await asyncio.wait_for(message_queue.put(msg), timeout=0.5)
+                                # Backpressure REAL: bloquear hasta que la cola acepte
+                                await message_queue.put(msg)  # sin timeout
                             else:
-                                # Esperar hasta poder encolar en lugar de descartarlo inmediatamente
                                 await asyncio.wait_for(message_queue.put(msg), timeout=1.0)
                         except (asyncio.TimeoutError, asyncio.QueueFull):
+                            # solo cae aquí si backpressure=False
                             symbol = symbol or _symbol_from_msg(msg)
                             if symbol:
                                 queue_discards[symbol] = queue_discards.get(symbol, 0) + 1
