@@ -50,6 +50,7 @@ class DataFeed:
         handler_timeout: float = float(os.getenv("DF_HANDLER_TIMEOUT_SEC", "2.0")),
         cancel_timeout: float = 5,
         backpressure: bool = False,
+        drop_oldest: bool | None = None,
         batch_size: int | None = None,
         reset_cb: Callable[[str], None] | None = None,
     ) -> None:
@@ -91,6 +92,12 @@ class DataFeed:
             )
         else:
             self.backpressure = backpressure
+        if drop_oldest is None:
+            self.drop_oldest = (
+                os.getenv("DF_BACKPRESSURE_DROP", "true").lower() == "true"
+            )
+        else:
+            self.drop_oldest = drop_oldest
         registrar_reconexion_datafeed(self._reconectar_por_supervisor)
         self._stream_restart_stats: Dict[str, Deque[float]] = {}
         self._combined = False
@@ -236,18 +243,21 @@ class DataFeed:
                     "queue_discards",
                     {"symbol": symbol, "count": self._queue_discards[symbol]},
                 )
-                try:
-                    _ = queue.get_nowait()
-                    queue.task_done()
-                except asyncio.QueueEmpty:
-                    pass
-                try:
-                    await asyncio.wait_for(queue.put(candle), timeout=1.0)
-                    QUEUE_SIZE.labels(symbol=symbol).set(queue.qsize())
-                except Exception:
-                    log.error(
-                        f"[{symbol}] No se pudo encolar nueva vela tras espera; descartando"
-                    )
+                if self.drop_oldest:
+                    try:
+                        _ = queue.get_nowait()
+                        queue.task_done()
+                    except asyncio.QueueEmpty:
+                        pass
+                    try:
+                        await asyncio.wait_for(queue.put(candle), timeout=1.0)
+                        QUEUE_SIZE.labels(symbol=symbol).set(queue.qsize())
+                    except Exception:
+                        log.error(
+                            f"[{symbol}] No se pudo encolar nueva vela tras espera; descartando"
+                        )
+                else:
+                    return
         self._last[symbol] = datetime.now(UTC)
         self._last_monotonic[symbol] = time.monotonic()
         self._mensajes_recibidos[symbol] = (
