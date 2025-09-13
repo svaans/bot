@@ -101,23 +101,20 @@ async def warmup_symbol(symbol: str, tf: str, cliente, min_bars: int = MIN_BARS)
 async def warmup_inicial(
     symbols: Iterable[str], tf: str = "5m", min_bars: int | None = None
 ) -> None:
-    """Calienta los ``symbols`` y bloquea hasta completar el warmup.
+    """Calienta símbolos en paralelo y asegura progreso mínimo.
 
-    Se lanza al arrancar para evitar advertencias de datos insuficientes antes
-    de evaluar estrategias. Si algún símbolo no alcanza el total requerido de
-    velas, se reintenta hasta conseguir ``MIN_BARS``.
+    Se lanza al arrancar para evitar advertencias de datos insuficientes
+    antes de evaluar estrategias.
     """
-
     cliente = obtener_cliente()
     target = min_bars if min_bars is not None else MIN_BARS
-    pendientes = list(symbols)
-    while pendientes:
-        await asyncio.gather(
-            *(warmup_symbol(s, tf, cliente, min_bars=target) for s in pendientes)
-        )
-        pendientes = [s for s in pendientes if get_progress(s) < 1.0]
-        if pendientes:
-            await asyncio.sleep(0.5)
+    await asyncio.gather(
+        *(warmup_symbol(s, tf, cliente, min_bars=target) for s in symbols)
+    )
+    umbral = 0.9
+    for s in symbols:
+        if get_progress(s) < umbral:
+            await warmup_symbol(s, tf, cliente, min_bars=target)
 
 
 def mark_warned(symbol: str) -> None:
