@@ -9,6 +9,9 @@ import os
 import json
 import numpy as np
 import pandas as pd
+from typing import List, Dict
+
+from data_feed.candle_builder import backfill
 from indicators.retornos_volatilidad import (
     retornos_log,
     retornos_simples,
@@ -144,3 +147,17 @@ def calcular_tp_sl_adaptativos(symbol: str, df: pd.DataFrame, config: (dict |
         f'[{symbol}] TP/SL adaptativos | Regimen: {regimen} | Precio: {precio_actual:.2f} | ATR: {atr:.5f} | SL: {sl:.2f} | TP: {tp:.2f} | Ratios: SL x{multiplicador_sl}, TP x{multiplicador_tp} | Capital: {capital_actual}'
         )
     return sl, tp
+
+
+async def backfill_ventana(symbol: str, ventana: List[Dict[str, float]], window_size: int) -> List[Dict[str, float]]:
+    """Rellena ``ventana`` con velas faltantes tras una reconexión.
+
+    Si ``ventana`` tiene menos elementos que ``window_size`` se consultan las
+    velas faltantes mediante la API REST de Binance.
+    """
+    if len(ventana) >= window_size:
+        return ventana
+    faltantes = window_size - len(ventana)
+    nuevas = await backfill(symbol, faltantes)
+    ventana.extend(nuevas)
+    return ventana

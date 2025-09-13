@@ -3,6 +3,7 @@ import os
 import asyncio
 import pandas as pd
 from indicators.helpers import get_rsi
+from data_feed.candle_builder import backfill
 from core.utils.utils import configurar_logger
 log = configurar_logger('eval_tecnico')
 RUTA_PESOS = 'config/pesos_tecnicos.json'
@@ -63,17 +64,29 @@ async def cargar_pesos_tecnicos(symbol: str) -> dict:
     async with _pesos_lock:
         return _cargar_pesos(symbol)
 
-async def evaluar_puntaje_tecnico(symbol: str, df: pd.DataFrame, precio: float,
-    sl: float, tp: float) -> dict:
-    """Evalúa condiciones técnicas y retorna un puntaje acumulado.
-
-    La obtención de pesos está protegida mediante ``_pesos_lock``.
-    """
+async def evaluar_puntaje_tecnico(
+    symbol: str,
+    df: pd.DataFrame,
+    precio: float,
+    sl: float,
+    tp: float,
+    window_size: int = 60,
+) -> dict:
+    """Evalúa condiciones técnicas y retorna un puntaje acumulado."""
     pesos = await cargar_pesos_tecnicos(symbol)
-    if df is None or len(df) < 30:
-        log.warning(f'[{symbol}] datos insuficientes para score tecnico')
+    if df is None or len(df) < window_size:
+        log.warning(f'[{symbol}] datos insuficientes para score tecnico, backfilling')
+        faltantes = window_size if df is None else window_size - len(df)
+        nuevas = await backfill(symbol, faltantes)
+        df_back = pd.DataFrame(nuevas)
+        if df is not None and not df.empty:
+            df = pd.concat([df, df_back])
+        else:
+            df = df_back
+    if df is None or len(df) < window_size:
+        log.warning(f'[{symbol}] datos insuficientes tras backfill')
         return {'score_total': 0.0, 'detalles': {}}
-    df = df.tail(60).copy()
+    df = df.tail(window_size).copy()
     vela = df.iloc[-1]
     cierre = float(vela['close'])
     apertura = float(vela['open'])
