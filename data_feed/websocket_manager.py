@@ -6,6 +6,7 @@ import asyncio
 from typing import Awaitable, Callable
 
 import websockets
+from websockets.client import WebSocketClientProtocol
 
 from core.utils.logger import configurar_logger
 from data_feed.reconexion import calcular_backoff
@@ -21,16 +22,33 @@ class WebSocketManager:
         self.url = url
         self.handler = handler
         self.max_reintentos = max_reintentos
+        self.ws: WebSocketClientProtocol | None = None
+
+    async def close(self) -> None:
+        """Cierra la conexión WebSocket de forma controlada."""
+        if self.ws is None:
+            return
+        try:
+            await self.ws.close(code=1000)
+            await asyncio.wait_for(self.ws.wait_closed(), timeout=5)
+        except asyncio.TimeoutError:
+            log.warning("Timeout al cerrar WS; forzando cierre")
+            await self.ws.close_transport()
+        finally:
+            self.ws = None
 
     async def conectar(self) -> None:
         """Inicia la conexión y maneja reconexiones automáticas."""
         intentos = 0
         while True:
             try:
-                async with websockets.connect(self.url) as ws:
-                    intentos = 0
-                    async for mensaje in ws:
+                self.ws = await websockets.connect(self.url)
+                intentos = 0
+                try:
+                    async for mensaje in self.ws:
                         await self.handler(mensaje)
+                finally:
+                    await self.close()
             except Exception as exc:  # pragma: no cover - dependiente de la red
                 intentos += 1
                 if intentos > self.max_reintentos:
