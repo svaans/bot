@@ -22,6 +22,19 @@ from core.startup_manager import StartupManager
 from core.metrics import iniciar_exporter
 
 
+# --- Runner con aiomonitor opcional ---
+def run_with_optional_aiomonitor(coro):
+    if os.environ.get("AIOMONITOR") == "1":
+        from aiomonitor import Monitor
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        with Monitor(loop):  # abre telnet en 127.0.0.1:50101
+            loop.run_until_complete(coro)
+    else:
+        asyncio.run(coro)
+# --- fin runner ---
+
+
 def mostrar_banner():
     print('\n===============================')
     print('    🤖 BOT DE TRADING ACTIVO')
@@ -140,7 +153,7 @@ async def main():
 
 if __name__ == '__main__':
     try:
-        asyncio.run(main())
+        run_with_optional_aiomonitor(main())
     except KeyboardInterrupt:
         print('\n🛑 Bot detenido manualmente.')
     except Exception:

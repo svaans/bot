@@ -46,7 +46,7 @@ psutil==5.9.8                 # Monitorización de recursos del sistema
 
 # ───────── MONITORIZACIÓN ─────────
 prometheus-client==0.22.1     # Métricas Prometheus
-
+aiomonitor==0.7.1             # Consola de tareas asyncio en vivo
 
 # ───────── LOGGING Y FORMATO DE SALIDA ─────────
 colorama==0.4.6               # Colores en terminal (Windows compatible)
