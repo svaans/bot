@@ -176,7 +176,6 @@ HEARTBEAT_OK_TOTAL = _get_metric(
 HEARTBEAT_INTERVAL_MS = _get_metric(
     Gauge,
     "heartbeat_interval_ms",
-    "heartbeat_jitter_ms",
     "Intervalo entre latidos sucesivos (ms)",
     ["task"],
 )
