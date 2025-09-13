@@ -107,7 +107,7 @@ class Supervisor:
         if last:
             interval = (now - last).total_seconds()
             self.task_intervals[name].append(interval)
-            obs_metrics.HEARTBEAT_JITTER_MS.labels(name).set(interval * 1000)
+            obs_metrics.HEARTBEAT_INTERVAL_MS.labels(name).set(interval * 1000)
         self.task_heartbeat[name] = now
         obs_metrics.HEARTBEAT_OK_TOTAL.labels(name).inc()
         if cause:
