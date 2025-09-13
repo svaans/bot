@@ -342,6 +342,26 @@ class Trader:
         else:
             log.debug('🔍 Modo prueba: se omite carga de estado persistente')
 
+        self._hb_task: asyncio.Task | None = None
+
+    def start(self) -> None:
+        """Inicia la tarea dedicada de heartbeat."""
+        if self._hb_task is None or self._hb_task.done():
+            self._hb_task = asyncio.create_task(
+                self._heartbeat_loop(self.heartbeat_interval)
+            )
+
+    async def _emit_heartbeat(self) -> None:
+        tick('heartbeat')
+
+    async def _heartbeat_loop(self, interval: int = 60) -> None:
+        while not self._stop_event.is_set():
+            t0 = time.monotonic()
+            await self._emit_heartbeat()
+            jitter_ms = max((time.monotonic() - t0) * 1000, 0)
+            obs_metrics.HEARTBEAT_JITTER_MS.observe(jitter_ms)
+            await asyncio.sleep(interval)
+
     def _reset_candle_filter(self, symbol: str) -> None:
         """Resetea el filtro de velas para ``symbol`` tras un reinicio."""
         estado = self.estado.get(symbol)
@@ -1166,7 +1186,7 @@ class Trader:
                 df_reiniciando = getattr(self.data_feed, '_reiniciando', set())
                 if nombre == 'data_feed' and df_reiniciando:
                     log.debug(
-                        'DataFeed en reinicio; heartbeat no interviene',
+                        'DataFeed en reinicio; watchdog no interviene',
                         extra={'task': 'data_feed'},
                     )
                     continue
@@ -1174,25 +1194,25 @@ class Trader:
                     cancelled = task.cancelled()
                     if cancelled:
                         log.debug(
-                            'Heartbeat: tarea cancelada manualmente',
+                            'Watchdog: tarea cancelada manualmente',
                             extra={'task': nombre},
                         )
                     else:
                         exc = task.exception()
                         if exc:
                             log.warning(
-                                'Heartbeat: tarea terminó con error',
+                                'Watchdog: tarea terminó con error',
                                 extra={'task': nombre, 'error': str(exc)},
                             )
                         else:
                             log.warning(
-                                'Heartbeat: tarea finalizó inesperadamente',
+                                'Watchdog: tarea finalizó inesperadamente',
                                 extra={'task': nombre},
                             )
                         if nombre == 'data_feed':
                             obs_metrics.DATAFEED_FAILED_RESTARTS.inc()
                     if nombre == 'flush':
-                        mensaje = 'Heartbeat: tarea flush finalizada; no se reiniciará automáticamente'
+                        mensaje = 'Watchdog: tarea flush finalizada; no se reiniciará automáticamente'
                         log.error(mensaje, extra={'task': 'flush'})
                         if self.notificador:
                             await safe_notify(
@@ -1237,7 +1257,7 @@ class Trader:
                     )
                     if nombre == 'data_feed' and otra_activa:
                         log.debug(
-                            'DataFeed ya activo; no se reinicia desde heartbeat',
+                            'DataFeed ya activo; no se reinicia desde watchdog',
                             extra={'task': 'data_feed'},
                         )
                         continue
@@ -1276,7 +1296,7 @@ class Trader:
                             t.get_name() == nombre for t in asyncio.all_tasks()
                         )
                         if nombre == 'data_feed' and otra_activa:
-                            log.debug('🔁 DataFeed ya activo tras reinicio; se omite reinicio por heartbeat')
+                            log.debug('🔁 DataFeed ya activo tras reinicio; se omite reinicio por watchdog')
                             continue
                         self._iniciar_tarea(nombre, self._factories[nombre])
                         log.debug(
@@ -1300,9 +1320,9 @@ class Trader:
                 elif sym in self._sin_datos_alertado:
                     self._sin_datos_alertado.remove(sym)
             log.debug(
-                f'🟢 Heartbeat: tareas activas {activos}/{len(self._tareas)}'
+                f'🟢 Vigilancia: tareas activas {activos}/{len(self._tareas)}'
             )
-            tick('heartbeat')
+            tick('watchdog')
             await asyncio.sleep(intervalo)
     
     async def _sincronizar_ordenes_periodicamente(self, intervalo: int = 60) -> None:
@@ -1918,6 +1938,7 @@ class Trader:
 
     async def ejecutar(self) ->None:
         """Inicia el procesamiento de todos los símbolos."""
+        self.start()
         async def handle(candle: dict) -> None:
             async with self._sem_velas:
                 if len(self._tareas_velas) > self._max_tasks_velas:
@@ -1991,7 +2012,7 @@ class Trader:
         for nombre, factory in tareas.items():
             self._iniciar_tarea(nombre, factory)
         self._iniciar_tarea(
-            'heartbeat',
+            'watchdog',
             lambda: self._vigilancia_tareas(self.heartbeat_interval),
             expected_interval=self.heartbeat_interval,
         )

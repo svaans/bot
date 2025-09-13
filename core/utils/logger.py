@@ -96,6 +96,9 @@ class JsonFormatter(logging.Formatter):
             'evento': record.getMessage(),
             'level': record.levelname,
             'logger': record.name,
+            'id': getattr(record, 'id', None),
+            'status_code': getattr(record, 'status_code', None),
+            'body': getattr(record, 'body', None),
         }
         return json.dumps(data, ensure_ascii=False)
 

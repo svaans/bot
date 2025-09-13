@@ -1,6 +1,7 @@
 import os
 import requests
 import asyncio
+from typing import Any, Tuple
 from core.utils.utils import configurar_logger
 from dotenv import load_dotenv
 ESCAPE_CHARS = ['_', '*', '[', ']', '(', ')', '~', '`', '>', '#', '+', '-',
@@ -19,8 +20,13 @@ log = configurar_logger('notificador')
 
 class Notificador:
 
-    def __init__(self, token: str='', chat_id: str='', modo_test: bool=
-        False, parse_mode: (str | None)='Markdown'):
+    def __init__(
+        self,
+        token: str = '',
+        chat_id: str = '',
+        modo_test: bool = False,
+        parse_mode: str | None = 'Markdown',
+    ):
         self.token = token
         self.chat_id = chat_id
         self.modo_test = modo_test
@@ -28,62 +34,48 @@ class Notificador:
         if not self.token or not self.chat_id:
             log.warning(
                 '❌ Token o Chat ID no configurados. Notificaciones deshabilitadas.'
-                )
+            )
 
-    def enviar(self, mensaje: str, tipo: str='INFO') ->None:
+    def enviar(self, mensaje: str, tipo: str = 'INFO', request_id: str | None = None) -> Tuple[bool, dict[str, Any]]:
         if not self.token or not self.chat_id:
-            return
+            return False, {"status_code": None, "body": "credenciales faltantes"}
         mensaje = f'[{tipo.upper()}] {mensaje}'
         if self.parse_mode and self.parse_mode.startswith('Markdown'):
             mensaje = escape_markdown(mensaje)
         if self.modo_test:
             print(f'🧪 [TEST] {mensaje}')
-            return
+            return True, {"status_code": 200, "body": "test"}
         url = f'https://api.telegram.org/bot{self.token}/sendMessage'
         payload = {'chat_id': self.chat_id, 'text': mensaje}
         if self.parse_mode:
             payload['parse_mode'] = self.parse_mode
         try:
             response = requests.post(url, json=payload, timeout=10)
-            ok = False
+            info = {"status_code": response.status_code, "body": response.text}
             try:
-                ok = response.json().get('ok', False)
+                ok = response.status_code == 200 and response.json().get('ok', False)
             except Exception:
                 ok = False
-            if response.status_code != 200 or not ok:
-                log.warning(f'⚠️ Error enviando notificación: {response.text}')
-                if self.parse_mode:
-                    payload.pop('parse_mode', None)
-                    retry = requests.post(url, json=payload, timeout=10)
-                    retry_ok = False
-                    try:
-                        retry_ok = retry.status_code == 200 and retry.json().get('ok', False)
-                    except Exception:
-                        retry_ok = False
-                    if not retry_ok:
-                        log.warning(
-                            f'⚠️ Reintento sin parse_mode: {retry.text}')
+            if not ok:
+                log.error(
+                    '⚠️ Error enviando notificación',
+                    extra={"id": request_id, **info},
+                )
+                return False, info
+            return True, info
         except Exception as e:
-            log.error(f'❌ Excepción al enviar notificación: {e}')
-            if self.parse_mode:
-                payload.pop('parse_mode', None)
-                try:
-                    retry = requests.post(url, json=payload, timeout=10)
-                    retry_ok = False
-                    try:
-                        retry_ok = retry.status_code == 200 and retry.json().get('ok', False)
-                    except Exception:
-                        retry_ok = False
-                    if not retry_ok:
-                        log.warning(
-                            f'⚠️ Reintento tras excepción: {retry.text}')
-                except Exception as e2:
-                    log.error(f'❌ Error en reintento de notificación: {e2}')
+            log.error(
+                f'❌ Excepción al enviar notificación: {e}',
+                extra={"id": request_id},
+            )
+            return False, {"exception": str(e)}
 
-    async def enviar_async(self, mensaje: str, tipo: str='INFO') ->None:
+    async def enviar_async(
+        self, mensaje: str, tipo: str = 'INFO', request_id: str | None = None
+    ) -> Tuple[bool, dict[str, Any]]:
         """Envía la notificación sin bloquear el loop principal."""
         loop = asyncio.get_running_loop()
-        await loop.run_in_executor(None, self.enviar, mensaje, tipo)
+        return await loop.run_in_executor(None, self.enviar, mensaje, tipo, request_id)
 
     async def escuchar_status(self, alert_manager, intervalo: int = 5) -> None:
         """Escucha el comando /status y responde con un resumen."""

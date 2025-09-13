@@ -27,6 +27,7 @@ from core.utils.utils import intervalo_a_segundos
 from core.metrics import registrar_watchdog_restart
 from core.registro_metrico import registro_metrico
 from core.utils.backoff import backoff_sleep
+from observabilidad import metrics as obs_metrics
 
 
 UTC = timezone.utc
@@ -106,7 +107,9 @@ class Supervisor:
         if last:
             interval = (now - last).total_seconds()
             self.task_intervals[name].append(interval)
+            obs_metrics.HEARTBEAT_JITTER_MS.labels(name).set(interval * 1000)
         self.task_heartbeat[name] = now
+        obs_metrics.HEARTBEAT_OK_TOTAL.labels(name).inc()
         if cause:
             self.task_cause[name] = cause
 
@@ -122,7 +125,7 @@ class Supervisor:
 
     def tick_data(self, symbol: str, reinicio: bool = False) -> None:
         """Actualiza la marca de tiempo de la última vela recibida."""
-
+        obs_metrics.registrar_tick_data(symbol, reinicio=reinicio)
         ahora = self._now()
         self.data_heartbeat[symbol] = ahora
         if reinicio:
@@ -468,6 +471,8 @@ class Supervisor:
         asyncio.create_task(_starter(), name=f"{task_name}_restart")
         if task_name.startswith("stream_"):
             sym = task_name.split("stream_")[1]
+            obs_metrics.REINTENTOS_RECONEXION_TOTAL.labels(sym).inc()
+            obs_metrics.STREAMS_ACTIVOS.labels(sym).set(0)
             self.reconexiones_ws[sym] = self.reconexiones_ws.get(sym, 0) + 1
             registro_metrico.registrar(
                 "reconexiones_ws_total",

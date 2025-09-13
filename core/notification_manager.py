@@ -4,6 +4,7 @@ from core.notificador import Notificador
 from typing import Any
 import asyncio
 import os
+from uuid import uuid4
 from dotenv import load_dotenv
 from prometheus_client import Counter
 from core.utils.logger import configurar_logger
@@ -16,11 +17,39 @@ NOTIFY_ERRORS_TOTAL = Counter(
     'Errores al enviar notificaciones a servicios externos',
 )
 
+
+class _Metrics:
+    notify_sent = Counter(
+        'notify_sent_total',
+        'Notificaciones enviadas correctamente',
+    )
+    notify_retry = Counter(
+        'notify_retry_total',
+        'Reintentos de envío de notificaciones',
+    )
+    notify_failed = Counter(
+        'notify_failed_total',
+        'Notificaciones que agotaron reintentos',
+    )
+
+
+METRICS = _Metrics()
+
 class NotificationManager:
     """Encapsula el sistema de notificaciones del bot."""
 
-    def __init__(self, token: str = '', chat_id: str = '', modo_test: bool = False, bus: EventBus | None = None):
+    def __init__(
+        self,
+        token: str = '',
+        chat_id: str = '',
+        modo_test: bool = False,
+        bus: EventBus | None = None,
+        workers: int = 2,
+    ):
         self._notifier = Notificador(token, chat_id, modo_test)
+        self._q: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
+        loop = asyncio.get_event_loop()
+        self._workers = [loop.create_task(self._worker()) for _ in range(workers)]
         if bus:
             self.subscribe(bus)
 
@@ -42,11 +71,35 @@ class NotificationManager:
             log.error(f'❌ Error enviando notificación: {e}')
             NOTIFY_ERRORS_TOTAL.inc()
 
-    def enviar(self, mensaje: str, tipo: str='INFO') ->None:
+    def enviar(self, mensaje: str, tipo: str = 'INFO') -> None:
+        """Envía de forma síncrona sin reintentos."""
         self._notifier.enviar(mensaje, tipo)
 
-    async def enviar_async(self, mensaje: str, tipo: str='INFO') ->None:
-        await self._notifier.enviar_async(mensaje, tipo)
+    async def enviar_async(self, mensaje: str, tipo: str = 'INFO') -> None:
+        """Coloca ``mensaje`` en la cola de envío asíncrono."""
+        await self._q.put({"mensaje": mensaje, "tipo": tipo, "attempt": 0, "id": uuid4().hex})
+
+    async def _worker(self) -> None:
+        schedule = [1, 2, 5]
+        while True:
+            item = await self._q.get()
+            ok, info = await self._notifier.enviar_async(
+                item["mensaje"],
+                item.get("tipo", "INFO"),
+                request_id=item["id"],
+            )
+            if ok:
+                METRICS.notify_sent.inc()
+            else:
+                if item["attempt"] < 3:
+                    item["attempt"] += 1
+                    METRICS.notify_retry.inc()
+                    await asyncio.sleep(schedule[item["attempt"] - 1])
+                    await self._q.put(item)
+                else:
+                    METRICS.notify_failed.inc()
+                    log.error("Notificación DLQ", extra={"id": item["id"], **info})
+            self._q.task_done()
 
     async def _on_orden_creada(self, data: Any) -> None:
         mensaje = (
