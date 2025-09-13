@@ -27,7 +27,7 @@ from core.utils.utils import configurar_logger, intervalo_a_segundos
 from core.supervisor import tick, tick_data, registrar_ping
 from binance_api.cliente import fetch_ohlcv_async
 from core.registro_metrico import registro_metrico
-from core.utils.backoff import calcular_backoff
+from core.utils.backoff import backoff_sleep
 
 
 class InactividadTimeoutError(Exception):
@@ -67,6 +67,7 @@ PING_TIMEOUT = int(os.getenv("WS_PING_TIMEOUT", "10"))
 OPEN_TIMEOUT = int(os.getenv("WS_OPEN_TIMEOUT", "10"))
 CLOSE_TIMEOUT = int(os.getenv("WS_CLOSE_TIMEOUT", "5"))
 MAX_BACKOFF = float(os.getenv("WS_BACKOFF_MAX", "60"))
+BACKOFF_BASE = float(os.getenv("WS_BACKOFF_BASE", "1.0"))
 QUEUE_WARN_INTERVAL = float(os.getenv("WS_QUEUE_WARN_INTERVAL", "5.0"))
 
 TIMEOUT_SIN_DATOS_FACTOR_MIN = 90  # antes era 300
@@ -103,6 +104,70 @@ def normalizar_symbolo(symbol: str) -> str:
 
 
 INTERVALOS_VALIDOS = {'1m', '3m', '5m', '15m', '30m', '1h', '4h', '1d'}
+
+
+async def _resuscribir(
+    ws,
+    handlers: dict,
+    timeout: float = 5,
+    max_intentos: int = 3,
+) -> None:
+    """Envía suscripciones y espera ACK por símbolo tras reconectar.
+
+    Si un símbolo no recibe ACK tras ``max_intentos`` se levanta una excepción
+    para que el WebSocket se reinicie.
+    """
+    for sym, h in handlers.items():
+        stream = f"{normalizar_symbolo(sym)}@kline_{h['intervalo']}"
+        intentos = 0
+        while True:
+            intentos += 1
+            req_id = random.randint(1, 1_000_000)
+            mensaje = {
+                "method": "SUBSCRIBE",
+                "params": [stream],
+                "id": req_id,
+            }
+            await ws.send(json.dumps(mensaje))
+            inicio = time.perf_counter()
+            try:
+                ack_raw = await asyncio.wait_for(ws.recv(), timeout=timeout)
+                elapsed_ms = (time.perf_counter() - inicio) * 1000
+                if _es_ack(ack_raw, req_id):
+                    log.info(
+                        "ACK resuscripción",
+                        extra={
+                            "sym": sym,
+                            "attempt": intentos,
+                            "elapsed_ms": round(elapsed_ms, 1),
+                        },
+                    )
+                    break
+                raise ValueError(f"ACK inválido: {ack_raw}")
+            except Exception as e:  # noqa: PERF203 - logging needed
+                elapsed_ms = (time.perf_counter() - inicio) * 1000
+                log.warning(
+                    "Resuscripción sin ACK",
+                    extra={
+                        "sym": sym,
+                        "attempt": intentos,
+                        "elapsed_ms": round(elapsed_ms, 1),
+                        "err": str(e),
+                    },
+                )
+                if intentos >= max_intentos:
+                    raise
+                espera = calcular_backoff(intentos, max_seg=5)
+                await asyncio.sleep(espera)
+
+
+def _es_ack(raw: str, req_id: int) -> bool:
+    """Verifica que ``raw`` sea un ACK de Binance para ``req_id``."""
+    try:
+        data = json.loads(raw)
+    except Exception:
+        return False
+    return data.get("id") == req_id and data.get("result") is None
 
 
 async def _rellenar_gaps(
@@ -253,6 +318,13 @@ async def _gestionar_ws(
             )
             _habilitar_tcp_keepalive(ws)
             fallos_consecutivos = 0
+
+            try:
+                await _resuscribir(ws, handlers)
+            except Exception as e:  # noqa: PERF203 - logging
+                log.warning(f"❌ Falló resuscripción inicial: {e}")
+                await ws.close()
+                raise
 
             # Inicializa marcadores de último mensaje para los watchdogs
             for s in handlers:
@@ -488,21 +560,19 @@ async def _gestionar_ws(
         except Exception as e:
             fallos_consecutivos += 1
             total_reintentos += 1
-            delay = calcular_backoff(fallos_consecutivos, max_seg=MAX_BACKOFF)
-            if fallos_consecutivos >= 3:
-                delay = max(delay, 5)  # asegurarse de no reintentar demasiado rápido
+            planned = min(BACKOFF_BASE * (2 ** fallos_consecutivos), MAX_BACKOFF)
             log.error(f'❌ Error en WebSocket: {e}')
             log.info(
-                f'🔁 Reintentando conexión en {delay:.1f} segundos... (total reintentos: {total_reintentos})'
+                f'🔁 Reintentando conexión en {planned:.1f} segundos... (total reintentos: {total_reintentos})'
             )
             _registrar_reconexion()
             tick('data_feed')
-            await asyncio.sleep(delay)
-            if delay >= MAX_BACKOFF and fallos_consecutivos > 1:
+            await backoff_sleep(fallos_consecutivos, base=BACKOFF_BASE, cap=MAX_BACKOFF)
+            if planned >= MAX_BACKOFF and fallos_consecutivos > 1:
                 log.warning(f'⚠️ Backoff máximo alcanzado: {MAX_BACKOFF}s')
             elif fallos_consecutivos >= 5:
                 log.warning(
-                    f'⏳ {fallos_consecutivos} fallos consecutivos. Nuevo backoff: {delay:.1f}s'
+                    f'⏳ {fallos_consecutivos} fallos consecutivos. Nuevo backoff: {planned:.1f}s'
                 )
 
 

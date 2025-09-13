@@ -26,6 +26,7 @@ from core.utils.logger import configurar_logger
 from core.utils.utils import intervalo_a_segundos
 from core.metrics import registrar_watchdog_restart
 from core.registro_metrico import registro_metrico
+from core.utils.backoff import backoff_sleep
 
 
 UTC = timezone.utc
@@ -44,7 +45,7 @@ class Supervisor:
         self.task_expected_interval: Dict[str, int] = {}
         self.task_cause: Dict[str, str] = {}
         self.task_cooldown: Dict[str, datetime] = {}
-        self.task_backoff: Dict[str, int] = defaultdict(lambda: 5)
+        self.task_backoff: Dict[str, int] = defaultdict(int)
         self.task_restart_times: Dict[str, Deque[datetime]] = defaultdict(deque)
         self.data_heartbeat: Dict[str, datetime] = {}
         self.stop_event = asyncio.Event()
@@ -113,7 +114,7 @@ class Supervisor:
         self.last_alive = now
         # reinicio exitoso resetea backoff
         if name in self.task_backoff:
-            self.task_backoff[name] = 5
+            self.task_backoff[name] = 0
 
     # Alias retrocompatible
     def tick(self, name: str, cause: str | None = None) -> None:  # pragma: no cover - compat
@@ -367,7 +368,6 @@ class Supervisor:
         """Ejecuta ``coro_factory`` reiniciándolo ante fallos o finalización."""
 
         restarts = 0
-        current_delay = delay
         task = asyncio.current_task()
         try:
             while True:
@@ -385,11 +385,12 @@ class Supervisor:
                     raise
                 except Exception as e:  # pragma: no cover - log crítico
                     self.beat(task_name, "error")
+                    planned = min(delay * (2 ** restarts), 120)
                     log.error(
                         "⚠️ Error en %s: %r. Reiniciando en %ss",
                         task_name,
                         e,
-                        current_delay,
+                        planned,
                         exc_info=True,
                     )
                     if max_restarts is not None and restarts >= max_restarts:
@@ -400,11 +401,10 @@ class Supervisor:
                         )
                         break
                     log.warning(
-                        "⏹️ %s finalizó; reiniciando en %ss", task_name, current_delay
+                        "⏹️ %s finalizó; reiniciando en %ss", task_name, planned
                     )
-                    await asyncio.sleep(current_delay)
+                    await backoff_sleep(restarts, base=delay, cap=120)
                     restarts += 1
-                    current_delay = min(current_delay * 2, 120)
                     continue
         finally:
             # Limpia la referencia de la tarea si ya no es la vigente
@@ -458,9 +458,9 @@ class Supervisor:
                 )
             except Exception:
                 pass
-        delay = self.task_backoff[task_name]
+        attempt = self.task_backoff[task_name]
         async def _starter() -> None:
-            await asyncio.sleep(delay)
+            await backoff_sleep(attempt, base=5, cap=120)
             factory = self.task_factories.get(task_name)
             if factory:
                 self.supervised_task(factory, name=task_name)
@@ -480,7 +480,7 @@ class Supervisor:
                 "reinicios_consumer_total",
                 {"symbol": sym, "count": self.reinicios_consumer[sym]},
             )
-        self.task_backoff[task_name] = min(delay * 2, 120)
+        self.task_backoff[task_name] = attempt + 1
 
     def supervised_task(
         self,
@@ -494,7 +494,7 @@ class Supervisor:
 
         task_name = name or getattr(coro_factory, "__name__", "task")
         self.task_factories[task_name] = coro_factory
-        self.task_backoff[task_name] = 5
+        self.task_backoff[task_name] = 0
         if expected_interval is not None:
             self.task_expected_interval[task_name] = expected_interval
         task = asyncio.create_task(

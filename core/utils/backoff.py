@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import random
 
 
@@ -21,3 +22,20 @@ def calcular_backoff(
     if jitter:
         t = random.uniform(0.5 * t, 1.5 * t)
     return t
+
+
+async def backoff_sleep(
+    attempt: int,
+    base: float = 1.0,
+    cap: float = 30.0,
+) -> None:
+    """Espera un tiempo con backoff exponencial y *jitter*.
+
+    El tiempo base crece como ``base * 2 ** attempt`` limitado por ``cap`` y se
+    añade un término aleatorio uniforme entre ``0`` y ``base`` para evitar
+    sincronizaciones entre múltiples productores.
+    """
+
+    delay = min(base * (2 ** attempt), cap)
+    jitter = random.random() * base
+    await asyncio.sleep(delay + jitter)
