@@ -1,3 +1,15 @@
+# --- Debug remoto opcional ---
+import os
+if os.environ.get("DEBUGPY") == "1":
+    import debugpy
+    host = os.environ.get("DEBUGPY_HOST", "127.0.0.1")  # no expongas públicamente
+    port = int(os.environ.get("DEBUGPY_PORT", "5678"))
+    debugpy.listen((host, port))
+    print(f"[debugpy] Esperando conexión en {host}:{port} ...")
+    if os.environ.get("DEBUGPY_WAIT_FOR_CLIENT", "1") == "1":
+        debugpy.wait_for_client()
+# --- fin debug remoto ---
+
 import asyncio
 import platform
 import signal

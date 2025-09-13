@@ -48,9 +48,12 @@ class WebSocketManager:
                     async for mensaje in self.ws:
                         await self.handler(mensaje)
                 finally:
+                    if self.ws and self.ws.close_code and self.ws.close_code != 1000:
+                        obs_metrics.WS_UNEXPECTED_CLOSURES.inc()
                     await self.close()
             except Exception as exc:  # pragma: no cover - dependiente de la red
                 intentos += 1
+                obs_metrics.WS_RECONNECTIONS.inc()
                 if intentos > self.max_reintentos:
                     log.error("Máximo de reintentos alcanzado", exc_info=exc)
                     raise
