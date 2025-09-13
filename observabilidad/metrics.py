@@ -160,6 +160,11 @@ REINTENTOS_RECONEXION_TOTAL = _get_metric(
     "Reintentos de reconexión de streams por símbolo",
     ["symbol"],
 )
+BACKOFF_SECONDS = _get_metric(
+    Histogram,
+    "backoff_seconds",
+    "Tiempo de espera aplicado antes de reintentar conexiones",
+)
 STREAMS_ACTIVOS = _get_metric(
     Gauge,
     "streams_activos",
