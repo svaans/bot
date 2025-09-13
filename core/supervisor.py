@@ -220,11 +220,19 @@ class Supervisor:
                     "inactividad_detectada_total",
                     {"role": task_name, "count": self.inactividad_detectada[task_name]},
                 )
-                if task_name.startswith("stream_") and self.data_feed_reconnector:
-                    log.warning(
-                        "Inactividad detectada en %s; se delega en reconector",
-                        task_name,
-                    )
+                if task_name.startswith("stream_"):
+                    sym = task_name.split("_", 1)[1]
+                    if self.data_feed_reconnector:
+                        log.warning(
+                            "Inactividad detectada en %s; solicitando reinicio",
+                            task_name,
+                        )
+                        await self.data_feed_reconnector(sym)
+                    else:
+                        log.warning(
+                            "Inactividad detectada en %s; no hay reconector registrado",
+                            task_name,
+                        )
                 else:
                     await self.restart_task(task_name)
         for sym, ts in self.data_heartbeat.items():
@@ -264,7 +272,6 @@ class Supervisor:
                         )
                     except Exception:
                         pass
-                    task = self.tasks.get(f"stream_{sym}")
                     if self.data_feed_reconnector:
                         try:
                             log.warning(
@@ -277,20 +284,10 @@ class Supervisor:
                                 sym,
                                 e,
                             )
-                    elif task:
-                        try:
-                            log.warning(
-                                "Cancelando stream %s desde watchdog", sym
-                            )
-                            task.cancel()
-                            log.debug(
-                                "Stream %s cancelado; el monitor debería reiniciarlo",
-                                sym,
-                            )
-                        except Exception as e:
-                            log.debug(
-                                "No se pudo cancelar stream %s: %s", sym, e
-                            )
+                    else:
+                        log.debug(
+                            "No hay reconector de DataFeed registrado para %s", sym
+                        )
                     self.inactive_symbols.add(sym)
 
         for sym, rtts in list(self.ping_rtts.items()):

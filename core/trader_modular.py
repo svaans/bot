@@ -1163,7 +1163,8 @@ class Trader:
             activos = 0
             ahora = datetime.now(UTC)
             for nombre, task in list(self._tareas.items()):
-                if nombre == 'data_feed' and getattr(self.data_feed, '_reiniciando', False):
+                df_reiniciando = getattr(self.data_feed, '_reiniciando', set())
+                if nombre == 'data_feed' and df_reiniciando:
                     log.debug(
                         'DataFeed en reinicio; heartbeat no interviene',
                         extra={'task': 'data_feed'},

@@ -69,6 +69,15 @@ CLOSE_TIMEOUT = int(os.getenv("WS_CLOSE_TIMEOUT", "5"))
 MAX_BACKOFF = float(os.getenv("WS_BACKOFF_MAX", "60"))
 QUEUE_WARN_INTERVAL = float(os.getenv("WS_QUEUE_WARN_INTERVAL", "5.0"))
 
+TIMEOUT_SIN_DATOS_FACTOR_MIN = 90  # antes era 300
+
+
+def _calc_inactividad_timeout(intervalo_vela_s: int) -> int:
+    return max(2 * intervalo_vela_s, TIMEOUT_SIN_DATOS_FACTOR_MIN)
+
+
+USE_INTERNAL_KEEPALIVE = False
+
 def _registrar_reconexion() -> None:
     """Registra un intento de reconexión y alerta si la tasa es elevada."""
     ahora = time.monotonic()
@@ -226,19 +235,19 @@ async def _gestionar_ws(
             if primera_vez:
                 await asyncio.sleep(random.random())
                 primera_vez = False
-            ws = await asyncio.wait_for(
-                websockets.connect(
-                    url,
-                    open_timeout=OPEN_TIMEOUT,
-                    close_timeout=CLOSE_TIMEOUT,
-                    ping_interval=ping_interval,
-                    ping_timeout=PING_TIMEOUT,
-                    max_size=2 ** 20,
-                    max_queue=0,
-                    ssl=_SSL_CONTEXT,
-                ),
-                timeout=OPEN_TIMEOUT + 5,
-            )
+                ws = await asyncio.wait_for(
+                    websockets.connect(
+                        url,
+                        open_timeout=OPEN_TIMEOUT,
+                        close_timeout=CLOSE_TIMEOUT,
+                        ping_interval=None if USE_INTERNAL_KEEPALIVE else ping_interval,
+                        ping_timeout=None if USE_INTERNAL_KEEPALIVE else PING_TIMEOUT,
+                        max_size=2 ** 20,
+                        max_queue=0,
+                        ssl=_SSL_CONTEXT,
+                    ),
+                    timeout=OPEN_TIMEOUT + 5,
+                )
             log.info(
                 f"🔌 WebSocket conectado a {url} a las {datetime.now(UTC).isoformat()}"
             )
@@ -434,6 +443,11 @@ async def _gestionar_ws(
                             f'Sin datos en {mensaje_timeout}s'
                         )
                     except ConnectionClosed as e:
+                        if 'ping timeout' in (e.reason or '').lower():
+                            registro_metrico.registrar(
+                                'ws_ping_timeouts_total',
+                                {'url': url},
+                            )
                         log.warning(f"🚪 WebSocket cerrado — Código: {e.code}, Motivo: {e.reason}")
                         await ws.close()
                         break
@@ -514,12 +528,7 @@ async def escuchar_velas(
     if last_message is None:
         last_message = {}
     if tiempo_maximo is None:
-        base_timeout = intervalo_a_segundos(intervalo) * 5
-        if base_timeout < 300:
-            log.info(
-                f'⌛ Timeout de inactividad extendido a 300s para {symbol}'
-            )
-        tiempo_maximo = max(base_timeout, 300)
+        tiempo_maximo = _calc_inactividad_timeout(intervalo_a_segundos(intervalo))
     if ping_interval is None:
         ping_interval = 30
     if mensaje_timeout is None:
@@ -682,6 +691,9 @@ async def _watchdog(
                 finally:
                     tick('data_feed')
                     tick_data(symbol)
+                registro_metrico.registrar(
+                    'ws_watchdog_timeouts_total', {'symbol': symbol}
+                )
                 raise InactividadTimeoutError(
                     f'Sin velas en {tiempo_maximo:.0f}s para {symbol}'
                 )
@@ -698,6 +710,8 @@ async def _watchdog(
 
 async def _keepalive(ws, symbol, intervalo=PING_INTERVAL, log_interval=10):
     """Envía ping periódicamente para mantener viva la conexión."""
+    if not USE_INTERNAL_KEEPALIVE:
+        return
     contador = 0
     try:
         while True:
@@ -713,6 +727,14 @@ async def _keepalive(ws, symbol, intervalo=PING_INTERVAL, log_interval=10):
                 registrar_ping(symbol, rtt)
                 if contador % log_interval == 0:
                     log.info(f'📡 RTT ping {symbol}: {rtt:.1f} ms')
+            except asyncio.TimeoutError:
+                log.warning(f'❌ Ping timeout para {symbol}')
+                registro_metrico.registrar(
+                    'ws_ping_timeouts_total', {'symbol': symbol}
+                )
+                await ws.close()
+                tick('data_feed')
+                break
             except Exception as e:
                 log.warning(f'❌ Ping falló para {symbol}: {e}')
                 await ws.close()

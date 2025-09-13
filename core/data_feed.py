@@ -6,7 +6,7 @@ import os
 from typing import Awaitable, Callable, Dict, Iterable, Any, Deque
 from datetime import datetime, timezone, timedelta
 import time
-from collections import deque
+from collections import deque, defaultdict
 from uuid import uuid4
 from binance_api.websocket import (
     escuchar_velas,
@@ -82,7 +82,8 @@ class DataFeed:
         self._symbols: list[str] = []
         self.reinicios_forzados_total = 0
         self.handler_timeout = handler_timeout
-        self._reiniciando = False
+        self._locks: Dict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
+        self._reiniciando: set[str] = set()
         self._handler_timeouts: Dict[str, int] = {}
         self._mensajes_recibidos: Dict[str, int] = {}
         self._ultimo_log_descartes: Dict[str, float] = {}
@@ -753,17 +754,20 @@ class DataFeed:
     
     async def _reconectar_por_supervisor(self, symbol: str) -> None:
         """Reinicia únicamente el stream afectado manteniendo el estado."""
-        if not self._running or self._reiniciando:
+        if not self._running:
             return
-        self._reiniciando = True
-        log.critical(
-            "🔁 Reinicio de DataFeed solicitado por supervisor (%s)", symbol
-        )
-        self.reinicios_forzados_total += 1
-        try:
-            await self._reiniciar_stream(symbol)
-        finally:
-            self._reiniciando = False
+        async with self._locks[symbol]:
+            if symbol in self._reiniciando:
+                return
+            self._reiniciando.add(symbol)
+            log.critical(
+                "🔁 Reinicio de DataFeed solicitado por supervisor (%s)", symbol
+            )
+            self.reinicios_forzados_total += 1
+            try:
+                await self._reiniciar_stream(symbol)
+            finally:
+                self._reiniciando.discard(symbol)
 
 
     async def _reiniciar_stream(self, symbol: str) -> None:
@@ -833,32 +837,28 @@ class DataFeed:
                         for sym in self._symbols
                     )
                     if task and (task.done() or inactivo):
-                        log.warning(
-                            "🔄 Stream combinado inactivo o finalizado; relanzando"
-                        )
-                        if not task.done():
-                            task.cancel()
-                            try:
-                                await asyncio.wait_for(task, timeout=self.cancel_timeout)
-                            except asyncio.TimeoutError:
-                                log.warning("⏱️ Timeout cancelando stream combinado")
-                            except Exception:
-                                log.exception("Error cancelando stream combinado")
-                        nuevo = supervised_task(
-                            lambda: self.stream_combined(self._symbols, self._handler_actual),
-                            "stream_combinado",
-                            max_restarts=0,
-                        )
-                        for sym in self._symbols:
-                            self._tasks[sym] = nuevo
-                            tick_data(sym, reinicio=True)
-                            if self._reset_cb:
-                                self._reset_cb(sym)
+                        locks = [self._locks[s] for s in self._symbols]
+                        for l in locks:
+                            await l.acquire()
+                        try:
+                            if any(sym in self._reiniciando for sym in self._symbols):
+                                continue
+                            self._reiniciando.update(self._symbols)
+                            log.warning(
+                                "🔄 Stream combinado inactivo o finalizado; relanzando"
+                            )
+                            await self._reiniciar_stream(self._symbols[0])
                             if inactivo:
-                                registrar_reinicio_inactividad(sym)
-                                self._reinicios_inactividad[sym] = (
-                                    self._reinicios_inactividad.get(sym, 0) + 1
-                                )
+                                for sym in self._symbols:
+                                    registrar_reinicio_inactividad(sym)
+                                    self._reinicios_inactividad[sym] = (
+                                        self._reinicios_inactividad.get(sym, 0) + 1
+                                    )
+                        finally:
+                            for sym in self._symbols:
+                                self._reiniciando.discard(sym)
+                            for l in locks:
+                                l.release()
                         continue
 
                 for sym, task in list(self._tasks.items()):
@@ -868,71 +868,50 @@ class DataFeed:
                         and (ahora - ultimo) > self.tiempo_inactividad
                     )
                     if task.done() or inactivo:
-                        log.warning(
-                            f"🔄 Stream {sym} inactivo o finalizado; relanzando",
-                        )
-                        log.debug(
-                            f"Tareas antes de reinicio: {list(self._tasks.keys())}"
-                        )
-                        if not task.done():
-                            task.cancel()
-                            log.warning(f"Stream {sym} cancelado; se reiniciará")
+                        async with self._locks[sym]:
+                            if sym in self._reiniciando:
+                                continue
+                            self._reiniciando.add(sym)
                             try:
-                                await asyncio.wait_for(
-                                    task,
-                                    timeout=self.cancel_timeout,
-                                )
-                            except asyncio.TimeoutError:
                                 log.warning(
-                                    f"⏱️ Timeout cancelando stream {sym}"
+                                    f"🔄 Stream {sym} inactivo o finalizado; relanzando",
                                 )
-                            except Exception:
-                                log.exception(f'Error cancelando stream {sym}')
-                        stats = self._stream_restart_stats.setdefault(sym, deque())
-                        ts_now = time.time()
-                        stats.append(ts_now)
-                        while stats and ts_now - stats[0] > 300:
-                            stats.popleft()
-                        if len(stats) > self.max_stream_restarts and ts_now - stats[0] < 60:
-                            log.error(
-                                f"🚨 Circuit breaker: demasiados reinicios para stream {sym}"
-                            )
-                            try:
-                                await self.notificador.enviar_async(
-                                    f"🚨 Circuit breaker: demasiados reinicios para stream {sym}",
-                                    "CRITICAL",
-                                )
-                            except Exception:
-                                log.exception(
-                                    "Error enviando notificación de circuit breaker"
-                                )
-                                tick("data_feed")
-                            cons = self._consumer_tasks.get(sym)
-                            if cons and not cons.done():
-                                cons.cancel()
-                            self._consumer_tasks.pop(sym, None)
-                            self._queues.pop(sym, None)
-                            self._tasks.pop(sym, None)
-                            continue
-                        backoff = min(60, 2 ** (len(stats) - 1))
-                        await asyncio.sleep(backoff)
-                        self._tasks[sym] = supervised_task(
-                            lambda sym=sym: self.stream(sym, self._handler_actual),
-                            f"stream_{sym}",
-                            max_restarts=0,
-                        )
-                        log.info("📡 stream reiniciado para %s", sym)
-                        log.debug(
-                            f"Tareas después de reinicio: {list(self._tasks.keys())}"
-                        )
-                        tick_data(sym, reinicio=True)
-                        if self._reset_cb:
-                            self._reset_cb(sym)
-                        if inactivo:
-                            registrar_reinicio_inactividad(sym)
-                            self._reinicios_inactividad[sym] = (
-                                self._reinicios_inactividad.get(sym, 0) + 1
-                            )
+                                stats = self._stream_restart_stats.setdefault(sym, deque())
+                                ts_now = time.time()
+                                stats.append(ts_now)
+                                while stats and ts_now - stats[0] > 300:
+                                    stats.popleft()
+                                if len(stats) > self.max_stream_restarts and ts_now - stats[0] < 60:
+                                    log.error(
+                                        f"🚨 Circuit breaker: demasiados reinicios para stream {sym}"
+                                    )
+                                    try:
+                                        await self.notificador.enviar_async(
+                                            f"🚨 Circuit breaker: demasiados reinicios para stream {sym}",
+                                            "CRITICAL",
+                                        )
+                                    except Exception:
+                                        log.exception(
+                                            "Error enviando notificación de circuit breaker"
+                                        )
+                                        tick("data_feed")
+                                    cons = self._consumer_tasks.get(sym)
+                                    if cons and not cons.done():
+                                        cons.cancel()
+                                    self._consumer_tasks.pop(sym, None)
+                                    self._queues.pop(sym, None)
+                                    self._tasks.pop(sym, None)
+                                    continue
+                                backoff = min(60, 2 ** (len(stats) - 1))
+                                await asyncio.sleep(backoff)
+                                await self._reiniciar_stream(sym)
+                                if inactivo:
+                                    registrar_reinicio_inactividad(sym)
+                                    self._reinicios_inactividad[sym] = (
+                                        self._reinicios_inactividad.get(sym, 0) + 1
+                                    )
+                            finally:
+                                self._reiniciando.discard(sym)
         
         except asyncio.CancelledError:
             tick('data_feed')
