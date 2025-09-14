@@ -93,16 +93,18 @@ class StreamContexto:
         intentos = 0
         while self._running:
             try:
-                async with websockets.connect(
-                    url,
-                    open_timeout=self.open_timeout,
-                    ping_interval=self.ping_interval,
-                    ping_timeout=self.ping_timeout,
-                    close_timeout=5,
-                    max_queue=0,
-                    compression="deflate",
-                    ssl=self.ssl_context,
-                ) as ws:
+                connect_params = {
+                    "open_timeout": self.open_timeout,
+                    "ping_interval": self.ping_interval,
+                    "ping_timeout": self.ping_timeout,
+                    "close_timeout": 5,
+                    "max_queue": 0,
+                    "compression": "deflate",
+                }
+                if self.ssl_context is not None:
+                    connect_params["ssl"] = self.ssl_context
+
+                async with websockets.connect(url, **connect_params) as ws:
                     log.info(f'🔌 Contexto conectado para {symbol}')
                     self._last[symbol] = datetime.now(UTC)
                     self._last_monotonic[symbol] = time.monotonic()

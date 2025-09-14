@@ -296,6 +296,6 @@ def iniciar_exporter() -> WSGIServer:
     """
 
     port = int(os.getenv("METRICS_PORT", "8000"))
-    server = start_wsgi_server(port)
+    server, _ = start_wsgi_server(port)
     log.info(f"Prometheus exporter escuchando en puerto {port}")
     return server
