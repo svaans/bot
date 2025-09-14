@@ -2,6 +2,7 @@
 from __future__ import annotations
 import asyncio
 import json
+import ssl
 from datetime import datetime, timezone
 from typing import Awaitable, Callable, Dict, Iterable
 import time
@@ -10,6 +11,8 @@ import websockets
 from binance_api.websocket import _keepalive
 from core.utils.utils import configurar_logger
 from core.supervisor import supervised_task, tick
+from core.utils.backoff import calcular_backoff
+from core.registro_metrico import registro_metrico
 
 UTC = timezone.utc
 
@@ -49,6 +52,13 @@ class StreamContexto:
         cancel_timeout: float = 5,
         open_timeout: int = 30,
         connection_delay: float = 1.0,
+        ping_interval: int = 20,
+        ping_timeout: int = 10,
+        max_retries: int = 5,
+        backoff_base: float = 1.5,
+        backoff_cap: float = 60.0,
+        circuit_breaker: float = 300.0,
+        ssl_context: ssl.SSLContext | bool | None = None,
     ) -> None:
         self.url_template = url_template or CONTEXT_WS_URL
         self.monitor_interval = max(1, monitor_interval)
@@ -56,6 +66,13 @@ class StreamContexto:
         self.cancel_timeout = cancel_timeout
         self.open_timeout = open_timeout
         self.connection_delay = connection_delay
+        self.ping_interval = ping_interval
+        self.ping_timeout = ping_timeout
+        self.max_retries = max_retries
+        self.backoff_base = backoff_base
+        self.backoff_cap = backoff_cap
+        self.circuit_breaker = circuit_breaker
+        self.ssl_context = ssl_context
         self._tasks: Dict[str, asyncio.Task] = {}
         self._last: Dict[str, datetime] = {}
         self._last_monotonic: Dict[str, float] = {}
@@ -73,73 +90,95 @@ class StreamContexto:
     ) -> None:
         symbol_norm = symbol.replace('/', '').lower()
         url = self.url_template.format(symbol=symbol_norm)
-        try:
-            async with websockets.connect(
-                url,
-                open_timeout=self.open_timeout,
-                ping_interval=20,
-                ping_timeout=10,
-                close_timeout=5,
-                max_queue=0,
-                compression="deflate",
-            ) as ws:
-                log.info(f'🔌 Contexto conectado para {symbol}')
-                self._last[symbol] = datetime.now(UTC)
-                self._last_monotonic[symbol] = time.monotonic()
-                keeper = asyncio.create_task(_keepalive(ws, symbol, 20))
-                try:
-                    async for msg in ws:
-                        try:
-                            self._last[symbol] = datetime.now(UTC)
-                            self._last_monotonic[symbol] = time.monotonic()
-                            data = json.loads(msg)
-                            vela = data.get('k')
-                            if vela is None:
-                                continue
-                            close = float(vela.get('c', 0.0))
-                            open_ = float(vela.get('o', 0.0))
-                            vol = float(vela.get('v', 0.0))
-                            if isclose(open_, 0.0, rel_tol=1e-12, abs_tol=1e-12) or vol < 1e-08:
-                                continue
-                            variacion_pct = (close - open_) / open_
-                            puntaje = variacion_pct * vol
-                            _PUNTAJES[symbol] = puntaje
+        intentos = 0
+        while self._running:
+            try:
+                async with websockets.connect(
+                    url,
+                    open_timeout=self.open_timeout,
+                    ping_interval=self.ping_interval,
+                    ping_timeout=self.ping_timeout,
+                    close_timeout=5,
+                    max_queue=0,
+                    compression="deflate",
+                    ssl=self.ssl_context,
+                ) as ws:
+                    log.info(f'🔌 Contexto conectado para {symbol}')
+                    self._last[symbol] = datetime.now(UTC)
+                    self._last_monotonic[symbol] = time.monotonic()
+                    intentos = 0
+                    keeper = asyncio.create_task(_keepalive(ws, symbol, self.ping_interval))
+                    try:
+                        async for msg in ws:
                             try:
-                                await handler(symbol, puntaje)
-                                tick('context_stream')
+                                self._last[symbol] = datetime.now(UTC)
+                                self._last_monotonic[symbol] = time.monotonic()
+                                data = json.loads(msg)
+                                vela = data.get('k')
+                                if vela is None:
+                                    continue
+                                close = float(vela.get('c', 0.0))
+                                open_ = float(vela.get('o', 0.0))
+                                vol = float(vela.get('v', 0.0))
+                                if isclose(open_, 0.0, rel_tol=1e-12, abs_tol=1e-12) or vol < 1e-08:
+                                    continue
+                                variacion_pct = (close - open_) / open_
+                                puntaje = variacion_pct * vol
+                                _PUNTAJES[symbol] = puntaje
+                                try:
+                                    await handler(symbol, puntaje)
+                                    tick('context_stream')
+                                except Exception as e:
+                                    log.warning(
+                                        f'⚠️ Handler contexto {symbol} falló: {e}'
+                                    )
+                            except asyncio.CancelledError:
+                                log.info(
+                                    f'🛑 Stream contexto {symbol} cancelado (mensaje).'
+                                )
+                                raise
                             except Exception as e:
                                 log.warning(
-                                    f'⚠️ Handler contexto {symbol} falló: {e}'
+                                    f'⚠️ Error procesando contexto de {symbol}: {e}'
                                 )
-                        except asyncio.CancelledError:
-                            log.info(
-                                f'🛑 Stream contexto {symbol} cancelado (mensaje).'
-                            )
-                            raise
+                    finally:
+                        keeper.cancel()
+                        try:
+                            await keeper
                         except Exception as e:
-                            log.warning(
-                                f'⚠️ Error procesando contexto de {symbol}: {e}'
-                            )
-                finally:
-                    keeper.cancel()
-                    try:
-                        await keeper
-                    except Exception as e:
-                        log.debug(f'Error al esperar keepalive cancelado: {e}')
-                    log.debug(f'Tareas activas tras cierre: {len(asyncio.all_tasks())}')
-        except asyncio.CancelledError:
-            log.info(f'🛑 Stream contexto {symbol} cancelado')
-            raise
-        except asyncio.TimeoutError as e:
-            log.warning(
-                f'⏱️ Timeout handshake contexto {symbol} en {url}: {e}'
-            )
-            raise
-        except Exception as e:
-            log.warning(
-                f'⚠️ Stream de contexto {symbol} en {url} finalizó con error: {e}'
-            )
-            raise
+                            log.debug(f'Error al esperar keepalive cancelado: {e}')
+                        log.debug(f'Tareas activas tras cierre: {len(asyncio.all_tasks())}')
+            except asyncio.CancelledError:
+                log.info(f'🛑 Stream contexto {symbol} cancelado')
+                raise
+            except Exception as e:
+                intentos += 1
+                backoff = calcular_backoff(intentos, base=self.backoff_base, max_seg=self.backoff_cap)
+                log.warning(
+                    "⚠️ WS contexto %s intento %s falló: %s | backoff %.1fs url=%s",
+                    symbol,
+                    intentos,
+                    e,
+                    backoff,
+                    url,
+                )
+                registro_metrico.registrar(
+                    "context_ws_reconnect_total",
+                    {"symbol": symbol, "attempt": intentos, "backoff_s": backoff},
+                )
+                if intentos >= self.max_retries:
+                    log.error(
+                        "🚫 Contexto %s superó %s fallos consecutivos; enfriando %.1fs",
+                        symbol,
+                        self.max_retries,
+                        self.circuit_breaker,
+                    )
+                    await asyncio.sleep(self.circuit_breaker)
+                    intentos = 0
+                else:
+                    await asyncio.sleep(backoff)
+            else:
+                break
 
     async def _monitor_inactividad(self) -> None:
         """Vigila la actividad de los streams y los reinicia al quedar inactivos."""

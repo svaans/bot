@@ -26,7 +26,7 @@ from core.utils.logger import configurar_logger
 from core.utils.utils import intervalo_a_segundos
 from core.metrics import registrar_watchdog_restart
 from core.registro_metrico import registro_metrico
-from core.utils.backoff import backoff_sleep
+from core.utils.backoff import backoff_sleep, calcular_backoff
 from observabilidad import metrics as obs_metrics
 
 
@@ -372,6 +372,7 @@ class Supervisor:
 
         restarts = 0
         task = asyncio.current_task()
+        limite = max_restarts if max_restarts is not None else 5
         try:
             while True:
                 try:
@@ -388,25 +389,30 @@ class Supervisor:
                     raise
                 except Exception as e:  # pragma: no cover - log crítico
                     self.beat(task_name, "error")
-                    planned = min(delay * (2 ** restarts), 120)
+                    backoff = calcular_backoff(restarts, base=delay, max_seg=120)
                     log.error(
-                        "⚠️ Error en %s: %r. Reiniciando en %ss",
+                        "⚠️ Error en %s: %r | intento=%s backoff=%.1fs",
                         task_name,
                         e,
-                        planned,
+                        restarts + 1,
+                        backoff,
                         exc_info=True,
                     )
-                    if max_restarts is not None and restarts >= max_restarts:
+                    if restarts + 1 >= limite:
+                        cooldown = calcular_backoff(restarts, base=delay * 2, max_seg=300)
                         log.error(
-                            "❌ %s alcanzó el límite de reinicios (%s)",
+                            "🚫 %s alcanzó %s reinicios; enfriando %.1fs",
                             task_name,
-                            max_restarts,
+                            limite,
+                            cooldown,
                         )
-                        break
+                        await asyncio.sleep(cooldown)
+                        restarts = 0
+                        continue
                     log.warning(
-                        "⏹️ %s finalizó; reiniciando en %ss", task_name, planned
+                        "⏹️ %s finalizó; reintento en %.1fs", task_name, backoff
                     )
-                    await backoff_sleep(restarts, base=delay, cap=120)
+                    await asyncio.sleep(backoff)
                     restarts += 1
                     continue
         finally:
