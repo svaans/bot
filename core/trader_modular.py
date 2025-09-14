@@ -6,7 +6,7 @@ from dataclasses import dataclass, replace, field
 from typing import Dict, Callable, Awaitable, Any, List
 from collections import OrderedDict, deque, defaultdict
 from core.streams.candle_filter import CandleFilter
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone, date
 import json
 import os
 import math
@@ -83,10 +83,18 @@ from core.scoring import calcular_score_tecnico, PESOS_SCORE_TECNICO, ScoreBreak
 from binance_api.cliente import fetch_ticker_async, fetch_order_book_async
 from core import adaptador_umbral
 from observabilidad import metrics as obs_metrics
+from prometheus_client import Counter
 from core.data.bootstrap import warmup_symbol
 log = configurar_logger('trader')
 LOG_DIR = os.getenv('LOG_DIR', 'logs')
 UTC = timezone.utc
+
+AJUSTE_CAPITAL_SALTADO = obs_metrics._get_metric(
+    Counter,
+    "ajuste_capital_saltado_total",
+    "Ajustes de capital diarios omitidos",
+    ["symbol", "motivo"],
+)
 
 # --- Helper local: correlación Pearson sobre ventanas recientes ---
 def correlacion_series(s1, s2, ventana: int = 60) -> float | None:
@@ -787,10 +795,29 @@ class Trader:
         """Compatibilidad con ``monitorear_estado_periodicamente``."""
         return self.orders.ordenes
 
-    def ajustar_capital_diario(self, factor: float=0.2, limite: float=0.3,
-        penalizacion_corr: float=0.2, umbral_corr: float=0.8, fecha: (
-        datetime.date | None)=None) ->None:
-        """Redistribuye el capital según múltiples métricas adaptativas."""
+    def ajustar_capital_diario(
+        self,
+        factor: float = 0.2,
+        limite: float = 0.3,
+        penalizacion_corr: float = 0.2,
+        umbral_corr: float | None = 0.8,
+        fecha: date | None = None,
+    ) -> None:
+        """Redistribuye el capital según métricas adaptativas.
+
+        Preconditions:
+            ``umbral_corr`` debe ser convertible a ``float``.
+        Postconditions:
+            Si no hay datos suficientes para calcular correlaciones no se
+            modifica ``capital_por_simbolo`` y se emite un log de advertencia
+            estructurado.
+        """
+        try:
+            umbral_corr = float(umbral_corr)
+        except (TypeError, ValueError):
+            umbral_corr = 0.8
+        if math.isnan(umbral_corr):
+            umbral_corr = 0.8
         if self._limite_riesgo_notificado:
             if self.notificador:
                 try:
@@ -813,6 +840,17 @@ class Trader:
             }
         max_senales = max(senales.values()) if senales else 0
         correlaciones = self._calcular_correlaciones()
+        if correlaciones.empty:
+            msg = {
+                "evento": "ajuste_capital_skip",
+                "symbol": "*",
+                "corr_media": None,
+                "umbral_corr": umbral_corr,
+                "motivo_salto": "sin_correlaciones",
+            }
+            log.warning(json.dumps(msg))
+            AJUSTE_CAPITAL_SALTADO.labels(symbol="*", motivo="sin_correlaciones").inc()
+            return
         stats = getattr(reporter_diario, 'estadisticas', pd.DataFrame())
         for symbol in self.capital_por_simbolo:
             inicio = self.capital_inicial_diario.get(symbol, self.
@@ -822,12 +860,22 @@ class Trader:
             peso = 1 + factor * rendimiento
             if max_senales > 0:
                 peso += 0.2 * senales[symbol] / max_senales
-            corr_media = None
-            if not correlaciones.empty and symbol in correlaciones.columns:
-                corr_series = correlaciones[symbol].drop(labels=[symbol],
-                    errors='ignore').abs()
-                corr_media = corr_series.mean()
-            if corr_media >= umbral_corr:
+            corr_media: float | None = None
+            if symbol in correlaciones.columns:
+                corr_series = correlaciones[symbol].drop(labels=[symbol], errors="ignore").abs()
+                if not corr_series.empty:
+                    corr_media = float(corr_series.mean())
+            if corr_media is None or math.isnan(corr_media):
+                msg = {
+                    "evento": "ajuste_capital_skip",
+                    "symbol": symbol,
+                    "corr_media": corr_media,
+                    "umbral_corr": umbral_corr,
+                    "motivo_salto": "corr_media_invalida",
+                }
+                log.warning(json.dumps(msg))
+                AJUSTE_CAPITAL_SALTADO.labels(symbol=symbol, motivo="corr_media_invalida").inc()
+            elif corr_media >= umbral_corr:
                 peso *= 1 - penalizacion_corr * corr_media
             fila = stats[stats['symbol'] == symbol] if isinstance(stats, pd
                 .DataFrame) and 'symbol' in stats.columns else pd.DataFrame()

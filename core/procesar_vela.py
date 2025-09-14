@@ -3,6 +3,7 @@ import asyncio
 import logging
 import time
 import os
+import json
 from datetime import datetime, timezone
 from collections import deque, defaultdict
 from types import MappingProxyType
@@ -22,6 +23,8 @@ from core.metrics import (
     registrar_vela_recibida,
     registrar_vela_rechazada,
 )
+from observabilidad import metrics as obs_metrics
+from prometheus_client import Counter
 
 """Procesa una vela de mercado y actualiza indicadores.
 
@@ -33,6 +36,13 @@ procesan en paralelo.
 
 log = configurar_logger('procesar_vela')
 UTC = timezone.utc
+
+AJUSTE_CAPITAL_SALTADO = obs_metrics._get_metric(
+    Counter,
+    "ajuste_capital_saltado_total",
+    "Ajustes de capital diarios omitidos",
+    ["symbol", "motivo"],
+)
 
 # Protege el acceso a funciones de indicadores que no son thread-safe por símbolo
 _indicadores_locks: defaultdict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
@@ -56,7 +66,21 @@ async def _procesar_candle(trader, symbol: str, intervalo: str, estado, vela: di
     vela_inmutable = MappingProxyType(snapshot)
     inicio = time.perf_counter()
     if datetime.now(UTC).date() != trader.fecha_actual:
-        trader.ajustar_capital_diario()
+        buffers_ready = len(getattr(trader, 'estado', {})) >= 2 and all(
+            len(st.buffer) >= 2 for st in getattr(trader, 'estado', {}).values()
+        )
+        if not buffers_ready:
+            msg = {
+                "evento": "ajuste_capital_skip",
+                "symbol": "*",
+                "corr_media": None,
+                "umbral_corr": 0.8,
+                "motivo_salto": "datos_insuficientes",
+            }
+            log.warning(json.dumps(msg))
+            AJUSTE_CAPITAL_SALTADO.labels(symbol="*", motivo="datos_insuficientes").inc()
+        else:
+            trader.ajustar_capital_diario()
     estado.buffer.append(vela_inmutable)
     estado.estrategias_buffer.append({})
     estado.ultimo_timestamp = ts
