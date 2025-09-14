@@ -36,6 +36,7 @@ async def backfill(symbol: str, n: int) -> List[Dict[str, float]]:
     df[["open", "high", "low", "close", "volume"]] = df[
         ["open", "high", "low", "close", "volume"]
     ].astype(float)
+    df = df.sort_values("timestamp").drop_duplicates(subset=["timestamp"])
     df["is_closed"] = True
     return df.to_dict(orient="records")
 

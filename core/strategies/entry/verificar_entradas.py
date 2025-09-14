@@ -2,6 +2,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 import asyncio
 import time
+import os
 import pandas as pd
 from core.utils import configurar_logger, safe_resample
 from core.adaptador_dinamico import calcular_tp_sl_adaptativos
@@ -20,6 +21,7 @@ from core.utils.utils import (
     distancia_minima_valida,
     verificar_integridad_datos,
     intervalo_a_segundos,
+    timestamp_alineado,
 )
 from core.utils.cooldown import calcular_cooldown
 from core.contexto_externo import obtener_puntaje_contexto
@@ -28,6 +30,7 @@ from core.scoring import DecisionTrace, DecisionReason
 log = configurar_logger('verificar_entrada')
 UTC = timezone.utc
 MAX_BACKFILL_CANDLES = 100
+MIN_BUFFER_CANDLES = int(os.getenv("MIN_BUFFER_CANDLES", "30"))
 
 _indicador_cache: dict[tuple[str, int], tuple[float | None, float | None]] = {}
 
@@ -43,6 +46,18 @@ def _memo_indicadores(symbol: str, df: pd.DataFrame) -> tuple[float | None, floa
     _indicador_cache[key] = (rsi if isinstance(rsi, (int, float)) else None,
                             momentum if isinstance(momentum, (int, float)) else None)
     return _indicador_cache[key]
+
+
+def _buffer_ready(estado, intervalo: str) -> tuple[bool, str]:
+    ts = [c.get('timestamp') for c in estado.buffer if c.get('timestamp') is not None]
+    if len(ts) < MIN_BUFFER_CANDLES:
+        return False, 'prebuffer'
+    intervalo_ms = intervalo_a_segundos(intervalo) * 1000
+    if any(not timestamp_alineado(t, intervalo) for t in ts):
+        return False, 'misaligned'
+    if any(ts[i] <= ts[i - 1] for i in range(1, len(ts))):
+        return False, 'out_of_order'
+    return True, ''
 
 def _reparar_huecos(
     df: pd.DataFrame,
@@ -283,6 +298,20 @@ async def verificar_entrada(trader, symbol: str, df: pd.DataFrame, estado) -> (
 
     def _budget_exceeded() -> bool:
         return time.perf_counter() > deadline
+    
+    buffer_ok, motivo = _buffer_ready(estado, trader.config.intervalo_velas)
+    if not buffer_ok:
+        faltan = max(0, MIN_BUFFER_CANDLES - len(estado.buffer))
+        log.info(
+            f'[{symbol}] Buffer no listo {len(estado.buffer)}/{MIN_BUFFER_CANDLES}',
+            extra={
+                'faltan': faltan,
+                'min_required': MIN_BUFFER_CANDLES,
+                'motivo_no_eval': motivo,
+            },
+        )
+        metricas_tracker.registrar_filtro(motivo)
+        return None
 
     # Normalización mínima previa
     if df is None or df.empty:
@@ -370,7 +399,7 @@ async def verificar_entrada(trader, symbol: str, df: pd.DataFrame, estado) -> (
     persistencia_score = coincidencia_parcial(
         historico_estrategias, trader.pesos_por_simbolo.get(symbol, {}), ventanas=5
     )
-    if buffer_len < 30 and persistencia_score < 1:
+    if buffer_len < MIN_BUFFER_CANDLES and persistencia_score < 1:
         metricas_tracker.registrar_filtro('prebuffer')
         return None
     contexto_umbral = {

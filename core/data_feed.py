@@ -108,6 +108,9 @@ class DataFeed:
             self.drop_oldest = drop_oldest
         registrar_reconexion_datafeed(self._reconectar_por_supervisor)
         self._stream_restart_stats: Dict[str, Deque[float]] = {}
+        self.min_buffer_candles = int(os.getenv("MIN_BUFFER_CANDLES", "30"))
+        # Evita repetir llamadas de backfill para el mismo timestamp
+        self._last_backfill_ts: Dict[str, int] = {}
         self._combined = False
         self._reset_cb = reset_cb
         # Configuración de batch y métricas
@@ -331,43 +334,60 @@ class DataFeed:
         )
         tick_data(symbol)
     async def _backfill_candles(self, symbol: str) -> None:
-        """Recupera y procesa velas faltantes tras una reconexión."""
+        """Recupera velas faltantes y evita llamadas repetidas."""
         if not self._cliente:
             return
+        
+        intervalo_ms = self.intervalo_segundos * 1000
+        ahora = int(datetime.now(UTC).timestamp() * 1000)
         last_ts = self._last_close_ts.get(symbol)
-        if last_ts is None:
+        cached = self._last_backfill_ts.get(symbol)
+        if last_ts is not None and cached is not None and last_ts <= cached:
             return
+        
+        if last_ts is None:
+            faltan = self.min_buffer_candles
+            since = ahora - intervalo_ms * faltan
+        else:
+            faltan = max(0, (ahora - last_ts) // intervalo_ms)
+            if faltan <= 0:
+                self._last_backfill_ts[symbol] = last_ts
+                return
+            since = last_ts + 1
+        restante_total = min(max(faltan, self.min_buffer_candles), BACKFILL_MAX_CANDLES)
         queue = self._queues.get(symbol)
         if queue and queue.maxsize and queue.qsize() > queue.maxsize * 0.5:
             log.warning(
                 f"[{symbol}] backfill diferido por presión de cola ({queue.qsize()}/{queue.maxsize})"
             )
             return
-        intervalo_ms = self.intervalo_segundos * 1000
-        ahora = int(datetime.now(UTC).timestamp() * 1000)
-        faltan = max(0, (ahora - last_ts) // intervalo_ms)
-        if faltan <= 0:
-            return
-        restante_total = min(faltan + 1, BACKFILL_MAX_CANDLES)
-        since = last_ts + 1
+        log.info(
+            f"[{symbol}] Backfill solicitado faltantes={faltan} min_required={self.min_buffer_candles}"
+        )
         ohlcv: list[list[float]] = []
         total_chunks = (restante_total + 99) // 100
         for idx in range(total_chunks):
             limite_chunk = min(100, restante_total)
-            try:
-                chunk = await fetch_ohlcv_async(
-                    self._cliente,
-                    symbol,
-                    self.intervalo,
-                    since=since,
-                    limit=limite_chunk,
-                )
-            except (AuthenticationError, NetworkError) as e:
-                log.warning(f'❌ Error obteniendo backfill para {symbol}: {e}')
-                return
-            except Exception:
-                log.exception(f'❌ Error inesperado obteniendo backfill para {symbol}')
-                return
+            intento = 0
+            while True:
+                try:
+                    chunk = await fetch_ohlcv_async(
+                        self._cliente,
+                        symbol,
+                        self.intervalo,
+                        since=since,
+                        limit=limite_chunk,
+                    )
+                    break
+                except (AuthenticationError, NetworkError) as e:
+                    intento += 1
+                    if intento >= 3:
+                        log.warning(f'❌ Error obteniendo backfill para {symbol}: {e}')
+                        return
+                    await asyncio.sleep(0.5 * intento)
+                except Exception:
+                    log.exception(f'❌ Error inesperado obteniendo backfill para {symbol}')
+                    return
             log.info(
                 f'[{symbol}] Backfill chunk {idx + 1}/{total_chunks} con {len(chunk)} velas'
             )
@@ -380,6 +400,10 @@ class DataFeed:
                 break
         if not ohlcv:
             return
+        log.info(
+            f"[{symbol}] Backfill completado rellenadas={len(ohlcv)} faltantes={faltan} min_required={self.min_buffer_candles}"
+        )
+        self._last_backfill_ts[symbol] = ohlcv[-1][0]
         validar_integridad_velas(
             symbol,
             self.intervalo,
