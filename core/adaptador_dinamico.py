@@ -9,6 +9,7 @@ import os
 import json
 import numpy as np
 import pandas as pd
+import asyncio
 from typing import List, Dict
 
 from data_feed.candle_builder import backfill
@@ -158,6 +159,5 @@ async def backfill_ventana(symbol: str, ventana: List[Dict[str, float]], window_
     if len(ventana) >= window_size:
         return ventana
     faltantes = window_size - len(ventana)
-    nuevas = await backfill(symbol, faltantes)
-    ventana.extend(nuevas)
+    asyncio.create_task(backfill(symbol, faltantes))
     return ventana

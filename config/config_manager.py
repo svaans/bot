@@ -1,5 +1,5 @@
-from dataclasses import dataclass
-from typing import List
+from dataclasses import dataclass, field
+from typing import Dict, List
 import os
 from dotenv import load_dotenv
 from pathlib import Path
@@ -81,6 +81,7 @@ class Config:
     backfill_max_candles: int = 1000
     df_backpressure: bool = True
     df_backpressure_drop: bool = True
+    timeout_evaluar_condiciones_por_symbol: Dict[str, int] = field(default_factory=dict)
 
 
 class ConfigManager:
@@ -163,4 +164,5 @@ class ConfigManager:
             backfill_max_candles=_cargar_int('BACKFILL_MAX_CANDLES', getattr(defaults, 'backfill_max_candles', 1000)),
             df_backpressure=os.getenv('DF_BACKPRESSURE', 'true').lower() == 'true',
             df_backpressure_drop=os.getenv('DF_BACKPRESSURE_DROP', 'true').lower() == 'true',
+            timeout_evaluar_condiciones_por_symbol={},
         )

@@ -1,6 +1,7 @@
 from __future__ import annotations
 from datetime import datetime, timezone
 import asyncio
+import time
 import pandas as pd
 from core.utils import configurar_logger, safe_resample
 from core.adaptador_dinamico import calcular_tp_sl_adaptativos
@@ -27,6 +28,21 @@ from core.scoring import DecisionTrace, DecisionReason
 log = configurar_logger('verificar_entrada')
 UTC = timezone.utc
 MAX_BACKFILL_CANDLES = 100
+
+_indicador_cache: dict[tuple[str, int], tuple[float | None, float | None]] = {}
+
+
+def _memo_indicadores(symbol: str, df: pd.DataFrame) -> tuple[float | None, float | None]:
+    ts = int(df['timestamp'].iloc[-1]) if not df.empty else 0
+    key = (symbol, ts)
+    cached = _indicador_cache.get(key)
+    if cached:
+        return cached
+    rsi = get_rsi(df)
+    momentum = get_momentum(df)
+    _indicador_cache[key] = (rsi if isinstance(rsi, (int, float)) else None,
+                            momentum if isinstance(momentum, (int, float)) else None)
+    return _indicador_cache[key]
 
 def _reparar_huecos(
     df: pd.DataFrame,
@@ -258,6 +274,16 @@ async def verificar_entrada(trader, symbol: str, df: pd.DataFrame, estado) -> (
     si cumple todos los filtros, de lo contrario None.
     """
 
+    timeout_cfg = getattr(
+        trader.config,
+        "timeout_evaluar_condiciones_por_symbol",
+        {},
+    ).get(symbol, trader.config.timeout_evaluar_condiciones)
+    deadline = time.perf_counter() + timeout_cfg
+
+    def _budget_exceeded() -> bool:
+        return time.perf_counter() > deadline
+
     # Normalización mínima previa
     if df is None or df.empty:
         log.warning(f'[{symbol}] DF vacío')
@@ -283,6 +309,10 @@ async def verificar_entrada(trader, symbol: str, df: pd.DataFrame, estado) -> (
         else:
             _handle_integrity_failure(trader, symbol, df, stats, estado)
             return None
+        
+    if _budget_exceeded():
+        log.warning(f'[{symbol}] Budget agotado antes de adaptar configuración')
+        return None
 
     config = adaptar_configuracion(symbol, df, trader.config_por_simbolo.get(symbol, {}))
     trader.config_por_simbolo[symbol] = config
@@ -320,6 +350,10 @@ async def verificar_entrada(trader, symbol: str, df: pd.DataFrame, estado) -> (
             },
             pesos_symbol=trader.pesos_por_simbolo.get(symbol, {}),
         )
+    
+    if _budget_exceeded():
+        log.warning(f'[{symbol}] Budget agotado antes de engine')
+        return None
 
     engine_eval = await _engine_eval()
     estrategias = engine_eval.get('estrategias_activas', {})
@@ -350,6 +384,7 @@ async def verificar_entrada(trader, symbol: str, df: pd.DataFrame, estado) -> (
         for e, activo in estrategias.items()
         if activo and trader.persistencia.es_persistente(symbol, e)
     }
+    await asyncio.sleep(0)
     direccion = 'short' if tendencia == 'bajista' else 'long'
     estrategias_persistentes, incoherentes = filtrar_por_direccion(
         estrategias_persistentes, direccion)
@@ -358,6 +393,7 @@ async def verificar_entrada(trader, symbol: str, df: pd.DataFrame, estado) -> (
         trader.pesos_por_simbolo.get(symbol, {}).get(e, 0)
         for e in estrategias_persistentes
     )
+    await asyncio.sleep(0)
     puntaje += trader.persistencia.peso_extra * len(estrategias_persistentes)
     puntaje -= penalizacion
     cierre = trader.historial_cierres.get(symbol)
@@ -409,9 +445,10 @@ async def verificar_entrada(trader, symbol: str, df: pd.DataFrame, estado) -> (
     )
     peso_min_total = config.get('peso_minimo_total', 0.5)
     diversidad_min = config.get('diversidad_minima', 2)
+    rsi_cache, mom_cache = _memo_indicadores(symbol, df)
     rsi = engine_eval.get('rsi')
     if rsi is None:
-        rsi = get_rsi(df)
+        rsi = rsi_cache
     elif isinstance(rsi, pd.Series):
         rsi = rsi.iloc[-1]
     if rsi is None:
@@ -420,7 +457,7 @@ async def verificar_entrada(trader, symbol: str, df: pd.DataFrame, estado) -> (
         return None
     momentum = engine_eval.get('momentum')
     if momentum is None:
-        momentum = get_momentum(df)
+        momentum = mom_cache
     elif isinstance(momentum, pd.Series):
         momentum = momentum.iloc[-1]
     if momentum is None:
@@ -444,6 +481,9 @@ async def verificar_entrada(trader, symbol: str, df: pd.DataFrame, estado) -> (
     diversidad_ok = await trader._validar_diversidad(symbol, peso_total,
         peso_min_total, estrategias_persistentes, diversidad_min, df,
         config.get('modo_agresivo', False))
+    if _budget_exceeded():
+        log.warning(f'[{symbol}] Budget agotado tras validar diversidad')
+        return None
     if not diversidad_ok:
         umbral_peso_unico = config.get('umbral_peso_estrategia_unica',
             peso_min_total * 1.5) or (peso_min_total * 1.5)
@@ -504,6 +544,10 @@ async def verificar_entrada(trader, symbol: str, df: pd.DataFrame, estado) -> (
         metricas_tracker.registrar_filtro('sl_tp')
         return None
     
+    if _budget_exceeded():
+        log.warning(f'[{symbol}] Budget agotado antes de score técnico')
+        return None
+    await asyncio.sleep(0)
     eval_tecnica = await evaluar_puntaje_tecnico(symbol, df, precio, sl, tp)
     score_total = eval_tecnica['score_total']
     score_normalizado = eval_tecnica.get('score_normalizado')

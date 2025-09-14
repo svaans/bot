@@ -1,5 +1,5 @@
 from dataclasses import dataclass, field
-from typing import List
+from typing import List, Dict
 
 
 @dataclass(frozen=True)
@@ -50,3 +50,4 @@ class DevelopmentConfig:
     frecuencia_recursos: int = 60
     timeout_sin_datos_factor: int = 6
     backfill_max_candles: int = 1000
+    timeout_evaluar_condiciones_por_symbol: Dict[str, int] = field(default_factory=dict)

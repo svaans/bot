@@ -24,6 +24,10 @@ from core.metrics import (
     registrar_vela_rechazada,
 )
 from observabilidad import metrics as obs_metrics
+from observabilidad.metrics import (
+    EVALUAR_ENTRADA_LATENCY_MS,
+    EVALUAR_ENTRADA_TIMEOUTS,
+)
 from prometheus_client import Counter
 
 """Procesa una vela de mercado y actualiza indicadores.
@@ -65,6 +69,7 @@ async def _procesar_candle(trader, symbol: str, intervalo: str, estado, vela: di
     }
     vela_inmutable = MappingProxyType(snapshot)
     inicio = time.perf_counter()
+    durations: dict[str, float] = {}
     if datetime.now(UTC).date() != trader.fecha_actual:
         buffers_ready = len(getattr(trader, 'estado', {})) >= 2 and all(
             len(st.buffer) >= 2 for st in getattr(trader, 'estado', {}).values()
@@ -106,9 +111,11 @@ async def _procesar_candle(trader, symbol: str, intervalo: str, estado, vela: di
         estado.indicadores_calls += 1
         if recien_lleno:
             await asyncio.to_thread(clear_cache, estado.df)
+        t_ind = time.perf_counter()
         await asyncio.to_thread(get_rsi, estado)
         await asyncio.to_thread(get_momentum, estado)
         await asyncio.to_thread(get_atr, estado)
+        durations["indicadores_ms"] = (time.perf_counter() - t_ind) * 1000
 
     if len(estado.df) < MAX_BUFFER_VELAS:
         base = estado.df
@@ -131,8 +138,10 @@ async def _procesar_candle(trader, symbol: str, intervalo: str, estado, vela: di
             obtener_tendencia, symbol, df
         )
         trader.estado_tendencia[symbol] = estado.tendencia_detectada
+        dur_trend = time.perf_counter() - t_trend
+        durations["tendencia_ms"] = dur_trend * 1000
         log.debug(
-            f'obtener_tendencia tardó {time.perf_counter() - t_trend:.2f}s para {symbol}',
+            f'obtener_tendencia tardó {dur_trend:.2f}s para {symbol}',
             extra={'symbol': symbol, 'timeframe': intervalo, 'timestamp': ts},
         )
     estado.contador_tendencia = (
@@ -154,8 +163,10 @@ async def _procesar_candle(trader, symbol: str, intervalo: str, estado, vela: di
                     trader._verificar_salidas(symbol, df),
                     timeout=trader.config.timeout_verificar_salidas,
                 )
+                dur_salidas = time.perf_counter() - t_salidas
+                durations["salidas_ms"] = dur_salidas * 1000
                 log.debug(
-                    f'_verificar_salidas tardó {time.perf_counter() - t_salidas:.2f}s para {symbol}',
+                    f'_verificar_salidas tardó {dur_salidas:.2f}s para {symbol}',
                     extra={'symbol': symbol, 'timeframe': intervalo, 'timestamp': ts},
                 )
                 estado.timeouts_salidas = 0
@@ -199,12 +210,20 @@ async def _procesar_candle(trader, symbol: str, intervalo: str, estado, vela: di
             return
         try:
             t_entrada = time.perf_counter()
+            timeout_eval = getattr(
+                trader.config,
+                "timeout_evaluar_condiciones_por_symbol",
+                {}
+            ).get(symbol, trader.config.timeout_evaluar_condiciones)
             info = await asyncio.wait_for(
                 trader.evaluar_condiciones_de_entrada(symbol, df, estado),
-                timeout=trader.config.timeout_evaluar_condiciones,
+                timeout=timeout_eval,
             )
+            dur_entry = time.perf_counter() - t_entrada
+            durations["entrada_ms"] = dur_entry * 1000
+            EVALUAR_ENTRADA_LATENCY_MS.labels(symbol=symbol).observe(durations["entrada_ms"])
             log.debug(
-                f'evaluar_condiciones_de_entrada tardó {time.perf_counter() - t_entrada:.2f}s para {symbol}',
+                f'evaluar_condiciones_de_entrada tardó {dur_entry:.2f}s para {symbol}',
                 extra={'symbol': symbol, 'timeframe': intervalo, 'timestamp': ts},
             )
             if isinstance(info, dict) and info:
@@ -228,6 +247,7 @@ async def _procesar_candle(trader, symbol: str, intervalo: str, estado, vela: di
                     f'⚠️ Resultado inesperado al evaluar entrada para {symbol}: {type(info)}'
                 )
         except asyncio.TimeoutError:
+            EVALUAR_ENTRADA_TIMEOUTS.labels(symbol=symbol).inc()
             log.error(
                 f'⏰ Timeout en evaluar_condiciones_de_entrada para {symbol}'
             )
@@ -250,6 +270,17 @@ async def _procesar_candle(trader, symbol: str, intervalo: str, estado, vela: di
                 log.error(f'❌ Error enviando notificación: {e2}')
     finally:
         duracion = time.perf_counter() - inicio
+        if durations:
+            log.info(
+                json.dumps(
+                    {
+                        "evento": "timing_procesar_vela",
+                        "symbol": symbol,
+                        "timeframe": intervalo,
+                        "durations_ms": {k: round(v, 2) for k, v in durations.items()},
+                    }
+                )
+            )
         ahora = time.perf_counter()
         if ahora - getattr(trader, '_recursos_ts', 0) >= getattr(
             trader, 'frecuencia_recursos', 60

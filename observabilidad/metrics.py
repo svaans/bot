@@ -135,6 +135,22 @@ PNL_DISCREPANCIA_SHORT = _get_metric(
     ["symbol"],
 )
 
+# Métricas de evaluación de entradas
+EVALUAR_ENTRADA_LATENCY_MS = _get_metric(
+    Histogram,
+    "evaluar_entrada_latency_ms",
+    "Latencia de evaluar_condiciones_de_entrada (ms)",
+    ["symbol"],
+    buckets=(50, 100, 200, 500, 1000, 2000, 5000, 10000),
+)
+
+EVALUAR_ENTRADA_TIMEOUTS = _get_metric(
+    Counter,
+    "evaluar_entrada_timeouts_total",
+    "Timeouts en evaluar_condiciones_de_entrada",
+    ["symbol"],
+)
+
 # Telemetría de streams y latidos
 TICKS_TOTAL = _get_metric(
     Counter,

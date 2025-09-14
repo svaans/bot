@@ -75,16 +75,9 @@ async def evaluar_puntaje_tecnico(
     """Evalúa condiciones técnicas y retorna un puntaje acumulado."""
     pesos = await cargar_pesos_tecnicos(symbol)
     if df is None or len(df) < window_size:
-        log.warning(f'[{symbol}] datos insuficientes para score tecnico, backfilling')
+        log.warning(f'[{symbol}] datos insuficientes para score tecnico, backfill en background')
         faltantes = window_size if df is None else window_size - len(df)
-        nuevas = await backfill(symbol, faltantes)
-        df_back = pd.DataFrame(nuevas)
-        if df is not None and not df.empty:
-            df = pd.concat([df, df_back])
-        else:
-            df = df_back
-    if df is None or len(df) < window_size:
-        log.warning(f'[{symbol}] datos insuficientes tras backfill')
+        asyncio.create_task(backfill(symbol, faltantes))
         return {'score_total': 0.0, 'detalles': {}}
     df = df.tail(window_size).copy()
     vela = df.iloc[-1]
