@@ -68,6 +68,14 @@ QUEUE_SIZE_AVG = _get_metric(
     ["symbol"],
 )
 
+CANDLE_AGE = _get_metric(
+    Histogram,
+    "datafeed_candle_age_seconds",
+    "Edad de las velas al momento de procesarse",
+    ["symbol"],
+    buckets=(0.1, 0.5, 1, 2, 5, 10, 30),
+)
+
 # Reconexiones fallidas y bandera de feed detenido
 DATAFEED_FAILED_RESTARTS = _get_metric(
     Counter,

@@ -121,6 +121,47 @@ class DataFeed:
         self._last_window_reset: Dict[str, float] = {}
         self._estado: Dict[str, Any] | None = None
 
+    async def _process_candle(
+        self,
+        symbol: str,
+        candle: dict,
+        handler: Callable[[dict], Awaitable[None]],
+        queue: asyncio.Queue,
+    ) -> None:
+        """Procesa una única vela aplicando timeout y métricas."""
+        enqueue_ts = candle.pop("_enqueue_time", None)
+        try:
+            await asyncio.wait_for(handler(candle), timeout=self.handler_timeout)
+        except asyncio.TimeoutError:
+            self._handler_timeouts[symbol] = (
+                self._handler_timeouts.get(symbol, 0) + 1
+            )
+            obs_metrics.HANDLER_TIMEOUTS.labels(symbol=symbol).inc()
+            registro_metrico.registrar(
+                "handler_timeouts",
+                {"symbol": symbol, "count": self._handler_timeouts[symbol]},
+            )
+            log.error(
+                f"Handler de {symbol} superó {self.handler_timeout}s; omitiendo vela "
+                f"(total {self._handler_timeouts[symbol]})"
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            log.error(f"Error procesando vela en {symbol}: {e}")
+        finally:
+            queue.task_done()
+            if enqueue_ts is not None:
+                INGEST_LATENCY.labels(symbol=symbol).observe(
+                    time.monotonic() - enqueue_ts
+                )
+            QUEUE_SIZE.labels(symbol=symbol).set(queue.qsize())
+            ts = candle.get("timestamp")
+            if ts is not None:
+                age = max(0.0, time.time() - ts / 1000)
+                obs_metrics.CANDLE_AGE.labels(symbol=symbol).observe(age)
+            self._consumer_last[symbol] = time.monotonic()
+
     @property
     def activos(self) ->list[str]:
         """Lista de símbolos con streams activos."""
@@ -196,8 +237,11 @@ class DataFeed:
                 f'❌ Timestamp desalineado en vela de {symbol}: {ts}'
             )
             return False
-        if not force and self._last_close_ts.get(symbol) == ts:
-            log.debug(f'[{symbol}] Vela duplicada ignorada: {ts}')
+        last = self._last_close_ts.get(symbol)
+        if last is not None and ts <= last and not force:
+            reason = "duplicada" if ts == last else "fuera_de_orden"
+            log.debug(f'[{symbol}] Vela {reason} ignorada: {ts}')
+            registrar_vela_rechazada(symbol, reason)
             return False
         self._last_close_ts[symbol] = ts
         return True
@@ -212,6 +256,8 @@ class DataFeed:
             log.warning(
                 f"[{symbol}] queue_size={qsize}/{queue.maxsize}"
             )
+            # Pequeño backoff para dar respiro al consumidor
+            await asyncio.sleep(0.01)
         candle.setdefault("trace_id", uuid4().hex)
         candle["_enqueue_time"] = time.monotonic()
 
@@ -290,6 +336,12 @@ class DataFeed:
             return
         last_ts = self._last_close_ts.get(symbol)
         if last_ts is None:
+            return
+        queue = self._queues.get(symbol)
+        if queue and queue.maxsize and queue.qsize() > queue.maxsize * 0.5:
+            log.warning(
+                f"[{symbol}] backfill diferido por presión de cola ({queue.qsize()}/{queue.maxsize})"
+            )
             return
         intervalo_ms = self.intervalo_segundos * 1000
         ahora = int(datetime.now(UTC).timestamp() * 1000)
@@ -371,121 +423,67 @@ class DataFeed:
         procesadas = 0
         inicio = time.monotonic()
         while self._running:
-            candle = await queue.get()
-            self._consumer_last[symbol] = time.monotonic()
-            enqueue_ts = candle.pop("_enqueue_time", None)
-            # --- FAST-FORWARD CUANDO HAY BACKPRESSURE ---
-            try:
-                maxsize = getattr(queue, "maxsize", 0) or 0
-                qsz = queue.qsize()
-                if maxsize and qsz / maxsize >= 0.8:
-                    last = candle
-                    dropped = 0
-                    while True:
-                        try:
-                            extra = queue.get_nowait()
-                            queue.task_done()
-                            last = extra
-                            dropped += 1
-                        except asyncio.QueueEmpty:
-                            break
-                    if dropped:
-                        self._queue_discards[symbol] = (
-                            self._queue_discards.get(symbol, 0) + dropped
-                        )
-                        obs_metrics.QUEUE_DROPS.labels(symbol=symbol).inc(dropped)
-                        registro_metrico.registrar(
-                            "queue_discards",
-                            {"symbol": symbol, "count": self._queue_discards[symbol]},
-                        )
-                        registrar_vela_rechazada(symbol, "backpressure")
-                        if _should_log(f"backpressure:{symbol}", every=2.0):
-                            log.warning(
-                                f"[{symbol}] fast-forward: dropped {dropped} old candles (kept latest)."
-                            )
-                    candle = last
-            except Exception as e:
-                log.debug(f"fast-forward skip failed: {e}")
-            # --- FIN FAST-FORWARD ---
-            try:
-                await asyncio.wait_for(
-                    handler(candle), timeout=self.handler_timeout
-                )
-            except asyncio.TimeoutError:
-                self._handler_timeouts[symbol] = (
-                    self._handler_timeouts.get(symbol, 0) + 1
-                )
-                obs_metrics.HANDLER_TIMEOUTS.labels(symbol=symbol).inc()
-                registro_metrico.registrar(
-                    "handler_timeouts",
-                    {"symbol": symbol, "count": self._handler_timeouts[symbol]},
-                )
-                log.error(
-                    f"Handler de {symbol} superó {self.handler_timeout}s; omitiendo vela "
-                    f"(total {self._handler_timeouts[symbol]})"
-                )
-            except asyncio.CancelledError:
-                raise
-            except Exception as e:
-                log.error(f"Error procesando vela en {symbol}: {e}")
-            finally:
-                queue.task_done()
-                if enqueue_ts is not None:
-                    INGEST_LATENCY.labels(symbol=symbol).observe(
-                        time.monotonic() - enqueue_ts
-                    )
-                QUEUE_SIZE.labels(symbol=symbol).set(queue.qsize())
-                procesadas += 1
-                ahora = time.monotonic()
-                if ahora - inicio >= 2.0:
-                    rate = procesadas / (ahora - inicio)
-                    qsize = queue.qsize()
-                    obs_metrics.CONSUMER_RATE.labels(symbol=symbol).set(rate)
-                    msg = f"[{symbol}] consumer_rate={rate:.1f}/s qsize={qsize}/{queue.maxsize}"
-                    if qsize:
-                        log.warning(msg)
-                    else:
-                        log.info(msg)
-                    # Actualizar watermarks de cola (últimos 60s)
-                    self._queue_windows[symbol].append(qsize)
-                    if ahora - self._last_window_reset[symbol] >= 60:
-                        vals = self._queue_windows[symbol]
-                        obs_metrics.QUEUE_SIZE_MIN.labels(symbol=symbol).set(min(vals) if vals else 0)
-                        obs_metrics.QUEUE_SIZE_MAX.labels(symbol=symbol).set(max(vals) if vals else 0)
-                        obs_metrics.QUEUE_SIZE_AVG.labels(symbol=symbol).set((sum(vals) / len(vals)) if vals else 0.0)
-                        self._queue_windows[symbol].clear()
-                        self._last_window_reset[symbol] = ahora
-                    procesadas = 0
-                    inicio = ahora
-                # Procesar mensajes adicionales en lote si `BATCH_SIZE_CONSUMER` > 1
-                for _ in range(self.batch_size - 1):
-                    if queue.empty():
-                        break
+            first = await queue.get()
+            maxsize = getattr(queue, "maxsize", 0) or 0
+            qsz = queue.qsize()
+            if maxsize and qsz / maxsize >= 0.8:
+                dropped = 0
+                objetivo = int(maxsize * 0.5)
+                while queue.qsize() > objetivo:
                     try:
-                        next_candle = queue.get_nowait()
+                        _ = queue.get_nowait()
+                        queue.task_done()
+                        dropped += 1
                     except asyncio.QueueEmpty:
                         break
-                    enqueue_ts2 = next_candle.pop("_enqueue_time", None)
-                    try:
-                        await asyncio.wait_for(handler(next_candle), timeout=self.handler_timeout)
-                    except asyncio.TimeoutError:
-                        self._handler_timeouts[symbol] = self._handler_timeouts.get(symbol, 0) + 1
-                        obs_metrics.HANDLER_TIMEOUTS.labels(symbol=symbol).inc()
-                        registro_metrico.registrar(
-                            "handler_timeouts",
-                            {"symbol": symbol, "count": self._handler_timeouts[symbol]},
+                if dropped:
+                    self._queue_discards[symbol] = (
+                        self._queue_discards.get(symbol, 0) + dropped
+                    )
+                    obs_metrics.QUEUE_DROPS.labels(symbol=symbol).inc(dropped)
+                    registro_metrico.registrar(
+                        "queue_discards",
+                        {"symbol": symbol, "count": self._queue_discards[symbol]},
+                    )
+                    registrar_vela_rechazada(symbol, "backpressure")
+                    if _should_log(f"backpressure:{symbol}", every=2.0):
+                        log.warning(
+                            f"[{symbol}] high-watermark drop {dropped} old candles (qsize={queue.qsize()}/{queue.maxsize})"
                         )
-                        log.error(
-                            f"Handler de {symbol} superó {self.handler_timeout}s (batch); omitiendo vela"
-                        )
-                    except Exception as e:
-                        log.error(f"Error procesando vela en {symbol} (batch): {e}")
-                    finally:
-                        queue.task_done()
-                        if enqueue_ts2 is not None:
-                            INGEST_LATENCY.labels(symbol=symbol).observe(time.monotonic() - enqueue_ts2)
-                        QUEUE_SIZE.labels(symbol=symbol).set(queue.qsize())
-                        procesadas += 1
+            candles = [first]
+            for _ in range(self.batch_size - 1):
+                if queue.empty():
+                    break
+                try:
+                    candles.append(queue.get_nowait())
+                except asyncio.QueueEmpty:
+                    break
+            async with asyncio.TaskGroup() as tg:
+                for c in candles:
+                    tg.create_task(
+                        self._process_candle(symbol, c, handler, queue)
+                    )
+            procesadas += len(candles)
+            ahora = time.monotonic()
+            if ahora - inicio >= 2.0:
+                rate = procesadas / (ahora - inicio)
+                qsize = queue.qsize()
+                obs_metrics.CONSUMER_RATE.labels(symbol=symbol).set(rate)
+                msg = f"[{symbol}] consumer_rate={rate:.1f}/s qsize={qsize}/{queue.maxsize}"
+                if qsize:
+                    log.warning(msg)
+                else:
+                    log.info(msg)
+                self._queue_windows[symbol].append(qsize)
+                if ahora - self._last_window_reset[symbol] >= 60:
+                    vals = self._queue_windows[symbol]
+                    obs_metrics.QUEUE_SIZE_MIN.labels(symbol=symbol).set(min(vals) if vals else 0)
+                    obs_metrics.QUEUE_SIZE_MAX.labels(symbol=symbol).set(max(vals) if vals else 0)
+                    obs_metrics.QUEUE_SIZE_AVG.labels(symbol=symbol).set((sum(vals) / len(vals)) if vals else 0.0)
+                    self._queue_windows[symbol].clear()
+                    self._last_window_reset[symbol] = ahora
+                procesadas = 0
+                inicio = ahora
                         
     async def _relanzar_stream(
         self, symbol: str, handler: Callable[[dict], Awaitable[None]]

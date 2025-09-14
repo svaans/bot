@@ -65,12 +65,22 @@ class CandleFilter:
             self.rejected += 1
             return [], 'duplicate', self._should_warn()
 
-        if self.last_ts_processed and ts_norm < self.last_ts_processed:
+        if self.last_ts_processed is not None and ts_norm <= self.last_ts_processed:
             self.rejected += 1
-            return [], 'out_of_order', self._should_warn()
+            reason = 'duplicate' if ts_norm == self.last_ts_processed else 'out_of_order'
+            return [], reason, self._should_warn()
 
         self._buffer.append({'timestamp': ts_norm, 'data': candle})
         self._buffer = deque(sorted(self._buffer, key=lambda x: x['timestamp']))
+
+        # Si el buffer excede su tamaño, descartar las velas más antiguas
+        discarded = 0
+        while len(self._buffer) > self.buffer_size:
+            self._buffer.popleft()
+            discarded += 1
+        if discarded:
+            self.rejected += discarded
+            return [], 'out_of_order', self._should_warn()
 
         ready: List[Dict] = []
         while self._buffer:
