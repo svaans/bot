@@ -20,10 +20,6 @@ except Exception:  # pragma: no cover - fallback for non-POSIX systems
 UTC = timezone.utc
 
 from core.utils.utils import configurar_logger, intervalo_a_segundos
-# Si en el futuro se escuchan streams de profundidad (@depthUpdate),
-# será necesario validar la secuencia de mensajes con el esquema
-# ``U <= lastUpdateId + 1 <= u`` y obtener un snapshot inicial vía
-# ``/api/v3/depth`` antes de procesar las actualizaciones.
 from core.supervisor import tick, tick_data, registrar_ping
 from binance_api.cliente import fetch_ohlcv_async
 from core.registro_metrico import registro_metrico
@@ -32,10 +28,11 @@ from core.utils.backoff import backoff_sleep
 
 class InactividadTimeoutError(Exception):
     """Señala que el WebSocket se cerró por falta de datos."""
-
     pass
 
+
 log = configurar_logger('websocket')
+
 
 def _ajustar_limite_archivos(min_limit: int = 4096) -> None:
     """Intenta aumentar el límite de descriptores si es demasiado bajo."""
@@ -47,7 +44,9 @@ def _ajustar_limite_archivos(min_limit: int = 4096) -> None:
             resource.setrlimit(resource.RLIMIT_NOFILE, (min_limit, hard))
             log.debug(f'Límite de archivos incrementado a {min_limit}')
     except Exception as e:  # pragma: no cover - fallbacks en entornos no POSIX
-        log.debug(f'No se pudo ajustar el límite de archivos: {e}')
+        # Aviso visible en caso de no poder elevar
+        log.warning(f'No se pudo ajustar RLIMIT_NOFILE a {min_limit}: {e}')
+
 
 _ajustar_limite_archivos()
 
@@ -78,6 +77,7 @@ def _calc_inactividad_timeout(intervalo_vela_s: int) -> int:
 
 
 USE_INTERNAL_KEEPALIVE = False
+
 
 def _registrar_reconexion() -> None:
     """Registra un intento de reconexión y alerta si la tasa es elevada."""
@@ -117,6 +117,7 @@ async def _resuscribir(
     Si un símbolo no recibe ACK tras ``max_intentos`` se levanta una excepción
     para que el WebSocket se reinicie.
     """
+    loop = asyncio.get_running_loop()
     for sym, h in handlers.items():
         stream = f"{normalizar_symbolo(sym)}@kline_{h['intervalo']}"
         intentos = 0
@@ -131,19 +132,28 @@ async def _resuscribir(
             await ws.send(json.dumps(mensaje))
             inicio = time.perf_counter()
             try:
-                ack_raw = await asyncio.wait_for(ws.recv(), timeout=timeout)
-                elapsed_ms = (time.perf_counter() - inicio) * 1000
-                if _es_ack(ack_raw, req_id):
-                    log.info(
-                        "ACK resuscripción",
-                        extra={
-                            "sym": sym,
-                            "attempt": intentos,
-                            "elapsed_ms": round(elapsed_ms, 1),
-                        },
-                    )
-                    break
-                raise ValueError(f"ACK inválido: {ack_raw}")
+                # Ventana de espera: lee varios mensajes hasta encontrar el ACK correcto
+                deadline = loop.time() + timeout
+                while True:
+                    remaining = deadline - loop.time()
+                    if remaining <= 0:
+                        raise TimeoutError("ACK no recibido dentro del timeout")
+                    ack_raw = await asyncio.wait_for(ws.recv(), timeout=remaining)
+                    if _es_ack(ack_raw, req_id):
+                        elapsed_ms = (time.perf_counter() - inicio) * 1000
+                        log.info(
+                            "ACK resuscripción",
+                            extra={
+                                "sym": sym,
+                                "attempt": intentos,
+                                "elapsed_ms": round(elapsed_ms, 1),
+                            },
+                        )
+                        break
+                    # Mensaje no-ACK durante resuscripción (puede ser kline): lo descartamos aquí
+                    # para mantener la simplicidad. El consumidor retomará al reconectar.
+                    log.debug("Mensaje no-ACK recibido durante resuscripción (descartado temporalmente)")
+                break
             except Exception as e:  # noqa: PERF203 - logging needed
                 elapsed_ms = (time.perf_counter() - inicio) * 1000
                 log.warning(
@@ -157,8 +167,9 @@ async def _resuscribir(
                 )
                 if intentos >= max_intentos:
                     raise
-                espera = calcular_backoff(intentos, max_seg=5)
-                await asyncio.sleep(espera)
+                # Backoff exponencial simple con tope 5s
+                espera = min(2 ** (intentos - 1), 5)
+                await asyncio.sleep(espera + random.random() * 0.25)
 
 
 def _es_ack(raw: str, req_id: int) -> bool:
@@ -167,7 +178,12 @@ def _es_ack(raw: str, req_id: int) -> bool:
         data = json.loads(raw)
     except Exception:
         return False
-    return data.get("id") == req_id and data.get("result") is None
+    if data.get("id") != req_id:
+        return False
+    if data.get("error"):
+        log.warning(f"ACK con error para id={req_id}: {data.get('error')}")
+        return False
+    return data.get("result") is None
 
 
 async def _rellenar_gaps(
@@ -178,12 +194,7 @@ async def _rellenar_gaps(
     nuevo_ts: int,
     intervalo_ms: int,
 ):
-    """Genera velas sintéticas para cubrir huecos entre ``ultimo_ts`` y ``nuevo_ts``.
-
-    Las velas generadas tendrán volumen 0 y precios planos igualados a ``ultimo_cierre``.
-    Se marcan con ``synthetic=True`` para auditar y distinguirlas.
-    Devuelve el último timestamp emitido (o el original si no había hueco).
-    """
+    """Genera velas sintéticas para cubrir huecos entre ``ultimo_ts`` y ``nuevo_ts``."""
     if ultimo_ts is None or ultimo_cierre is None:
         return ultimo_ts
 
@@ -205,7 +216,6 @@ async def _rellenar_gaps(
         gap += intervalo_ms
 
     return ultimo_ts
-
 
 
 async def _procesar_cola(
@@ -265,8 +275,14 @@ async def _procesar_cola(
                 await h['callback'](vela)
             else:
                 await asyncio.wait_for(h['callback'](vela), timeout=callback_timeout)
+        except asyncio.TimeoutError:
+            log.warning(f'⏱️ Callback timeout ({callback_timeout}s) en {symbol}')
+            registro_metrico.registrar('callback_timeouts_total', {'symbol': symbol})
+            queue.task_done()
+            continue
         except Exception as e:
             log.warning(f'❌ Callback falló: {e}')
+            registro_metrico.registrar('callback_errors_total', {'symbol': symbol})
             queue.task_done()
             continue
 
@@ -275,10 +291,8 @@ async def _procesar_cola(
         h['ultimo_cierre'] = vela['close']
         last_message[symbol] = time.monotonic()
         tick('data_feed')
-        tick_data(symbol)  # <--- añadido: latido por símbolo en cada vela
+        tick_data(symbol)  # latido por símbolo en cada vela
         queue.task_done()
-
-
 
 
 async def _gestionar_ws(
@@ -298,21 +312,22 @@ async def _gestionar_ws(
     while True:
         try:
             if primera_vez:
-                await asyncio.sleep(random.random())
+                await asyncio.sleep(random.random())  # jitter inicial
                 primera_vez = False
-                ws = await asyncio.wait_for(
-                    websockets.connect(
-                        url,
-                        open_timeout=OPEN_TIMEOUT,
-                        close_timeout=CLOSE_TIMEOUT,
-                        ping_interval=None if USE_INTERNAL_KEEPALIVE else ping_interval,
-                        ping_timeout=None if USE_INTERNAL_KEEPALIVE else PING_TIMEOUT,
-                        max_size=2 ** 20,
-                        max_queue=0,
-                        ssl=_SSL_CONTEXT,
-                    ),
-                    timeout=OPEN_TIMEOUT + 5,
-                )
+
+            ws = await asyncio.wait_for(
+                websockets.connect(
+                    url,
+                    open_timeout=OPEN_TIMEOUT,
+                    close_timeout=CLOSE_TIMEOUT,
+                    ping_interval=None if USE_INTERNAL_KEEPALIVE else ping_interval,
+                    ping_timeout=None if USE_INTERNAL_KEEPALIVE else PING_TIMEOUT,
+                    max_size=2 ** 20,
+                    max_queue=0,
+                    ssl=_SSL_CONTEXT,
+                ),
+                timeout=OPEN_TIMEOUT + 5,
+            )
             log.info(
                 f"🔌 WebSocket conectado a {url} a las {datetime.now(UTC).isoformat()}"
             )
@@ -353,6 +368,7 @@ async def _gestionar_ws(
                     norm = data['stream'].split('@')[0]
                     return handlers_by_norm.get(norm)
                 return next(iter(handlers))
+
             consumer = asyncio.create_task(
                 _procesar_cola(
                     message_queue,
@@ -413,6 +429,14 @@ async def _gestionar_ws(
                                     # Backfill normal desde ts conocido
                                     ahora = int(datetime.now(UTC).timestamp() * 1000)
                                     faltan = max(1, (ahora - h['ultimo_timestamp']) // h['intervalo_ms'])
+                                    if faltan > MAX_BACKFILL_CANDLES:
+                                        log.warning(
+                                            f'Gap grande en backfill {symbol}: faltan={faltan}, limitando a {MAX_BACKFILL_CANDLES}'
+                                        )
+                                        registro_metrico.registrar(
+                                            'backfill_gap_grande_total',
+                                            {'symbol': symbol, 'faltan': int(faltan)},
+                                        )
                                     limite = min(faltan, MAX_BACKFILL_CANDLES)
                                     async with _backfill_semaphore:
                                         ohlcv = await asyncio.wait_for(
@@ -547,7 +571,6 @@ async def _gestionar_ws(
                     except Exception as e:
                         log.debug(f'Error al esperar tarea cancelada: {e}')
                         tick('data_feed')
-                log.debug(f'Tareas activas tras cierre: {len(asyncio.all_tasks())}')
                 try:
                     await ws.close()
                     await ws.wait_closed()
@@ -674,9 +697,7 @@ async def escuchar_velas_combinado(
     if tiempo_maximo is None:
         base_timeout = intervalo_a_segundos(intervalo) * 5
         if base_timeout < 300:
-            log.info(
-                '⌛ Timeout de inactividad extendido a 300s para stream combinado'
-            )
+            log.info('⌛ Timeout de inactividad extendido a 300s para stream combinado')
         tiempo_maximo = max(base_timeout, 300)
     if ping_interval is None:
         ping_interval = 30
@@ -684,6 +705,7 @@ async def escuchar_velas_combinado(
         mensaje_timeout = tiempo_maximo
     intervalo_ms = intervalo_a_segundos(intervalo) * 1000
     ws_handlers = {}
+
     for s in symbols:
         def make_parser(sym):
             def parser(data):
@@ -732,7 +754,6 @@ async def _watchdog(
 ):
     """Cierra el WS si no se reciben datos en ``tiempo_maximo`` segundos (usa reloj monotónico)."""
     try:
-        # Revisión: intervalo de sondeo razonable y siempre >0
         intervalo = max(1.0, min(5.0, float(tiempo_maximo) / 5.0))
         while True:
             await asyncio.sleep(intervalo)
@@ -740,12 +761,10 @@ async def _watchdog(
             ahora_mono = time.monotonic()
             ultimo = last_message.get(symbol)
 
-            # Inicializa si aún no hay marca
             if ultimo is None:
                 last_message[symbol] = ahora_mono
                 continue
 
-            # Autodefensa: si alguien metió un datetime u otro tipo, re-inicializa
             if not isinstance(ultimo, (int, float)):
                 log.debug(f'⛑️ Corrigiendo tipo de last_message[{symbol}]={type(ultimo).__name__}')
                 last_message[symbol] = ahora_mono
@@ -761,9 +780,8 @@ async def _watchdog(
                 finally:
                     tick('data_feed')
                     tick_data(symbol)
-                registro_metrico.registrar(
-                    'ws_watchdog_timeouts_total', {'symbol': symbol}
-                )
+                registro_metrico.registrar('ws_watchdog_timeouts_total', {'symbol': symbol})
+                registro_metrico.registrar('ws_watchdog_closures_total', {'symbol': symbol})
                 raise InactividadTimeoutError(
                     f'Sin velas en {tiempo_maximo:.0f}s para {symbol}'
                 )
@@ -799,10 +817,12 @@ async def _keepalive(ws, symbol, intervalo=PING_INTERVAL, log_interval=10):
                     log.info(f'📡 RTT ping {symbol}: {rtt:.1f} ms')
             except asyncio.TimeoutError:
                 log.warning(f'❌ Ping timeout para {symbol}')
-                registro_metrico.registrar(
-                    'ws_ping_timeouts_total', {'symbol': symbol}
-                )
+                registro_metrico.registrar('ws_ping_timeouts_total', {'symbol': symbol})
                 await ws.close()
+                tick('data_feed')
+                break
+            except ConnectionClosed as e:
+                log.info(f'🔚 WS cerrado durante ping ({symbol}) — Código: {e.code}, Motivo: {e.reason}')
                 tick('data_feed')
                 break
             except Exception as e:
@@ -812,6 +832,7 @@ async def _keepalive(ws, symbol, intervalo=PING_INTERVAL, log_interval=10):
                 break
     except asyncio.CancelledError:
         raise
+
 
 def _habilitar_tcp_keepalive(ws):
     """Activa el keep-alive del sistema operativo para ``ws`` si es posible."""
@@ -829,3 +850,4 @@ def _habilitar_tcp_keepalive(ws):
     except Exception as e:
         log.warning(f'No se pudo configurar TCP keep-alive: {e}')
         tick('data_feed')
+
