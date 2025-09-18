@@ -1,6 +1,4 @@
-Aquí tienes el **archivo completo corregido y listo para pegar** con los fixes aplicados: SyntaxError resuelto, circuit breaker tipado y con mensaje claro, control de rate-limit, mejoras en user stream (no duplica keepalive y usa backoff exponencial), normalización de símbolo más segura y cierre correcto de la sesión HTTP.
-
-```python
+# binance_api/cliente.py
 import os
 import asyncio
 import functools
@@ -582,5 +580,4 @@ async def close_http_session() -> None:
     global _HTTP_SESSION
     if _HTTP_SESSION and not _HTTP_SESSION.closed:
         await _HTTP_SESSION.close()
-```
 

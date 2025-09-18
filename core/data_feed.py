@@ -166,7 +166,7 @@ class DataFeed:
             self._consumer_last[symbol] = time.monotonic()
 
     @property
-    def activos(self) ->list[str]:
+    def activos(self) -> list[str]:
         """Lista de símbolos con streams activos."""
         return list(self._symbols)
     
@@ -333,6 +333,7 @@ class DataFeed:
             f'timestamp={candle.get("timestamp")}'
         )
         tick_data(symbol)
+
     async def _backfill_candles(self, symbol: str) -> None:
         """Recupera velas faltantes y evita llamadas repetidas."""
         if not self._cliente:
@@ -398,6 +399,8 @@ class DataFeed:
             since = chunk[-1][0] + 1
             if len(chunk) < limite_chunk or restante_total <= 0:
                 break
+            # cede el control al loop entre chunks para evitar monopolizar
+            await asyncio.sleep(0)
         if not ohlcv:
             return
         log.info(
@@ -699,15 +702,15 @@ class DataFeed:
             except asyncio.CancelledError:
                 for sym in symbols:
                     beat(f'stream_{sym}', 'cancel')
-                delay = calcular_backoff(fallos_consecutivos)
                 raise
             except InactividadTimeoutError:
                 for sym in symbols:
                     beat(f'stream_{sym}', 'inactivity')
+                fallos_consecutivos = 0
+                delay = calcular_backoff(fallos_consecutivos)  # definir antes de usar
                 log.warning(
                     f'🔕 Stream combinado reiniciado por inactividad; reintentando en {delay:.1f}s'
                 )
-                fallos_consecutivos = 0
                 await asyncio.sleep(delay)
                 continue
             except Exception as e:
@@ -1080,6 +1083,7 @@ class DataFeed:
                 )
             else:
                 log.debug(f"Tarea {nombre} estado: {estado}")
+
     async def detener(self) -> None:
         """Cancela todos los streams en ejecución."""
         tasks: set[asyncio.Task] = set()

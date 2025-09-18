@@ -27,6 +27,7 @@ from core.utils.cooldown import calcular_cooldown
 from core.contexto_externo import obtener_puntaje_contexto
 from core.metricas_semanales import metricas_tracker
 from core.scoring import DecisionTrace, DecisionReason
+
 log = configurar_logger('verificar_entrada')
 UTC = timezone.utc
 MAX_BACKFILL_CANDLES = 100
@@ -43,8 +44,10 @@ def _memo_indicadores(symbol: str, df: pd.DataFrame) -> tuple[float | None, floa
         return cached
     rsi = get_rsi(df)
     momentum = get_momentum(df)
-    _indicador_cache[key] = (rsi if isinstance(rsi, (int, float)) else None,
-                            momentum if isinstance(momentum, (int, float)) else None)
+    _indicador_cache[key] = (
+        rsi if isinstance(rsi, (int, float)) else None,
+        momentum if isinstance(momentum, (int, float)) else None
+    )
     return _indicador_cache[key]
 
 
@@ -58,6 +61,7 @@ def _buffer_ready(estado, intervalo: str) -> tuple[bool, str]:
     if any(ts[i] <= ts[i - 1] for i in range(1, len(ts))):
         return False, 'out_of_order'
     return True, ''
+
 
 def _reparar_huecos(
     df: pd.DataFrame,
@@ -190,19 +194,20 @@ def _handle_integrity_failure(trader, symbol: str, df: pd.DataFrame, stats: dict
                     )
                 if not dfs_nuevas:
                     return
+
+                # Concatena y sanea con contrato flexible
                 estado.df = (
                     pd.concat([estado.df, *dfs_nuevas])
                     .drop_duplicates(subset=['timestamp'])
                     .sort_values('timestamp')
                     .reset_index(drop=True)
                 )
-                ok_estado, estado.df = verificar_integridad_datos(estado.df)
+                ok_estado, reparado = _sanear_df(estado.df)
                 if ok_estado:
+                    estado.df = reparado
                     log.info(f'[{symbol}] Hueco crítico reparado vía REST')
                 else:
-                    log.warning(
-                        f'[{symbol}] Datos corruptos irreparables tras backfill: {stats}'
-                    )
+                    log.warning(f'[{symbol}] Datos corruptos irreparables tras backfill: {stats}')
 
             asyncio.create_task(_backfill_critico())
             metricas_tracker.registrar_filtro('datos_invalidos')
@@ -214,6 +219,7 @@ def _handle_integrity_failure(trader, symbol: str, df: pd.DataFrame, stats: dict
     else:
         log.warning(f'[{symbol}] Datos corruptos irreparables: {stats}')
         metricas_tracker.registrar_filtro('datos_invalidos')
+
 
 def _sanear_df(df: pd.DataFrame) -> tuple[bool, pd.DataFrame]:
     """Ejecuta ``verificar_integridad_datos`` de forma defensiva.
@@ -234,6 +240,7 @@ def _sanear_df(df: pd.DataFrame) -> tuple[bool, pd.DataFrame]:
     if reparado is None or getattr(reparado, 'empty', False):
         return False, df
     return ok, reparado
+
 
 def _tendencia_principal(tendencias: list[str | None]) -> tuple[str | None, float]:
     """Devuelve la tendencia predominante y su proporción."""
@@ -282,8 +289,8 @@ def validar_marcos(symbol_state: dict) -> bool:
         return False
     return True
 
-async def verificar_entrada(trader, symbol: str, df: pd.DataFrame, estado) -> (
-    dict | None):
+
+async def verificar_entrada(trader, symbol: str, df: pd.DataFrame, estado) -> dict | None:
     """
     Evalúa condiciones de entrada y devuelve info de operación
     si cumple todos los filtros, de lo contrario None.
@@ -298,7 +305,7 @@ async def verificar_entrada(trader, symbol: str, df: pd.DataFrame, estado) -> (
 
     def _budget_exceeded() -> bool:
         return time.perf_counter() > deadline
-    
+
     buffer_ok, motivo = _buffer_ready(estado, trader.config.intervalo_velas)
     if not buffer_ok:
         faltan = max(0, MIN_BUFFER_CANDLES - len(estado.buffer))
@@ -322,11 +329,11 @@ async def verificar_entrada(trader, symbol: str, df: pd.DataFrame, estado) -> (
     df['timestamp'] = pd.to_numeric(df['timestamp'], errors='coerce')
     df = df.dropna(subset=['timestamp']).drop_duplicates(subset=['timestamp']).reset_index(drop=True)
 
-    # Integridad básica; si falla intentamos reparación de huecos tolerables
-    ok, df = verificar_integridad_datos(df)
+    # Integridad básica con contrato flexible; si falla, intentar reparar huecos tolerables
+    ok, df = _sanear_df(df)
     if not ok:
-        reparado, ok, stats = _reparar_huecos(df)
-        if ok:
+        reparado, ok_rep, stats = _reparar_huecos(df)
+        if ok_rep:
             ok_reparado, reparado = _sanear_df(reparado)
             if ok_reparado:
                 log.info(f'[{symbol}] Datos incompletos reparados: {stats}')
@@ -338,20 +345,24 @@ async def verificar_entrada(trader, symbol: str, df: pd.DataFrame, estado) -> (
         else:
             _handle_integrity_failure(trader, symbol, df, stats, estado)
             return None
-        
+
     if _budget_exceeded():
         log.warning(f'[{symbol}] Budget agotado antes de adaptar configuración')
         return None
 
     config = adaptar_configuracion(symbol, df, trader.config_por_simbolo.get(symbol, {}))
     trader.config_por_simbolo[symbol] = config
+
     tendencia = obtener_tendencia(symbol, df)
     log.debug(f'[{symbol}] Tendencia: {tendencia}')
+
+    # Construcción de marcos temporales superiores
     df_sorted = df.sort_values('timestamp')
     df_idx = df_sorted.set_index(pd.to_datetime(df_sorted['timestamp'], unit='ms'))
     df_5m = safe_resample(df_idx, '5min').last().dropna() if len(df_idx) >= 5 else None
     df_1h = safe_resample(df_idx, '1h').last().dropna() if len(df_idx) >= 60 else None
     df_1d = safe_resample(df_idx, '1d').last().dropna() if len(df_idx) >= 1440 else None
+
     if not validar_marcos(
         {
             'symbol': symbol,
@@ -365,6 +376,7 @@ async def verificar_entrada(trader, symbol: str, df: pd.DataFrame, estado) -> (
         log.info(f'[{symbol}] Contradicción entre marcos temporales.')
         metricas_tracker.registrar_filtro('marcos_temporales')
         return None
+
     async def _engine_eval() -> dict:
         return await trader.engine.evaluar_entrada(
             symbol,
@@ -379,7 +391,7 @@ async def verificar_entrada(trader, symbol: str, df: pd.DataFrame, estado) -> (
             },
             pesos_symbol=trader.pesos_por_simbolo.get(symbol, {}),
         )
-    
+
     if _budget_exceeded():
         log.warning(f'[{symbol}] Budget agotado antes de engine')
         return None
@@ -391,9 +403,12 @@ async def verificar_entrada(trader, symbol: str, df: pd.DataFrame, estado) -> (
         metricas_tracker.registrar_filtro('sin_estrategias')
         return None
     log.debug(f'[{symbol}] Estrategias activas: {list(estrategias.keys())}')
+
+    # Persistencia de estrategias en el estado
     if estado.estrategias_buffer:
         estado.estrategias_buffer[-1] = estrategias
     trader.persistencia.actualizar(symbol, estrategias)
+
     buffer_len = len(estado.buffer)
     historico_estrategias = list(estado.estrategias_buffer)[-100:]
     persistencia_score = coincidencia_parcial(
@@ -402,22 +417,28 @@ async def verificar_entrada(trader, symbol: str, df: pd.DataFrame, estado) -> (
     if buffer_len < MIN_BUFFER_CANDLES and persistencia_score < 1:
         metricas_tracker.registrar_filtro('prebuffer')
         return None
+
     contexto_umbral = {
         "rsi": engine_eval.get("rsi"),
         "slope": engine_eval.get("slope"),
         "persistencia": persistencia_score,
     }
     umbral = calcular_umbral_adaptativo(symbol, df, contexto_umbral)
+
     estrategias_persistentes = {
         e: True
         for e, activo in estrategias.items()
         if activo and trader.persistencia.es_persistente(symbol, e)
     }
-    await asyncio.sleep(0)
+
+    await asyncio.sleep(0)  # ceder al loop
+
     direccion = 'short' if tendencia == 'bajista' else 'long'
     estrategias_persistentes, incoherentes = filtrar_por_direccion(
-        estrategias_persistentes, direccion)
+        estrategias_persistentes, direccion
+    )
     penalizacion = 0.05 * len(incoherentes) if incoherentes else 0.0
+
     puntaje = sum(
         trader.pesos_por_simbolo.get(symbol, {}).get(e, 0)
         for e in estrategias_persistentes
@@ -425,6 +446,8 @@ async def verificar_entrada(trader, symbol: str, df: pd.DataFrame, estado) -> (
     await asyncio.sleep(0)
     puntaje += trader.persistencia.peso_extra * len(estrategias_persistentes)
     puntaje -= penalizacion
+
+    # Reglas post-cierre reciente
     cierre = trader.historial_cierres.get(symbol)
     if cierre:
         motivo = cierre.get('motivo')
@@ -435,19 +458,19 @@ async def verificar_entrada(trader, symbol: str, df: pd.DataFrame, estado) -> (
             base_cd = int(config.get('cooldown_tras_perdida', 5))
             cooldown = calcular_cooldown(perdidas, base_cd)
             if velas < cooldown:
-                log.info(
-                    f'[{symbol}] Cooldown tras stop loss ({velas}/{cooldown}) activo.')
+                log.info(f'[{symbol}] Cooldown tras stop loss ({velas}/{cooldown}) activo.')
                 metricas_tracker.registrar_filtro('cooldown')
                 return None
             trader.historial_cierres.pop(symbol, None)
         elif motivo == 'cambio de tendencia':
             precio_actual = float(df['close'].iloc[-1])
-            if not trader._validar_reentrada_tendencia(symbol, df, cierre,
-                precio_actual):
+            if not trader._validar_reentrada_tendencia(symbol, df, cierre, precio_actual):
                 cierre['velas'] = cierre.get('velas', 0) + 1
                 metricas_tracker.registrar_filtro('reentrada_tendencia')
                 return None
             trader.historial_cierres.pop(symbol, None)
+
+    # Guardas de riesgo por pérdidas consecutivas y volatilidad
     hoy = datetime.now(UTC).date().isoformat()
     limite_base = getattr(trader.config, 'max_perdidas_diarias', 6)
     try:
@@ -457,23 +480,27 @@ async def verificar_entrada(trader, symbol: str, df: pd.DataFrame, estado) -> (
         volatilidad_dia = df_dia['close'].pct_change().std()
     except Exception:
         volatilidad_dia = df['close'].pct_change().tail(1440).std()
+
     if volatilidad_dia > 0.05:
         limite = max(3, int(limite_base * 0.5))
     elif volatilidad_dia < 0.02:
         limite = int(limite_base * 1.2)
     else:
         limite = limite_base
-    if cierre and cierre.get('fecha_perdidas') == hoy and cierre.get(
-        'perdidas_consecutivas', 0) >= limite:
+
+    if cierre and cierre.get('fecha_perdidas') == hoy and cierre.get('perdidas_consecutivas', 0) >= limite:
         log.info(f'[{symbol}] Bloqueado por pérdidas consecutivas: {limite}')
         metricas_tracker.registrar_filtro('perdidas_consecutivas')
         return None
+
     peso_total = sum(
         trader.pesos_por_simbolo.get(symbol, {}).get(e, 0)
         for e in estrategias_persistentes
     )
     peso_min_total = config.get('peso_minimo_total', 0.5)
     diversidad_min = config.get('diversidad_minima', 2)
+
+    # RSI/momentum con cache de respaldo
     rsi_cache, mom_cache = _memo_indicadores(symbol, df)
     rsi = engine_eval.get('rsi')
     if rsi is None:
@@ -484,6 +511,7 @@ async def verificar_entrada(trader, symbol: str, df: pd.DataFrame, estado) -> (
         log.warning(f'[{symbol}] RSI insuficiente, entrada descartada')
         metricas_tracker.registrar_filtro('datos_invalidos')
         return None
+
     momentum = engine_eval.get('momentum')
     if momentum is None:
         momentum = mom_cache
@@ -493,6 +521,7 @@ async def verificar_entrada(trader, symbol: str, df: pd.DataFrame, estado) -> (
         log.warning(f'[{symbol}] Momentum insuficiente, entrada descartada')
         metricas_tracker.registrar_filtro('datos_invalidos')
         return None
+
     if trader.usar_score_tecnico:
         score_tecnico, puntos_tecnicos = trader._calcular_score_tecnico(
             df, rsi, momentum, tendencia, direccion
@@ -500,34 +529,38 @@ async def verificar_entrada(trader, symbol: str, df: pd.DataFrame, estado) -> (
     else:
         score_tecnico = None
         puntos_tecnicos = None
-    ok_pers, valor_pers, minimo_pers = trader._evaluar_persistencia(symbol,
-        estado, df, trader.pesos_por_simbolo.get(symbol, {}), tendencia,
-        puntaje, umbral, estrategias)
+
+    ok_pers, valor_pers, minimo_pers = trader._evaluar_persistencia(
+        symbol, estado, df, trader.pesos_por_simbolo.get(symbol, {}), tendencia, puntaje, umbral, estrategias
+    )
+
     razones = []
-    if not trader._validar_puntaje(symbol, puntaje, umbral, config.get(
-        'modo_agresivo', False)):
+    if not trader._validar_puntaje(symbol, puntaje, umbral, config.get('modo_agresivo', False)):
         razones.append('puntaje')
-    diversidad_ok = await trader._validar_diversidad(symbol, peso_total,
-        peso_min_total, estrategias_persistentes, diversidad_min, df,
-        config.get('modo_agresivo', False))
+
+    diversidad_ok = await trader._validar_diversidad(
+        symbol, peso_total, peso_min_total, estrategias_persistentes, diversidad_min, df, config.get('modo_agresivo', False)
+    )
+
     if _budget_exceeded():
         log.warning(f'[{symbol}] Budget agotado tras validar diversidad')
         return None
+
     if not diversidad_ok:
-        umbral_peso_unico = config.get('umbral_peso_estrategia_unica',
-            peso_min_total * 1.5) or (peso_min_total * 1.5)
+        umbral_peso_unico = config.get('umbral_peso_estrategia_unica', peso_min_total * 1.5) or (peso_min_total * 1.5)
         umbral_score_base = getattr(trader, 'umbral_score_tecnico', 1.0) * 1.5
         umbral_score_unico = config.get('umbral_score_estrategia_unica', umbral_score_base) or umbral_score_base
         high_weight = peso_total >= umbral_peso_unico
-        high_score = (
-            (score_tecnico if score_tecnico is not None else 0) >= umbral_score_unico
-        )
+        high_score = (score_tecnico if score_tecnico is not None else 0) >= umbral_score_unico
         if not (high_weight or high_score or config.get('modo_agresivo', False)):
             razones.append('diversidad')
+
     if not trader._validar_estrategia(symbol, df, estrategias, config):
         razones.append('estrategia')
+
     if not ok_pers:
         razones.append('persistencia')
+
     if razones:
         agresivo = config.get('modo_agresivo', False)
         if not agresivo or len(razones) > 2:
@@ -535,20 +568,20 @@ async def verificar_entrada(trader, symbol: str, df: pd.DataFrame, estado) -> (
             for r in razones:
                 metricas_tracker.registrar_filtro(r)
             return None
+
     if trader.usar_score_tecnico:
-        log.debug(
-            f'[{symbol}] Score técnico {score_tecnico:.2f} componentes: {puntos_tecnicos.to_dict()}'
-        )
+        log.debug(f'[{symbol}] Score técnico {score_tecnico:.2f} componentes: {puntos_tecnicos.to_dict()}')
     else:
         score_tecnico = None
+
     precio = float(df['close'].iloc[-1])
-    sl, tp = calcular_tp_sl_adaptativos(symbol, df, config,
-        trader.capital_por_simbolo.get(symbol, 0), precio)
+    sl, tp = calcular_tp_sl_adaptativos(
+        symbol, df, config, trader.capital_por_simbolo.get(symbol, 0), precio
+    )
+
+    # Ajuste por tendencia de marco superior (5m) si está disponible
     try:
-        df_htf = (
-            df.sort_values('timestamp')
-            .set_index(pd.to_datetime(df['timestamp'], unit='ms'))
-        )
+        df_htf = df.sort_values('timestamp').set_index(pd.to_datetime(df['timestamp'], unit='ms'))
         df_htf = safe_resample(df_htf, '5min').last().dropna()
         if len(df_htf) >= 30:
             tendencia_htf = obtener_tendencia(symbol, df_htf)
@@ -567,25 +600,28 @@ async def verificar_entrada(trader, symbol: str, df: pd.DataFrame, estado) -> (
     except Exception as e:
         log.error(f'❌ Error evaluando tendencia HTF para {symbol}: {e}')
         metricas_tracker.registrar_filtro('tendencia_htf_error')
+
     if not distancia_minima_valida(precio, sl, tp):
-        log.warning(
-            f'[{symbol}] SL/TP distancia mínima no válida: SL {sl} TP {tp}')
+        log.warning(f'[{symbol}] SL/TP distancia mínima no válida: SL {sl} TP {tp}')
         metricas_tracker.registrar_filtro('sl_tp')
         return None
-    
+
     if _budget_exceeded():
         log.warning(f'[{symbol}] Budget agotado antes de score técnico')
         return None
+
     await asyncio.sleep(0)
     eval_tecnica = await evaluar_puntaje_tecnico(symbol, df, precio, sl, tp)
     score_total = eval_tecnica['score_total']
     score_normalizado = eval_tecnica.get('score_normalizado')
     detalles = eval_tecnica.get('detalles', {})
+
     pesos_simbolo = await cargar_pesos_tecnicos(symbol)
     score_max = sum(pesos_simbolo.values())
     if score_normalizado is None:
         score_normalizado = score_total / score_max if score_max else score_total
     umbral_normalizado = umbral / score_max if score_max else umbral
+
     if score_normalizado < umbral_normalizado:
         trace = DecisionTrace(
             score_normalizado, umbral_normalizado, DecisionReason.BELOW_THRESHOLD, detalles
@@ -593,6 +629,8 @@ async def verificar_entrada(trader, symbol: str, df: pd.DataFrame, estado) -> (
         log.info(f'[{symbol}] Trace: {trace.to_json()}')
         metricas_tracker.registrar_filtro('score_tecnico')
         return None
+
+    # Control de correlación con posiciones abiertas
     abiertas = [s for s, o in trader.orders.ordenes.items() if o.cantidad_abierta > 0 and s != symbol]
     if abiertas:
         correlaciones = trader._calcular_correlaciones(symbols=[symbol, *abiertas])
@@ -603,14 +641,16 @@ async def verificar_entrada(trader, symbol: str, df: pd.DataFrame, estado) -> (
                 log.info(f'[{symbol}] Correlación {corr:.2f} supera umbral {umbral_corr}')
                 metricas_tracker.registrar_filtro('correlacion')
                 return None
+
+    # Contexto macro
     puntaje_macro = obtener_puntaje_contexto(symbol)
     if abs(puntaje_macro) > getattr(trader.config, 'umbral_puntaje_macro', 6):
         log.info(f'[{symbol}] Contexto macro desfavorable ({puntaje_macro:.2f})')
         metricas_tracker.registrar_filtro('contexto_macro')
         return None
-    log.info(
-        f'✅ [{symbol}] Señal de entrada generada con {len(estrategias_persistentes)} estrategias activas.'
-        )
+
+    log.info(f'✅ [{symbol}] Señal de entrada generada con {len(estrategias_persistentes)} estrategias activas.')
+
     candle_ts = int(df['timestamp'].iloc[-1])
     version = getattr(trader.config, 'version', 'v1')
     return {
@@ -628,3 +668,4 @@ async def verificar_entrada(trader, symbol: str, df: pd.DataFrame, estado) -> (
         'score_tecnico': score_tecnico,
         'detalles_tecnicos': eval_tecnica.get('detalles', {}),
     }
+

@@ -10,7 +10,6 @@ necesario.
 
 from __future__ import annotations
 import asyncio
-import logging
 import traceback
 import threading
 from collections import defaultdict, deque
@@ -18,7 +17,6 @@ from datetime import datetime, timedelta, timezone
 from typing import Awaitable, Callable, Deque, Dict
 
 import os
-
 
 from config.config import INTERVALO_VELAS, TIMEOUT_SIN_DATOS_FACTOR
 from core.notification_manager import crear_notification_manager_desde_env
@@ -32,6 +30,7 @@ from observabilidad import metrics as obs_metrics
 
 UTC = timezone.utc
 log = configurar_logger("supervisor")
+
 
 class Supervisor:
     """Vigila la salud del bot y gestiona reinicios de tareas."""
@@ -84,7 +83,6 @@ class Supervisor:
 
     def exception_handler(self, loop: asyncio.AbstractEventLoop, context: dict) -> None:
         """Manejador de excepciones no controladas del loop principal."""
-
         exc = context.get("exception")
         if exc:
             if isinstance(exc, StopIteration):
@@ -101,7 +99,6 @@ class Supervisor:
 
     def beat(self, name: str, cause: str | None = None) -> None:
         """Registra un latido para ``name`` y opcionalmente su ``cause``."""
-
         now = self._now()
         last = self.task_heartbeat.get(name)
         if last:
@@ -140,7 +137,6 @@ class Supervisor:
 
     def registrar_reinicio_inactividad(self, symbol: str) -> None:
         """Incrementa el contador de reinicios por inactividad para ``symbol``."""
-
         self.reinicios_inactividad[symbol] = (
             self.reinicios_inactividad.get(symbol, 0) + 1
         )
@@ -154,7 +150,6 @@ class Supervisor:
         self, cb: Callable[[str], Awaitable[None]]
     ) -> None:
         """Registra ``cb`` para reiniciar el DataFeed cuando falten datos."""
-
         self.data_feed_reconnector = cb
 
     def registrar_ping(self, symbol: str, rtt_ms: float) -> None:
@@ -167,7 +162,6 @@ class Supervisor:
 
     async def heartbeat(self, interval: int = 60) -> None:
         """Emite latidos periódicos para el proceso principal."""
-
         while True:
             log.info("bot alive | last=%s", self.last_function)
             self.last_alive = self._now()
@@ -175,7 +169,6 @@ class Supervisor:
 
     def set_watchdog_interval(self, interval: int) -> None:
         """Actualiza el intervalo de verificación del watchdog."""
-
         self._watchdog_interval = interval
         self._watchdog_interval_event.set()
 
@@ -190,10 +183,14 @@ class Supervisor:
             )
             for nombre, task in self.tasks.items():
                 try:
-                    stack = "\n".join(traceback.format_stack(task.get_stack()))
-                    log.critical("Stack de %s:\n%s", nombre, stack)
+                    frames = task.get_stack()
+                    # Construye un StackSummary legible
+                    summary = traceback.StackSummary.extract([(f, f.f_lineno) for f in frames])
+                    stack = "".join(summary.format())
                 except Exception:
-                    pass
+                    stack = "No se pudo formatear el stack."
+                log.critical("Stack de %s:\n%s", nombre, stack)
+
         for task_name, ts in list(self.task_heartbeat.items()):
             cooldown = self.task_cooldown.get(task_name)
             if cooldown and now < cooldown:
@@ -239,7 +236,8 @@ class Supervisor:
                         )
                 else:
                     await self.restart_task(task_name)
-        for sym, ts in self.data_heartbeat.items():
+
+        for sym, ts in list(self.data_heartbeat.items()):
             sin_datos = (now - ts).total_seconds()
             log.debug(
                 "Verificando datos de %s: %.1f segundos desde la última vela",
@@ -323,7 +321,6 @@ class Supervisor:
 
     async def watchdog(self, timeout: int = 120, check_interval: int = 10) -> None:
         """Valida que el proceso siga activo e imprime trazas si se congela."""
-
         self._watchdog_interval = check_interval
         while not self.stop_event.is_set():
             await self._watchdog_once(timeout)
@@ -336,14 +333,12 @@ class Supervisor:
                 pass
             self._watchdog_interval_event.clear()
 
-
-# ------------------------------------------------------------------
+    # ------------------------------------------------------------------
     # Gestión de tareas supervisadas
     # ------------------------------------------------------------------
 
     def start_supervision(self) -> None:
         """Configura el loop y lanza las tareas de monitorización."""
-
         loop = asyncio.get_running_loop()
         self.main_loop = loop
         loop.set_exception_handler(self.exception_handler)
@@ -351,7 +346,6 @@ class Supervisor:
         asyncio.create_task(self.heartbeat(), name="heartbeat")
         asyncio.create_task(self.watchdog(), name="watchdog")
 
-    
         def thread_excepthook(args: threading.ExceptHookArgs) -> None:
             log.critical(
                 "Excepcion en hilo %s: %s",
@@ -359,6 +353,7 @@ class Supervisor:
                 args.exc_value,
                 exc_info=(args.exc_type, args.exc_value, args.exc_traceback),
             )
+
         threading.excepthook = thread_excepthook
 
     async def _restartable_runner(
@@ -369,7 +364,6 @@ class Supervisor:
         max_restarts: int | None = None,
     ) -> None:
         """Ejecuta ``coro_factory`` reiniciándolo ante fallos o finalización."""
-
         restarts = 0
         task = asyncio.current_task()
         limite = max_restarts if max_restarts is not None else 5
@@ -419,9 +413,9 @@ class Supervisor:
             # Limpia la referencia de la tarea si ya no es la vigente
             if self.tasks.get(task_name) is task:
                 self.tasks.pop(task_name, None)
+
     async def restart_task(self, task_name: str) -> None:
         """Reinicia ``task_name`` aplicando backoff y registrando métricas."""
-
         task = self.tasks.get(task_name)
         if task:
             try:
@@ -439,42 +433,24 @@ class Supervisor:
             finally:
                 if self.tasks.get(task_name) is task:
                     self.tasks.pop(task_name, None)
+
         registrar_watchdog_restart(task_name)
         self.reinicios_watchdog[task_name] = (
             self.reinicios_watchdog.get(task_name, 0) + 1
         )
-        factory = self.task_factories.get(task_name)
-        if factory:
-            self.supervised_task(factory, name=task_name)
-        try:
-            self.notificador.enviar(f"Reiniciando tarea {task_name}")
-        except Exception:
-            pass
-        now = self._now()
-        times = self.task_restart_times[task_name]
-        times.append(now)
-        limite = now - timedelta(minutes=10)
-        while times and times[0] < limite:
-            times.popleft()
-        if len(times) > 3:
-            log.warning(
-                "⚠️ %s reiniciado %s veces en 10m", task_name, len(times)
-            )
-            try:
-                self.notificador.enviar(
-                    f"⚠️ {task_name} reiniciado {len(times)} veces en 10m",
-                    "WARNING",
-                )
-            except Exception:
-                pass
+
+        # Programar arranque diferido (evita doble arranque)
         attempt = self.task_backoff[task_name]
+
         async def _starter() -> None:
             await backoff_sleep(attempt, base=5, cap=120)
             factory = self.task_factories.get(task_name)
             if factory:
                 self.supervised_task(factory, name=task_name)
             self.task_cooldown[task_name] = self._now() + timedelta(seconds=self.cooldown_sec)
+
         asyncio.create_task(_starter(), name=f"{task_name}_restart")
+
         if task_name.startswith("stream_"):
             sym = task_name.split("stream_")[1]
             obs_metrics.REINTENTOS_RECONEXION_TOTAL.labels(sym).inc()
@@ -491,6 +467,7 @@ class Supervisor:
                 "reinicios_consumer_total",
                 {"symbol": sym, "count": self.reinicios_consumer[sym]},
             )
+
         self.task_backoff[task_name] = attempt + 1
 
     def supervised_task(
@@ -502,10 +479,9 @@ class Supervisor:
         expected_interval: int | None = None,
     ) -> asyncio.Task:
         """Crea una tarea supervisada que se reinicia automáticamente."""
-
         task_name = name or getattr(coro_factory, "__name__", "task")
         self.task_factories[task_name] = coro_factory
-        self.task_backoff[task_name] = 0
+        self.task_backoff[task_name] = 0  # resetea backoff en nueva creación
         if expected_interval is not None:
             self.task_expected_interval[task_name] = expected_interval
         task = asyncio.create_task(
@@ -514,15 +490,15 @@ class Supervisor:
         )
         self.tasks[task_name] = task
         return task
-    
+
     async def shutdown(self) -> None:
         """Detiene todas las tareas supervisadas."""
-
         self.stop_event.set()
         for t in list(self.tasks.values()):
             t.cancel()
         if self.tasks:
             await asyncio.gather(*self.tasks.values(), return_exceptions=True)
+
 
 # ----------------------------------------------------------------------
 #  API de compatibilidad
@@ -541,9 +517,11 @@ registrar_ping = _default_supervisor.registrar_ping
 set_watchdog_interval = _default_supervisor.set_watchdog_interval
 shutdown = _default_supervisor.shutdown
 
+
 async def stop_supervision() -> None:
     """Detiene todas las tareas supervisadas."""
     await _default_supervisor.shutdown()
+
 
 tasks = _default_supervisor.tasks
 task_heartbeat = _default_supervisor.task_heartbeat
@@ -557,6 +535,7 @@ def get_last_alive() -> datetime:
 
 def __getattr__(name: str):  # pragma: no cover - acceso dinámico
     return getattr(_default_supervisor, name)
+
 
 __all__ = [
     "Supervisor",
@@ -577,3 +556,4 @@ __all__ = [
     "reinicios_inactividad",
     "get_last_alive",
 ]
+
