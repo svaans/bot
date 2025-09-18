@@ -485,11 +485,17 @@ class DataFeed:
                     candles.append(queue.get_nowait())
                 except asyncio.QueueEmpty:
                     break
-            async with asyncio.TaskGroup() as tg:
-                for c in candles:
-                    tg.create_task(
-                        self._process_candle(symbol, c, handler, queue)
-                    )
+            if hasattr(asyncio, "TaskGroup"):
+                async with asyncio.TaskGroup() as tg:  # type: ignore[attr-defined]
+                    for c in candles:
+                        tg.create_task(
+                            self._process_candle(symbol, c, handler, queue)
+                        )
+            else:
+                # Python 3.10 o menor: usamos gather
+                await asyncio.gather(
+                    *(self._process_candle(symbol, c, handler, queue) for c in candles)
+                )
             procesadas += len(candles)
             ahora = time.monotonic()
             if ahora - inicio >= 2.0:

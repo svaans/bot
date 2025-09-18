@@ -366,7 +366,17 @@ class Supervisor:
         """Ejecuta ``coro_factory`` reiniciándolo ante fallos o finalización."""
         restarts = 0
         task = asyncio.current_task()
-        limite = max_restarts if max_restarts is not None else 5
+
+        # Semántica mejorada:
+        # - None  => usa 5 por defecto
+        # - <= 0  => ilimitado
+        if max_restarts is None:
+            limite = 5
+        elif max_restarts <= 0:
+            limite = float("inf")
+        else:
+            limite = max_restarts
+
         try:
             while True:
                 try:
@@ -394,10 +404,11 @@ class Supervisor:
                     )
                     if restarts + 1 >= limite:
                         cooldown = calcular_backoff(restarts, base=delay * 2, max_seg=300)
+                        limite_txt = "ilimitado" if limite == float("inf") else str(int(limite))
                         log.error(
                             "🚫 %s alcanzó %s reinicios; enfriando %.1fs",
                             task_name,
-                            limite,
+                            limite_txt,
                             cooldown,
                         )
                         await asyncio.sleep(cooldown)
@@ -556,4 +567,5 @@ __all__ = [
     "reinicios_inactividad",
     "get_last_alive",
 ]
+
 

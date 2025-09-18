@@ -1,5 +1,6 @@
 """Gestión de contexto fundamental recibido por streaming desde Binance."""
 from __future__ import annotations
+
 import asyncio
 import json
 import ssl
@@ -8,7 +9,10 @@ from typing import Awaitable, Callable, Dict, Iterable
 import time
 from math import isclose
 import websockets
-from binance_api.websocket import _keepalive
+
+# ❌ Eliminado: keepalive manual para evitar doble ping/pong
+# from binance_api.websocket import _keepalive
+
 from core.utils.utils import configurar_logger
 from core.supervisor import supervised_task, tick
 from core.utils.backoff import calcular_backoff
@@ -22,7 +26,7 @@ _DATOS_EXTERNOS: Dict[str, dict] = {}
 CONTEXT_WS_URL = 'wss://stream.binance.com:9443/ws/{symbol}@kline_5m'
 
 
-def obtener_puntaje_contexto(symbol: str) ->float:
+def obtener_puntaje_contexto(symbol: str) -> float:
     """Devuelve el último puntaje conocido para ``symbol``."""
     valor = _PUNTAJES.get(symbol)
     try:
@@ -31,12 +35,12 @@ def obtener_puntaje_contexto(symbol: str) ->float:
         return 0.0
 
 
-def obtener_todos_puntajes() ->dict:
+def obtener_todos_puntajes() -> dict:
     """Devuelve todos los puntajes actuales almacenados."""
     return dict(_PUNTAJES)
 
 
-def obtener_datos_externos(symbol: str) ->dict:
+def obtener_datos_externos(symbol: str) -> dict:
     """Devuelve los últimos datos externos conocidos para ``symbol``."""
     return dict(_DATOS_EXTERNOS.get(symbol, {}))
 
@@ -50,7 +54,8 @@ class StreamContexto:
         monitor_interval: int = 30,
         inactivity_timeout: int = 300,
         cancel_timeout: float = 5,
-        open_timeout: int = 30,
+        # ⬆️ Hicimos más generoso el open_timeout para reducir "timed out during opening handshake"
+        open_timeout: int = 60,
         connection_delay: float = 1.0,
         ping_interval: int = 20,
         ping_timeout: int = 10,
@@ -81,7 +86,7 @@ class StreamContexto:
         self._running = False
         self._symbols: list[str] = []
 
-    def actualizar_datos_externos(self, symbol: str, datos: dict) ->None:
+    def actualizar_datos_externos(self, symbol: str, datos: dict) -> None:
         actual = _DATOS_EXTERNOS.setdefault(symbol, {})
         actual.update(datos)
 
@@ -93,23 +98,31 @@ class StreamContexto:
         intentos = 0
         while self._running:
             try:
+                # SSL por defecto si no se proporcionó (endurece handshake)
+                connect_ssl = self.ssl_context
+                if connect_ssl is None:
+                    connect_ssl = ssl.create_default_context()
+
                 connect_params = {
                     "open_timeout": self.open_timeout,
+                    # ✅ dejamos que 'websockets' gestione los pings (no keepalive manual)
                     "ping_interval": self.ping_interval,
                     "ping_timeout": self.ping_timeout,
                     "close_timeout": 5,
-                    "max_queue": 0,
+                    "max_queue": 0,       # backpressure interno inmediato (coherente con tus colas externas)
                     "compression": "deflate",
+                    "ssl": connect_ssl,
                 }
-                if self.ssl_context is not None:
-                    connect_params["ssl"] = self.ssl_context
 
                 async with websockets.connect(url, **connect_params) as ws:
                     log.info(f'🔌 Contexto conectado para {symbol}')
                     self._last[symbol] = datetime.now(UTC)
                     self._last_monotonic[symbol] = time.monotonic()
                     intentos = 0
-                    keeper = asyncio.create_task(_keepalive(ws, symbol, self.ping_interval))
+
+                    # ❌ Eliminado el keepalive propio.
+                    # keeper = asyncio.create_task(_keepalive(ws, symbol, self.ping_interval))
+
                     try:
                         async for msg in ws:
                             try:
@@ -131,24 +144,19 @@ class StreamContexto:
                                     await handler(symbol, puntaje)
                                     tick('context_stream')
                                 except Exception as e:
-                                    log.warning(
-                                        f'⚠️ Handler contexto {symbol} falló: {e}'
-                                    )
+                                    log.warning(f'⚠️ Handler contexto {symbol} falló: {e}')
                             except asyncio.CancelledError:
-                                log.info(
-                                    f'🛑 Stream contexto {symbol} cancelado (mensaje).'
-                                )
+                                log.info(f'🛑 Stream contexto {symbol} cancelado (mensaje).')
                                 raise
                             except Exception as e:
-                                log.warning(
-                                    f'⚠️ Error procesando contexto de {symbol}: {e}'
-                                )
+                                log.warning(f'⚠️ Error procesando contexto de {symbol}: {e}')
                     finally:
-                        keeper.cancel()
-                        try:
-                            await keeper
-                        except Exception as e:
-                            log.debug(f'Error al esperar keepalive cancelado: {e}')
+                        # if keeper:
+                        #     keeper.cancel()
+                        #     try:
+                        #         await keeper
+                        #     except Exception as e:
+                        #         log.debug(f'Error al esperar keepalive cancelado: {e}')
                         log.debug(f'Tareas activas tras cierre: {len(asyncio.all_tasks())}')
             except asyncio.CancelledError:
                 log.info(f'🛑 Stream contexto {symbol} cancelado')
@@ -194,25 +202,21 @@ class StreamContexto:
                 for sym, task in list(self._tasks.items()):
                     ultimo = self._last_monotonic.get(sym)
                     if task.done():
-                        log.warning(
-                            f'🔄 Stream contexto {sym} finalizado; reiniciando'
-                        )
+                        log.warning(f'🔄 Stream contexto {sym} finalizado; reiniciando')
                         self._tasks[sym] = supervised_task(
                             lambda sym=sym: self._stream(sym, self._handler_actual),
                             name=f"context_stream_{sym}",
                         )
                         continue
                     if ultimo is not None and (ahora - ultimo) > self.inactivity_timeout:
+                        # Si aún no hemos calculado ningún puntaje, probablemente no llegaron kline cerrados:
+                        # evita bucles de reinicio ruidosos.
                         if sym not in _PUNTAJES:
-                            log.debug(
-                                f'⏳ Contexto {sym} sin datos recientes; omitiendo reinicio'
-                            )
+                            log.debug(f'⏳ Contexto {sym} sin datos recientes; omitiendo reinicio')
                             self._last[sym] = datetime.now(UTC)
                             self._last_monotonic[sym] = ahora
                             continue
-                        log.warning(
-                            f'🔄 Stream contexto {sym} inactivo; reiniciando'
-                        )
+                        log.warning(f'🔄 Stream contexto {sym} inactivo; reiniciando')
                         task.cancel()
                         try:
                             await task
@@ -225,7 +229,9 @@ class StreamContexto:
         except asyncio.CancelledError:
             pass
 
-    async def escuchar(self, symbols: Iterable[str], handler: Callable[[str, float], Awaitable[None]]) -> None:
+    async def escuchar(
+        self, symbols: Iterable[str], handler: Callable[[str, float], Awaitable[None]]
+    ) -> None:
         """Inicia un stream supervisado por cada símbolo."""
         await self.detener()
         self._handler_actual = handler
@@ -241,6 +247,7 @@ class StreamContexto:
                 lambda sym=sym: self._stream(sym, handler),
                 name=f"context_stream_{sym}",
             )
+            # pequeño retraso entre conexiones para evitar estampida
             await asyncio.sleep(self.connection_delay)
         try:
             while self._running:
@@ -253,25 +260,20 @@ class StreamContexto:
         if self._monitor_task and not self._monitor_task.done():
             self._monitor_task.cancel()
             try:
-                await asyncio.wait_for(
-                    self._monitor_task,
-                    timeout=self.cancel_timeout,
-                )
+                await asyncio.wait_for(self._monitor_task, timeout=self.cancel_timeout)
             except asyncio.TimeoutError:
                 log.warning('🧟 Timeout cancelando monitor global (tarea zombie)')
             except Exception:
                 pass
         self._monitor_task = None
+
         for task in self._tasks.values():
             task.cancel()
         for nombre, task in list(self._tasks.items()):
             if task.done():
                 continue
             try:
-                await asyncio.wait_for(
-                    task,
-                    timeout=self.cancel_timeout,
-                )
+                await asyncio.wait_for(task, timeout=self.cancel_timeout)
             except asyncio.TimeoutError:
                 log.warning(f'🧟 Timeout cancelando stream {nombre} (tarea zombie)')
             except Exception:
@@ -280,5 +282,10 @@ class StreamContexto:
         self._symbols = []
 
 
-__all__ = ['StreamContexto', 'obtener_puntaje_contexto',
-    'obtener_todos_puntajes', 'obtener_datos_externos']
+__all__ = [
+    'StreamContexto',
+    'obtener_puntaje_contexto',
+    'obtener_todos_puntajes',
+    'obtener_datos_externos',
+]
+
