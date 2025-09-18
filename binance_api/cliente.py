@@ -1,3 +1,6 @@
+Aquí tienes el **archivo completo corregido y listo para pegar** con los fixes aplicados: SyntaxError resuelto, circuit breaker tipado y con mensaje claro, control de rate-limit, mejoras en user stream (no duplica keepalive y usa backoff exponencial), normalización de símbolo más segura y cierre correcto de la sesión HTTP.
+
+```python
 import os
 import asyncio
 import functools
@@ -17,9 +20,7 @@ from core.metrics import registrar_binance_weight
 
 log = configurar_logger('binance_client')
 
-
 AUTH_WARNING_EMITTED = False
-
 CB_SILENCE_SECONDS = float(os.getenv("CB_SILENCE_SECONDS", "60"))
 
 # Estado del circuit breaker y métricas por endpoint
@@ -48,6 +49,7 @@ def _get_session() -> aiohttp.ClientSession:
         _HTTP_SESSION = aiohttp.ClientSession(connector=connector, timeout=timeout)
     return _HTTP_SESSION
 
+
 class BinanceError(Exception):
     """Excepción propia con código y sugerencia."""
 
@@ -56,6 +58,14 @@ class BinanceError(Exception):
         self.code = code
         self.reason = reason
         self.suggestion = suggestion
+
+
+class CircuitBreakerOpen(BinanceError):
+    def __init__(self, endpoint: str, remaining: float):
+        super().__init__(429, "Circuit breaker", f"Espera {remaining:.1f}s")
+        self.endpoint = endpoint
+        self.remaining = remaining
+
 
 def _extract_code(exc: Exception) -> int | None:
     code = getattr(exc, "code", None)
@@ -74,30 +84,30 @@ def _extract_code(exc: Exception) -> int | None:
 def binance_call(
     fn: Callable[[], Any], *, signed: bool = False, endpoint: str | None = None, symbol: str | None = None
 ) -> Any:
+    """
+    Envoltura con circuit breaker, backoff e integración de métricas de weight.
+    Nota: esta función es síncrona; se ejecuta dentro de run_in_executor.
+    """
     endpoint = endpoint or getattr(fn, "__name__", "unknown")
     state = _CIRCUIT_BREAKERS.setdefault(
         endpoint,
         {
-            "fails": 0,  # fallos consecutivos para circuit breaker
-            "until": 0.0,  # tiempo hasta que se reintenta
-            "silence": 0.0,  # ventana de silencio para logs
-            "attempts": 0,  # métricas totales
-            "failures": 0,
+            "fails": 0,       # fallos consecutivos para circuit breaker
+            "until": 0.0,     # epoch hasta que se reintenta
+            "silence": 0.0,   # ventana de silencio para logs
+            "attempts": 0,    # total de intentos
+            "failures": 0,    # total de fallos
             "last_code": None,
         },
     )
     state["attempts"] += 1
     now = time.time()
     if state["until"] > now:
+        remaining = max(0.0, state["until"] - now)
         if now >= state.get("silence", 0.0):
-            log.error(f"Circuit breaker activo para {endpoint}")
+            log.error(f"Circuit breaker activo para {endpoint} ({remaining:.1f}s restantes)")
             state["silence"] = now + CB_SILENCE_SECONDS
-        exc = RuntimeError("Circuit breaker activo")
-        exc.endpoint = endpoint
-        exc.symbol = symbol
-        exc.signed = signed
-        exc.attempts = 0
-        raise exc
+        raise CircuitBreakerOpen(endpoint, remaining)
 
     max_attempts = 5
     base = 0.5
@@ -107,6 +117,7 @@ def binance_call(
     while attempt <= max_attempts:
         try:
             result = fn()
+            # Extrae weight de cabeceras si ccxt lo expone
             exchange = getattr(fn, "__self__", None)
             used = 0
             if exchange and getattr(exchange, "last_response", None):
@@ -114,22 +125,27 @@ def binance_call(
                 try:
                     used = int(
                         hdrs.get("X-MBX-USED-WEIGHT-1m")
-                        or hdrs.get("X-MBX-USED-IP-WEIGHT-1m", 0)
+                        or hdrs.get("X-MBX-USED-IP-WEIGHT-1m")
+                        or hdrs.get("X-MBX-ORDER-COUNT-1m", 0)
                     )
                 except Exception:
                     used = 0
             registrar_binance_weight(used)
             if used > 1000:
                 log.warning(f"⚠️ Weight {used}/1200 used")
+
             state["fails"] = 0
             state["until"] = 0.0
             state["last_code"] = None
             return result
+
         except Exception as exc:
             code = _extract_code(exc)
             state["last_code"] = code
             state["failures"] += 1
             status = getattr(exc, "http_status", None) or getattr(exc, "status", None)
+
+            # Límite de tasa
             if code == -1003 or (isinstance(status, int) and status in (429, 418)):
                 headers = getattr(getattr(exc, "response", None), "headers", {}) or {}
                 retry_after = headers.get("Retry-After")
@@ -142,6 +158,8 @@ def binance_call(
                     log.error(f"🕒 Límite de tasa excedido en {endpoint}, pausando {wait} s")
                     state["silence"] = time.time() + CB_SILENCE_SECONDS
                 raise BinanceError(code or status or 429, "Rate limit hit", f"Backoff {wait}s")
+
+            # 5xx → suma fallos; abre CB corto si se repite
             is_5xx = isinstance(status, int) and 500 <= status < 600
             if is_5xx:
                 state["fails"] += 1
@@ -149,20 +167,13 @@ def binance_call(
                     state["until"] = time.time() + 30
             else:
                 state["fails"] = 0
+
+            # errores finales sin reintento
             final = False
-
-            if code in (-1013, -1100, -1102, -1130):
+            if code in (-1013, -1100, -1102, -1130):  # parámetro inválido / filtro
                 final = True
 
-            if code == -2015:
-                state["until"] = time.time() + random.randint(600, 900)
-                if time.time() >= state.get("silence", 0.0):
-                    log.error(f"Error -2015 en {endpoint}: {exc}")
-                    state["silence"] = time.time() + CB_SILENCE_SECONDS
-                final = True
-            elif state["fails"] > 3 or attempt >= max_attempts:
-                final = True
-
+            # Desfase horario
             if code == -1021 and not time_synced:
                 exchange = getattr(fn, "__self__", None)
                 if exchange and hasattr(exchange, "load_time_difference"):
@@ -174,29 +185,48 @@ def binance_call(
                 attempt += 1
                 continue
 
+            # Auth inválida prolongada
+            if code == -2015:
+                state["until"] = time.time() + random.randint(600, 900)
+                if time.time() >= state.get("silence", 0.0):
+                    log.error(f"Error -2015 en {endpoint}: {exc}")
+                    state["silence"] = time.time() + CB_SILENCE_SECONDS
+                final = True
+            elif state["fails"] > 3 or attempt >= max_attempts:
+                final = True
+
+            # Anotar metadatos útiles en la excepción
             exc.endpoint = endpoint
             exc.symbol = symbol
             exc.signed = signed
             exc.attempts = attempt
+
             if final:
                 if code != -2015 and time.time() >= state.get("silence", 0.0):
                     log.error(f"Error final en {endpoint}: {exc}")
                     state["silence"] = time.time() + CB_SILENCE_SECONDS
                 raise
+
             log.debug(f"Intento {attempt} fallido en {endpoint}: {exc}")
             espera = base * (2 ** (attempt - 1)) + random.random() * jitter
+            # Nota: binance_call es síncrona; este sleep corre en el executor.
             time.sleep(espera)
             attempt += 1
 
-# === reemplaza en cliente.py ===
+
+# === user data stream ===
 async def _start_user_stream(exchange) -> None:
     """
     Inicializa el user data stream de Binance con base URL correcta y tareas de keepalive/WS.
     Soporta Spot y USDM Futures según exchange.options['defaultType'].
     """
     global _USER_STREAM_TASK, _KEEPALIVE_TASK
+    # Evita duplicar listener si ya está activo
     if _USER_STREAM_TASK and not _USER_STREAM_TASK.done():
         return
+    # Cancela keepalive previo si sigue vivo
+    if _KEEPALIVE_TASK and not _KEEPALIVE_TASK.done():
+        _KEEPALIVE_TASK.cancel()
 
     default_type = (getattr(exchange, "options", {}) or {}).get("defaultType", "spot")
     if default_type == "future":
@@ -236,9 +266,7 @@ async def _keepalive_listen_key_generic(rest_base: str, path: str, headers: dict
     session = _get_session()
     while True:
         try:
-            r = await session.put(
-                f"{rest_base}{path}", headers=headers, params={"listenKey": listen_key}
-            )
+            r = await session.put(f"{rest_base}{path}", headers=headers, params={"listenKey": listen_key})
             if r.status >= 400:
                 body = await r.text()
                 log.error(f"Keepalive listenKey falló ({r.status}): {body}")
@@ -249,6 +277,7 @@ async def _keepalive_listen_key_generic(rest_base: str, path: str, headers: dict
 
 async def _user_stream_ws_generic(ws_url: str, exchange) -> None:
     """Escucha user stream (Spot o Futures) y mantiene caché local de órdenes."""
+    retries = 0
     while True:
         try:
             async with websockets.connect(
@@ -260,13 +289,14 @@ async def _user_stream_ws_generic(ws_url: str, exchange) -> None:
                 max_queue=0,
                 compression="deflate",
             ) as ws:
+                retries = 0
                 async for msg in ws:
                     try:
                         data = json.loads(msg)
                     except Exception:
                         continue
-                    # Spot: eventos e="executionReport"
-                    # Futures: eventos pueden venir envueltos en {"stream":..., "data": {...}}
+                    # Spot: e="executionReport"
+                    # Futures: a veces viene {"stream":..., "data": {...}}
                     payload = data.get("data") if "stream" in data else data
                     if not isinstance(payload, dict):
                         continue
@@ -280,7 +310,11 @@ async def _user_stream_ws_generic(ws_url: str, exchange) -> None:
                     try:
                         symbol = exchange.market_id_to_symbol(raw)
                     except Exception:
-                        symbol = raw[:-4] + "/" + raw[-4:] if len(raw) > 4 else raw
+                        try:
+                            symbol = exchange.safe_symbol(raw)
+                        except Exception:
+                            log.warning(f"No pude normalizar símbolo de user stream: {raw}")
+                            symbol = raw
                     try:
                         from core.orders import real_orders
                         real_orders.eliminar_orden(symbol, forzar_log=True)
@@ -288,8 +322,9 @@ async def _user_stream_ws_generic(ws_url: str, exchange) -> None:
                         log.error(f"Error actualizando orden {symbol} desde user stream: {err}")
         except Exception as e:
             log.error(f"Error en websocket de user stream: {e}")
-            await asyncio.sleep(5)
-
+            retries += 1
+            delay = min(60, 2 ** min(6, retries)) + random.random()
+            await asyncio.sleep(delay)
 
 
 def auth_guard(default: Any = None):
@@ -301,9 +336,7 @@ def auth_guard(default: Any = None):
             global AUTH_WARNING_EMITTED
             if not self.modo_real or not self.authenticated:
                 if not AUTH_WARNING_EMITTED:
-                    log.warning(
-                        "🔒 AuthGuard: llamadas privadas bloqueadas en modo SIMULADO"
-                    )
+                    log.warning("🔒 AuthGuard: llamadas privadas bloqueadas en modo SIMULADO")
                     AUTH_WARNING_EMITTED = True
                 if isinstance(default, Exception):
                     raise default
@@ -403,6 +436,7 @@ def crear_cliente(config: Config | None = None):
         try:
             asyncio.get_event_loop().create_task(_start_user_stream(exchange))
         except RuntimeError:
+            # No hay loop activo; el caller deberá iniciar user stream más tarde.
             pass
     exchange._modo_real = modo_real
 
@@ -437,7 +471,7 @@ def crear_cliente(config: Config | None = None):
     }
     for nombre, firmado in wrappers.items():
         _wrap(nombre, firmado)
-        
+
     return exchange
 
 
@@ -525,7 +559,7 @@ async def fetch_order_book_async(cliente, *args, **kwargs):
     loop = asyncio.get_running_loop()
     func = functools.partial(cliente.fetch_order_book, *args, **kwargs)
     return await loop.run_in_executor(None, func)
-    
+
 
 async def load_markets_async(cliente, *args, **kwargs):
     if isinstance(cliente, BinanceClient):
@@ -548,3 +582,5 @@ async def close_http_session() -> None:
     global _HTTP_SESSION
     if _HTTP_SESSION and not _HTTP_SESSION.closed:
         await _HTTP_SESSION.close()
+```
+
