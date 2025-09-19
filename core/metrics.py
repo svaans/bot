@@ -96,6 +96,20 @@ TRADER_QUEUE_SIZE = Gauge(
     "Tamaño de la cola interna del Trader",
 )
 
+TRADER_PIPELINE_LATENCY = Histogram(
+    "trader_pipeline_latency_seconds",
+    "Latencia del procesamiento de velas en el trader modular",
+    ["symbol"],
+    buckets=(0.05, 0.1, 0.25, 0.5, 1, 2, 5, 10),
+)
+
+TRADER_PIPELINE_QUEUE_WAIT = Histogram(
+    "trader_pipeline_queue_wait_seconds",
+    "Tiempo que una vela espera en la cola interna del trader",
+    ["symbol"],
+    buckets=(0.01, 0.05, 0.1, 0.25, 0.5, 1, 2, 5),
+)
+
 WATCHDOG_RESTARTS = Counter(
     "watchdog_restarts_total",
     "Reinicios de tareas provocados por el watchdog",
