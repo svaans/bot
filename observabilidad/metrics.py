@@ -196,6 +196,25 @@ STREAMS_ACTIVOS = _get_metric(
     ["symbol"],
 )
 
+TRADER_BACKPRESSURE_TOTAL = _get_metric(
+    Counter,
+    "trader_backpressure_total",
+    "Activaciones del mecanismo de backpressure en el trader modular",
+)
+
+TRADER_BACKPRESSURE_DURATION = _get_metric(
+    Histogram,
+    "trader_backpressure_duration_seconds",
+    "Duración de las pausas aplicadas por backpressure en el trader modular",
+    buckets=(0.05, 0.1, 0.25, 0.5, 1, 2, 5),
+)
+
+TRADER_BACKPRESSURE_ACTIVE = _get_metric(
+    Gauge,
+    "trader_backpressure_active",
+    "Indicador binario de backpressure activo en el trader modular",
+)
+
 HEARTBEAT_OK_TOTAL = _get_metric(
     Counter,
     "heartbeat_ok_total",

@@ -182,6 +182,7 @@ class Trader:
         self.engine = StrategyEngine()
         self.bus = EventBus()
         obs_metrics.FEED_STOPPED.set(0)
+        obs_metrics.TRADER_BACKPRESSURE_ACTIVE.set(0)
         self.risk = RiskManager(config.umbral_riesgo_diario, self.bus)
         self.notificador = NotificationManager(config.telegram_token,
             config.telegram_chat_id, bus=self.bus)
@@ -1989,9 +1990,9 @@ class Trader:
         self.start()
         async def handle(candle: dict) -> None:
             async with self._sem_velas:
-                if len(self._tareas_velas) > self._max_tasks_velas:
-                    log.warning('⚠️ Backpressure: demasiadas velas pendientes')
-                    await asyncio.sleep(0.05)
+                backlog = len(self._tareas_velas)
+                if backlog >= self._max_tasks_velas:
+                    await self._aplicar_backpressure(backlog)
                 task = asyncio.create_task(self._procesar_vela(candle))
                 self._tareas_velas.add(task)
                 task.add_done_callback(self._tareas_velas.discard)
@@ -2069,6 +2070,56 @@ class Trader:
     def solicitar_parada(self) -> None:
         """Solicita al trader que detenga su ejecución."""
         self._stop_event.set()
+
+    async def _aplicar_backpressure(self, backlog_inicial: int) -> None:
+        """Bloquea la ingesta de velas hasta que la cola se normaliza."""
+
+        if backlog_inicial < self._max_tasks_velas:
+            return
+
+        retraso = 0.05
+        inicio = time.monotonic()
+        obs_metrics.TRADER_BACKPRESSURE_TOTAL.inc()
+        obs_metrics.TRADER_BACKPRESSURE_ACTIVE.set(1)
+        registro_metrico.registrar(
+            'trader_backpressure',
+            {
+                'queue_size': backlog_inicial,
+                'threshold': self._max_tasks_velas,
+            },
+        )
+        log.warning(
+            '⚠️ Backpressure: %s velas pendientes (máx %s). Pausando ingesta.',
+            backlog_inicial,
+            self._max_tasks_velas,
+        )
+        try:
+            backlog_actual = backlog_inicial
+            while backlog_actual >= self._max_tasks_velas:
+                if self._stop_event.is_set():
+                    break
+                await asyncio.sleep(retraso)
+                backlog_actual = len(self._tareas_velas)
+                TRADER_QUEUE_SIZE.set(backlog_actual)
+                retraso = min(retraso * 1.5, 0.5)
+        finally:
+            duracion = time.monotonic() - inicio
+            backlog_final = len(self._tareas_velas)
+            obs_metrics.TRADER_BACKPRESSURE_DURATION.observe(duracion)
+            obs_metrics.TRADER_BACKPRESSURE_ACTIVE.set(0)
+            TRADER_QUEUE_SIZE.set(backlog_final)
+            if self._stop_event.is_set() and backlog_final >= self._max_tasks_velas:
+                log.info(
+                    '⏹️ Backpressure cancelado por parada del bot tras %.2fs; cola=%s',
+                    duracion,
+                    backlog_final,
+                )
+            else:
+                log.info(
+                    '📉 Backpressure liberado en %.2fs; cola=%s',
+                    duracion,
+                    backlog_final,
+                )
 
     async def _procesar_vela(self, vela: dict) ->None:
         symbol = vela.get('symbol')

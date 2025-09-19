@@ -501,8 +501,12 @@ class DataFeed:
             if ahora - inicio >= 2.0:
                 rate = procesadas / (ahora - inicio)
                 qsize = queue.qsize()
+                maxsize = getattr(queue, "maxsize", 0) or 0
+                capacidad = f"{qsize}/{maxsize}" if maxsize > 0 else f"{qsize}"
                 obs_metrics.CONSUMER_RATE.labels(symbol=symbol).set(rate)
-                msg = f"[{symbol}] consumer_rate={rate:.1f}/s qsize={qsize}/{queue.maxsize}"
+                msg = (
+                    f"[{symbol}] consumer_rate={rate:.1f}/s qsize={capacidad}"
+                )
                 if qsize:
                     log.warning(msg)
                 else:

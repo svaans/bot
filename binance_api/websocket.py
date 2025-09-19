@@ -427,53 +427,86 @@ async def _gestionar_ws(
                                         tick_data(symbol)
                                 else:
                                     # Backfill normal desde ts conocido
-                                    ahora = int(datetime.now(UTC).timestamp() * 1000)
-                                    faltan = max(1, (ahora - h['ultimo_timestamp']) // h['intervalo_ms'])
-                                    if faltan > MAX_BACKFILL_CANDLES:
-                                        log.warning(
-                                            f'Gap grande en backfill {symbol}: faltan={faltan}, limitando a {MAX_BACKFILL_CANDLES}'
+                                    gap_detectado = False
+                                    while True:
+                                        ahora = int(datetime.now(UTC).timestamp() * 1000)
+                                        faltan_crudo = max(
+                                            0, (ahora - h['ultimo_timestamp']) // h['intervalo_ms']
                                         )
-                                        registro_metrico.registrar(
-                                            'backfill_gap_grande_total',
-                                            {'symbol': symbol, 'faltan': int(faltan)},
-                                        )
-                                    limite = min(faltan, MAX_BACKFILL_CANDLES)
-                                    async with _backfill_semaphore:
-                                        ohlcv = await asyncio.wait_for(
-                                            fetch_ohlcv_async(
-                                                cliente,
-                                                symbol=symbol,
-                                                timeframe=h['intervalo'],
-                                                since=h['ultimo_timestamp'] + 1,
-                                                limit=limite,
-                                            ),
-                                            timeout=10,
-                                        )
-                                    for o in ohlcv:
-                                        tss = o[0]
-                                        if tss > h['ultimo_timestamp']:
-                                            h['ultimo_timestamp'] = await _rellenar_gaps(
-                                                h['callback'],
-                                                symbol,
-                                                h['ultimo_timestamp'],
-                                                h['ultimo_cierre'],
-                                                tss,
-                                                h['intervalo_ms'],
+                                        if faltan_crudo == 0:
+                                            faltan = 1  # chequea si hay vela nueva disponible
+                                        else:
+                                            faltan = faltan_crudo
+
+                                        if faltan_crudo > MAX_BACKFILL_CANDLES and not gap_detectado:
+                                            log.warning(
+                                                f'Gap grande en backfill {symbol}: faltan={faltan_crudo}, '
+                                                f'limitando chunk a {MAX_BACKFILL_CANDLES}'
                                             )
-                                            vela = {
-                                                'symbol': symbol,
-                                                'timestamp': tss,
-                                                'open': float(o[1]),
-                                                'high': float(o[2]),
-                                                'low': float(o[3]),
-                                                'close': float(o[4]),
-                                                'volume': float(o[5]),
-                                            }
-                                            await h['callback'](vela)
-                                            h['ultimo_timestamp'] = tss
-                                            h['ultimo_cierre'] = vela['close']
-                                            tick('data_feed')
-                                            tick_data(symbol)
+                                            registro_metrico.registrar(
+                                                'backfill_gap_grande_total',
+                                                {'symbol': symbol, 'faltan': int(faltan_crudo)},
+                                            )
+                                            gap_detectado = True
+
+                                        ultimo_ts = h.get('ultimo_timestamp')
+                                        if ultimo_ts is None:
+                                            break
+
+                                        limite = min(faltan, MAX_BACKFILL_CANDLES)
+                                        async with _backfill_semaphore:
+                                            ohlcv = await asyncio.wait_for(
+                                                fetch_ohlcv_async(
+                                                    cliente,
+                                                    symbol=symbol,
+                                                    timeframe=h['intervalo'],
+                                                    since=ultimo_ts + 1,
+                                                    limit=limite,
+                                                ),
+                                                timeout=10,
+                                            )
+
+                                        if not ohlcv:
+                                            break
+
+                                        nuevas_velas = 0
+                                        for o in ohlcv:
+                                            tss = o[0]
+                                            if tss > h['ultimo_timestamp']:
+                                                h['ultimo_timestamp'] = await _rellenar_gaps(
+                                                    h['callback'],
+                                                    symbol,
+                                                    h['ultimo_timestamp'],
+                                                    h['ultimo_cierre'],
+                                                    tss,
+                                                    h['intervalo_ms'],
+                                                )
+                                                vela = {
+                                                    'symbol': symbol,
+                                                    'timestamp': tss,
+                                                    'open': float(o[1]),
+                                                    'high': float(o[2]),
+                                                    'low': float(o[3]),
+                                                    'close': float(o[4]),
+                                                    'volume': float(o[5]),
+                                                }
+                                                await h['callback'](vela)
+                                                h['ultimo_timestamp'] = tss
+                                                h['ultimo_cierre'] = vela['close']
+                                                tick('data_feed')
+                                                tick_data(symbol)
+                                                nuevas_velas += 1
+
+                                        if nuevas_velas == 0:
+                                            break
+
+                                        # ¿Quedan más velas por recuperar?
+                                        ahora = int(datetime.now(UTC).timestamp() * 1000)
+                                        faltan_crudo = max(
+                                            0, (ahora - h['ultimo_timestamp']) // h['intervalo_ms']
+                                        )
+                                        if faltan_crudo <= 0:
+                                            break
                                 break
                             except Exception as e:
                                 intentos += 1
