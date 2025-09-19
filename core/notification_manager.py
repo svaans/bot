@@ -132,6 +132,25 @@ class NotificationManager:
 
         asyncio.create_task(_resumir())
 
+async def close(self) -> None:
+        """Cancela los workers asíncronos y limpia la cola interna."""
+
+        if not self._workers:
+            return
+        for worker in self._workers:
+            worker.cancel()
+        await asyncio.gather(
+            *self._workers,
+            return_exceptions=True,
+        )
+        self._workers.clear()
+        while not self._q.empty():
+            try:
+                self._q.get_nowait()
+                self._q.task_done()
+            except asyncio.QueueEmpty:  # pragma: no cover - carrera defensiva
+                break
+
 
 def crear_notification_manager_desde_env() -> "NotificationManager":
     """Crea un ``NotificationManager`` leyendo las variables de entorno.
