@@ -68,6 +68,27 @@ QUEUE_SIZE_AVG = _get_metric(
     ["symbol"],
 )
 
+QUEUE_HIGH_WATERMARK_RATIO = _get_metric(
+    Gauge,
+    "datafeed_queue_high_watermark_ratio",
+    "Ratio de ocupación registrado al superar el umbral de alerta",
+    ["symbol"],
+)
+
+QUEUE_COALESCE_TOTAL = _get_metric(
+    Counter,
+    "datafeed_queue_coalesce_total",
+    "Velas combinadas mediante coalescing",
+    ["symbol"],
+)
+
+QUEUE_POLICY_FALLBACK_TOTAL = _get_metric(
+    Counter,
+    "datafeed_queue_policy_fallback_total",
+    "Aplicaciones de la política de seguridad al manejar colas llenas",
+    ["symbol", "policy"],
+)
+
 CANDLE_AGE = _get_metric(
     Histogram,
     "datafeed_candle_age_seconds",
@@ -213,6 +234,19 @@ TRADER_BACKPRESSURE_ACTIVE = _get_metric(
     Gauge,
     "trader_backpressure_active",
     "Indicador binario de backpressure activo en el trader modular",
+)
+
+TRADER_FASTPATH_ACTIVE = _get_metric(
+    Gauge,
+    "trader_fastpath_active",
+    "Indicador binario del modo degradado del trader",
+)
+
+TRADER_FASTPATH_TRANSITIONS = _get_metric(
+    Counter,
+    "trader_fastpath_transitions_total",
+    "Activaciones del modo degradado del trader",
+    ["state"],
 )
 
 HEARTBEAT_OK_TOTAL = _get_metric(
