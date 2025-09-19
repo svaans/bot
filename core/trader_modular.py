@@ -88,6 +88,8 @@ from core import adaptador_umbral
 from observabilidad import metrics as obs_metrics
 from prometheus_client import Counter
 from core.data.bootstrap import warmup_symbol
+from core.utils.async_queue import AsyncWorkerQueue, AsyncBatchQueue
+from core.utils.perf import flush_profiles
 log = configurar_logger('trader')
 LOG_DIR = os.getenv('LOG_DIR', 'logs')
 UTC = timezone.utc
@@ -152,6 +154,7 @@ class EstadoSimbolo:
     indicadores_wait_ms: float = 0.0
     entradas_timeouts: int = 0
     cierres_timeouts: int = 0
+    indicadores_hash: int = 0
 
 
 class Trader:
@@ -355,6 +358,11 @@ class Trader:
         self._stop_event = asyncio.Event()
         self._limite_riesgo_notificado = False
         self._cerrado = False
+        self.profile_candles = bool(int(os.getenv('TRADER_PROFILE_VELAS', '0')))
+        self._notification_queue = AsyncWorkerQueue('notifications', maxsize=500)
+        self._persistence_queue = AsyncBatchQueue(
+            'persistence', handler=self._process_persistence_batch, batch_size=64, flush_interval=0.25, maxsize=1024
+        )
         self._cpu_high_cycles = 0
         self._mem_high_cycles = 0
         self.context_stream = StreamContexto()
@@ -398,6 +406,8 @@ class Trader:
     def start(self) -> None:
         """Inicia la tarea dedicada de heartbeat."""
         if self._hb_task is None or self._hb_task.done():
+            self._notification_queue.start()
+            self._persistence_queue.start()
             self._hb_task = asyncio.create_task(
                 self._heartbeat_loop(self.heartbeat_interval)
             )
@@ -2327,6 +2337,9 @@ class Trader:
             metrics.flush(log)
         self._dispatcher_metrics.clear()
         self._pipeline_metrics.clear()
+        await self._notification_queue.close()
+        await self._persistence_queue.close()
+        flush_profiles()
         await self.bus.close()
         real_orders.flush_operaciones()
         self.rejection_handler.flush()
@@ -2365,6 +2378,23 @@ class Trader:
             )
         except Exception as e:
             log.warning(f'⚠️ Error guardando estado persistente: {e}')
+
+    def enqueue_notification(self, message: str, level: str = 'INFO') -> None:
+        if not self.notificador:
+            return
+        self._notification_queue.submit(self.notificador.enviar_async, message, level)
+
+    def enqueue_persistence(self, tipo: str, datos: dict, *, immediate: bool = False) -> None:
+        self._persistence_queue.submit(self._build_persist_payload, tipo, datos, immediate)
+
+    def _build_persist_payload(self, tipo: str, datos: dict, immediate: bool) -> dict:
+        return {'tipo': tipo, 'datos': datos, 'immediate': immediate}
+
+    def _process_persistence_batch(self, batch: list[dict]) -> None:
+        for entry in batch:
+            registro_metrico.registrar(
+                entry['tipo'], entry['datos'], guardar_inmediatamente=entry['immediate']
+            )
 
     async def _cargar_estado_persistente(self) -> None:
         """Carga el estado previo de ``ESTADO_DIR`` si existe."""

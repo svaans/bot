@@ -4,8 +4,10 @@ import logging
 import time
 import os
 import json
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from collections import deque, defaultdict
+from itertools import islice
 from types import MappingProxyType
 import numpy as np
 import pandas as pd
@@ -19,6 +21,7 @@ from core.strategies.tendencia import obtener_tendencia
 from indicators.helpers import clear_cache
 from core.indicadores import get_rsi, get_momentum, get_atr
 from core.registro_metrico import registro_metrico
+from core.utils.perf import CandleProfiler
 from core.metrics import (
     registrar_vela_recibida,
     registrar_vela_rechazada,
@@ -58,6 +61,84 @@ MAX_BUFFER_VELAS = int(os.getenv('MAX_BUFFER_VELAS', 180))
 MAX_ESTRATEGIAS_BUFFER = MAX_BUFFER_VELAS
 
 
+@dataclass(slots=True)
+class _IndicatorCacheEntry:
+    window_hash: int
+    timestamp: int
+    values: dict[str, float | None]
+
+
+_indicator_cache: dict[tuple[str, str], _IndicatorCacheEntry] = {}
+
+
+def _compute_buffer_hash(buffer: deque, sample: int = 120) -> int:
+    if not buffer:
+        return 0
+    subset = list(buffer)[-sample:]
+    return hash(tuple(int(c.get('timestamp', 0)) for c in subset))
+
+
+def _get_cached_indicators(
+    symbol: str, intervalo: str, window_hash: int, timestamp: int
+) -> dict[str, float | None] | None:
+    entry = _indicator_cache.get((symbol, intervalo))
+    if entry and entry.window_hash == window_hash and entry.timestamp == timestamp:
+        return entry.values
+    return None
+
+
+def _store_indicator_cache(
+    symbol: str,
+    intervalo: str,
+    window_hash: int,
+    timestamp: int,
+    values: dict[str, float | None],
+) -> None:
+    _indicator_cache[(symbol, intervalo)] = _IndicatorCacheEntry(
+        window_hash=window_hash,
+        timestamp=timestamp,
+        values=values,
+    )
+
+
+def _invalidate_indicator_cache(symbol: str, intervalo: str) -> None:
+    _indicator_cache.pop((symbol, intervalo), None)
+
+
+def _approximate_spread(snapshot: MappingProxyType | dict[str, float]) -> float:
+    close = float(snapshot.get('close', 0.0) or 0.0)
+    if close <= 0:
+        return 0.0
+    high = float(snapshot.get('high', close) or close)
+    low = float(snapshot.get('low', close) or close)
+    return abs(high - low) / close
+
+
+def _volume_gate(df: pd.DataFrame, minimo_relativo: float) -> tuple[bool, dict[str, float]]:
+    if 'volume' not in df.columns or df.empty:
+        return True, {'avg': 0.0, 'ultimo': 0.0}
+    ventana = min(len(df), 20)
+    if ventana < 5:
+        return True, {'avg': 0.0, 'ultimo': float(df['volume'].iloc[-1])}
+    vol_avg = float(df['volume'].tail(ventana).mean())
+    ultimo = float(df['volume'].iloc[-1])
+    if vol_avg <= 0:
+        return True, {'avg': vol_avg, 'ultimo': ultimo}
+    permitido = ultimo >= vol_avg * max(minimo_relativo, 0.0)
+    return permitido, {'avg': vol_avg, 'ultimo': ultimo}
+
+
+def _spread_gate(trader, symbol: str, snapshot: MappingProxyType | dict[str, float]) -> tuple[bool, float, float]:
+    spread_ratio = _approximate_spread(snapshot)
+    if trader.spread_guard:
+        permitido = trader.spread_guard.allows(symbol, spread_ratio)
+        limite = trader.spread_guard.current_limit(symbol)
+    else:
+        limite = getattr(trader.config, 'max_spread_ratio', 0.0) or 0.0
+        permitido = spread_ratio <= limite if limite > 0 else True
+    return permitido, spread_ratio, limite
+
+
 async def _procesar_candle(
     trader,
     symbol: str,
@@ -86,114 +167,154 @@ async def _procesar_candle(
         trader.notificador if not (modo_degradado and skip_notifications) else None
     )
 
-    # --- Inicialización defensiva del estado (evita AttributeError) ---
-    for attr, default in [
-        ("df", pd.DataFrame()),
-        ("df_idx", 0),
-        ("_ring_ready", False),
-        ("indicadores_wait_ms", 0.0),
-        ("indicadores_calls", 0),
-        ("contador_tendencia", 0),
-        ("timeouts_salidas", 0),
-        ("cierres_timeouts", 0),
-        ("entradas_timeouts", 0),
-        ("tendencia_detectada", None),
-        ("buffer", deque(maxlen=MAX_BUFFER_VELAS)),
-        ("estrategias_buffer", deque(maxlen=MAX_ESTRATEGIAS_BUFFER)),
-    ]:
-        if not hasattr(estado, attr):
-            setattr(estado, attr, default)
-    # -------------------------------------------------------------------
+    profiler = CandleProfiler(symbol, intervalo, getattr(trader, 'profile_candles', False))
 
     inicio = time.perf_counter()
     durations: dict[str, float] = {}
 
-    # Ajuste de capital diario (solo si hay buffers mínimos)
-    if datetime.now(UTC).date() != trader.fecha_actual:
-        buffers_ready = len(getattr(trader, 'estado', {})) >= 2 and all(
-            len(st.buffer) >= 2 for st in getattr(trader, 'estado', {}).values()
-        )
-        if not buffers_ready:
-            msg = {
-                "evento": "ajuste_capital_skip",
-                "symbol": "*",
-                "corr_media": None,
-                "umbral_corr": 0.8,
-                "motivo_salto": "datos_insuficientes",
-            }
-            log.warning(json.dumps(msg))
-            AJUSTE_CAPITAL_SALTADO.labels(symbol="*", motivo="datos_insuficientes").inc()
+    def _notify(message: str, level: str = 'INFO') -> None:
+        if notificador:
+            with profiler.stage('notifications_io'):
+                trader.enqueue_notification(message, level)
+
+    def _persist(tipo: str, datos: dict, *, immediate: bool = False) -> None:
+        with profiler.stage('persistence_io'):
+            trader.enqueue_persistence(tipo, datos, immediate=immediate)
+
+    recien_lleno = False
+    df: pd.DataFrame
+
+    with profiler.stage('state_update'):
+        t_state = time.perf_counter()
+        for attr, default in [
+            ("df", pd.DataFrame()),
+            ("df_idx", 0),
+            ("_ring_ready", False),
+            ("indicadores_wait_ms", 0.0),
+            ("indicadores_calls", 0),
+            ("contador_tendencia", 0),
+            ("timeouts_salidas", 0),
+            ("cierres_timeouts", 0),
+            ("entradas_timeouts", 0),
+            ("tendencia_detectada", None),
+            ("buffer", deque(maxlen=MAX_BUFFER_VELAS)),
+            ("estrategias_buffer", deque(maxlen=MAX_ESTRATEGIAS_BUFFER)),
+        ]:
+            if not hasattr(estado, attr):
+                setattr(estado, attr, default)
+
+        if datetime.now(UTC).date() != trader.fecha_actual:
+            buffers_ready = len(getattr(trader, 'estado', {})) >= 2 and all(
+                len(st.buffer) >= 2 for st in getattr(trader, 'estado', {}).values()
+            )
+            if not buffers_ready:
+                msg = {
+                    "evento": "ajuste_capital_skip",
+                    "symbol": "*",
+                    "corr_media": None,
+                    "umbral_corr": 0.8,
+                    "motivo_salto": "datos_insuficientes",
+                }
+                log.warning(json.dumps(msg))
+                AJUSTE_CAPITAL_SALTADO.labels(symbol="*", motivo="datos_insuficientes").inc()
+            else:
+                trader.ajustar_capital_diario()
+
+        if not isinstance(estado.buffer, deque):
+            estado.buffer = deque(maxlen=MAX_BUFFER_VELAS)
+        if not isinstance(estado.estrategias_buffer, deque):
+            estado.estrategias_buffer = deque(maxlen=MAX_ESTRATEGIAS_BUFFER)
+
+        estado.buffer.append(vela_inmutable)
+        estado.estrategias_buffer.append({})
+        estado.ultimo_timestamp = ts
+
+        if not isinstance(estado.df.index, pd.RangeIndex):
+            estado.df.reset_index(drop=True, inplace=True)
+
+        if estado.df.empty:
+            estado.df = pd.DataFrame([snapshot])
+            estado.df_idx = len(estado.df) % MAX_BUFFER_VELAS
+        elif len(estado.df) < MAX_BUFFER_VELAS:
+            estado.df.loc[len(estado.df)] = snapshot
+            estado.df_idx = len(estado.df) % MAX_BUFFER_VELAS
         else:
-            trader.ajustar_capital_diario()
+            estado.df.loc[estado.df_idx] = snapshot
+            estado.df_idx = (estado.df_idx + 1) % MAX_BUFFER_VELAS
 
-    # Estructuras de estado
-    estado.buffer.append(vela_inmutable)
-    estado.estrategias_buffer.append({})
-    estado.ultimo_timestamp = ts
-
-    # Asegura índice simple antes de usar ring buffer por posición
-    if not isinstance(estado.df.index, pd.RangeIndex):
-        estado.df.reset_index(drop=True, inplace=True)
-
-    # Ring buffer en DataFrame
-    if estado.df.empty:
-        estado.df = pd.DataFrame([snapshot])
-        estado.df_idx = len(estado.df) % MAX_BUFFER_VELAS
-    elif len(estado.df) < MAX_BUFFER_VELAS:
-        estado.df.loc[len(estado.df)] = snapshot
-        estado.df_idx = len(estado.df) % MAX_BUFFER_VELAS
-    else:
-        estado.df.loc[estado.df_idx] = snapshot
-        estado.df_idx = (estado.df_idx + 1) % MAX_BUFFER_VELAS
-
-    recien_lleno = (len(estado.df) == MAX_BUFFER_VELAS and not getattr(estado, "_ring_ready", False))
-    if recien_lleno:
-        estado._ring_ready = True
-
-    # Indicadores (sección protegida por lock por símbolo)
-    lock_ind = _indicadores_locks[symbol]
-    espera = time.perf_counter()
-    async with lock_ind:
-        estado.indicadores_wait_ms += (time.perf_counter() - espera) * 1000
-        estado.indicadores_calls += 1
+        recien_lleno = (
+            len(estado.df) == MAX_BUFFER_VELAS
+            and not getattr(estado, "_ring_ready", False)
+        )
         if recien_lleno:
-            await asyncio.to_thread(clear_cache, estado.df)
-        t_ind = time.perf_counter()
-        await asyncio.to_thread(get_rsi, estado)
-        await asyncio.to_thread(get_momentum, estado)
-        await asyncio.to_thread(get_atr, estado)
-        durations["indicadores_ms"] = (time.perf_counter() - t_ind) * 1000
+            estado._ring_ready = True
 
-    # Construye base rotada si se llenó el ring buffer
-    if len(estado.df) < MAX_BUFFER_VELAS:
-        base = estado.df
-    else:
-        idx = estado.df_idx
-        orden = np.r_[idx:MAX_BUFFER_VELAS, 0:idx]
-        base = estado.df.iloc[orden].reset_index(drop=True)
+        if len(estado.df) < MAX_BUFFER_VELAS:
+            base = estado.df.copy()
+        else:
+            idx = estado.df_idx
+            orden = np.r_[idx:MAX_BUFFER_VELAS, 0:idx]
+            base = estado.df.iloc[orden].reset_index(drop=True)
 
-    # Copia sin la columna de estrategias activas (si existe)
-    df = await asyncio.to_thread(
-        lambda: base.drop(columns=["estrategias_activas"], errors="ignore")
-        if "estrategias_activas" in base.columns else base
-    )
+        if 'estrategias_activas' in base.columns:
+            df = base.drop(columns=['estrategias_activas'])
+        else:
+            df = base.copy()
+
+        durations['state_ms'] = (time.perf_counter() - t_state) * 1000
+
     if df.empty or 'close' not in df.columns:
         log.error(f"❌ DataFrame inválido para {symbol}: {df}")
         return
+    
+    # Indicadores (sección protegida por lock por símbolo)
+    with profiler.stage('indicators'):
+        lock_ind = _indicadores_locks[symbol]
+        window_hash = _compute_buffer_hash(estado.buffer)
+        ts_df = int(df['timestamp'].iloc[-1]) if 'timestamp' in df.columns else ts
+        cached = _get_cached_indicators(symbol, intervalo, window_hash, ts_df)
+        if cached is None:
+            espera = time.perf_counter()
+            async with lock_ind:
+                estado.indicadores_wait_ms += (time.perf_counter() - espera) * 1000
+                estado.indicadores_calls += 1
+                if recien_lleno:
+                    await asyncio.to_thread(clear_cache, estado.df)
+                    _invalidate_indicator_cache(symbol, intervalo)
+                t_ind = time.perf_counter()
+                valores = await asyncio.gather(
+                    asyncio.to_thread(get_rsi, estado),
+                    asyncio.to_thread(get_momentum, estado),
+                    asyncio.to_thread(get_atr, estado),
+                )
+                durations["indicadores_ms"] = (time.perf_counter() - t_ind) * 1000
+            indicadores = {
+                'rsi': valores[0],
+                'momentum': valores[1],
+                'atr': valores[2],
+            }
+            _store_indicator_cache(symbol, intervalo, window_hash, ts_df, indicadores)
+        else:
+            indicadores = cached
+            durations.setdefault("indicadores_ms", 0.0)
+        estado.indicadores_hash = window_hash
 
     # Detección de tendencia: cada N velas (configurable)
     if getattr(estado, 'contador_tendencia', 0) == 0 and not (
         modo_degradado and omitir_tendencia
     ):
-        t_trend = time.perf_counter()
-        estado.tendencia_detectada = await asyncio.to_thread(obtener_tendencia, symbol, df)
-        trader.estado_tendencia[symbol] = estado.tendencia_detectada
-        dur_trend = time.perf_counter() - t_trend
-        durations["tendencia_ms"] = dur_trend * 1000
-        log.debug(
-            f'obtener_tendencia tardó {dur_trend:.2f}s para {symbol}',
-            extra={'symbol': symbol, 'timeframe': intervalo, 'timestamp': ts},
-        )
+        with profiler.stage('trend'):
+            t_trend = time.perf_counter()
+            estado.tendencia_detectada = await asyncio.to_thread(
+                obtener_tendencia, symbol, df
+            )
+            trader.estado_tendencia[symbol] = estado.tendencia_detectada
+            dur_trend = time.perf_counter() - t_trend
+            durations["tendencia_ms"] = dur_trend * 1000
+            log.debug(
+                f'obtener_tendencia tardó {dur_trend:.2f}s para {symbol}',
+                extra={'symbol': symbol, 'timeframe': intervalo, 'timestamp': ts},
+            )
     estado.contador_tendencia = (getattr(estado, 'contador_tendencia', 0) + 1) % max(getattr(trader.config, 'frecuencia_tendencia', 1), 1)
 
     log.debug(
@@ -207,75 +328,109 @@ async def _procesar_candle(
         return
 
     try:
-        # ¿Hay operación abierta? => verificar salidas primero
         orden_existente = trader.orders.obtener(symbol)
+        cancelar_por_salidas = False
         if orden_existente is not None:
-            try:
-                t_salidas = time.perf_counter()
-                await asyncio.wait_for(
-                    trader._verificar_salidas(symbol, df),
-                    timeout=trader.config.timeout_verificar_salidas,
-                )
-                dur_salidas = time.perf_counter() - t_salidas
-                durations["salidas_ms"] = dur_salidas * 1000
-                log.debug(
-                    f'_verificar_salidas tardó {dur_salidas:.2f}s para {symbol}',
-                    extra={'symbol': symbol, 'timeframe': intervalo, 'timestamp': ts},
-                )
-                estado.timeouts_salidas = 0
-            except asyncio.TimeoutError:
-                log.error(f'⏰ Timeout verificando salidas de {symbol}')
-                estado.timeouts_salidas += 1
-                if notificador:
-                    try:
-                        await notificador.enviar_async(
-                            f'⚠️ Timeout verificando salidas de {symbol}'
-                        )
-                    except Exception as e:
-                        log.error(f'❌ Error enviando notificación: {e}')
-            if estado.timeouts_salidas >= trader.config.max_timeouts_salidas:
-                log.error(
-                    f'🚨 Forzando cierre de {symbol} tras {estado.timeouts_salidas} timeouts'
-                )
-                precio_cierre = float(df['close'].iloc[-1])
+            with profiler.stage('position_manager'):
+                t_pm = time.perf_counter()
                 try:
+                    t_salidas = time.perf_counter()
                     await asyncio.wait_for(
-                        trader.cerrar_operacion(
-                            symbol, precio_cierre, 'timeout_salidas'
-                        ),
-                        timeout=trader.config.timeout_cerrar_operacion,
+                        trader._verificar_salidas(symbol, df),
+                        timeout=trader.config.timeout_verificar_salidas,
                     )
+                    dur_salidas = time.perf_counter() - t_salidas
+                    durations["salidas_ms"] = dur_salidas * 1000
+                    log.debug(
+                        f'_verificar_salidas tardó {dur_salidas:.2f}s para {symbol}',
+                        extra={'symbol': symbol, 'timeframe': intervalo, 'timestamp': ts},
+                    )
+                    estado.timeouts_salidas = 0
                 except asyncio.TimeoutError:
-                    estado.cierres_timeouts += 1
-                    log.error(f'⏰ Timeout cerrando operación de {symbol}')
-                    if notificador:
-                        try:
-                            await notificador.enviar_async(
-                                f'⚠️ Timeout cerrando operación de {symbol}'
-                            )
-                        except Exception as e:
-                            log.error(f'❌ Error enviando notificación: {e}')
-                except Exception as e:
-                    log.error(f'❌ Error forzando cierre de {symbol}: {e}')
-                estado.timeouts_salidas = 0
+                    log.error(f'⏰ Timeout verificando salidas de {symbol}')
+                    estado.timeouts_salidas += 1
+                    _notify(f'⚠️ Timeout verificando salidas de {symbol}', 'WARNING')
+                if estado.timeouts_salidas >= trader.config.max_timeouts_salidas:
+                    log.error(
+                        f'🚨 Forzando cierre de {symbol} tras {estado.timeouts_salidas} timeouts'
+                    )
+                    precio_cierre = float(df['close'].iloc[-1])
+                    try:
+                        await asyncio.wait_for(
+                            trader.cerrar_operacion(
+                                symbol, precio_cierre, 'timeout_salidas'
+                            ),
+                            timeout=trader.config.timeout_cerrar_operacion,
+                        )
+                    except asyncio.TimeoutError:
+                        estado.cierres_timeouts += 1
+                        log.error(f'⏰ Timeout cerrando operación de {symbol}')
+                        _notify(f'⚠️ Timeout cerrando operación de {symbol}', 'WARNING')
+                    except Exception as cierre_err:
+                        log.error(f'❌ Error forzando cierre de {symbol}: {cierre_err}')
+                    estado.timeouts_salidas = 0
+                    cancelar_por_salidas = True
+                durations['position_manager_ms'] = durations.get(
+                    'position_manager_ms', 0.0
+                ) + (time.perf_counter() - t_pm) * 1000
+            if cancelar_por_salidas:
                 return
 
-        # ¿Puedo evaluar entradas?
-        if not trader._puede_evaluar_entradas(symbol):
-            return
-        if modo_degradado and omitir_entradas:
-            log.debug(
-                f'[{symbol}] Entrada omitida por modo degradado (backlog alto)'
-            )
-            return
+        with profiler.stage('risk_checks'):
+            t_risk = time.perf_counter()
+            try:
+                capital_total = float(
+                    sum(getattr(trader, 'capital_inicial_diario', {}).values())
+                )
+                if getattr(trader, 'risk', None) and trader.risk.riesgo_superado(
+                    capital_total
+                ):
+                    log.warning(
+                        f'[{symbol}] Límite de riesgo diario superado. Entrada bloqueada.'
+                    )
+                    _notify(
+                        '🚨 Límite de riesgo diario superado. Bot pausado.', 'CRITICAL'
+                    )
+                    return
+                if not trader._puede_evaluar_entradas(symbol):
+                    return
+                if modo_degradado and omitir_entradas:
+                    log.debug(
+                        f'[{symbol}] Entrada omitida por modo degradado (backlog alto)'
+                    )
+                    return
+                permitido_vol, vol_stats = _volume_gate(
+                    df, getattr(trader.config, 'volumen_min_relativo', 1.0)
+                )
+                if not permitido_vol:
+                    log.debug(
+                        f'[{symbol}] Volumen insuficiente: último={vol_stats["ultimo"]:.2f}, '
+                        f'promedio={vol_stats["avg"]:.2f}'
+                    )
+                    return
+                with profiler.stage('spread_guard'):
+                    t_spread = time.perf_counter()
+                    spread_ok, spread_ratio, spread_limit = _spread_gate(
+                        trader, symbol, snapshot
+                    )
+                    durations['spread_guard_ms'] = (
+                        time.perf_counter() - t_spread
+                    ) * 1000
+                if not spread_ok:
+                    log.debug(
+                        f'[{symbol}] Entrada omitida por spread {spread_ratio:.4f} '
+                        f'> límite {spread_limit:.4f}'
+                    )
+                    return
+            finally:
+                durations['risk_ms'] = (time.perf_counter() - t_risk) * 1000
 
-        # Evaluación de entrada
-        try:
+        with profiler.stage('strategy_engine'):
             t_entrada = time.perf_counter()
             timeout_eval = getattr(
                 trader.config,
                 "timeout_evaluar_condiciones_por_symbol",
-                {}
+                {},
             ).get(symbol, trader.config.timeout_evaluar_condiciones)
             info = await asyncio.wait_for(
                 trader.evaluar_condiciones_de_entrada(symbol, df, estado),
@@ -283,64 +438,51 @@ async def _procesar_candle(
             )
             dur_entry = time.perf_counter() - t_entrada
             durations["entrada_ms"] = dur_entry * 1000
-            EVALUAR_ENTRADA_LATENCY_MS.labels(symbol=symbol).observe(durations["entrada_ms"])
-            log.debug(
-                f'evaluar_condiciones_de_entrada tardó {dur_entry:.2f}s para {symbol}',
-                extra={'symbol': symbol, 'timeframe': intervalo, 'timestamp': ts},
-            )
-            if isinstance(info, dict) and info:
-                try:
+        EVALUAR_ENTRADA_LATENCY_MS.labels(symbol=symbol).observe(durations["entrada_ms"])
+        log.debug(
+            f'evaluar_condiciones_de_entrada tardó {dur_entry:.2f}s para {symbol}',
+            extra={'symbol': symbol, 'timeframe': intervalo, 'timestamp': ts},
+        )
+        if isinstance(info, dict) and info:
+            try:
+                with profiler.stage('position_manager'):
+                    t_pm = time.perf_counter()
                     await asyncio.wait_for(
                         trader._abrir_operacion_real(**info),
                         timeout=trader.config.timeout_abrir_operacion,
                     )
-                except asyncio.TimeoutError:
-                    estado.entradas_timeouts += 1
-                    log.error(f'⏰ Timeout abriendo operación de {symbol}')
-                    if notificador:
-                        try:
-                            await notificador.enviar_async(
-                                f'⚠️ Timeout abriendo operación de {symbol}'
-                            )
-                        except Exception as e:
-                            log.error(f'❌ Error enviando notificación: {e}')
-            elif info is not None:
-                log.warning(
-                    f'⚠️ Resultado inesperado al evaluar entrada para {symbol}: {type(info)}'
-                )
-        except asyncio.TimeoutError:
-            EVALUAR_ENTRADA_TIMEOUTS.labels(symbol=symbol).inc()
-            log.error(f'⏰ Timeout en evaluar_condiciones_de_entrada para {symbol}')
-            estado.entradas_timeouts += 1
-            if notificador:
-                try:
-                    await notificador.enviar_async(
-                        f'⚠️ Timeout en evaluar condiciones de entrada para {symbol}'
-                    )
-                except Exception as e:
-                    log.error(f'❌ Error enviando notificación: {e}')
+                    durations['position_manager_ms'] = durations.get(
+                        'position_manager_ms', 0.0
+                    ) + (time.perf_counter() - t_pm) * 1000
+            except asyncio.TimeoutError:
+                estado.entradas_timeouts += 1
+                log.error(f'⏰ Timeout abriendo operación de {symbol}')
+                _notify(f'⚠️ Timeout abriendo operación de {symbol}', 'WARNING')
+        elif info is not None:
+            log.warning(
+                f'⚠️ Resultado inesperado al evaluar entrada para {symbol}: {type(info)}'
+            )
+    except asyncio.TimeoutError:
+        EVALUAR_ENTRADA_TIMEOUTS.labels(symbol=symbol).inc()
+        log.error(f'⏰ Timeout en evaluar_condiciones_de_entrada para {symbol}')
+        estado.entradas_timeouts += 1
+        _notify(
+            f'⚠️ Timeout en evaluar condiciones de entrada para {symbol}', 'WARNING'
+        )
     except Exception as e:
         log.exception(f'❌ Error procesando vela de {symbol}: {e}')
-        if notificador:
-            try:
-                await notificador.enviar_async(
-                    f'❌ Error procesando vela de {symbol}: {e}'
-                )
-            except Exception as e2:
-                log.error(f'❌ Error enviando notificación: {e2}')
+        _notify(f'❌ Error procesando vela de {symbol}: {e}', 'ERROR')
     finally:
         duracion = time.perf_counter() - inicio
         if durations:
-            log.info(
-                json.dumps(
-                    {
-                        "evento": "timing_procesar_vela",
-                        "symbol": symbol,
-                        "timeframe": intervalo,
-                        "durations_ms": {k: round(v, 2) for k, v in durations.items()},
-                    }
-                )
-            )
+            payload = {
+                "evento": "timing_procesar_vela",
+                "symbol": symbol,
+                "timeframe": intervalo,
+                "durations_ms": {k: round(v, 2) for k, v in durations.items()},
+            }
+            log.info(json.dumps(payload))
+            _persist('timing_procesar_vela', payload)
         # Métricas de recursos (con suavizado)
         ahora = time.perf_counter()
         if ahora - getattr(trader, '_recursos_ts', 0) >= getattr(trader, 'frecuencia_recursos', 60):
@@ -357,6 +499,7 @@ async def _procesar_candle(
                 f'✅ procesar_vela completado en {duracion:.2f}s para {symbol} | CPU: {cpu:.1f}% | Memoria: {mem:.1f}%',
                 extra={'symbol': symbol, 'timeframe': intervalo, 'timestamp': ts},
             )
+        profiler.finalize(ts)
 
         if cpu > trader.config.umbral_alerta_cpu:
             trader._cpu_high_cycles += 1
