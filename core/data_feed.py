@@ -123,6 +123,9 @@ class DataFeed:
         self._queue_windows: Dict[str, list] = {}
         self._last_window_reset: Dict[str, float] = {}
         self._estado: Dict[str, Any] | None = None
+        self._backfill_retry_tasks: Dict[str, asyncio.Task] = {}
+        self._backfill_retry_last: Dict[str, float] = {}
+        self._backfill_retry_delay = float(os.getenv("BACKFILL_RETRY_DELAY", "1.0"))
 
     async def _process_candle(
         self,
@@ -175,6 +178,45 @@ class DataFeed:
                 age = max(0.0, time.time() - ts / 1000)
                 obs_metrics.CANDLE_AGE.labels(symbol=symbol).observe(age)
             self._consumer_last[symbol] = time.monotonic()
+
+    def _schedule_backfill_retry(self, symbol: str) -> None:
+        """Programa un reintento diferido para ``_backfill_candles`` controlando la cadencia."""
+
+        existing = self._backfill_retry_tasks.get(symbol)
+        current_task = asyncio.current_task()
+        if (
+            existing
+            and not existing.done()
+            and existing is not current_task
+        ):
+            log.debug(f"[{symbol}] Reintento de backfill ya programado")
+            return
+
+        delay = max(0.0, self._backfill_retry_delay)
+        now = time.monotonic()
+        last = self._backfill_retry_last.get(symbol, 0.0)
+        if now - last < delay and (existing is None or existing.done()):
+            log.debug(
+                f"[{symbol}] Reintento de backfill omitido por throttle (delta={now - last:.3f}s)"
+            )
+            return
+
+        async def _delayed_retry() -> None:
+            try:
+                await asyncio.sleep(delay)
+                await self._backfill_candles(symbol)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                log.exception(f"[{symbol}] Error en reintento diferido de backfill")
+            finally:
+                self._backfill_retry_tasks.pop(symbol, None)
+
+        self._backfill_retry_last[symbol] = now
+        task = asyncio.create_task(
+            _delayed_retry(), name=f"datafeed-backfill-retry-{symbol}"
+        )
+        self._backfill_retry_tasks[symbol] = task
 
     @property
     def activos(self) -> list[str]:
@@ -372,6 +414,7 @@ class DataFeed:
             log.warning(
                 f"[{symbol}] backfill diferido por presión de cola ({queue.qsize()}/{queue.maxsize})"
             )
+            self._schedule_backfill_retry(symbol)
             return
         log.info(
             f"[{symbol}] Backfill solicitado faltantes={faltan} min_required={self.min_buffer_candles}"
