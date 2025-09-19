@@ -2021,14 +2021,13 @@ class Trader:
         """Inicia el procesamiento de todos los símbolos."""
         self.start()
         async def handle(candle: dict) -> None:
-            async with self._sem_velas:
-                backlog = len(self._tareas_velas)
-                if backlog >= self._max_tasks_velas:
-                    await self._aplicar_backpressure(backlog)
-                task = asyncio.create_task(self._procesar_vela(candle))
-                self._tareas_velas.add(task)
-                task.add_done_callback(self._tareas_velas.discard)
-                TRADER_QUEUE_SIZE.set(len(self._tareas_velas))
+            backlog = len(self._tareas_velas)
+            if backlog >= self._max_tasks_velas:
+                await self._aplicar_backpressure(backlog)
+            task = asyncio.create_task(self._procesar_vela(candle))
+            self._tareas_velas.add(task)
+            task.add_done_callback(self._tareas_velas.discard)
+            TRADER_QUEUE_SIZE.set(len(self._tareas_velas))
 
         async def handle_context(symbol: str, score: float) -> None:
             self.puntajes_contexto[symbol] = score
@@ -2154,14 +2153,15 @@ class Trader:
                 )
 
     async def _procesar_vela(self, vela: dict) ->None:
-        symbol = vela.get('symbol')
-        if not self._validar_config(symbol):
-            return
-        log.debug(
-            f"[{symbol}] Procesando vela trace_id={vela.get('trace_id')}"
-        )
-        
-        await procesar_vela(self, vela)
+        async with self._sem_velas:
+            symbol = vela.get('symbol')
+            if not self._validar_config(symbol):
+                return
+            log.debug(
+                f"[{symbol}] Procesando vela trace_id={vela.get('trace_id')}"
+            )
+
+            await procesar_vela(self, vela)
         return
 
     async def cerrar(self) ->None:
