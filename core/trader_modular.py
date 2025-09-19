@@ -945,52 +945,76 @@ class Trader:
             except Exception as e:
                 log.info(f'📈 No se pudo precargar histórico desde Binance: {e}')
         base_ms = intervalo_a_segundos(self.config.intervalo_velas) * 1000
-        for symbol in self.estado.keys():
-            try:
-                df = await warmup_symbol(
-                    symbol,
-                    self.config.intervalo_velas,
-                    cliente,
-                    min_bars=velas,
-                )
-            except BaseError as e:
-                log.warning(f'⚠️ Error cargando histórico para {symbol}: {e}')
-                continue
-            except Exception as e:
-                log.warning(f'⚠️ Error inesperado cargando histórico para {symbol}: {e}')
-                continue
-            df = df.sort_values('timestamp')
-            df = df[df['timestamp'] % base_ms == 0].drop_duplicates(subset=['timestamp'])
-            while len(df) < velas:
-                faltan = velas - len(df)
-                since = int(df['timestamp'].iloc[0]) - base_ms * faltan if not df.empty else None
+        underfilled: list[str] = []
+        try:
+            for symbol in self.estado.keys():
                 try:
-                    ohlcv = await fetch_ohlcv_async(
-                        cliente,
+                    df = await warmup_symbol(
                         symbol,
                         self.config.intervalo_velas,
-                        since=since,
-                        limit=faltan,
+                        cliente,
+                        min_bars=velas,
                     )
+                except BaseError as e:
+                    log.warning(f'⚠️ Error cargando histórico para {symbol}: {e}')
+                    underfilled.append(symbol)
+                    continue
                 except Exception as e:
-                    log.warning(f'⚠️ Error backfilling {symbol}: {e}')
-                    break
-                df_extra = pd.DataFrame(
-                    ohlcv,
-                    columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'],
-                )
-                df_extra = df_extra[df_extra['timestamp'] % base_ms == 0]
-                df = (
-                    pd.concat([df_extra, df], ignore_index=True)
-                    .drop_duplicates(subset=['timestamp'])
-                    .sort_values('timestamp')
-                )
-            if not df.empty:
+                    log.warning(f'⚠️ Error inesperado cargando histórico para {symbol}: {e}')
+                    underfilled.append(symbol)
+                    continue
+                if df is None or df.empty:
+                    log.error(
+                        '❌ Histórico insuficiente para %s tras warmup: %s velas',
+                        symbol,
+                        0 if df is None else len(df),
+                    )
+                    underfilled.append(symbol)
+                    continue
+                df = df.sort_values('timestamp')
+                df = df[df['timestamp'] % base_ms == 0].drop_duplicates(subset=['timestamp'])
+                while len(df) < velas:
+                    faltan = velas - len(df)
+                    since = (
+                        int(df['timestamp'].iloc[0]) - base_ms * faltan
+                        if not df.empty
+                        else None
+                    )
+                    try:
+                        ohlcv = await fetch_ohlcv_async(
+                            cliente,
+                            symbol,
+                            self.config.intervalo_velas,
+                            since=since,
+                            limit=faltan,
+                        )
+                    except Exception as e:
+                        log.warning(f'⚠️ Error backfilling {symbol}: {e}')
+                        break
+                    df_extra = pd.DataFrame(
+                        ohlcv,
+                        columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'],
+                    )
+                    df_extra = df_extra[df_extra['timestamp'] % base_ms == 0]
+                    df = (
+                        pd.concat([df_extra, df], ignore_index=True)
+                        .drop_duplicates(subset=['timestamp'])
+                        .sort_values('timestamp')
+                    )
+                if len(df) < velas:
+                    log.error(
+                        '❌ Histórico insuficiente para %s tras backfill: %s/%s velas',
+                        symbol,
+                        len(df),
+                        velas,
+                    )
+                    underfilled.append(symbol)
+                    continue
                 ts = df['timestamp'].to_numpy()
                 diffs = np.diff(ts)
                 esperado = base_ms
                 gaps = int((diffs != esperado).sum())
-                if gaps > 0 or len(df) < velas:
+                if gaps > 0:
                     log.error(f'❌ Backfill no contiguo para {symbol}: {gaps} gaps')
                     raise RuntimeError(f'Backfill inicial no contiguo: {symbol}')
                 for fila in df.tail(velas).to_dict('records'):
@@ -1005,13 +1029,21 @@ class Trader:
                 tendencia, _ = detectar_tendencia(symbol, self.estado[symbol].df)
                 self.estado[symbol].tendencia_detectada = tendencia
                 self.estado_tendencia[symbol] = tendencia
-        if cliente_temp is not None:
-            try:
-                cliente_temp.close()
-            except Exception:
-                pass
-        self.warmup_completed = True
-        log.info('📈 Histórico inicial cargado')
+            if underfilled:
+                pendientes = ', '.join(sorted(set(underfilled)))
+                log.critical(
+                    '❌ Warmup incompleto. Datos insuficientes para: %s',
+                    pendientes,
+                )
+                raise RuntimeError(f'Datos históricos insuficientes para: {pendientes}')
+            self.warmup_completed = True
+            log.info('📈 Histórico inicial cargado')
+        finally:
+            if cliente_temp is not None:
+                try:
+                    cliente_temp.close()
+                except Exception:
+                    pass
 
     async def _ciclo_aprendizaje(self, intervalo: int = 86400, max_fallos: int = 5) -> None:
         """Ejecuta el proceso de aprendizaje continuo periódicamente.
