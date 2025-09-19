@@ -55,12 +55,16 @@ def pending_symbols() -> Set[str]:
     return set(_pending_fetch)
 
 
-async def warmup_symbol(symbol: str, tf: str, cliente, min_bars: int = MIN_BARS) -> pd.DataFrame:
+async def warmup_symbol(
+    symbol: str, tf: str, cliente, min_bars: int = MIN_BARS
+) -> Optional[pd.DataFrame]:
     """Carga ``min_bars`` de histórico para ``symbol`` usando caché cuando es válido.
 
     Si la caché contiene menos velas de las requeridas, se ignora y se solicita
     nuevamente el histórico completo. De esta forma nos aseguramos de que el
     parámetro ``min_bars`` tenga efecto aun cuando existan archivos previos.
+
+    Devuelve ``None`` cuando no se logra reunir la cantidad solicitada.
     """
     _config[symbol] = (tf, cliente, min_bars)
     path = _cache_path(symbol, tf)
@@ -89,12 +93,26 @@ async def warmup_symbol(symbol: str, tf: str, cliente, min_bars: int = MIN_BARS)
             log.warning(f'⚠️ Error obteniendo histórico de {symbol}: {e}')
             df = pd.DataFrame()
         else:
-            df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+            df = pd.DataFrame(
+                ohlcv,
+                columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'],
+            )
             try:
                 df.to_csv(path, index=False)
             except Exception:
                 log.exception(f'Error guardando caché {path}')
-    _update_progress(symbol, len(df), min_bars)
+    if df is None:
+        df = pd.DataFrame()
+    count = len(df)
+    _update_progress(symbol, count, min_bars)
+    if count < min_bars:
+        log.error(
+            '❌ Warmup incompleto para %s: %s/%s velas disponibles',
+            symbol,
+            count,
+            min_bars,
+        )
+        return None
     return df.tail(min_bars)
 
 
