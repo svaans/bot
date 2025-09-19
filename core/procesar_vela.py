@@ -58,7 +58,18 @@ MAX_BUFFER_VELAS = int(os.getenv('MAX_BUFFER_VELAS', 180))
 MAX_ESTRATEGIAS_BUFFER = MAX_BUFFER_VELAS
 
 
-async def _procesar_candle(trader, symbol: str, intervalo: str, estado, vela: dict) -> None:
+async def _procesar_candle(
+    trader,
+    symbol: str,
+    intervalo: str,
+    estado,
+    vela: dict,
+    *,
+    modo_degradado: bool = False,
+    skip_notifications: bool = False,
+    omitir_entradas: bool = False,
+    omitir_tendencia: bool = False,
+) -> None:
     ts = vela['timestamp']
     snapshot = {
         'symbol': symbol,
@@ -70,6 +81,10 @@ async def _procesar_candle(trader, symbol: str, intervalo: str, estado, vela: di
         'volume': float(vela['volume']),
     }
     vela_inmutable = MappingProxyType(snapshot)
+
+    notificador = (
+        trader.notificador if not (modo_degradado and skip_notifications) else None
+    )
 
     # --- Inicialización defensiva del estado (evita AttributeError) ---
     for attr, default in [
@@ -167,7 +182,9 @@ async def _procesar_candle(trader, symbol: str, intervalo: str, estado, vela: di
         return
 
     # Detección de tendencia: cada N velas (configurable)
-    if getattr(estado, 'contador_tendencia', 0) == 0:
+    if getattr(estado, 'contador_tendencia', 0) == 0 and not (
+        modo_degradado and omitir_tendencia
+    ):
         t_trend = time.perf_counter()
         estado.tendencia_detectada = await asyncio.to_thread(obtener_tendencia, symbol, df)
         trader.estado_tendencia[symbol] = estado.tendencia_detectada
@@ -209,9 +226,9 @@ async def _procesar_candle(trader, symbol: str, intervalo: str, estado, vela: di
             except asyncio.TimeoutError:
                 log.error(f'⏰ Timeout verificando salidas de {symbol}')
                 estado.timeouts_salidas += 1
-                if trader.notificador:
+                if notificador:
                     try:
-                        await trader.notificador.enviar_async(
+                        await notificador.enviar_async(
                             f'⚠️ Timeout verificando salidas de {symbol}'
                         )
                     except Exception as e:
@@ -231,9 +248,9 @@ async def _procesar_candle(trader, symbol: str, intervalo: str, estado, vela: di
                 except asyncio.TimeoutError:
                     estado.cierres_timeouts += 1
                     log.error(f'⏰ Timeout cerrando operación de {symbol}')
-                    if trader.notificador:
+                    if notificador:
                         try:
-                            await trader.notificador.enviar_async(
+                            await notificador.enviar_async(
                                 f'⚠️ Timeout cerrando operación de {symbol}'
                             )
                         except Exception as e:
@@ -245,6 +262,11 @@ async def _procesar_candle(trader, symbol: str, intervalo: str, estado, vela: di
 
         # ¿Puedo evaluar entradas?
         if not trader._puede_evaluar_entradas(symbol):
+            return
+        if modo_degradado and omitir_entradas:
+            log.debug(
+                f'[{symbol}] Entrada omitida por modo degradado (backlog alto)'
+            )
             return
 
         # Evaluación de entrada
@@ -275,9 +297,9 @@ async def _procesar_candle(trader, symbol: str, intervalo: str, estado, vela: di
                 except asyncio.TimeoutError:
                     estado.entradas_timeouts += 1
                     log.error(f'⏰ Timeout abriendo operación de {symbol}')
-                    if trader.notificador:
+                    if notificador:
                         try:
-                            await trader.notificador.enviar_async(
+                            await notificador.enviar_async(
                                 f'⚠️ Timeout abriendo operación de {symbol}'
                             )
                         except Exception as e:
@@ -290,18 +312,18 @@ async def _procesar_candle(trader, symbol: str, intervalo: str, estado, vela: di
             EVALUAR_ENTRADA_TIMEOUTS.labels(symbol=symbol).inc()
             log.error(f'⏰ Timeout en evaluar_condiciones_de_entrada para {symbol}')
             estado.entradas_timeouts += 1
-            if trader.notificador:
+            if notificador:
                 try:
-                    await trader.notificador.enviar_async(
+                    await notificador.enviar_async(
                         f'⚠️ Timeout en evaluar condiciones de entrada para {symbol}'
                     )
                 except Exception as e:
                     log.error(f'❌ Error enviando notificación: {e}')
     except Exception as e:
         log.exception(f'❌ Error procesando vela de {symbol}: {e}')
-        if trader.notificador:
+        if notificador:
             try:
-                await trader.notificador.enviar_async(
+                await notificador.enviar_async(
                     f'❌ Error procesando vela de {symbol}: {e}'
                 )
             except Exception as e2:
@@ -346,14 +368,43 @@ async def _procesar_candle(trader, symbol: str, intervalo: str, estado, vela: di
             trader._mem_high_cycles = 0
 
 
-async def _procesar_candle_con_lock(trader, symbol: str, intervalo: str, estado, vela: dict) -> None:
+async def _procesar_candle_con_lock(
+    trader,
+    symbol: str,
+    intervalo: str,
+    estado,
+    vela: dict,
+    *,
+    modo_degradado: bool = False,
+    skip_notifications: bool = False,
+    omitir_entradas: bool = False,
+    omitir_tendencia: bool = False,
+) -> None:
     """Procesa una vela asegurando el lock por símbolo e intervalo."""
     lock = _vela_locks[f'{symbol}:{intervalo}']
     async with lock:
-        await _procesar_candle(trader, symbol, intervalo, estado, vela)
+        await _procesar_candle(
+            trader,
+            symbol,
+            intervalo,
+            estado,
+            vela,
+            modo_degradado=modo_degradado,
+            skip_notifications=skip_notifications,
+            omitir_entradas=omitir_entradas,
+            omitir_tendencia=omitir_tendencia,
+        )
 
 
-async def procesar_vela(trader, vela: dict) -> None:
+async def procesar_vela(
+    trader,
+    vela: dict,
+    *,
+    modo_degradado: bool = False,
+    skip_notifications: bool = False,
+    omitir_entradas: bool = False,
+    omitir_tendencia: bool = False,
+) -> None:
     """Entrada principal para procesar una vela cerrada."""
     if not isinstance(vela, dict):
         log.error(f"❌ Formato de vela inválido: {vela}")
@@ -447,12 +498,30 @@ async def procesar_vela(trader, vela: dict) -> None:
 
         # Procesa la primera de la lista bajo el lock actual
         primera, *resto = ready
-        await _procesar_candle(trader, symbol, intervalo, estado, primera)
+        await _procesar_candle(
+            trader,
+            symbol,
+            intervalo,
+            estado,
+            primera,
+            modo_degradado=modo_degradado,
+            skip_notifications=skip_notifications,
+            omitir_entradas=omitir_entradas,
+            omitir_tendencia=omitir_tendencia,
+        )
 
         # El resto se procesa en tareas separadas; cada una adquirirá el lock interno
         for vela_proc in resto:
             asyncio.create_task(
                 _procesar_candle_con_lock(
-                    trader, symbol, intervalo, estado, vela_proc
+                    trader,
+                    symbol,
+                    intervalo,
+                    estado,
+                    vela_proc,
+                    modo_degradado=modo_degradado,
+                    skip_notifications=skip_notifications,
+                    omitir_entradas=omitir_entradas,
+                    omitir_tendencia=omitir_tendencia,
                 )
             )
