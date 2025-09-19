@@ -133,6 +133,17 @@ class DataFeed:
     ) -> None:
         """Procesa una única vela aplicando timeout y métricas."""
         enqueue_ts = candle.pop("_enqueue_time", None)
+        trace_id = candle.get("trace_id")
+        if enqueue_ts is not None:
+            wait_duration = time.monotonic() - enqueue_ts
+            log.debug(
+                f"[{symbol}] Handler esperó {wait_duration:.3f}s antes de iniciar "
+                f"trace_id={trace_id}"
+            )
+        else:
+            log.debug(
+                f"[{symbol}] Handler sin timestamp de espera previo trace_id={trace_id}"
+            )
         try:
             await asyncio.wait_for(handler(candle), timeout=self.handler_timeout)
         except asyncio.TimeoutError:
