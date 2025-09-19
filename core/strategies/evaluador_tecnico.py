@@ -1,6 +1,7 @@
 import json
 import os
 import asyncio
+from typing import Dict
 import pandas as pd
 from indicators.helpers import get_rsi
 from data_feed.candle_builder import backfill
@@ -25,6 +26,8 @@ PESOS_DEFECTO = {
 }
 _pesos_cache: dict | None = None
 _pesos_lock = asyncio.Lock()
+_backfill_tasks: Dict[str, asyncio.Task] = {}
+_backfill_lock = asyncio.Lock()
 
 
 def _cargar_pesos(symbol: str) ->dict:
@@ -77,8 +80,23 @@ async def evaluar_puntaje_tecnico(
     if df is None or len(df) < window_size:
         log.warning(f'[{symbol}] datos insuficientes para score tecnico, backfill en background')
         faltantes = window_size if df is None else window_size - len(df)
-        asyncio.create_task(backfill(symbol, faltantes))
-        return {'score_total': 0.0, 'detalles': {}}
+        if faltantes > 0:
+            async with _backfill_lock:
+                task = _backfill_tasks.get(symbol)
+                if task is None or task.done():
+                    nueva_tarea = asyncio.create_task(backfill(symbol, faltantes))
+                    _backfill_tasks[symbol] = nueva_tarea
+
+                    def _cleanup_backfill(t: asyncio.Task, *, sym: str = symbol) -> None:
+                        try:
+                            t.result()
+                        except Exception as exc:  # pragma: no cover - logging de error
+                            log.warning(f'[{sym}] backfill asincrono fallo: {exc}')
+                        finally:
+                            _backfill_tasks.pop(sym, None)
+
+                    nueva_tarea.add_done_callback(_cleanup_backfill)
+        return {'score_total': 0.0, 'score_normalizado': 0.0, 'detalles': {}}
     df = df.tail(window_size).copy()
     vela = df.iloc[-1]
     cierre = float(vela['close'])
