@@ -5,12 +5,13 @@ volatilidad reciente y para calcular niveles de ``take profit`` y ``stop
 loss`` según el régimen de mercado.
 """
 from __future__ import annotations
-import os
+import asyncio
 import json
+import os
+from dataclasses import dataclass
+from typing import Any, Dict, List
 import numpy as np
 import pandas as pd
-import asyncio
-from typing import List, Dict
 
 from data_feed.candle_builder import backfill
 from indicators.retornos_volatilidad import (
@@ -19,14 +20,14 @@ from indicators.retornos_volatilidad import (
     verificar_consistencia,
     volatilidad_welford,
 )
-from core.utils.market_utils import calcular_slope_pct
-from core.utils.utils import configurar_logger
-from core.market_regime import detectar_regimen
 from core.ajustador_riesgo import (
+    RIESGO_MAXIMO_DIARIO_BASE,
     ajustar_sl_tp_riesgo,
     es_modo_agresivo,
-    RIESGO_MAXIMO_DIARIO_BASE,
 )
+from core.market_regime import detectar_regimen
+from core.utils.market_utils import calcular_slope_pct
+from core.utils.utils import configurar_logger
 log = configurar_logger('adaptador_dinamico')
 RUTA_CONFIGS_OPTIMAS = 'config/configuraciones_optimas.json'
 if os.path.exists(RUTA_CONFIGS_OPTIMAS):
@@ -35,8 +36,104 @@ if os.path.exists(RUTA_CONFIGS_OPTIMAS):
 else:
     log.warning(
         '❌ Archivo de configuración no encontrado. Se usará configuración por defecto.'
-        )
+    )
     CONFIGS_OPTIMAS: dict = {}
+
+@dataclass(frozen=True)
+class MinDistanceConstraints:
+    """Parámetros efectivos de distancia mínima para SL/TP."""
+
+    min_distance_pct: float
+    min_distance_ticks: int
+    tick_size: float
+    min_distance_abs: float
+
+
+@dataclass(frozen=True)
+class TpSlResult:
+    """Resultado estructurado del cálculo de SL/TP adaptativos."""
+
+    sl: float
+    tp: float
+    atr: float
+    multiplicador_sl: float
+    multiplicador_tp: float
+    min_constraints: MinDistanceConstraints
+    sl_offset: float
+    tp_offset: float
+    sl_clamped: bool
+    tp_clamped: bool
+
+    def __iter__(self):  # pragma: no cover - compatibilidad con tuple unpacking
+        yield self.sl
+        yield self.tp
+
+
+def _extraer_tick_size(config: Dict[str, Any]) -> float:
+    """Obtiene ``tick_size`` desde la configuración si está disponible."""
+
+    filtros = config.get('filters') if isinstance(config.get('filters'), dict) else {}
+    filtros_mercado = (
+        config.get('market_filters') if isinstance(config.get('market_filters'), dict) else {}
+    )
+    candidatos = [
+        config.get('tick_size'),
+        config.get('tickSize'),
+        filtros.get('tick_size'),
+        filtros.get('tickSize'),
+        filtros_mercado.get('tick_size'),
+        filtros_mercado.get('tickSize'),
+    ]
+    for candidato in candidatos:
+        if candidato in (None, ''):
+            continue
+        try:
+            tick = float(candidato)
+            if tick > 0:
+                return tick
+        except (TypeError, ValueError):  # pragma: no cover - defensivo
+            continue
+    return 0.0
+
+
+def _resolver_min_distancia(
+    config: Dict[str, Any],
+    precio_actual: float,
+) -> MinDistanceConstraints:
+    """Calcula las restricciones efectivas de distancia mínima."""
+
+    min_pct_cfg = config.get('distancia_minima_pct', config.get('min_distancia_pct'))
+    if min_pct_cfg is None:
+        min_pct_cfg = os.getenv('MIN_DISTANCIA_SL_TP_PCT', '0.0005')
+    try:
+        min_pct_cfg = float(min_pct_cfg)
+    except (TypeError, ValueError):
+        min_pct_cfg = 0.0005
+    min_pct_cfg = max(min_pct_cfg, 1e-6)
+
+    min_ticks_cfg = config.get('min_distancia_ticks', os.getenv('MIN_DISTANCIA_TICKS'))
+    try:
+        min_ticks = max(1, int(min_ticks_cfg))
+    except (TypeError, ValueError):
+        min_ticks = 2
+
+    tick_size = _extraer_tick_size(config)
+
+    min_pct_ticks = (tick_size * min_ticks) / precio_actual if precio_actual > 0 else 0.0
+    min_pct = max(min_pct_cfg, min_pct_ticks)
+    min_distance_pct = min_pct if precio_actual > 0 else min_pct_cfg
+    if precio_actual > 0:
+        min_distance_abs_pct = precio_actual * min_distance_pct
+    else:
+        min_distance_abs_pct = min_distance_pct
+    min_distance_abs = max(min_distance_abs_pct, tick_size * min_ticks)
+
+    return MinDistanceConstraints(
+        min_distance_pct=min_distance_pct,
+        min_distance_ticks=min_ticks,
+        tick_size=tick_size,
+        min_distance_abs=min_distance_abs,
+    )
 
 
 def _adaptar_configuracion_base(symbol: str, df: pd.DataFrame, base_config: dict
@@ -103,31 +200,54 @@ def _adaptar_configuracion_base(symbol: str, df: pd.DataFrame, base_config: dict
     return config
 
 
-def calcular_tp_sl_adaptativos(symbol: str, df: pd.DataFrame, config: (dict |
-    None)=None, capital_actual: (float | None)=None, precio_actual: (float |
-    None)=None) ->tuple[float, float]:
+def calcular_tp_sl_adaptativos(
+    symbol: str,
+    df: pd.DataFrame,
+    config: dict | None = None,
+    capital_actual: float | None = None,
+    precio_actual: float | None = None,
+) -> TpSlResult:
     if config is None:
         config = {}
     if not isinstance(df, pd.DataFrame):
         raise TypeError('df debe ser un DataFrame de pandas')
     if precio_actual is None:
         precio_actual = float(df['close'].iloc[-1])
+    min_constraints = _resolver_min_distancia(config, precio_actual)
     columnas_requeridas = {'high', 'low', 'close'}
     if not columnas_requeridas.issubset(df.columns):
         log.warning(
             f'[{symbol}] ❌ Columnas insuficientes para TP/SL. Usando margen fijo.'
-            )
-        margen = precio_actual * 0.01
-        return precio_actual - margen, precio_actual + margen
-    df = df.ffill().bfill()
-    df['hl'] = df['high'] - df['low']
-    df['hc'] = abs(df['high'] - df['close'].shift(1))
-    df['lc'] = abs(df['low'] - df['close'].shift(1))
-    df['tr'] = df[['hl', 'hc', 'lc']].max(axis=1)
-    regimen = detectar_regimen(df)
+        )
+        margen_base = precio_actual * 0.01
+        offset = max(margen_base, min_constraints.min_distance_abs)
+        sl = round(max(0.0, precio_actual - offset), 6)
+        tp = round(precio_actual + offset, 6)
+        clamped = offset > margen_base
+        return TpSlResult(
+            sl=sl,
+            tp=tp,
+            atr=float('nan'),
+            multiplicador_sl=float('nan'),
+            multiplicador_tp=float('nan'),
+            min_constraints=min_constraints,
+            sl_offset=offset,
+            tp_offset=offset,
+            sl_clamped=clamped,
+            tp_clamped=clamped,
+        )
+
+    trabajo = df.copy()
+    trabajo = trabajo.ffill().bfill()
+    trabajo['hl'] = trabajo['high'] - trabajo['low']
+    trabajo['hc'] = abs(trabajo['high'] - trabajo['close'].shift(1))
+    trabajo['lc'] = abs(trabajo['low'] - trabajo['close'].shift(1))
+    trabajo['tr'] = trabajo[['hl', 'hc', 'lc']].max(axis=1)
+
+    regimen = detectar_regimen(trabajo)
     ventana_atr = 7 if regimen == 'lateral' else 14
-    atr = df['tr'].rolling(window=ventana_atr).mean().iloc[-1]
-    if pd.isna(atr):
+    atr = trabajo['tr'].rolling(window=ventana_atr).mean().iloc[-1]
+    if pd.isna(atr) or atr <= 0:
         atr = precio_actual * 0.01
     multiplicador_sl = config.get('sl_ratio', 1.5)
     multiplicador_tp = config.get('tp_ratio', 2.5)
@@ -137,17 +257,37 @@ def calcular_tp_sl_adaptativos(symbol: str, df: pd.DataFrame, config: (dict |
     else:
         multiplicador_sl *= 1.2
         multiplicador_tp *= 1.2
-    if config.get('modo_capital_bajo'
-        ) and capital_actual is not None and capital_actual < 500:
+    if config.get('modo_capital_bajo') and capital_actual is not None and capital_actual < 500:
         factor = 1 + (1 - capital_actual / 500) * 0.2
         multiplicador_tp *= factor
         multiplicador_sl *= max(0.5, 1 - (1 - capital_actual / 500) * 0.1)
-    sl = round(precio_actual - atr * multiplicador_sl, 6)
-    tp = round(precio_actual + atr * multiplicador_tp, 6)
+    sl_offset_base = atr * multiplicador_sl
+    tp_offset_base = atr * multiplicador_tp
+    sl_clamped = sl_offset_base < min_constraints.min_distance_abs
+    tp_clamped = tp_offset_base < min_constraints.min_distance_abs
+    sl_offset = max(sl_offset_base, min_constraints.min_distance_abs)
+    tp_offset = max(tp_offset_base, min_constraints.min_distance_abs)
+
+    sl = round(max(0.0, precio_actual - sl_offset), 6)
+    tp = round(precio_actual + tp_offset, 6)
     log.debug(
-        f'[{symbol}] TP/SL adaptativos | Regimen: {regimen} | Precio: {precio_actual:.2f} | ATR: {atr:.5f} | SL: {sl:.2f} | TP: {tp:.2f} | Ratios: SL x{multiplicador_sl}, TP x{multiplicador_tp} | Capital: {capital_actual}'
-        )
-    return sl, tp
+        f'[{symbol}] TP/SL adaptativos | Regimen: {regimen} | Precio: {precio_actual:.2f} | ATR: {atr:.5f} | '
+        f'SL: {sl:.2f} | TP: {tp:.2f} | Ratios: SL x{multiplicador_sl}, TP x{multiplicador_tp} | '
+        f'Capital: {capital_actual} | MinDistAbs: {min_constraints.min_distance_abs:.6f}'
+    )
+
+    return TpSlResult(
+        sl=sl,
+        tp=tp,
+        atr=float(atr),
+        multiplicador_sl=float(multiplicador_sl),
+        multiplicador_tp=float(multiplicador_tp),
+        min_constraints=min_constraints,
+        sl_offset=float(sl_offset),
+        tp_offset=float(tp_offset),
+        sl_clamped=bool(sl_clamped),
+        tp_clamped=bool(tp_clamped),
+    )
 
 
 async def backfill_ventana(symbol: str, ventana: List[Dict[str, float]], window_size: int) -> List[Dict[str, float]]:
