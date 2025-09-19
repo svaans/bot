@@ -1,9 +1,10 @@
 """Módulo para gestionar el flujo de datos desde Binance."""
 from __future__ import annotations
 import asyncio
+import json
 import random
 import os
-from typing import Awaitable, Callable, Dict, Iterable, Any, Deque
+from typing import Awaitable, Callable, Dict, Iterable, Any, Deque, Literal
 from datetime import datetime, timezone, timedelta
 import time
 from collections import deque, defaultdict
@@ -26,6 +27,7 @@ from core.metrics import (
     registrar_vela_rechazada,
 )
 from observabilidad import metrics as obs_metrics
+from observabilidad.perf_tracker import StageMetrics
 from core.supervisor import (
     tick,
     tick_data,
@@ -35,7 +37,10 @@ from core.supervisor import (
     beat,
     task_cooldown,
 )
-from core.notification_manager import crear_notification_manager_desde_env
+from core.notification_manager import (
+    NotificationManager,
+    crear_notification_manager_desde_env,
+)
 from ccxt.base.errors import AuthenticationError, NetworkError
 from config.config import BACKFILL_MAX_CANDLES
 
@@ -58,6 +63,8 @@ class DataFeed:
         drop_oldest: bool | None = None,
         batch_size: int | None = None,
         reset_cb: Callable[[str], None] | None = None,
+        notification_manager: NotificationManager | None = None,
+        notifications_enabled: bool | None = None,
     ) -> None:
         self.intervalo = intervalo
         self.intervalo_segundos = intervalo_a_segundos(intervalo)
@@ -78,7 +85,16 @@ class DataFeed:
         self._handler_actual: Callable[[dict], Awaitable[None]] | None = None
         self._running = False
         self._cliente: Any | None = None
-        self.notificador = crear_notification_manager_desde_env()
+        if notifications_enabled is None:
+            notifications_enabled = (
+                os.getenv("DF_NOTIFICATIONS", "true").lower() == "true"
+            )
+        if notification_manager is not None:
+            self.notificador = notification_manager
+        elif notifications_enabled:
+            self.notificador = crear_notification_manager_desde_env()
+        else:
+            self.notificador = None
         self._symbols: list[str] = []
         self.reinicios_forzados_total = 0
         self.handler_timeout = handler_timeout
@@ -86,7 +102,6 @@ class DataFeed:
         self._reiniciando: set[str] = set()
         self._handler_timeouts: Dict[str, int] = {}
         self._mensajes_recibidos: Dict[str, int] = {}
-        self._ultimo_log_descartes: Dict[str, float] = {}
         self._queue_discards: Dict[str, int] = {}
         self._coalesce_counts: Dict[str, int] = {}
         self._reinicios_inactividad: Dict[str, int] = {}
@@ -94,6 +109,17 @@ class DataFeed:
         self._consumer_tasks: Dict[str, asyncio.Task] = {}
         self._consumer_last: Dict[str, float] = {}
         self._monitor_consumers_task: asyncio.Task | None = None
+        self._queue_default_limit = int(os.getenv("DF_QUEUE_MAX", "2000"))
+        self._queue_limits: Dict[str, int] = {}
+        self._queue_policy_default = os.getenv("DF_QUEUE_POLICY", "block").lower()
+        self._queue_policy_overrides: Dict[str, str] = {}
+        self._queue_safety_policy = os.getenv("DF_QUEUE_SAFETY_POLICY", "drop_oldest").lower()
+        self._coalesce_window_ms = max(0, int(os.getenv("DF_QUEUE_COALESCE_MS", "0")))
+        self._queue_high_watermark = float(os.getenv("DF_QUEUE_HIGH_WATERMARK", "0.8"))
+        self._queue_alert_interval = float(os.getenv("DF_QUEUE_ALERT_INTERVAL", "5.0"))
+        self._metrics_log_interval = float(os.getenv("DF_METRICS_LOG_INTERVAL", "5.0"))
+        self._queue_alert_last: Dict[str, float] = {}
+        self._stage_metrics: Dict[str, StageMetrics] = {}
         if backpressure is None:
             self.backpressure = (
                 os.getenv("DF_BACKPRESSURE", "true").lower() == "true"
@@ -106,6 +132,9 @@ class DataFeed:
             )
         else:
             self.drop_oldest = drop_oldest
+        self.configure_queue_control()
+        if not self.backpressure and self._queue_policy_default == "block":
+            self._queue_policy_default = "drop_oldest" if self.drop_oldest else "reject"
         registrar_reconexion_datafeed(self._reconectar_por_supervisor)
         self._stream_restart_stats: Dict[str, Deque[float]] = {}
         self.min_buffer_candles = int(os.getenv("MIN_BUFFER_CANDLES", "30"))
@@ -127,6 +156,204 @@ class DataFeed:
         self._backfill_retry_last: Dict[str, float] = {}
         self._backfill_retry_delay = float(os.getenv("BACKFILL_RETRY_DELAY", "1.0"))
 
+    def configure_queue_control(
+        self,
+        *,
+        default_limit: int | None = None,
+        per_symbol_limits: Dict[str, int] | None = None,
+        default_policy: str | None = None,
+        policy_overrides: Dict[str, str] | None = None,
+        high_watermark: float | None = None,
+        coalesce_window_ms: int | None = None,
+        safety_policy: str | None = None,
+        alert_interval: float | None = None,
+        metrics_log_interval: float | None = None,
+    ) -> None:
+        """Actualiza la configuración de control de colas del ``DataFeed``."""
+
+        if default_limit is not None:
+            self._queue_default_limit = max(0, int(default_limit))
+        if per_symbol_limits is not None:
+            self._queue_limits = {
+                sym.upper(): max(0, int(limit))
+                for sym, limit in per_symbol_limits.items()
+            }
+        if default_policy is not None:
+            self._queue_policy_default = default_policy.lower()
+        if policy_overrides is not None:
+            self._queue_policy_overrides = {
+                sym.upper(): policy.lower()
+                for sym, policy in policy_overrides.items()
+            }
+        if safety_policy is not None:
+            self._queue_safety_policy = safety_policy.lower()
+        if coalesce_window_ms is not None:
+            self._coalesce_window_ms = max(0, int(coalesce_window_ms))
+        if high_watermark is not None:
+            self._queue_high_watermark = max(0.0, min(1.0, float(high_watermark)))
+        if alert_interval is not None:
+            self._queue_alert_interval = max(0.5, float(alert_interval))
+        if metrics_log_interval is not None:
+            self._metrics_log_interval = max(0.5, float(metrics_log_interval))
+
+    def _queue_maxsize_for(self, symbol: str) -> int:
+        return max(0, self._queue_limits.get(symbol.upper(), self._queue_default_limit))
+
+    def _queue_policy_for(self, symbol: str) -> str:
+        return self._queue_policy_overrides.get(symbol.upper(), self._queue_policy_default)
+
+    def _get_stage_metrics(self, symbol: str) -> StageMetrics:
+        metrics = self._stage_metrics.get(symbol)
+        if metrics is None:
+            metrics = StageMetrics(
+                "datafeed_consumer",
+                log_interval=self._metrics_log_interval,
+            )
+            self._stage_metrics[symbol] = metrics
+        return metrics
+
+    def _emit_high_watermark(self, symbol: str, qsize: int, maxsize: int) -> None:
+        if maxsize <= 0:
+            return
+        ratio = qsize / maxsize
+        if ratio < self._queue_high_watermark:
+            return
+        ahora = time.monotonic()
+        last = self._queue_alert_last.get(symbol, 0.0)
+        if ahora - last < self._queue_alert_interval:
+            return
+        self._queue_alert_last[symbol] = ahora
+        payload = {
+            "evento": "queue_high_watermark",
+            "symbol": symbol,
+            "stage": "datafeed",
+            "queue_size": qsize,
+            "queue_max": maxsize,
+            "policy": self._queue_policy_for(symbol),
+            "ratio": round(ratio, 4),
+        }
+        log.warning(json.dumps(payload, ensure_ascii=False))
+        obs_metrics.QUEUE_HIGH_WATERMARK_RATIO.labels(symbol=symbol).set(ratio)
+        registro_metrico.registrar(
+            "queue_high_watermark",
+            {"symbol": symbol, "qsize": qsize, "maxsize": maxsize},
+        )
+
+    def _drop_oldest(self, symbol: str, queue: asyncio.Queue) -> bool:
+        try:
+            _ = queue.get_nowait()
+        except asyncio.QueueEmpty:
+            return False
+        queue.task_done()
+        self._queue_discards[symbol] = self._queue_discards.get(symbol, 0) + 1
+        obs_metrics.QUEUE_DROPS.labels(symbol=symbol).inc()
+        registro_metrico.registrar(
+            "queue_discards",
+            {"symbol": symbol, "count": self._queue_discards[symbol]},
+        )
+        return True
+
+    def _reject_candle(self, symbol: str, candle: dict, reason: str) -> None:
+        self._queue_discards[symbol] = self._queue_discards.get(symbol, 0) + 1
+        obs_metrics.QUEUE_DROPS.labels(symbol=symbol).inc()
+        registro_metrico.registrar(
+            "queue_discards",
+            {"symbol": symbol, "count": self._queue_discards[symbol]},
+        )
+        registrar_vela_rechazada(symbol, reason)
+        payload = {
+            "evento": "queue_reject",
+            "symbol": symbol,
+            "reason": reason,
+            "policy": self._queue_policy_for(symbol),
+            "timestamp": candle.get("timestamp"),
+        }
+        log.warning(json.dumps(payload, ensure_ascii=False))
+
+    def _coalesce_with_tail(
+        self,
+        symbol: str,
+        queue: asyncio.Queue,
+        candle: dict,
+    ) -> bool:
+        if self._coalesce_window_ms <= 0:
+            return False
+        tail = None
+        try:
+            tail = queue._queue[-1]  # type: ignore[attr-defined]
+        except (AttributeError, IndexError):
+            return False
+        last_ts = tail.get("timestamp")
+        new_ts = candle.get("timestamp")
+        if last_ts is None or new_ts is None:
+            return False
+        if new_ts < last_ts or new_ts - last_ts > self._coalesce_window_ms:
+            return False
+        tail_high = float(tail.get("high", candle.get("high", 0.0)))
+        tail_low = float(tail.get("low", candle.get("low", 0.0)))
+        tail_volume = float(tail.get("volume", 0.0))
+        candle_high = float(candle.get("high", tail_high))
+        candle_low = float(candle.get("low", tail_low))
+        candle_volume = float(candle.get("volume", 0.0))
+        tail["high"] = max(tail_high, candle_high)
+        tail["low"] = min(tail_low, candle_low)
+        tail["close"] = candle.get("close", tail.get("close"))
+        tail["volume"] = tail_volume + candle_volume
+        tail["_coalesced"] = tail.get("_coalesced", 0) + 1
+        obs_metrics.QUEUE_COALESCE_TOTAL.labels(symbol=symbol).inc()
+        registro_metrico.registrar(
+            "queue_coalesce",
+            {"symbol": symbol, "count": tail["_coalesced"]},
+        )
+        self._coalesce_counts[symbol] = self._coalesce_counts.get(symbol, 0) + 1
+        payload = {
+            "evento": "queue_coalesce",
+            "symbol": symbol,
+            "timestamp": new_ts,
+            "coalesced_count": tail["_coalesced"],
+        }
+        log.info(json.dumps(payload, ensure_ascii=False))
+        return True
+
+    async def _handle_queue_full(
+        self,
+        symbol: str,
+        queue: asyncio.Queue,
+        candle: dict,
+        policy: str,
+    ) -> Literal["retry", "handled", "rejected", "inserted"]:
+        policy = policy.lower()
+        if policy == "drop_oldest":
+            dropped = self._drop_oldest(symbol, queue)
+            if dropped:
+                registrar_vela_rechazada(symbol, "backpressure")
+                return "retry"
+            return "rejected"
+        if policy == "coalesce":
+            if self._coalesce_with_tail(symbol, queue, candle):
+                return "handled"
+            fallback = self._queue_safety_policy
+            obs_metrics.QUEUE_POLICY_FALLBACK_TOTAL.labels(
+                symbol=symbol, policy=fallback
+            ).inc()
+            if fallback == "drop_oldest":
+                dropped = self._drop_oldest(symbol, queue)
+                if dropped:
+                    registrar_vela_rechazada(symbol, "coalesce_fallback")
+                    return "retry"
+                return "rejected"
+            if fallback == "block":
+                await queue.put(candle)
+                return "inserted"
+            self._reject_candle(symbol, candle, "coalesce_reject")
+            return "rejected"
+        if policy == "reject":
+            self._reject_candle(symbol, candle, "queue_reject")
+            return "rejected"
+        # Por defecto, bloquear
+        await queue.put(candle)
+        return "inserted"
+
     async def _process_candle(
         self,
         symbol: str,
@@ -135,19 +362,23 @@ class DataFeed:
         queue: asyncio.Queue,
     ) -> None:
         """Procesa una única vela aplicando timeout y métricas."""
-        enqueue_ts = candle.pop("_enqueue_time", None)
+        enqueue_ts = candle.get("_df_enqueue_time")
         trace_id = candle.get("trace_id")
+        queue_wait_ms: float | None = None
         if enqueue_ts is not None:
-            wait_duration = time.monotonic() - enqueue_ts
+            queue_wait_ms = (time.monotonic() - enqueue_ts) * 1000
+            candle["_df_queue_wait_ms"] = queue_wait_ms
             log.debug(
-                f"[{symbol}] Handler esperó {wait_duration:.3f}s antes de iniciar "
+                f"[{symbol}] Handler esperó {queue_wait_ms/1000:.3f}s antes de iniciar "
                 f"trace_id={trace_id}"
             )
         else:
             log.debug(
                 f"[{symbol}] Handler sin timestamp de espera previo trace_id={trace_id}"
             )
+        start = time.perf_counter()
         try:
+            candle["_df_dequeue_time"] = time.monotonic()
             await asyncio.wait_for(handler(candle), timeout=self.handler_timeout)
         except asyncio.TimeoutError:
             self._handler_timeouts[symbol] = (
@@ -167,6 +398,7 @@ class DataFeed:
         except Exception as e:
             log.error(f"Error procesando vela en {symbol}: {e}")
         finally:
+            duration_ms = (time.perf_counter() - start) * 1000
             queue.task_done()
             if enqueue_ts is not None:
                 INGEST_LATENCY.labels(symbol=symbol).observe(
@@ -177,6 +409,14 @@ class DataFeed:
             if ts is not None:
                 age = max(0.0, time.time() - ts / 1000)
                 obs_metrics.CANDLE_AGE.labels(symbol=symbol).observe(age)
+            metrics = self._get_stage_metrics(symbol)
+            metrics.record(
+                latency=duration_ms,
+                queue_delay=queue_wait_ms,
+                queue_size=float(queue.qsize()),
+                extra={"symbol": symbol, "trace_id": trace_id},
+            )
+            metrics.maybe_flush(log, extra={"symbol": symbol})
             self._consumer_last[symbol] = time.monotonic()
 
     def _schedule_backfill_retry(self, symbol: str) -> None:
@@ -308,14 +548,11 @@ class DataFeed:
             return
         queue = self._queues[symbol]
         qsize = queue.qsize()
-        if queue.maxsize and qsize > queue.maxsize * 0.8:
-            log.warning(
-                f"[{symbol}] queue_size={qsize}/{queue.maxsize}"
-            )
-            # Pequeño backoff para dar respiro al consumidor
-            await asyncio.sleep(0.01)
+        maxsize = getattr(queue, "maxsize", 0) or 0
+        if maxsize:
+            self._emit_high_watermark(symbol, qsize, maxsize)
         candle.setdefault("trace_id", uuid4().hex)
-        candle["_enqueue_time"] = time.monotonic()
+        candle["_df_enqueue_time"] = time.monotonic()
 
         def _update_producer_stats() -> None:
             stats = self._producer_stats.get(symbol)
@@ -330,44 +567,33 @@ class DataFeed:
                 stats["count"] = 0
                 stats["last"] = now
 
-        if self.backpressure:
+        policy = self._queue_policy_for(symbol)
+        inserted_or_handled = False
+        if policy == "block":
             await queue.put(candle)
+            inserted_or_handled = True
+        else:
+            while True:
+                try:
+                    queue.put_nowait(candle)
+                    inserted_or_handled = True
+                    break
+                except asyncio.QueueFull:
+                    action = await self._handle_queue_full(symbol, queue, candle, policy)
+                    if action == "retry":
+                        continue
+                    if action == "inserted":
+                        inserted_or_handled = True
+                        break
+                    if action == "handled":
+                        inserted_or_handled = True
+                        break
+                    if action == "rejected":
+                        return
+        if inserted_or_handled:
             QUEUE_SIZE.labels(symbol=symbol).set(queue.qsize())
             _update_producer_stats()
-        else:
-            try:
-                queue.put_nowait(candle)
-                QUEUE_SIZE.labels(symbol=symbol).set(queue.qsize())
-                _update_producer_stats()
-            except asyncio.QueueFull:
-                now = time.monotonic()
-                last = self._ultimo_log_descartes.get(symbol, 0.0)
-                if now - last >= float(os.getenv("DF_QUEUE_DROP_LOG_INTERVAL", "5.0")):
-                    log.warning(
-                        f"[{symbol}] Queue llena; descartando 1 (qsize={queue.qsize()}/{queue.maxsize})"
-                    )
-                    self._ultimo_log_descartes[symbol] = now
-                self._queue_discards[symbol] = self._queue_discards.get(symbol, 0) + 1
-                obs_metrics.QUEUE_DROPS.labels(symbol=symbol).inc()
-                registro_metrico.registrar(
-                    "queue_discards",
-                    {"symbol": symbol, "count": self._queue_discards[symbol]},
-                )
-                if self.drop_oldest:
-                    try:
-                        _ = queue.get_nowait()
-                        queue.task_done()
-                    except asyncio.QueueEmpty:
-                        pass
-                    try:
-                        await asyncio.wait_for(queue.put(candle), timeout=1.0)
-                        QUEUE_SIZE.labels(symbol=symbol).set(queue.qsize())
-                    except Exception:
-                        log.error(
-                            f"[{symbol}] No se pudo encolar nueva vela tras espera; descartando"
-                        )
-                else:
-                    return
+        
         self._last[symbol] = datetime.now(UTC)
         self._last_monotonic[symbol] = time.monotonic()
         self._mensajes_recibidos[symbol] = (
@@ -646,7 +872,10 @@ class DataFeed:
                 beat(f'stream_{symbol}', 'error')
                 fallos_consecutivos += 1
                 try:
-                    if fallos_consecutivos == 1 or fallos_consecutivos % 5 == 0:
+                    if (
+                        self.notificador is not None
+                        and (fallos_consecutivos == 1 or fallos_consecutivos % 5 == 0)
+                    ):
                         await self.notificador.enviar_async(
                             f'🔄 Stream {symbol} en reconexión (intento {fallos_consecutivos})',
                             'WARN',
@@ -683,10 +912,11 @@ class DataFeed:
                         f"Stream {symbol} detenido tras {fallos_consecutivos} intentos"
                     )
                     try:
-                        await self.notificador.enviar_async(
-                            f'❌ Stream {symbol} superó el límite de {self.max_stream_restarts} intentos',
-                            'CRITICAL',
-                        )
+                        if self.notificador is not None:
+                            await self.notificador.enviar_async(
+                                f'❌ Stream {symbol} superó el límite de {self.max_stream_restarts} intentos',
+                                'CRITICAL',
+                            )
                     except Exception:
                         log.exception('Error enviando notificación de límite de reconexiones')
                         tick('data_feed')
@@ -782,7 +1012,10 @@ class DataFeed:
                     beat(f'stream_{sym}', 'error')
                 fallos_consecutivos += 1
                 try:
-                    if fallos_consecutivos == 1 or fallos_consecutivos % 5 == 0:
+                    if (
+                        self.notificador is not None
+                        and (fallos_consecutivos == 1 or fallos_consecutivos % 5 == 0)
+                    ):
                         await self.notificador.enviar_async(
                             f'🔄 Stream combinado en reconexión (intento {fallos_consecutivos})',
                             'WARN',
@@ -818,10 +1051,11 @@ class DataFeed:
                         f'❌ Stream combinado superó el límite de {self.max_stream_restarts} intentos'
                     )
                     try:
-                        await self.notificador.enviar_async(
-                            f'❌ Stream combinado superó el límite de {self.max_stream_restarts} intentos',
-                            'CRITICAL',
-                        )
+                        if self.notificador is not None:
+                            await self.notificador.enviar_async(
+                                f'❌ Stream combinado superó el límite de {self.max_stream_restarts} intentos',
+                                'CRITICAL',
+                            )
                     except Exception:
                         log.exception(
                             'Error enviando notificación de límite de reconexiones'
@@ -970,15 +1204,19 @@ class DataFeed:
                                 stats.append(ts_now)
                                 while stats and ts_now - stats[0] > 300:
                                     stats.popleft()
-                                if len(stats) > self.max_stream_restarts and ts_now - stats[0] < 60:
+                                if (
+                                    len(stats) > self.max_stream_restarts
+                                    and ts_now - stats[0] < 60
+                                ):
                                     log.error(
                                         f"🚨 Circuit breaker: demasiados reinicios para stream {sym}"
                                     )
                                     try:
-                                        await self.notificador.enviar_async(
-                                            f"🚨 Circuit breaker: demasiados reinicios para stream {sym}",
-                                            "CRITICAL",
-                                        )
+                                        if self.notificador is not None:
+                                            await self.notificador.enviar_async(
+                                                f"🚨 Circuit breaker: demasiados reinicios para stream {sym}",
+                                                "CRITICAL",
+                                            )
                                     except Exception:
                                         log.exception(
                                             "Error enviando notificación de circuit breaker"
@@ -1094,9 +1332,18 @@ class DataFeed:
                 if merged:
                     self._last_close_ts[sym] = merged[-1][0]
         self._running = True
-        tam_q = int(os.getenv("DF_QUEUE_MAX", "2000"))
-        self._queues = {sym: asyncio.Queue(maxsize=tam_q) for sym in self._symbols}
+        self._queues = {
+            sym: asyncio.Queue(maxsize=self._queue_maxsize_for(sym))
+            for sym in self._symbols
+        }
         for sym in self._symbols:
+            maxsize = getattr(self._queues[sym], "maxsize", 0) or 0
+            log.debug(
+                "[%s] Cola inicializada max=%s policy=%s",
+                sym,
+                maxsize,
+                self._queue_policy_for(sym),
+            )
             self._consumer_tasks[sym] = supervised_task(
                 lambda sym=sym: self._consumer(sym, handler),
                 f"consumer_{sym}",
@@ -1198,6 +1445,10 @@ class DataFeed:
         self._mensajes_recibidos.clear()
         self._queue_discards.clear()
         self._reinicios_inactividad.clear()
+        for sym, metrics in self._stage_metrics.items():
+            metrics.flush(log, extra={"symbol": sym})
+        self._stage_metrics.clear()
+        self._queue_alert_last.clear()
         self._symbols = []
         self._running = False
         self._combined = False
