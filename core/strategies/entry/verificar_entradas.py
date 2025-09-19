@@ -576,9 +576,24 @@ async def verificar_entrada(trader, symbol: str, df: pd.DataFrame, estado) -> di
         score_tecnico = None
 
     precio = float(df['close'].iloc[-1])
-    sl, tp = calcular_tp_sl_adaptativos(
+    tp_sl_result = calcular_tp_sl_adaptativos(
         symbol, df, config, trader.capital_por_simbolo.get(symbol, 0), precio
     )
+    sl, tp = tp_sl_result
+
+    if getattr(tp_sl_result, 'sl_clamped', False) or getattr(tp_sl_result, 'tp_clamped', False):
+        min_constraints = getattr(tp_sl_result, 'min_constraints', None)
+        if min_constraints is not None:
+            log.debug(
+                f'[{symbol}] Ajuste mínimos aplicado | SL clamp={tp_sl_result.sl_clamped} '
+                f'| TP clamp={tp_sl_result.tp_clamped} | MinAbs={min_constraints.min_distance_abs:.6f} '
+                f'| MinPct={min_constraints.min_distance_pct:.6f} | MinTicks={min_constraints.min_distance_ticks}'
+            )
+        else:
+            log.debug(
+                f'[{symbol}] Ajuste mínimos aplicado | SL clamp={tp_sl_result.sl_clamped} '
+                f'| TP clamp={tp_sl_result.tp_clamped}'
+            )
 
     # Ajuste por tendencia de marco superior (5m) si está disponible
     try:
