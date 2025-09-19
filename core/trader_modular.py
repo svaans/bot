@@ -54,6 +54,8 @@ from core.metrics import (
     registrar_decision,
     registrar_correlacion_btc,
     TRADER_QUEUE_SIZE,
+    TRADER_PIPELINE_LATENCY,
+    TRADER_PIPELINE_QUEUE_WAIT,
 )
 from core.supervisor import (
     supervised_task,
@@ -78,6 +80,7 @@ from core.procesar_vela import (
     MAX_BUFFER_VELAS,
     MAX_ESTRATEGIAS_BUFFER,
 )
+from observabilidad.perf_tracker import StageMetrics
 from indicators.rsi import calcular_rsi
 from core.scoring import calcular_score_tecnico, PESOS_SCORE_TECNICO, ScoreBreakdown
 from binance_api.cliente import fetch_ticker_async, fetch_order_book_async
@@ -179,10 +182,22 @@ class Trader:
             backpressure=getattr(config, 'df_backpressure', True),
             drop_oldest=getattr(config, 'df_backpressure_drop', True),
         )
+        self.data_feed.configure_queue_control(
+            default_limit=getattr(config, 'df_queue_default_limit', None),
+            per_symbol_limits=getattr(config, 'df_queue_limits', None),
+            default_policy=getattr(config, 'df_queue_policy', None),
+            policy_overrides=getattr(config, 'df_queue_policy_by_symbol', None),
+            high_watermark=getattr(config, 'df_queue_high_watermark', None),
+            coalesce_window_ms=getattr(config, 'df_queue_coalesce_ms', None),
+            safety_policy=getattr(config, 'df_queue_safety_policy', None),
+            alert_interval=getattr(config, 'df_queue_alert_interval', None),
+            metrics_log_interval=getattr(config, 'df_metrics_log_interval', None),
+        )
         self.engine = StrategyEngine()
         self.bus = EventBus()
         obs_metrics.FEED_STOPPED.set(0)
         obs_metrics.TRADER_BACKPRESSURE_ACTIVE.set(0)
+        obs_metrics.TRADER_FASTPATH_ACTIVE.set(0)
         self.risk = RiskManager(config.umbral_riesgo_diario, self.bus)
         self.notificador = NotificationManager(config.telegram_token,
             config.telegram_chat_id, bus=self.bus)
@@ -307,6 +322,33 @@ class Trader:
             getattr(self.config, 'max_velas_concurrentes', 100)
         )
         self._max_tasks_velas = getattr(self.config, 'max_tasks_velas', 500)
+        self._trader_metrics_interval = getattr(
+            self.config, 'trader_metrics_log_interval', 5.0
+        )
+        self._fast_path_enabled = getattr(
+            self.config, 'trader_fastpath_enabled', True
+        )
+        default_threshold = max(1, int(self._max_tasks_velas * 0.7))
+        self._fast_path_threshold = int(
+            getattr(self.config, 'trader_fastpath_threshold', default_threshold)
+        )
+        default_recovery = max(1, int(self._fast_path_threshold * 0.6))
+        self._fast_path_recovery = int(
+            getattr(self.config, 'trader_fastpath_recovery', default_recovery)
+        )
+        self._fast_path_recovery = max(1, min(self._fast_path_recovery, self._max_tasks_velas))
+        self._fast_path_skip_notifications = getattr(
+            self.config, 'trader_fastpath_skip_notifications', True
+        )
+        self._fast_path_skip_entries = getattr(
+            self.config, 'trader_fastpath_skip_entries', True
+        )
+        self._fast_path_skip_trend = getattr(
+            self.config, 'trader_fastpath_skip_trend', True
+        )
+        self._fast_path_active = False
+        self._dispatcher_metrics: Dict[str, StageMetrics] = {}
+        self._pipeline_metrics: Dict[str, StageMetrics] = {}
         self._restart_stats: defaultdict[str, deque] = defaultdict(deque)
         self._sin_datos_alertado: set[str] = set()
         self._factories: dict[str, Callable[[], Awaitable]] = {}
@@ -358,6 +400,52 @@ class Trader:
         if self._hb_task is None or self._hb_task.done():
             self._hb_task = asyncio.create_task(
                 self._heartbeat_loop(self.heartbeat_interval)
+            )
+
+    def _get_stage_metrics(
+        self,
+        store: Dict[str, StageMetrics],
+        stage: str,
+        symbol: str,
+    ) -> StageMetrics:
+        metrics = store.get(symbol)
+        if metrics is None:
+            metrics = StageMetrics(stage, log_interval=self._trader_metrics_interval)
+            store[symbol] = metrics
+        return metrics
+
+    def _update_fast_path_state(self, backlog: int) -> None:
+        if not self._fast_path_enabled:
+            return
+        if not self._fast_path_active and backlog >= self._fast_path_threshold:
+            self._fast_path_active = True
+            obs_metrics.TRADER_FASTPATH_ACTIVE.set(1)
+            obs_metrics.TRADER_FASTPATH_TRANSITIONS.labels(state="activate").inc()
+            log.warning(
+                json.dumps(
+                    {
+                        "evento": "fast_path_transition",
+                        "state": "activate",
+                        "backlog": backlog,
+                        "threshold": self._fast_path_threshold,
+                    },
+                    ensure_ascii=False,
+                )
+            )
+        elif self._fast_path_active and backlog <= self._fast_path_recovery:
+            self._fast_path_active = False
+            obs_metrics.TRADER_FASTPATH_ACTIVE.set(0)
+            obs_metrics.TRADER_FASTPATH_TRANSITIONS.labels(state="deactivate").inc()
+            log.info(
+                json.dumps(
+                    {
+                        "evento": "fast_path_transition",
+                        "state": "deactivate",
+                        "backlog": backlog,
+                        "recovery": self._fast_path_recovery,
+                    },
+                    ensure_ascii=False,
+                )
             )
 
     async def _emit_heartbeat(self) -> None:
@@ -2021,9 +2109,32 @@ class Trader:
         """Inicia el procesamiento de todos los símbolos."""
         self.start()
         async def handle(candle: dict) -> None:
-            backlog = len(self._tareas_velas)
-            if backlog >= self._max_tasks_velas:
-                await self._aplicar_backpressure(backlog)
+            symbol = candle.get('symbol', 'UNKNOWN')
+            backlog_pre = len(self._tareas_velas)
+            if self._fast_path_enabled:
+                self._update_fast_path_state(backlog_pre)
+            if backlog_pre >= self._max_tasks_velas:
+                await self._aplicar_backpressure(backlog_pre)
+            backlog_post = len(self._tareas_velas)
+            if self._fast_path_enabled:
+                self._update_fast_path_state(backlog_post)
+            df_dequeue = candle.get('_df_dequeue_time')
+            dispatch_latency_ms = None
+            if df_dequeue is not None:
+                dispatch_latency_ms = (time.monotonic() - df_dequeue) * 1000
+            metrics = self._get_stage_metrics(
+                self._dispatcher_metrics, 'trader_dispatch', symbol
+            )
+            metrics.record(
+                latency=dispatch_latency_ms,
+                queue_size=float(backlog_post),
+                extra={'symbol': symbol, 'backlog_pre': backlog_pre, 'backlog_post': backlog_post},
+            )
+            metrics.maybe_flush(log, extra={'symbol': symbol})
+            candle['_trader_enqueue_time'] = time.perf_counter()
+            candle['_trader_backlog_snapshot'] = backlog_post
+            if self._fast_path_active:
+                candle['_fast_path'] = True
             task = asyncio.create_task(self._procesar_vela(candle))
             self._tareas_velas.add(task)
             task.add_done_callback(self._tareas_velas.discard)
@@ -2153,15 +2264,47 @@ class Trader:
                 )
 
     async def _procesar_vela(self, vela: dict) ->None:
+        symbol = vela.get('symbol')
+        if not self._validar_config(symbol):
+            return
+        enqueue_time = vela.get('_trader_enqueue_time')
+        queue_wait_ms: float | None = None
+        fast_path = bool(vela.get('_fast_path')) or self._fast_path_active
+        start_process = 0.0
         async with self._sem_velas:
-            symbol = vela.get('symbol')
-            if not self._validar_config(symbol):
-                return
+            start_process = time.perf_counter()
+            if enqueue_time is not None:
+                queue_wait_ms = (start_process - enqueue_time) * 1000
             log.debug(
                 f"[{symbol}] Procesando vela trace_id={vela.get('trace_id')}"
             )
 
-            await procesar_vela(self, vela)
+            await procesar_vela(
+                self,
+                vela,
+                modo_degradado=fast_path,
+                skip_notifications=self._fast_path_skip_notifications,
+                omitir_entradas=self._fast_path_skip_entries,
+                omitir_tendencia=self._fast_path_skip_trend,
+            )
+        duration_ms = (time.perf_counter() - start_process) * 1000
+        backlog_size = max(len(self._tareas_velas) - 1, 0)
+        metrics = self._get_stage_metrics(
+            self._pipeline_metrics, 'trader_pipeline', symbol or 'UNKNOWN'
+        )
+        metrics.record(
+            latency=duration_ms,
+            queue_delay=queue_wait_ms,
+            queue_size=float(backlog_size),
+            extra={'symbol': symbol, 'fast_path': fast_path},
+        )
+        metrics.maybe_flush(log, extra={'symbol': symbol, 'fast_path': fast_path})
+        if symbol:
+            TRADER_PIPELINE_LATENCY.labels(symbol=symbol).observe(duration_ms / 1000)
+            if queue_wait_ms is not None:
+                TRADER_PIPELINE_QUEUE_WAIT.labels(symbol=symbol).observe(
+                    queue_wait_ms / 1000
+                )
         return
 
     async def cerrar(self) ->None:
@@ -2178,6 +2321,12 @@ class Trader:
         await asyncio.gather(*self._tareas.values(), return_exceptions=True)
         await asyncio.gather(*self._tareas_velas, return_exceptions=True)
         self._tareas_velas.clear()
+        for metrics in self._dispatcher_metrics.values():
+            metrics.flush(log)
+        for metrics in self._pipeline_metrics.values():
+            metrics.flush(log)
+        self._dispatcher_metrics.clear()
+        self._pipeline_metrics.clear()
         await self.bus.close()
         real_orders.flush_operaciones()
         self.rejection_handler.flush()
