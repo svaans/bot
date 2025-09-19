@@ -19,7 +19,10 @@ from typing import Awaitable, Callable, Deque, Dict
 import os
 
 from config.config import INTERVALO_VELAS, TIMEOUT_SIN_DATOS_FACTOR
-from core.notification_manager import crear_notification_manager_desde_env
+from core.notification_manager import (
+    NotificationManager,
+    crear_notification_manager_desde_env,
+)
 from core.utils.logger import configurar_logger
 from core.utils.utils import intervalo_a_segundos
 from core.metrics import registrar_watchdog_restart
@@ -35,7 +38,12 @@ log = configurar_logger("supervisor")
 class Supervisor:
     """Vigila la salud del bot y gestiona reinicios de tareas."""
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        notification_manager: NotificationManager | None = None,
+        notifications_enabled: bool | None = None,
+    ) -> None:
         self.last_alive = datetime.now(UTC)
         self.last_function = "init"
         self.tasks: Dict[str, asyncio.Task] = {}
@@ -57,7 +65,16 @@ class Supervisor:
         self.last_data_alert: Dict[str, datetime] = {}
         self.reinicios_inactividad: Dict[str, int] = {}
         self.inactive_symbols: set[str] = set()
-        self.notificador = crear_notification_manager_desde_env()
+        if notifications_enabled is None:
+            notifications_enabled = (
+                os.getenv("SUPERVISOR_NOTIFICATIONS", "true").lower() == "true"
+            )
+        if notification_manager is not None:
+            self.notificador = notification_manager
+        elif notifications_enabled:
+            self.notificador = crear_notification_manager_desde_env()
+        else:
+            self.notificador = None
         self.data_feed_reconnector: Callable[[str], Awaitable[None]] | None = None
         self.main_loop: asyncio.AbstractEventLoop | None = None
         self._watchdog_interval_event = asyncio.Event()
@@ -509,6 +526,12 @@ class Supervisor:
             t.cancel()
         if self.tasks:
             await asyncio.gather(*self.tasks.values(), return_exceptions=True)
+        if getattr(self, "notificador", None):
+            try:
+                await self.notificador.close()
+            except Exception:
+                log.exception("Error cerrando NotificationManager del supervisor")
+        self.notificador = None
 
 
 # ----------------------------------------------------------------------
