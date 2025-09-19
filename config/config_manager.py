@@ -29,6 +29,48 @@ def _cargar_int(clave, valor_defecto):
         return int(valor_defecto)
 
 
+def _parse_int_mapping(clave: str) -> Dict[str, int]:
+    """Parses mappings ``SIMBOLO:valor`` separados por coma en enteros."""
+
+    resultado: Dict[str, int] = {}
+    raw = os.getenv(clave, "")
+    if not raw:
+        return resultado
+    for fragmento in raw.split(','):
+        fragmento = fragmento.strip()
+        if not fragmento:
+            continue
+        if ':' not in fragmento:
+            log.warning(f'⚠️ Formato inválido en {clave}: {fragmento}')
+            continue
+        simbolo, valor = fragmento.split(':', 1)
+        simbolo = simbolo.strip().upper()
+        try:
+            resultado[simbolo] = int(valor.strip())
+        except ValueError:
+            log.warning(f'⚠️ Valor inválido en {clave} para {simbolo}: {valor}')
+    return resultado
+
+
+def _parse_str_mapping(clave: str) -> Dict[str, str]:
+    """Parses mappings ``SIMBOLO:valor`` separados por coma en strings."""
+
+    resultado: Dict[str, str] = {}
+    raw = os.getenv(clave, "")
+    if not raw:
+        return resultado
+    for fragmento in raw.split(','):
+        fragmento = fragmento.strip()
+        if not fragmento:
+            continue
+        if ':' not in fragmento:
+            log.warning(f'⚠️ Formato inválido en {clave}: {fragmento}')
+            continue
+        simbolo, valor = fragmento.split(':', 1)
+        resultado[simbolo.strip().upper()] = valor.strip().lower()
+    return resultado
+
+
 @dataclass(frozen=True)
 class Config:
     """Configuración inmutable cargada desde el entorno."""
@@ -81,6 +123,22 @@ class Config:
     backfill_max_candles: int = 1000
     df_backpressure: bool = True
     df_backpressure_drop: bool = True
+    df_queue_default_limit: int = 2000
+    df_queue_limits: Dict[str, int] = field(default_factory=dict)
+    df_queue_policy: str = "block"
+    df_queue_policy_by_symbol: Dict[str, str] = field(default_factory=dict)
+    df_queue_coalesce_ms: int = 0
+    df_queue_high_watermark: float = 0.8
+    df_queue_safety_policy: str = "drop_oldest"
+    df_queue_alert_interval: float = 5.0
+    df_metrics_log_interval: float = 5.0
+    trader_metrics_log_interval: float = 5.0
+    trader_fastpath_enabled: bool = True
+    trader_fastpath_threshold: int = 350
+    trader_fastpath_recovery: int = 200
+    trader_fastpath_skip_notifications: bool = True
+    trader_fastpath_skip_entries: bool = True
+    trader_fastpath_skip_trend: bool = True
     timeout_evaluar_condiciones_por_symbol: Dict[str, int] = field(default_factory=dict)
 
 
@@ -114,6 +172,77 @@ class ConfigManager:
             log.error(f'❌ Faltan variables de entorno requeridas: {datos}')
             raise ValueError(f'Faltan datos de configuración: {datos}')
         capital_currency = os.getenv('CAPITAL_CURRENCY')
+        df_queue_limits = dict(getattr(defaults, 'df_queue_limits', {}))
+        df_queue_limits.update(_parse_int_mapping('DF_QUEUE_LIMITS'))
+        df_queue_policy_by_symbol = dict(
+            getattr(defaults, 'df_queue_policy_by_symbol', {})
+        )
+        df_queue_policy_by_symbol.update(_parse_str_mapping('DF_QUEUE_POLICIES'))
+        df_queue_default_limit = _cargar_int(
+            'DF_QUEUE_DEFAULT_LIMIT', getattr(defaults, 'df_queue_default_limit', 2000)
+        )
+        df_queue_policy = os.getenv(
+            'DF_QUEUE_POLICY', getattr(defaults, 'df_queue_policy', 'block')
+        ).lower()
+        df_queue_coalesce_ms = _cargar_int(
+            'DF_QUEUE_COALESCE_MS', getattr(defaults, 'df_queue_coalesce_ms', 0)
+        )
+        df_queue_high_watermark = _cargar_float(
+            'DF_QUEUE_HIGH_WATERMARK',
+            getattr(defaults, 'df_queue_high_watermark', 0.8),
+        )
+        df_queue_safety_policy = os.getenv(
+            'DF_QUEUE_SAFETY_POLICY',
+            getattr(defaults, 'df_queue_safety_policy', 'drop_oldest'),
+        ).lower()
+        df_queue_alert_interval = _cargar_float(
+            'DF_QUEUE_ALERT_INTERVAL',
+            getattr(defaults, 'df_queue_alert_interval', 5.0),
+        )
+        df_metrics_log_interval = _cargar_float(
+            'DF_METRICS_LOG_INTERVAL',
+            getattr(defaults, 'df_metrics_log_interval', 5.0),
+        )
+        trader_metrics_log_interval = _cargar_float(
+            'TRADER_METRICS_LOG_INTERVAL',
+            getattr(defaults, 'trader_metrics_log_interval', 5.0),
+        )
+        trader_fastpath_enabled = (
+            os.getenv(
+                'TRADER_FASTPATH_ENABLED',
+                str(getattr(defaults, 'trader_fastpath_enabled', True)),
+            ).lower()
+            == 'true'
+        )
+        trader_fastpath_threshold = _cargar_int(
+            'TRADER_FASTPATH_THRESHOLD',
+            getattr(defaults, 'trader_fastpath_threshold', 350),
+        )
+        trader_fastpath_recovery = _cargar_int(
+            'TRADER_FASTPATH_RECOVERY',
+            getattr(defaults, 'trader_fastpath_recovery', 200),
+        )
+        trader_fastpath_skip_notifications = (
+            os.getenv(
+                'TRADER_FASTPATH_SKIP_NOTIFICATIONS',
+                str(getattr(defaults, 'trader_fastpath_skip_notifications', True)),
+            ).lower()
+            == 'true'
+        )
+        trader_fastpath_skip_entries = (
+            os.getenv(
+                'TRADER_FASTPATH_SKIP_ENTRIES',
+                str(getattr(defaults, 'trader_fastpath_skip_entries', True)),
+            ).lower()
+            == 'true'
+        )
+        trader_fastpath_skip_trend = (
+            os.getenv(
+                'TRADER_FASTPATH_SKIP_TREND',
+                str(getattr(defaults, 'trader_fastpath_skip_trend', True)),
+            ).lower()
+            == 'true'
+        )
         return Config(
             api_key=api_key,
             api_secret=api_secret,
