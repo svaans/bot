@@ -264,4 +264,10 @@ set_watchdog_interval = _default_supervisor.set_watchdog_interval
 shutdown = _default_supervisor.shutdown
 
 
+async def stop_supervision() -> None:
+    """Detiene la supervisión por compatibilidad con el API anterior."""
+
+    await _default_supervisor.shutdown()
+
+
 
