@@ -65,6 +65,16 @@ except Exception:  # pragma: no cover
 UTC = timezone.utc
 
 
+def _max_buffer_velas() -> int:
+    """Obtiene el tamaño máximo del buffer de velas desde variables de entorno."""
+    return int(os.getenv("MAX_BUFFER_VELAS", "300"))
+
+
+def _max_estrategias_buffer() -> int:
+    """Determina el tamaño máximo del buffer para resultados de estrategias."""
+    return int(os.getenv("MAX_ESTRATEGIAS_BUFFER", str(_max_buffer_velas())))
+
+
 @dataclass
 class EstadoSimbolo:
     """Estado mínimo por símbolo.
@@ -72,7 +82,10 @@ class EstadoSimbolo:
     Mantén este dataclass liviano. Si más tarde necesitas métricas o caches,
     muévelas a un módulo aparte (p. ej. gestor_metricas.py).
     """
-    buffer: Deque[dict] = field(default_factory=lambda: deque(maxlen=int(os.getenv("MAX_BUFFER_VELAS", "300"))))
+    buffer: Deque[dict] = field(default_factory=lambda: deque(maxlen=_max_buffer_velas()))
+    estrategias_buffer: Deque[dict] = field(
+        default_factory=lambda: deque(maxlen=_max_estrategias_buffer())
+    )
     ultimo_timestamp: Optional[int] = None
 
 
