@@ -18,7 +18,10 @@ def actualizar_rsi_incremental(estado, periodo: int = 14) -> float | None:
     if df is None or df.empty or "close" not in df.columns:
         return None
 
-    cache_global = estado.indicadores_cache
+    cache_global = getattr(estado, "indicadores_cache", None)
+    if not isinstance(cache_global, dict):
+        cache_global = {}
+        setattr(estado, "indicadores_cache", cache_global)
     datos_rsi = cache_global.get("rsi")
     ultimo_cierre = float(df["close"].iloc[-1])
 
@@ -73,7 +76,10 @@ def actualizar_momentum_incremental(estado, periodo: int = 10) -> float | None:
     if df is None or df.empty or "close" not in df.columns:
         return None
 
-    cache_global = estado.indicadores_cache
+    cache_global = getattr(estado, "indicadores_cache", None)
+    if not isinstance(cache_global, dict):
+        cache_global = {}
+        setattr(estado, "indicadores_cache", cache_global)
     datos = cache_global.get("momentum")
     ultimo_cierre = float(df["close"].iloc[-1])
 
@@ -106,7 +112,10 @@ def actualizar_atr_incremental(estado, periodo: int = 14) -> float | None:
     if df is None or df.empty or not columnas.issubset(df.columns):
         return None
 
-    cache_global = estado.indicadores_cache
+    cache_global = getattr(estado, "indicadores_cache", None)
+    if not isinstance(cache_global, dict):
+        cache_global = {}
+        setattr(estado, "indicadores_cache", cache_global)
     datos = cache_global.get("atr")
     h = float(df["high"].iloc[-1])
     l = float(df["low"].iloc[-1])
