@@ -37,6 +37,30 @@ CONSUMER_RATE = _get_metric(
     "Velocidad de consumo de velas (eventos/segundo)",
     ["symbol"],
 )
+CONSUMER_STATE = _get_metric(
+    Gauge,
+    "datafeed_consumer_state",
+    "Estado del consumidor (0=STARTING,1=HEALTHY,2=STALLED,3=LOOP)",
+    ["symbol"],
+)
+CONSUMER_LAST_TIMESTAMP = _get_metric(
+    Gauge,
+    "datafeed_consumer_last_timestamp_seconds",
+    "Último timestamp procesado por el consumer (segundos desde epoch)",
+    ["symbol"],
+)
+CONSUMER_STALLS = _get_metric(
+    Counter,
+    "datafeed_consumer_stalls_total",
+    "Detecciones de consumer atascado",
+    ["symbol"],
+)
+CONSUMER_PROGRESS_FAILURES = _get_metric(
+    Counter,
+    "datafeed_consumer_progress_errors_total",
+    "Errores de progreso (timestamp no avanza)",
+    ["symbol"],
+)
 QUEUE_DROPS = _get_metric(
     Counter,
     "datafeed_queue_drops_total",

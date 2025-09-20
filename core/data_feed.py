@@ -4,10 +4,11 @@ import asyncio
 import json
 import random
 import os
-from typing import Awaitable, Callable, Dict, Iterable, Any, Deque, Literal
+from typing import Awaitable, Callable, Dict, Iterable, Any, Deque, Literal, Tuple
 from datetime import datetime, timezone, timedelta
 import time
 from collections import deque, defaultdict
+from enum import Enum
 from uuid import uuid4
 from binance_api.websocket import (
     escuchar_velas,
@@ -47,6 +48,21 @@ from config.config import BACKFILL_MAX_CANDLES
 UTC = timezone.utc
 log = configurar_logger('datafeed', modo_silencioso=False)
 
+class ConsumerState(Enum):
+    """Estados posibles del consumidor de colas del ``DataFeed``."""
+
+    STARTING = 0
+    HEALTHY = 1
+    STALLED = 2
+    LOOP = 3
+
+
+class ConsumerStalledError(RuntimeError):
+    """Señala que el consumidor no avanza y debe reiniciarse."""
+
+
+class ConsumerProgressError(RuntimeError):
+    """Señala que el consumidor procesa velas sin avanzar el timestamp."""
 
 class DataFeed:
     """Maneja la recepción de velas de Binance en tiempo real."""
@@ -155,6 +171,20 @@ class DataFeed:
         self._backfill_retry_tasks: Dict[str, asyncio.Task] = {}
         self._backfill_retry_last: Dict[str, float] = {}
         self._backfill_retry_delay = float(os.getenv("BACKFILL_RETRY_DELAY", "1.0"))
+        self._consumer_rate_window = max(
+            1.0, float(os.getenv("DF_CONSUMER_RATE_WINDOW", "10.0"))
+        )
+        self._consumer_min_window_span = 1.0
+        self._consumer_rate_epsilon = 1e-6
+        self._consumer_history: Dict[str, Deque[Tuple[float, int]]] = defaultdict(deque)
+        self._consumer_window_totals: Dict[str, int] = defaultdict(int)
+        self._consumer_last_rate: Dict[str, float] = defaultdict(float)
+        self._consumer_last_log: Dict[str, float] = {}
+        self._consumer_prev_qsize: Dict[str, int] = {}
+        self._consumer_status: Dict[str, ConsumerState] = {}
+        self._consumer_state_reason: Dict[str, str] = {}
+        self._consumer_last_processed_ts: Dict[str, int] = {}
+        self._consumer_counter_locks: Dict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
 
     def configure_queue_control(
         self,
@@ -418,6 +448,19 @@ class DataFeed:
             )
             metrics.maybe_flush(log, extra={"symbol": symbol})
             self._consumer_last[symbol] = time.monotonic()
+            if ts is not None:
+                forced = bool(candle.get("_df_forced"))
+                prev_ts = self._consumer_last_processed_ts.get(symbol)
+                if prev_ts is not None and ts <= prev_ts and not forced:
+                    qsize_actual = queue.qsize()
+                    maxsize = getattr(queue, "maxsize", 0) or 0
+                    self._handle_consumer_loop(
+                        symbol, ts, prev_ts, qsize_actual, maxsize
+                    )
+                self._consumer_last_processed_ts[symbol] = ts
+                obs_metrics.CONSUMER_LAST_TIMESTAMP.labels(symbol=symbol).set(
+                    ts / 1000
+                )
 
     def _schedule_backfill_retry(self, symbol: str) -> None:
         """Programa un reintento diferido para ``_backfill_candles`` controlando la cadencia."""
@@ -553,17 +596,23 @@ class DataFeed:
             self._emit_high_watermark(symbol, qsize, maxsize)
         candle.setdefault("trace_id", uuid4().hex)
         candle["_df_enqueue_time"] = time.monotonic()
+        candle["_df_forced"] = bool(force)
 
         def _update_producer_stats() -> None:
             stats = self._producer_stats.get(symbol)
             now = time.monotonic()
             if stats is None:
-                self._producer_stats[symbol] = {"last": now, "count": 0}
+                self._producer_stats[symbol] = {
+                    "last": now,
+                    "count": 0,
+                    "last_rate": 0.0,
+                }
                 stats = self._producer_stats[symbol]
             stats["count"] += 1
             if now - stats["last"] >= 2.0:
                 rate = stats["count"] / (now - stats["last"])
                 obs_metrics.PRODUCER_RATE.labels(symbol=symbol).set(rate)
+                stats["last_rate"] = rate
                 stats["count"] = 0
                 stats["last"] = now
 
@@ -612,6 +661,196 @@ class DataFeed:
             f'timestamp={candle.get("timestamp")}'
         )
         tick_data(symbol)
+
+    def _update_consumer_state(
+        self, symbol: str, state: ConsumerState, *, reason: str | None = None
+    ) -> None:
+        """Actualiza el estado interno y expone métricas/registro."""
+
+        anterior = self._consumer_status.get(symbol)
+        motivo_prev = self._consumer_state_reason.get(symbol)
+        cambiado = anterior != state or motivo_prev != reason
+        if reason:
+            self._consumer_state_reason[symbol] = reason
+        else:
+            self._consumer_state_reason.pop(symbol, None)
+        self._consumer_status[symbol] = state
+        obs_metrics.CONSUMER_STATE.labels(symbol=symbol).set(float(state.value))
+        if not cambiado:
+            return
+        payload = {"symbol": symbol, "state": state.name.lower()}
+        if reason:
+            payload["reason"] = reason
+        registro_metrico.registrar("consumer_state", payload)
+        msg = f"[{symbol}] consumer_state={state.name}"
+        if reason:
+            msg += f" ({reason})"
+        if state is ConsumerState.HEALTHY:
+            log.info(msg)
+        elif state is ConsumerState.STALLED:
+            log.error(msg)
+        elif state is ConsumerState.LOOP:
+            log.error(msg)
+        else:
+            log.info(msg)
+
+    def _reset_consumer_counters(self, symbol: str) -> None:
+        """Limpia ventanas móviles y resetea métricas internas."""
+
+        _ = self._consumer_counter_locks[symbol]
+        self._consumer_history[symbol] = deque()
+        self._consumer_window_totals[symbol] = 0
+        self._consumer_last_rate[symbol] = 0.0
+        self._consumer_prev_qsize.pop(symbol, None)
+        self._consumer_last_log.pop(symbol, None)
+        obs_metrics.CONSUMER_RATE.labels(symbol=symbol).set(0.0)
+        self._update_consumer_state(symbol, ConsumerState.STARTING)
+
+    async def _register_consumer_progress(
+        self, symbol: str, processed: int, timestamp: float
+    ) -> float:
+        """Actualiza la ventana deslizante de consumo y devuelve el nuevo rate."""
+
+        async with self._consumer_counter_locks[symbol]:
+            history = self._consumer_history[symbol]
+            history.append((timestamp, processed))
+            total = self._consumer_window_totals[symbol] + processed
+            cutoff = timestamp - self._consumer_rate_window
+            while history and history[0][0] < cutoff:
+                _, old = history.popleft()
+                total -= old
+            self._consumer_window_totals[symbol] = total
+            if history:
+                span = max(timestamp - history[0][0], self._consumer_min_window_span)
+            else:
+                span = self._consumer_rate_window
+            rate = total / span if span > 0 else 0.0
+            self._consumer_last_rate[symbol] = rate
+            return rate
+
+    def _emit_consumer_metrics(
+        self,
+        symbol: str,
+        consumer_rate: float,
+        producer_rate: float,
+        qsize: int,
+        maxsize: int,
+    ) -> None:
+        """Registra métricas de consumo en logs y ``registro_metrico``."""
+
+        state = self._consumer_status.get(symbol, ConsumerState.STARTING)
+        capacity = f"{qsize}/{maxsize}" if maxsize else f"{qsize}"
+        last_ts = self._consumer_last_processed_ts.get(symbol)
+        msg = (
+            f"[{symbol}] consumer_rate={consumer_rate:.2f}/s "
+            f"producer_rate={producer_rate:.2f}/s qsize={capacity} "
+            f"state={state.name}"
+        )
+        if last_ts is not None:
+            msg += f" last_ts={last_ts}"
+        logger = log.warning if qsize else log.info
+        logger(msg)
+        data = {
+            "symbol": symbol,
+            "consumer_rate": float(consumer_rate),
+            "producer_rate": float(producer_rate),
+            "qsize": int(qsize),
+            "qmax": int(maxsize),
+            "state": state.name.lower(),
+        }
+        motivo = self._consumer_state_reason.get(symbol)
+        if motivo:
+            data["state_reason"] = motivo
+        if last_ts is not None:
+            data["last_timestamp"] = int(last_ts)
+        registro_metrico.registrar("consumer_metrics", data)
+
+    def _handle_consumer_stall(
+        self,
+        symbol: str,
+        rate: float,
+        qsize: int,
+        maxsize: int,
+        producer_rate: float,
+        now: float,
+    ) -> None:
+        """Marca el consumer como atascado y dispara reinicio controlado."""
+
+        reason = f"consumer_rate≈0 qsize={qsize}"
+        self._update_consumer_state(symbol, ConsumerState.STALLED, reason=reason)
+        obs_metrics.CONSUMER_STALLS.labels(symbol=symbol).inc()
+        registro_metrico.registrar(
+            "consumer_stall",
+            {
+                "symbol": symbol,
+                "qsize": int(qsize),
+                "qmax": int(maxsize),
+                "consumer_rate": float(rate),
+                "producer_rate": float(producer_rate),
+            },
+        )
+        self._consumer_last_log[symbol] = now
+        self._emit_consumer_metrics(symbol, rate, producer_rate, qsize, maxsize)
+        raise ConsumerStalledError(f"[{symbol}] consumer sin progreso: {reason}")
+
+    def _check_consumer_health(
+        self,
+        symbol: str,
+        rate: float,
+        qsize: int,
+        maxsize: int,
+        producer_rate: float,
+        now: float,
+    ) -> None:
+        """Evalúa el estado del consumer y aplica verificaciones de seguridad."""
+
+        prev_qsize = self._consumer_prev_qsize.get(symbol)
+        self._consumer_prev_qsize[symbol] = qsize
+        if rate <= self._consumer_rate_epsilon:
+            if prev_qsize is not None and qsize > prev_qsize:
+                self._handle_consumer_stall(
+                    symbol, rate, qsize, maxsize, producer_rate, now
+                )
+                return
+        else:
+            self._update_consumer_state(symbol, ConsumerState.HEALTHY)
+        last_log = self._consumer_last_log.get(symbol, 0.0)
+        if now - last_log >= self._metrics_log_interval:
+            self._consumer_last_log[symbol] = now
+            self._emit_consumer_metrics(symbol, rate, producer_rate, qsize, maxsize)
+
+    def _handle_consumer_loop(
+        self,
+        symbol: str,
+        current_ts: int,
+        prev_ts: int,
+        qsize: int,
+        maxsize: int,
+    ) -> None:
+        """Detecta procesamiento repetido del mismo timestamp y reinicia."""
+
+        reason = (
+            f"timestamp no avanza prev={prev_ts} actual={current_ts} qsize={qsize}"
+        )
+        self._update_consumer_state(symbol, ConsumerState.LOOP, reason=reason)
+        obs_metrics.CONSUMER_PROGRESS_FAILURES.labels(symbol=symbol).inc()
+        registro_metrico.registrar(
+            "consumer_progress_error",
+            {
+                "symbol": symbol,
+                "prev_timestamp": int(prev_ts),
+                "current_timestamp": int(current_ts),
+                "qsize": int(qsize),
+                "qmax": int(maxsize),
+            },
+        )
+        producer_rate = self._producer_stats.get(symbol, {}).get("last_rate", 0.0)
+        rate = self._consumer_last_rate.get(symbol, 0.0)
+        self._consumer_last_log[symbol] = time.monotonic()
+        self._emit_consumer_metrics(symbol, rate, producer_rate, qsize, maxsize)
+        raise ConsumerProgressError(
+            f"[{symbol}] consumer procesando sin avanzar timestamp"
+        )
 
     async def _backfill_candles(self, symbol: str) -> None:
         """Recupera velas faltantes y evita llamadas repetidas."""
@@ -726,9 +965,8 @@ class DataFeed:
         """Procesa las velas encoladas para ``symbol`` de forma asíncrona."""
         queue = self._queues[symbol]
         self._queue_windows.setdefault(symbol, [])
-        self._last_window_reset.setdefault(symbol, time.monotonic())
-        procesadas = 0
-        inicio = time.monotonic()
+        self._last_window_reset[symbol] = time.monotonic()
+        self._reset_consumer_counters(symbol)
         while self._running:
             first = await queue.get()
             maxsize = getattr(queue, "maxsize", 0) or 0
@@ -776,31 +1014,30 @@ class DataFeed:
                 await asyncio.gather(
                     *(self._process_candle(symbol, c, handler, queue) for c in candles)
                 )
-            procesadas += len(candles)
             ahora = time.monotonic()
-            if ahora - inicio >= 2.0:
-                rate = procesadas / (ahora - inicio)
-                qsize = queue.qsize()
-                maxsize = getattr(queue, "maxsize", 0) or 0
-                capacidad = f"{qsize}/{maxsize}" if maxsize > 0 else f"{qsize}"
-                obs_metrics.CONSUMER_RATE.labels(symbol=symbol).set(rate)
-                msg = (
-                    f"[{symbol}] consumer_rate={rate:.1f}/s qsize={capacidad}"
-                )
-                if qsize:
-                    log.warning(msg)
-                else:
-                    log.info(msg)
-                self._queue_windows[symbol].append(qsize)
-                if ahora - self._last_window_reset[symbol] >= 60:
-                    vals = self._queue_windows[symbol]
-                    obs_metrics.QUEUE_SIZE_MIN.labels(symbol=symbol).set(min(vals) if vals else 0)
-                    obs_metrics.QUEUE_SIZE_MAX.labels(symbol=symbol).set(max(vals) if vals else 0)
-                    obs_metrics.QUEUE_SIZE_AVG.labels(symbol=symbol).set((sum(vals) / len(vals)) if vals else 0.0)
-                    self._queue_windows[symbol].clear()
-                    self._last_window_reset[symbol] = ahora
-                procesadas = 0
-                inicio = ahora
+            rate = await self._register_consumer_progress(symbol, len(candles), ahora)
+            obs_metrics.CONSUMER_RATE.labels(symbol=symbol).set(rate)
+            qsize = queue.qsize()
+            self._queue_windows[symbol].append(qsize)
+            if ahora - self._last_window_reset[symbol] >= 60:
+                vals = self._queue_windows[symbol]
+                minimo = min(vals) if vals else 0
+                maximo = max(vals) if vals else 0
+                promedio = (sum(vals) / len(vals)) if vals else 0.0
+                obs_metrics.QUEUE_SIZE_MIN.labels(symbol=symbol).set(minimo)
+                obs_metrics.QUEUE_SIZE_MAX.labels(symbol=symbol).set(maximo)
+                obs_metrics.QUEUE_SIZE_AVG.labels(symbol=symbol).set(promedio)
+                self._queue_windows[symbol].clear()
+                self._last_window_reset[symbol] = ahora
+            producer_rate = self._producer_stats.get(symbol, {}).get("last_rate", 0.0)
+            self._check_consumer_health(
+                symbol,
+                rate,
+                qsize,
+                maxsize,
+                float(producer_rate or 0.0),
+                ahora,
+            )
                         
     async def _relanzar_stream(
         self, symbol: str, handler: Callable[[dict], Awaitable[None]]
@@ -1445,6 +1682,20 @@ class DataFeed:
         self._mensajes_recibidos.clear()
         self._queue_discards.clear()
         self._reinicios_inactividad.clear()
+        for sym in list(self._consumer_status.keys()):
+            obs_metrics.CONSUMER_STATE.labels(symbol=sym).set(
+                float(ConsumerState.STARTING.value)
+            )
+        for sym in list(self._consumer_last_processed_ts.keys()):
+            obs_metrics.CONSUMER_LAST_TIMESTAMP.labels(symbol=sym).set(0.0)
+        self._consumer_history.clear()
+        self._consumer_window_totals.clear()
+        self._consumer_last_rate.clear()
+        self._consumer_last_log.clear()
+        self._consumer_prev_qsize.clear()
+        self._consumer_status.clear()
+        self._consumer_state_reason.clear()
+        self._consumer_last_processed_ts.clear()
         for sym, metrics in self._stage_metrics.items():
             metrics.flush(log, extra={"symbol": sym})
         self._stage_metrics.clear()
