@@ -43,7 +43,7 @@ import os
 from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any, Awaitable, Callable, Deque, Dict, Iterable, List, Optional
+from typing import Any, Awaitable, Callable, Deque, Dict, Iterable, List, Optional, TYPE_CHECKING
 
 # Imports tolerantes a ruta (ajusta según tu repo)
 try:
@@ -64,7 +64,17 @@ except Exception:  # pragma: no cover
 
 from core.streams.candle_filter import CandleFilter
 
+if TYPE_CHECKING:  # pragma: no cover - solo para anotaciones
+    from core.notification_manager import NotificationManager
+
 UTC = timezone.utc
+
+
+def _silence_task_result(task: asyncio.Task) -> None:
+    """Consume resultados/errores de tareas lanzadas en segundo plano."""
+
+    with contextlib.suppress(Exception):
+        task.result()
 
 
 def _max_buffer_velas() -> int:
@@ -368,6 +378,7 @@ class Trader(TraderLite):
         self.fecha_actual = datetime.now(UTC).date()
         self.estrategias_habilitadas = False
         self._bg_tasks: set[asyncio.Task] = set()
+        self.notificador: NotificationManager | None = None
 
     async def ejecutar(self) -> None:
         """Inicia el trader y espera hasta que finalice la tarea principal."""
@@ -416,6 +427,20 @@ class Trader(TraderLite):
                 self.on_event("notify", {"mensaje": mensaje, "nivel": nivel})
             except Exception:
                 pass
+
+        manager = getattr(self, "notificador", None)
+        if manager is None:
+            return
+
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            with contextlib.suppress(Exception):
+                manager.enviar(mensaje, nivel)
+            return
+
+        task = asyncio.create_task(manager.enviar_async(mensaje, nivel))
+        task.add_done_callback(_silence_task_result)
 
     def enqueue_persistence(self, tipo: str, datos: dict, *, immediate: bool = False) -> None:
         if self.on_event:

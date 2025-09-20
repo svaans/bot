@@ -113,6 +113,8 @@ async def main():
     print(f'🚀 Iniciando bot de trading... Modo real: {getattr(config, "modo_real", False)}')
 
     notificador = crear_notification_manager_desde_env()
+    if bot and hasattr(bot, 'notificador'):
+        bot.notificador = notificador
 
     # 4) Señales/parada
     stop_event = asyncio.Event()
@@ -181,6 +183,8 @@ async def main():
                     try:
                         startup = StartupManager()
                         bot, tarea_bot, config = await startup.run()
+                        if bot and hasattr(bot, 'notificador'):
+                            bot.notificador = notificador
                     except Exception as e:
                         print(f"❌ Error reiniciando bot: {e}")
                         traceback.print_exc()
