@@ -249,7 +249,7 @@ def _validar_marcos(symbol: str, df: pd.DataFrame, df5: pd.DataFrame | None, df1
     return True
 
 
-async def verificar_entrada_lite(
+async def verificar_entrada(
     trader: Any,
     symbol: str,
     df: pd.DataFrame,

@@ -45,6 +45,9 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Awaitable, Callable, Deque, Dict, Iterable, List, Optional, TYPE_CHECKING
 
+import pandas as pd
+
+
 # Imports tolerantes a ruta (ajusta según tu repo)
 try:
     from core.data_feed import DataFeed
@@ -66,7 +69,10 @@ from core.streams.candle_filter import CandleFilter
 from core.event_bus import EventBus
 from core.orders.order_manager import OrderManager
 from core.orders.storage_simulado import sincronizar_ordenes_simuladas
+from core.persistencia_tecnica import PersistenciaTecnica
 from core.risk import SpreadGuard
+from core.strategies import StrategyEngine
+from core.strategies.entry.verificar_entradas import verificar_entrada
 from core.utils.utils import configurar_logger
 
 if TYPE_CHECKING:  # pragma: no cover - solo para anotaciones
@@ -444,6 +450,22 @@ class Trader(TraderLite):
             sincronizar_ordenes_simuladas(self.orders)
         # Registro opcional de ventanas de cooldown por símbolo para entradas nuevas.
         self._entrada_cooldowns: Dict[str, datetime] = {}
+        self.engine = StrategyEngine()
+        persistencia_min = int(getattr(config, "persistencia_minima", 1) or 1)
+        persistencia_extra = float(
+            getattr(config, "peso_extra_persistencia", 0.5) or 0.5
+        )
+        self.persistencia = PersistenciaTecnica(
+            minimo=persistencia_min, peso_extra=persistencia_extra
+        )
+        self.config_por_simbolo: Dict[str, dict] = {}
+        config_pesos = getattr(config, "pesos_por_simbolo", None)
+        if isinstance(config_pesos, dict):
+            self.pesos_por_simbolo = {
+                symbol: dict(config_pesos.get(symbol, {})) for symbol in config.symbols
+            }
+        else:
+            self.pesos_por_simbolo = {symbol: {} for symbol in config.symbols}
 
     async def ejecutar(self) -> None:
         """Inicia el trader y espera hasta que finalice la tarea principal."""
@@ -560,6 +582,63 @@ class Trader(TraderLite):
                 log.warning("[%s] Error consultando gestor de riesgo", symbol, exc_info=True)
 
         return True
+    
+    async def evaluar_condiciones_de_entrada(
+        self,
+        symbol: str,
+        df: pd.DataFrame,
+        estado: Any,
+    ) -> dict[str, Any] | None:
+        """Evalúa condiciones de entrada delegando en el pipeline modular.
+
+        Parameters
+        ----------
+        symbol:
+            Par de trading a evaluar (por ejemplo ``"BTC/EUR"``).
+        df:
+            DataFrame OHLCV con la ventana más reciente de velas.
+        estado:
+            Estado interno asociado al símbolo (buffers, caches, etc.).
+
+        Returns
+        -------
+        dict[str, Any] | None
+            Diccionario con la propuesta de entrada listo para `_abrir_operacion_real`
+            o ``None`` si no se cumplieron las condiciones.
+        """
+
+        if not self.estrategias_habilitadas:
+            log.debug("[%s] Estrategias deshabilitadas; entrada omitida", symbol)
+            return None
+        if not isinstance(df, pd.DataFrame) or df.empty:
+            log.warning("[%s] DataFrame inválido al evaluar entrada", symbol)
+            return None
+
+        on_event_cb: Callable[[str, dict], None] | None = None
+        if hasattr(self, "_emit"):
+            on_event_cb = self._emit
+        elif callable(self.on_event):
+            on_event_cb = self.on_event
+
+        try:
+            resultado = await verificar_entrada(
+                self,
+                symbol,
+                df,
+                estado,
+                on_event=on_event_cb,
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            log.exception("❌ Error evaluando condiciones de entrada para %s", symbol)
+            return None
+
+        if resultado:
+            log.debug("[%s] Entrada candidata generada", symbol)
+        else:
+            log.debug("[%s] Sin condiciones de entrada válidas", symbol)
+        return resultado
 
     # Compat helpers -------------------------------------------------------
     def enqueue_notification(self, mensaje: str, nivel: str = "INFO") -> None:
