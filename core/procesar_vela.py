@@ -192,6 +192,7 @@ async def _procesar_candle(
             ("_ring_ready", False),
             ("indicadores_wait_ms", 0.0),
             ("indicadores_calls", 0),
+            ("indicadores_cache", {}),
             ("contador_tendencia", 0),
             ("timeouts_salidas", 0),
             ("cierres_timeouts", 0),
@@ -202,6 +203,9 @@ async def _procesar_candle(
         ]:
             if not hasattr(estado, attr):
                 setattr(estado, attr, default)
+
+        if not isinstance(getattr(estado, "indicadores_cache", None), dict):
+            estado.indicadores_cache = {}
 
         if datetime.now(UTC).date() != trader.fecha_actual:
             buffers_ready = len(getattr(trader, 'estado', {})) >= 2 and all(
@@ -279,6 +283,7 @@ async def _procesar_candle(
                 estado.indicadores_wait_ms += (time.perf_counter() - espera) * 1000
                 estado.indicadores_calls += 1
                 if recien_lleno:
+                    estado.indicadores_cache.clear()
                     await asyncio.to_thread(clear_cache, estado.df)
                     _invalidate_indicator_cache(symbol, intervalo)
                 t_ind = time.perf_counter()

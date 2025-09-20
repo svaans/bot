@@ -100,6 +100,7 @@ class EstadoSimbolo:
     )
     ultimo_timestamp: Optional[int] = None
     candle_filter: CandleFilter = field(default_factory=CandleFilter)
+    indicadores_cache: Dict[str, dict[str, float | None]] = field(default_factory=dict)
 
 
 class TraderLite:
