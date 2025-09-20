@@ -37,12 +37,13 @@ Integración con tu proyecto
 """
 from __future__ import annotations
 import asyncio
-import os
-from dataclasses import dataclass, field
-from typing import Any, Awaitable, Callable, Deque, Dict, Iterable, List, Optional
-from collections import deque
-from datetime import datetime, timezone
 import contextlib
+import inspect
+import os
+from collections import deque
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from typing import Any, Awaitable, Callable, Deque, Dict, Iterable, List, Optional
 
 # Imports tolerantes a ruta (ajusta según tu repo)
 try:
@@ -117,6 +118,7 @@ class TraderLite:
         self._handler = candle_handler or self._descubrir_handler_default()
         if not asyncio.iscoroutinefunction(self._handler):
             raise TypeError("candle_handler debe ser async (async def …)")
+        self._handler_invoker = self._build_handler_invoker(self._handler)
 
         # DataFeedLite
         self.feed = DataFeed(
@@ -172,7 +174,7 @@ class TraderLite:
                 est = self.estado[sym]
                 est.ultimo_timestamp = c.get("timestamp", est.ultimo_timestamp)
                 est.buffer.append(c)
-            await self._handler(c)
+            await self._handler_invoker(c)
 
         # Registrar latidos periódicos
         self.supervisor.supervised_task(lambda: self._heartbeat_loop(), name="heartbeat_loop", expected_interval=60)
@@ -217,6 +219,113 @@ class TraderLite:
             # No hace nada: pensado para pruebas de arranque
             return None
         return _placeholder
+    
+    def _build_handler_invoker(
+        self, handler: Callable[..., Awaitable[None]]
+    ) -> Callable[[dict], Awaitable[None]]:
+        """Adapta firmas comunes de `candle_handler`.
+
+        Permite reutilizar funciones existentes que esperan `(trader, vela)` o
+        únicamente la `vela`. Si el handler requiere argumentos adicionales sin
+        valores por defecto, se notifica explícitamente para evitar fallos
+        silenciosos.
+        """
+
+        signature = inspect.signature(handler)
+        trader_aliases = {"trader", "bot", "manager"}
+        candle_aliases = ("vela", "candle", "kline", "bar", "candle_data")
+
+        positional_params = [
+            p
+            for p in signature.parameters.values()
+            if p.kind in (
+                inspect.Parameter.POSITIONAL_ONLY,
+                inspect.Parameter.POSITIONAL_OR_KEYWORD,
+            )
+        ]
+
+        first_positional_name = positional_params[0].name if positional_params else None
+        needs_trader = any(alias in signature.parameters for alias in trader_aliases)
+        if not needs_trader and len(positional_params) >= 2:
+            if first_positional_name not in {"vela", "candle", "kline", "bar", "candle_data"}:
+                needs_trader = True
+
+        async def _invoke(candle: dict) -> None:
+            args: List[Any] = []
+            kwargs: Dict[str, Any] = {}
+            candle_assigned = False
+
+            for name, param in signature.parameters.items():
+                if param.kind == inspect.Parameter.VAR_POSITIONAL:
+                    continue
+                if name == "self":
+                    continue
+                if name in trader_aliases:
+                    if param.kind in (
+                        inspect.Parameter.POSITIONAL_ONLY,
+                        inspect.Parameter.POSITIONAL_OR_KEYWORD,
+                    ):
+                        args.append(self)
+                    else:
+                        kwargs[name] = self
+                    continue
+                if name in candle_aliases:
+                    if param.kind in (
+                        inspect.Parameter.POSITIONAL_ONLY,
+                        inspect.Parameter.POSITIONAL_OR_KEYWORD,
+                    ):
+                        args.append(candle)
+                    else:
+                        kwargs[name] = candle
+                    candle_assigned = True
+                    continue
+                if not candle_assigned and param.kind in (
+                    inspect.Parameter.POSITIONAL_ONLY,
+                    inspect.Parameter.POSITIONAL_OR_KEYWORD,
+                ) and param.default is inspect._empty:
+                    args.append(candle)
+                    candle_assigned = True
+                    continue
+                if (
+                    not candle_assigned
+                    and param.kind == inspect.Parameter.KEYWORD_ONLY
+                    and param.default is inspect._empty
+                ):
+                    kwargs[name] = candle
+                    candle_assigned = True
+                    continue
+                if (
+                    param.default is inspect._empty
+                    and param.kind
+                    not in (
+                        inspect.Parameter.VAR_POSITIONAL,
+                        inspect.Parameter.VAR_KEYWORD,
+                    )
+                ):
+                    raise TypeError(
+                        "candle_handler requiere parámetro obligatorio "
+                        f"'{name}' sin valor por defecto; usa un partial o "
+                        "ajusta la firma para incluir solo (trader, vela)."
+                    )
+
+            if needs_trader and all(alias not in signature.parameters for alias in trader_aliases):
+                # Si inferimos que necesita trader por la cantidad de posicionales,
+                # lo inyectamos al inicio.
+                args.insert(0, self)
+
+            if not candle_assigned:
+                if any(p.kind == inspect.Parameter.VAR_KEYWORD for p in signature.parameters.values()):
+                    kwargs.setdefault("vela", candle)
+                    candle_assigned = True
+                else:
+                    raise TypeError(
+                        "candle_handler no define un parámetro para la vela; "
+                        "asegúrate de aceptar (trader, vela) o solo la vela."
+                    )
+
+            await handler(*args, **kwargs)
+
+        return _invoke
     
 
 class Trader(TraderLite):
