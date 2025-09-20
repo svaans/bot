@@ -62,6 +62,8 @@ try:  # pragma: no cover
 except Exception:  # pragma: no cover
     crear_cliente = None  # seguirá funcionando en modo simulado
 
+from core.streams.candle_filter import CandleFilter
+
 UTC = timezone.utc
 
 
@@ -87,6 +89,7 @@ class EstadoSimbolo:
         default_factory=lambda: deque(maxlen=_max_estrategias_buffer())
     )
     ultimo_timestamp: Optional[int] = None
+    candle_filter: CandleFilter = field(default_factory=CandleFilter)
 
 
 class TraderLite:
