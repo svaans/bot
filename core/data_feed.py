@@ -48,6 +48,15 @@ UTC = timezone.utc
 log = configurar_logger("datafeed", modo_silencioso=False)
 
 
+def _safe_float(value: Any, default: float) -> float:
+    """Convierte ``value`` a ``float`` devolviendo ``default`` ante error."""
+
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
 class ConsumerState(Enum):
     STARTING = 0
     HEALTHY = 1
@@ -67,6 +76,8 @@ class DataFeed:
         queue_max: int = int(os.getenv("DF_QUEUE_MAX", "2000")),
         queue_policy: str = os.getenv("DF_QUEUE_POLICY", "drop_oldest").lower(),
         monitor_interval: int = 5,
+        consumer_timeout_intervals: float | None = None,
+        consumer_timeout_min: float | None = None,
         backpressure: bool = True,
         cancel_timeout: float = 5.0,
         on_event: Callable[[str, dict], None] | None = None,
@@ -78,7 +89,24 @@ class DataFeed:
         self.tiempo_inactividad = self.intervalo_segundos * self.inactivity_intervals
         self.queue_max = max(0, queue_max)
         self.queue_policy = queue_policy if queue_policy in {"drop_oldest", "block"} else "drop_oldest"
-        self.monitor_interval = max(1, monitor_interval)
+        monitor_interval_value = _safe_float(monitor_interval, 5.0)
+        self.monitor_interval = max(0.05, monitor_interval_value)
+        if consumer_timeout_intervals is None:
+            consumer_timeout_intervals = _safe_float(
+                os.getenv("DF_CONSUMER_TIMEOUT_INTERVALS"),
+                1.5,
+            )
+        consumer_timeout_intervals = _safe_float(consumer_timeout_intervals, 1.5)
+        self.consumer_timeout_intervals = max(1.0, consumer_timeout_intervals)
+        if consumer_timeout_min is None:
+            consumer_timeout_min = _safe_float(os.getenv("DF_CONSUMER_TIMEOUT_MIN"), 30.0)
+        consumer_timeout_min = _safe_float(consumer_timeout_min, 30.0)
+        self.consumer_timeout_min = max(0.0, consumer_timeout_min)
+        raw_consumer_timeout = self.intervalo_segundos * self.consumer_timeout_intervals
+        self.consumer_timeout = max(
+            self.consumer_timeout_min,
+            min(self.tiempo_inactividad, raw_consumer_timeout),
+        )
         self.backpressure = bool(backpressure)
         self.cancel_timeout = max(0.5, cancel_timeout)
         self.on_event = on_event
@@ -194,7 +222,10 @@ class DataFeed:
 
         # Monitores (inactividad + consumers)
         self._monitor_inactividad_task = asyncio.create_task(self._monitor_inactividad(), name="monitor_inactividad")
-        self._monitor_consumers_task = asyncio.create_task(self._monitor_consumers(), name="monitor_consumers")
+        self._monitor_consumers_task = asyncio.create_task(
+            self._monitor_consumers(self.consumer_timeout),
+            name="monitor_consumers",
+        )
 
         # Streams
         if self._combined:
@@ -424,16 +455,31 @@ class DataFeed:
         except Exception:
             log.exception("monitor_inactividad: error")
 
-    async def _monitor_consumers(self, timeout: int = 30) -> None:
+    async def _monitor_consumers(self, timeout: float | None = None) -> None:
         try:
             while self._running:
-                await asyncio.sleep(5)
+                await asyncio.sleep(self.monitor_interval)
                 ahora = time.monotonic()
+                current_timeout = timeout if timeout is not None else self.consumer_timeout
+                if current_timeout <= 0:
+                    continue
                 for s, last in list(self._consumer_last.items()):
-                    if ahora - last > timeout:
-                        log.warning(f"{s}: consumer sin progreso; reiniciando…")
+                    tarea = self._consumer_tasks.get(s)
+                    if tarea is None or tarea.done():
+                        self._set_consumer_state(s, ConsumerState.STALLED)
+                        log.warning(f"{s}: consumer detenido; reiniciando…")
                         await self._reiniciar_consumer(s)
                         self._consumer_last[s] = time.monotonic()
+                        continue
+                    if ahora - last <= current_timeout:
+                        continue
+                    queue = self._queues.get(s)
+                    if queue is None or queue.empty():
+                        continue
+                    self._set_consumer_state(s, ConsumerState.STALLED)
+                    log.warning(f"{s}: consumer sin progreso; reiniciando…")
+                    await self._reiniciar_consumer(s)
+                    self._consumer_last[s] = time.monotonic()
         except asyncio.CancelledError:
             return
         except Exception:
