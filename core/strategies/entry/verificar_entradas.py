@@ -18,8 +18,8 @@ from core.strategies.evaluador_tecnico import (
 )
 from indicators.helpers import get_rsi, get_momentum
 from binance_api.cliente import fetch_ohlcv_async
+from core.risk.validators import validate_levels, LevelValidationError
 from core.utils.utils import (
-    distancia_minima_valida,
     verificar_integridad_datos,
     intervalo_a_segundos,
     timestamp_alineado,
@@ -50,6 +50,35 @@ def _memo_indicadores(symbol: str, df: pd.DataFrame) -> tuple[float | None, floa
         momentum if isinstance(momentum, (int, float)) else None
     )
     return _indicador_cache[key]
+
+
+def _resolve_min_dist_pct(symbol: str, trader_config, symbol_config: dict | None) -> float:
+    """Determina la distancia mínima porcentual para ``symbol``."""
+
+    base = getattr(trader_config, "min_dist_pct", 0.0005)
+    valor = None
+    if isinstance(symbol_config, dict):
+        raw = symbol_config.get("distancia_minima_pct", symbol_config.get("min_distancia_pct"))
+        if raw is not None:
+            try:
+                valor = float(raw)
+            except (TypeError, ValueError):
+                valor = None
+    overrides = getattr(trader_config, "min_dist_pct_overrides", {})
+    if isinstance(overrides, dict):
+        override = overrides.get(symbol) or overrides.get(symbol.replace("/", ""))
+        if override is not None:
+            try:
+                valor = float(override)
+            except (TypeError, ValueError):
+                valor = valor
+    if valor is None:
+        valor = base
+    try:
+        valor = float(valor)
+    except (TypeError, ValueError):
+        valor = float(base)
+    return max(valor, 1e-6)
 
 
 def _buffer_ready(estado, intervalo: str) -> tuple[bool, str]:
@@ -617,34 +646,52 @@ async def verificar_entrada(trader, symbol: str, df: pd.DataFrame, estado) -> di
         log.error(f'❌ Error evaluando tendencia HTF para {symbol}: {e}')
         metricas_tracker.registrar_filtro('tendencia_htf_error')
 
-    min_pct_cfg = config.get('distancia_minima_pct', config.get('min_distancia_pct'))
-    if min_pct_cfg is None:
-        min_pct_cfg = os.getenv('MIN_DISTANCIA_SL_TP_PCT', '0.0005')
-    try:
-        min_pct_cfg = float(min_pct_cfg)
-    except (TypeError, ValueError):
-        min_pct_cfg = 0.0005
-    min_pct_cfg = max(min_pct_cfg, 1e-6)
-
-    min_ticks_cfg = config.get('min_distancia_ticks', os.getenv('MIN_DISTANCIA_TICKS'))
-    try:
-        min_ticks = max(1, int(min_ticks_cfg))
-    except (TypeError, ValueError):
-        min_ticks = 2
-
     tick_size = 0.0
+    step_size = 0.0
     if getattr(trader, 'capital_manager', None):
         try:
             market = await trader.capital_manager.info_mercado(symbol)
             tick_size = getattr(market, 'tick_size', 0.0) or 0.0
+            step_size = getattr(market, 'step_size', 0.0) or 0.0
         except Exception as exc:  # pragma: no cover - fallo no crítico
             log.debug(
-                f'[{symbol}] No se pudo obtener tick_size para validar SL/TP: {exc}'
+                f'[{symbol}] No se pudo obtener filtros de mercado para validar SL/TP: {exc}'
             )
 
-    min_pct_ticks = (tick_size * min_ticks) / precio if precio > 0 else 0.0
-    min_pct = max(min_pct_cfg, min_pct_ticks)
-    min_distance_abs = max(precio * min_pct if precio > 0 else min_pct, tick_size * min_ticks)
+    min_dist_pct = _resolve_min_dist_pct(symbol, trader.config, config)
+
+    try:
+        precio, sl, tp = validate_levels(
+            direccion,
+            precio,
+            sl,
+            tp,
+            min_dist_pct,
+            tick_size,
+            step_size,
+        )
+    except LevelValidationError as exc:
+        contexto = dict(exc.context)
+        contexto.update({'symbol': symbol, 'reason': exc.reason})
+        log.warning(
+            f'[{symbol}] Validación SL/TP fallida ({exc.reason})',
+            extra=contexto,
+        )
+        metricas_tracker.registrar_filtro('sl_tp')
+        return None
+
+    log.debug(
+        f'[{symbol}] SL/TP validados',
+        extra={
+            'symbol': symbol,
+            'entry': precio,
+            'sl': sl,
+            'tp': tp,
+            'tick_size': tick_size,
+            'step_size': step_size,
+            'min_dist_pct': min_dist_pct,
+        },
+    )
 
     sl_diff = abs(precio - sl)
     tp_diff = abs(tp - precio)
@@ -654,68 +701,17 @@ async def verificar_entrada(trader, symbol: str, df: pd.DataFrame, estado) -> di
     except (TypeError, ValueError):
         ratio_minimo = 1.3
 
-    ratio_actual = math.inf
-    if sl_diff > 0:
-        try:
-            ratio_actual = tp_diff / sl_diff
-        except ZeroDivisionError:
-            ratio_actual = math.inf
-
-    needs_adjust = (
-        sl_diff < min_distance_abs
-        or tp_diff < min_distance_abs
-        or not math.isfinite(ratio_actual)
-        or ratio_actual < ratio_minimo
-    )
-
-    if needs_adjust:
-        sl_diff = max(sl_diff, min_distance_abs)
-        ratio_objetivo = ratio_actual if math.isfinite(ratio_actual) and ratio_actual > 0 else ratio_minimo
-        ratio_objetivo = max(ratio_objetivo, ratio_minimo)
-        tp_diff = max(tp_diff, min_distance_abs, sl_diff * ratio_objetivo)
-
-        if direccion == 'long':
-            sl = round(precio - sl_diff, 6)
-            tp = round(precio + tp_diff, 6)
-        else:
-            sl = round(precio + sl_diff, 6)
-            tp = round(precio - tp_diff, 6)
-
-        log.debug(
-            f'[{symbol}] Ajuste SL/TP por distancia mínima => SL {sl:.6f} TP {tp:.6f} '
-            f'(diff_sl={sl_diff:.6f}, diff_tp={tp_diff:.6f})'
-        )
-
-        sl_diff = abs(precio - sl)
-        tp_diff = abs(tp - precio)
-        if sl_diff <= 0 or tp_diff <= 0:
-            log.warning(f'[{symbol}] SL/TP no ajustables para distancia mínima tras corrección')
-            metricas_tracker.registrar_filtro('sl_tp')
-            return None
-
-    if direccion == 'long':
-        if sl >= precio or tp <= precio:
-            log.warning(f'[{symbol}] SL/TP inconsistentes para dirección long: SL {sl} TP {tp}')
-            metricas_tracker.registrar_filtro('sl_tp')
-            return None
-    else:
-        if sl <= precio or tp >= precio:
-            log.warning(f'[{symbol}] SL/TP inconsistentes para dirección short: SL {sl} TP {tp}')
-            metricas_tracker.registrar_filtro('sl_tp')
-            return None
-
-    if not distancia_minima_valida(precio, sl, tp, min_pct=min_pct):
-        log.warning(f'[{symbol}] SL/TP distancia mínima no válida: SL {sl} TP {tp}')
-        metricas_tracker.registrar_filtro('sl_tp')
-        return None
-    
-    if sl_diff > 0:
-        ratio_final = tp_diff / sl_diff
-    else:
-        ratio_final = math.inf
+    ratio_final = tp_diff / sl_diff if sl_diff > 0 else math.inf
     if not math.isfinite(ratio_final) or ratio_final < ratio_minimo:
         log.warning(
-            f'[{symbol}] Ratio beneficio/riesgo insuficiente tras ajustes: {ratio_final:.3f} < {ratio_minimo:.3f}'
+            f'[{symbol}] Ratio beneficio/riesgo insuficiente tras validación: {ratio_final:.3f} < {ratio_minimo:.3f}',
+            extra={
+                'symbol': symbol,
+                'ratio': ratio_final,
+                'ratio_minimo': ratio_minimo,
+                'sl_diff': sl_diff,
+                'tp_diff': tp_diff,
+            },
         )
         metricas_tracker.registrar_filtro('sl_tp')
         return None
@@ -772,6 +768,9 @@ async def verificar_entrada(trader, symbol: str, df: pd.DataFrame, estado) -> di
         'precio': precio,
         'sl': sl,
         'tp': tp,
+        'tick_size': tick_size,
+        'step_size': step_size,
+        'min_dist_pct': min_dist_pct,
         'estrategias': estrategias_persistentes,
         'puntaje': puntaje,
         'umbral': umbral,

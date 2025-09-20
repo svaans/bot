@@ -71,6 +71,29 @@ def _parse_str_mapping(clave: str) -> Dict[str, str]:
     return resultado
 
 
+def _parse_float_mapping(clave: str) -> Dict[str, float]:
+    """Parses mappings ``SIMBOLO:valor`` en flotantes."""
+
+    resultado: Dict[str, float] = {}
+    raw = os.getenv(clave, "")
+    if not raw:
+        return resultado
+    for fragmento in raw.split(','):
+        fragmento = fragmento.strip()
+        if not fragmento:
+            continue
+        if ':' not in fragmento:
+            log.warning(f'⚠️ Formato inválido en {clave}: {fragmento}')
+            continue
+        simbolo, valor = fragmento.split(':', 1)
+        simbolo = simbolo.strip().upper()
+        try:
+            resultado[simbolo] = float(valor.strip())
+        except ValueError:
+            log.warning(f'⚠️ Valor inválido en {clave} para {simbolo}: {valor}')
+    return resultado
+
+
 @dataclass(frozen=True)
 class Config:
     """Configuración inmutable cargada desde el entorno."""
@@ -94,6 +117,8 @@ class Config:
     registro_tecnico_csv: str = 'logs/rechazos_tecnico.csv'
     umbral_confirmacion_micro: float = 0.6
     umbral_confirmacion_macro: float = 0.6
+    min_dist_pct: float = 0.0005
+    min_dist_pct_overrides: Dict[str, float] = field(default_factory=dict)
     fracciones_piramide: int = 1
     reserva_piramide: float = 0.0
     umbral_piramide: float = 0.005
@@ -178,6 +203,9 @@ class ConfigManager:
             getattr(defaults, 'df_queue_policy_by_symbol', {})
         )
         df_queue_policy_by_symbol.update(_parse_str_mapping('DF_QUEUE_POLICIES'))
+        min_dist_pct = _cargar_float('MIN_DIST_PCT', getattr(defaults, 'min_dist_pct', 0.0005))
+        min_dist_pct_overrides = dict(getattr(defaults, 'min_dist_pct_overrides', {}))
+        min_dist_pct_overrides.update(_parse_float_mapping('MIN_DIST_PCT_OVERRIDES'))
         df_queue_default_limit = _cargar_int(
             'DF_QUEUE_DEFAULT_LIMIT', getattr(defaults, 'df_queue_default_limit', 2000)
         )
@@ -264,6 +292,8 @@ class ConfigManager:
             registro_tecnico_csv=os.getenv('REGISTRO_TECNICO_CSV', os.path.join(log_dir, 'rechazos_tecnico.csv')),
             umbral_confirmacion_micro=_cargar_float('UMBRAL_CONFIRMACION_MICRO', getattr(defaults, 'umbral_confirmacion_micro', 0.6)),
             umbral_confirmacion_macro=_cargar_float('UMBRAL_CONFIRMACION_MACRO', getattr(defaults, 'umbral_confirmacion_macro', 0.6)),
+            min_dist_pct=min_dist_pct,
+            min_dist_pct_overrides=min_dist_pct_overrides,
             fracciones_piramide=int(os.getenv('FRACCIONES_PIRAMIDE', defaults.fracciones_piramide)),
             reserva_piramide=float(os.getenv('RESERVA_PIRAMIDE', defaults.reserva_piramide)),
             umbral_piramide=float(os.getenv('UMBRAL_PIRAMIDE', defaults.umbral_piramide)),

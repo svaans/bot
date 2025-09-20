@@ -1884,6 +1884,13 @@ class Trader:
         detalles_tecnicos: dict | None = None,
         **kwargs,
     ) -> None:
+        tick_size_hint = kwargs.pop('tick_size', 0.0) or 0.0
+        step_size_hint = kwargs.pop('step_size', 0.0) or 0.0
+        min_dist_pct_hint = kwargs.pop('min_dist_pct', None)
+        try:
+            min_dist_pct_value = float(min_dist_pct_hint)
+        except (TypeError, ValueError):
+            min_dist_pct_value = getattr(self.config, 'min_dist_pct', 0.0)
         capital_total = sum(
             getattr(self, "capital_inicial_diario", self.capital_manager.capital_por_simbolo).values()
         )
@@ -1921,9 +1928,11 @@ class Trader:
             return
         fracciones = self.piramide_fracciones
         market = await self.capital_manager.info_mercado(symbol)
+        tick_size = tick_size_hint or getattr(market, 'tick_size', 0.0) or 0.0
+        step_size = step_size_hint or getattr(market, 'step_size', 0.0) or 0.0
         cantidad = cantidad_total / fracciones
-        if market.step_size > 0:
-            cantidad = math.floor(cantidad / market.step_size) * market.step_size
+        if step_size > 0:
+            cantidad = math.floor(cantidad / step_size) * step_size
         if market.min_notional and precio * cantidad < market.min_notional:
             log.warning(
                 f'⛔ Orden fraccionaria para {symbol} inferior al mínimo Binance {market.min_notional}'
@@ -2016,6 +2025,9 @@ class Trader:
             detalles_tecnicos=detalles_tecnicos or {},
             candle_close_ts=candle_close_ts,
             strategy_version=strategy_version,
+            tick_size=tick_size,
+            step_size=step_size,
+            min_dist_pct=min_dist_pct_value,
         )
         registrar_decision(symbol, 'entry')
         # Actualizar métricas de señales y órdenes

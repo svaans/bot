@@ -22,6 +22,8 @@ class DevelopmentConfig:
     registro_tecnico_csv: str = 'logs/rechazos_tecnico.csv'
     umbral_confirmacion_micro: float = 0.6
     umbral_confirmacion_macro: float = 0.6
+    min_dist_pct: float = 0.0005
+    min_dist_pct_overrides: Dict[str, float] = field(default_factory=dict)
     fracciones_piramide: int = 1
     reserva_piramide: float = 0.0
     umbral_piramide: float = 0.006

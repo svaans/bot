@@ -10,12 +10,13 @@ from core.orders.order_model import Order
 from core.utils.logger import configurar_logger, log_decision
 from core.orders import real_orders
 from core.orders.validators import remainder_executable
+from core.risk.validators import validate_levels, LevelValidationError
 from core.utils.utils import is_valid_number
 from core.event_bus import EventBus
 from core.metrics import (
     registrar_orden,
     registrar_buy_rejected_insufficient_funds,
-	registrar_partial_close_collision,
+    registrar_partial_close_collision,
     registrar_registro_error,
 )
 from core.registro_metrico import registro_metrico
@@ -287,15 +288,61 @@ class OrderManager:
         cantidad: float = 0.0,
         puntaje: float = 0.0,
         umbral: float = 0.0,
-	    score_tecnico: float = 0.0,
+        score_tecnico: float = 0.0,
         objetivo: float | None = None,
         fracciones: int = 1,
         detalles_tecnicos: dict | None = None,
+        tick_size: float | None = None,
+        step_size: float | None = None,
+        min_dist_pct: float | None = None,
         *,
         candle_close_ts: int | None = None,   # reservado (no usado aquí)
         strategy_version: str | None = None,  # reservado (no usado aquí)
     ) -> bool:
         operation_id = self._generar_operation_id(symbol)
+        tick_size_value = float(tick_size or 0.0)
+        step_size_value = float(step_size or 0.0)
+        try:
+            min_dist_pct_value = float(min_dist_pct) if min_dist_pct is not None else 0.0
+        except (TypeError, ValueError):
+            min_dist_pct_value = 0.0
+
+        try:
+            precio, sl, tp = validate_levels(
+                direccion,
+                precio,
+                sl,
+                tp,
+                min_dist_pct_value,
+                tick_size_value,
+                step_size_value,
+            )
+        except LevelValidationError as exc:
+            contexto = dict(exc.context)
+            contexto.update({'symbol': symbol, 'reason': exc.reason})
+            entrada_log = {
+                'symbol': symbol,
+                'precio': contexto.get('entry', precio),
+                'sl': contexto.get('sl', sl),
+                'tp': contexto.get('tp', tp),
+                'cantidad': cantidad,
+            }
+            log.warning(
+                f'⚠️ {symbol}: validación SL/TP fallida ({exc.reason})',
+                extra=contexto,
+            )
+            log_decision(
+                log,
+                'abrir',
+                operation_id,
+                entrada_log,
+                {'niveles_validos': False},
+                'reject',
+                {'reason': 'invalid_levels', 'contexto': contexto},
+            )
+            registrar_orden('rejected')
+            return False
+        
         entrada_log = {
             'symbol': symbol,
             'precio': precio,
