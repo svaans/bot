@@ -140,6 +140,8 @@ class TraderLite:
 
         # Estado por símbolo
         self.estado: Dict[str, EstadoSimbolo] = {s: EstadoSimbolo() for s in config.symbols}
+        # Registro de tendencia por símbolo (utilizado por procesar_vela)
+        self.estado_tendencia: Dict[str, Any] = {s: None for s in config.symbols}
 
         # Handler de velas
         self._handler = candle_handler or self._descubrir_handler_default()
