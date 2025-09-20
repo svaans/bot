@@ -66,6 +66,7 @@ from core.streams.candle_filter import CandleFilter
 from core.event_bus import EventBus
 from core.orders.order_manager import OrderManager
 from core.orders.storage_simulado import sincronizar_ordenes_simuladas
+from core.risk import SpreadGuard
 from core.utils.utils import configurar_logger
 
 if TYPE_CHECKING:  # pragma: no cover - solo para anotaciones
@@ -149,6 +150,9 @@ class TraderLite:
         # Registro de tendencia por símbolo (utilizado por procesar_vela)
         self.estado_tendencia: Dict[str, Any] = {s: None for s in config.symbols}
 
+        # Protección dinámica ante spreads amplios.
+        self.spread_guard: SpreadGuard | None = None
+
         # Handler de velas
         self._handler = candle_handler or self._descubrir_handler_default()
         if not asyncio.iscoroutinefunction(self._handler):
@@ -178,6 +182,9 @@ class TraderLite:
         self._stop_event = asyncio.Event()
         self._runner_task: Optional[asyncio.Task] = None
 
+        # Configurar guardia de spread (puede devolver None si está deshabilitado).
+        self.spread_guard = self._create_spread_guard()
+
     # -------------------- API pública --------------------
     def start(self) -> None:
         """Arranca supervisor y la tarea principal del Trader."""
@@ -196,6 +203,49 @@ class TraderLite:
         if self._runner_task:
             with contextlib.suppress(Exception):
                 await self._runner_task
+
+    # ------------------- utilidades internas -------------------
+    def _create_spread_guard(self) -> SpreadGuard | None:
+        """Instancia ``SpreadGuard`` cuando la configuración lo habilita."""
+
+        base_limit = float(getattr(self.config, "max_spread_ratio", 0.0) or 0.0)
+        dynamic_enabled = bool(getattr(self.config, "spread_dynamic", False))
+        if not dynamic_enabled or base_limit <= 0:
+            return None
+
+        window = int(getattr(self.config, "spread_guard_window", 50) or 50)
+        hysteresis = float(getattr(self.config, "spread_guard_hysteresis", 0.15) or 0.15)
+        max_limit_default = base_limit * 5 if base_limit > 0 else 0.05
+        max_limit = float(
+            getattr(self.config, "spread_guard_max_limit", max_limit_default) or max_limit_default
+        )
+
+        # Normalizar parámetros para evitar valores inválidos.
+        window = max(5, window)
+        hysteresis = min(max(hysteresis, 0.0), 1.0)
+        max_limit = max(base_limit, max_limit)
+
+        try:
+            guard = SpreadGuard(
+                base_limit=base_limit,
+                max_limit=max_limit,
+                window=window,
+                hysteresis=hysteresis,
+            )
+        except Exception:
+            log.exception("No se pudo inicializar SpreadGuard; se usará el límite estático")
+            return None
+
+        log.debug(
+            "SpreadGuard habilitado",
+            extra={
+                "base_limit": base_limit,
+                "max_limit": max_limit,
+                "window": window,
+                "hysteresis": hysteresis,
+            },
+        )
+        return guard
 
     # ------------------- ciclo principal -------------------
     async def _run(self) -> None:
