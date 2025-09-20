@@ -63,6 +63,9 @@ except Exception:  # pragma: no cover
     crear_cliente = None  # seguirá funcionando en modo simulado
 
 from core.streams.candle_filter import CandleFilter
+from core.event_bus import EventBus
+from core.orders.order_manager import OrderManager
+from core.orders.storage_simulado import sincronizar_ordenes_simuladas
 
 if TYPE_CHECKING:  # pragma: no cover - solo para anotaciones
     from core.notification_manager import NotificationManager
@@ -382,6 +385,10 @@ class Trader(TraderLite):
         self.estrategias_habilitadas = False
         self._bg_tasks: set[asyncio.Task] = set()
         self.notificador: NotificationManager | None = None
+        self.bus = EventBus()
+        self.orders = OrderManager(self.modo_real, self.bus)
+        if not self.modo_real:
+            sincronizar_ordenes_simuladas(self.orders)
 
     async def ejecutar(self) -> None:
         """Inicia el trader y espera hasta que finalice la tarea principal."""
@@ -401,6 +408,9 @@ class Trader(TraderLite):
             task.cancel()
             with contextlib.suppress(Exception):
                 await task
+        if hasattr(self, "bus"):
+            with contextlib.suppress(Exception):
+                await self.bus.close()
 
     def solicitar_parada(self) -> None:
         """Señala al trader que debe detenerse en cuanto sea posible."""
