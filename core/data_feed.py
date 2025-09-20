@@ -111,6 +111,64 @@ class DataFeed:
         self._last_backfill_ts: Dict[str, int] = {}
 
     # ---------------- API pública ----------------
+    @property
+    def activos(self) -> bool:
+        """Indica si el feed tiene streams activos."""
+
+        if not self._running:
+            return False
+        return any(not t.done() for t in self._tasks.values())
+
+    def verificar_continuidad(self, *, max_gap_intervals: int | None = None) -> bool:
+        """Verifica que los backfills previos no tengan huecos grandes."""
+
+        if not self._symbols:
+            return True
+        intervalo_ms = self.intervalo_segundos * 1000
+        tolerancia = (max_gap_intervals or 1) * intervalo_ms
+        for symbol in self._symbols:
+            ultimo = self._last_close_ts.get(symbol)
+            if ultimo is None:
+                return False
+            backfill = self._last_backfill_ts.get(symbol)
+            if backfill is None:
+                continue
+            if ultimo - backfill > tolerancia:
+                return False
+        return True
+
+    async def precargar(
+        self,
+        symbols: Iterable[str],
+        *,
+        cliente: Any | None = None,
+        minimo: int | None = None,
+    ) -> None:
+        """Realiza backfill manual para ``symbols`` sin iniciar el stream."""
+
+        symbols_list = [s.upper() for s in symbols]
+        if not symbols_list:
+            return
+        prev_cliente = self._cliente
+        prev_symbols = list(self._symbols)
+        prev_min = self.min_buffer_candles
+        if cliente is not None:
+            self._cliente = cliente
+        if minimo is not None:
+            try:
+                self.min_buffer_candles = max(1, int(minimo))
+            except (TypeError, ValueError):
+                pass
+        try:
+            for symbol in symbols_list:
+                self._symbols = symbols_list
+                await self._do_backfill(symbol)
+        finally:
+            if minimo is not None:
+                self.min_buffer_candles = prev_min
+            self._symbols = prev_symbols
+            if cliente is not None:
+                self._cliente = prev_cliente
     async def escuchar(
         self,
         symbols: Iterable[str],

@@ -199,6 +199,18 @@ def crear_cliente(config: Optional[Config] = None):
     return exchange
 
 
+_cliente_cache: Any | None = None
+
+
+def obtener_cliente(config: Optional[Config] = None):
+    """Devuelve una instancia reutilizable del cliente de Binance."""
+
+    global _cliente_cache
+    if _cliente_cache is None:
+        _cliente_cache = crear_cliente(config)
+    return _cliente_cache
+
+
 # --------- Helpers asíncronos directos (aceptan BinanceClient o ccxt) ---------
 async def _exec_async(cliente, func_name: str, *args, **kwargs):
     if isinstance(cliente, BinanceClient):

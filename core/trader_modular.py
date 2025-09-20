@@ -41,19 +41,19 @@ import os
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable, Deque, Dict, Iterable, List, Optional
 from collections import deque
-from datetime import timezone
+from datetime import datetime, timezone
 import contextlib
 
 # Imports tolerantes a ruta (ajusta según tu repo)
 try:
-    from data_feed import DataFeed  # canvas entregado
-except Exception:  # pragma: no cover
-    from data_feed import DataFeed # si lo integraste en tu módulo existente
+    from core.data_feed import DataFeed
+except ModuleNotFoundError:  # pragma: no cover
+    from data_feed import DataFeed  # compatibilidad retro
 
 try:
-    from supervisor import Supervisor  # canvas entregado
-except Exception:  # pragma: no cover
-    from supervisor import Supervisor # si lo integraste con este nombre
+    from core.supervisor import Supervisor
+except ModuleNotFoundError:  # pragma: no cover
+    from supervisor import Supervisor  # compatibilidad retro
 
 # Cliente de exchange opcional (solo si operas en real)
 try:  # pragma: no cover
@@ -217,6 +217,88 @@ class TraderLite:
             # No hace nada: pensado para pruebas de arranque
             return None
         return _placeholder
+    
+
+class Trader(TraderLite):
+    """Wrapper ligero que expone la interfaz histórica del bot."""
+
+    def __init__(
+        self,
+        config: Any,
+        *,
+        candle_handler: Optional[Callable[[dict], Awaitable[None]]] = None,
+        on_event: Optional[Callable[[str, dict], None]] = None,
+        supervisor: Optional[Supervisor] = None,
+    ) -> None:
+        super().__init__(
+            config,
+            candle_handler=candle_handler,
+            on_event=on_event,
+            supervisor=supervisor,
+        )
+        self.modo_real = bool(getattr(config, "modo_real", False))
+        self.cliente = self._cliente
+        self.data_feed = self.feed
+        self.historial_cierres: Dict[str, dict] = {s: {} for s in config.symbols}
+        self.fecha_actual = datetime.now(UTC).date()
+        self.estrategias_habilitadas = False
+        self._bg_tasks: set[asyncio.Task] = set()
+
+    async def ejecutar(self) -> None:
+        """Inicia el trader y espera hasta que finalice la tarea principal."""
+
+        self.start()
+        if self._runner_task is not None:
+            await self._runner_task
+
+    async def cerrar(self) -> None:
+        """Detiene el trader y limpia tareas en segundo plano."""
+
+        await self.stop()
+        while self._bg_tasks:
+            task = self._bg_tasks.pop()
+            if task.done():
+                continue
+            task.cancel()
+            with contextlib.suppress(Exception):
+                await task
+
+    def solicitar_parada(self) -> None:
+        """Señala al trader que debe detenerse en cuanto sea posible."""
+
+        self._stop_event.set()
+
+    async def _precargar_historico(self, velas: int | None = None) -> None:
+        """Realiza un backfill inicial antes de abrir streams."""
+
+        await self.feed.precargar(self.config.symbols, cliente=self._cliente, minimo=velas)
+
+    def habilitar_estrategias(self) -> None:
+        """Marca las estrategias como habilitadas (bandera de compatibilidad)."""
+
+        self.estrategias_habilitadas = True
+
+    def ajustar_capital_diario(self, *, fecha: Optional[Any] = None) -> None:
+        """Actualiza la fecha de referencia utilizada por el capital manager."""
+
+        target = fecha or datetime.now(UTC).date()
+        self.fecha_actual = target
+
+    # Compat helpers -------------------------------------------------------
+    def enqueue_notification(self, mensaje: str, nivel: str = "INFO") -> None:
+        if self.on_event:
+            try:
+                self.on_event("notify", {"mensaje": mensaje, "nivel": nivel})
+            except Exception:
+                pass
+
+    def enqueue_persistence(self, tipo: str, datos: dict, *, immediate: bool = False) -> None:
+        if self.on_event:
+            payload = {"tipo": tipo, "datos": datos, "inmediato": immediate}
+            try:
+                self.on_event("persistencia", payload)
+            except Exception:
+                pass
 
 
 # Nota: si lo deseas, más adelante extraeremos EstadoSimbolo a `estado_simbolo.py`

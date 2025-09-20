@@ -21,7 +21,7 @@ import asyncio
 from typing import Any, Awaitable, Callable, Optional
 
 try:
-    from supervisor import Supervisor # pragma: no cover
+    from core.supervisor import Supervisor # pragma: no cover
 except Exception:  # pragma: no cover
     from supervisor import Supervisor
 

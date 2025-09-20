@@ -300,7 +300,7 @@ def subscribe_simulated_order_metrics(bus) -> None:
     bus.subscribe('orden_simulada_cerrada', _on_close)
 
 
-def iniciar_exporter() -> WSGIServer:
+def iniciar_exporter() -> WSGIServer | None:
     """Inicia el servidor WSGI para exponer métricas.
 
     Returns
@@ -310,6 +310,10 @@ def iniciar_exporter() -> WSGIServer:
     """
 
     port = int(os.getenv("METRICS_PORT", "8000"))
-    server, _ = start_wsgi_server(port)
+    try:
+        server, _ = start_wsgi_server(port)
+    except OSError as exc:
+        log.warning("No se pudo iniciar exporter en puerto %s: %s", port, exc)
+        return None
     log.info(f"Prometheus exporter escuchando en puerto {port}")
     return server

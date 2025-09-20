@@ -56,6 +56,8 @@ class Supervisor:
         # Data
         self.data_heartbeat: Dict[str, datetime] = {}
         self.TIMEOUT_SIN_DATOS = 300  # por defecto; ajústalo en tu app si quieres
+        # Pings WS
+        self.last_ping: Dict[str, float] = {}
         # Estado
         self.stop_event = asyncio.Event()
         self._watchdog_interval_event = asyncio.Event()
@@ -101,6 +103,18 @@ class Supervisor:
     def tick_data(self, symbol: str, reinicio: bool = False) -> None:
         self.data_heartbeat[symbol] = self._now()
         self._emit("tick_data", {"symbol": symbol, "reinicio": reinicio})
+
+    def registrar_ping(self, symbol: str, rtt: float) -> None:
+        """Registra latencias de ping para diagnósticos del WebSocket."""
+
+        try:
+            latencia = float(rtt)
+        except (TypeError, ValueError):
+            return
+        if latencia < 0:
+            return
+        self.last_ping[symbol] = latencia
+        self._emit("ws_ping", {"symbol": symbol, "latencia_ms": latencia})
 
     # ------------------- watchdog -------------------
     def set_watchdog_interval(self, interval: int) -> None:
@@ -262,6 +276,7 @@ tick = _default_supervisor.tick
 tick_data = _default_supervisor.tick_data
 set_watchdog_interval = _default_supervisor.set_watchdog_interval
 shutdown = _default_supervisor.shutdown
+registrar_ping = _default_supervisor.registrar_ping
 
 
 async def stop_supervision() -> None:
