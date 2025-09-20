@@ -10,7 +10,7 @@ from websockets.client import WebSocketClientProtocol
 
 from core.utils.logger import configurar_logger
 from data_feed.reconexion import calcular_backoff
-from observabilidad import metrics as obs_metrics
+from observability import metrics as obs_metrics
 
 log = configurar_logger("websocket_manager")
 

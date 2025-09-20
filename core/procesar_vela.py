@@ -26,8 +26,8 @@ from core.metrics import (
     registrar_vela_recibida,
     registrar_vela_rechazada,
 )
-from observabilidad import metrics as obs_metrics
-from observabilidad.metrics import (
+from observability import metrics as obs_metrics
+from observability.metrics import (
     EVALUAR_ENTRADA_LATENCY_MS,
     EVALUAR_ENTRADA_TIMEOUTS,
 )

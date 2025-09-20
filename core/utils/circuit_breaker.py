@@ -3,7 +3,7 @@ import asyncio
 from collections import deque
 from typing import Callable, Awaitable, Deque
 from core.utils.logger import configurar_logger
-from observabilidad import metrics as obs_metrics
+from observability import metrics as obs_metrics
 
 log = configurar_logger('circuit_breaker')
 

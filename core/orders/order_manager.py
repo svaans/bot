@@ -9,8 +9,13 @@ import os
 from core.orders.order_model import Order
 from core.utils.logger import configurar_logger, log_decision
 from core.orders import real_orders
-from core.orders.validators import remainder_executable
-from core.risk.validators import validate_levels, LevelValidationError
+# Importamos validadores con nombres más descriptivos.  El módulo
+# ``validators_binance`` centraliza las restricciones de Binance.
+from core.orders.validators_binance import remainder_executable  # renamed from validators
+from core.risk.level_validators import (
+    validate_levels,
+    LevelValidationError,
+)
 from core.utils.utils import is_valid_number
 from core.event_bus import EventBus
 from core.metrics import (

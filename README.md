@@ -64,13 +64,13 @@
 ## 6. Motor de Trading (core/)
 52. `core/trader_modular.py` implementa la clase `Trader` que orquesta la sesión.
 53. `core/trader_simulado.py` permite ejecutar el bot en modo simulado.
-54. `core/data_feed.py` gestiona la suscripción a datos de mercado en tiempo real.
+54. `data_feed/lite.py` gestiona la suscripción a datos de mercado en tiempo real.
 55. `core/event_bus.py` distribuye eventos entre componentes desacoplados.
-56. `core/ordenes_reales.py` envía órdenes a exchanges en modo real.
+56. `core/ordenes_reales.py` es un stub utilizado en pruebas para simular la ejecución de órdenes reales.
 57. `core/orders/` contiene estructuras y helpers para manejar órdenes.
 58. `core/estrategias.py` administra el registro y ejecución de estrategias.
 59. `core/strategies/` incluye implementaciones concretas de estrategias.
-60. `core/risk_manager.py` calcula límites de exposición y gestiona stop-loss.
+60. `core/risk/risk_manager.py` calcula límites de exposición y gestiona stop-loss.
 61. `core/risk/` agrupa políticas de riesgo reutilizables.
 62. `core/adaptador_dinamico.py` ajusta parámetros en caliente según condiciones.
 63. `core/adaptador_umbral.py` define reglas umbral para activar señales.
@@ -159,7 +159,7 @@
 141. `recalibrar_semana.py` ajusta pesos semanalmente según resultados.
 142. `reset_configuracion.py` restaura configuraciones predeterminadas.
 143. `reset_pesos.py` limpia ponderaciones de indicadores bajo ciertas condiciones.
-144. `gestor_aprendizaje.py` coordina procesos de entrenamiento y registro.
+144. `async_learning_manager.py` y `trade_results_manager.py` coordinan procesos de aprendizaje y registro.
 145. `calibrar_parametros_adaptativos.py` busca valores óptimos para adaptadores.
 146. Los módulos de aprendizaje se integran con `core` mediante APIs internas.
 147. Los resultados se guardan en `configuraciones_optimas.json` para uso posterior.
@@ -283,7 +283,7 @@
 237. `ajustador_riesgo.py` analiza métricas recientes para reducir exposición en mercados volátiles.
 238. `adaptador_umbral.py` bloquea entradas si los indicadores superan límites críticos.
 239. `capital_manager.py` distribuye capital entre estrategias según su rendimiento.
-240. `risk_manager.py` establece niveles de stop-loss y take-profit por operación.
+240. `risk/risk_manager.py` establece niveles de stop-loss y take-profit por operación.
 241. `position_manager.py` verifica que el tamaño de posición no exceda el capital disponible.
 242. `market_regime.py` detecta ambientes alcistas, bajistas o laterales para ajustar el riesgo.
 243. Los módulos de riesgo trabajan coordinados con configuraciones externas.

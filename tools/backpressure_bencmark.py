@@ -19,7 +19,8 @@ os.environ.setdefault('SUPERVISOR_NOTIFICATIONS', 'false')
 os.environ.setdefault('DF_NOTIFICATIONS', 'false')
 
 from core import supervisor
-from core.data_feed import DataFeed
+# Ajuste de importación tras mover DataFeed a data_feed.lite
+from data_feed.lite import DataFeed
 
 
 @dataclass

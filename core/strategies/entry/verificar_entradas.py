@@ -97,7 +97,9 @@ except Exception:  # pragma: no cover
         return (precio * 0.99, precio * 1.02)
 
 try:
-    from core.risk.validators import validate_levels, LevelValidationError
+    # Los validadores de riesgo residen en ``core.risk.level_validators``
+    # tras la reorganización para evitar confusión con otros validadores.
+    from core.risk.level_validators import validate_levels, LevelValidationError
 except Exception:  # pragma: no cover
     class LevelValidationError(Exception):
         def __init__(self, reason: str, context: dict | None = None):

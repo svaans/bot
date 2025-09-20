@@ -22,7 +22,7 @@ from core.strategies.exit.gestor_salidas import evaluar_salidas
 from core.strategies.tendencia import detectar_tendencia
 from core.utils.utils import configurar_logger
 from core.estrategias import TENDENCIA_IDEAL
-from observabilidad import metrics as obs_metrics
+from observability import metrics as obs_metrics
 
 log = configurar_logger("engine", modo_silencioso=True)
 

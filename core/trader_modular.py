@@ -50,7 +50,8 @@ import pandas as pd
 
 # Imports tolerantes a ruta (ajusta según tu repo)
 try:
-    from core.data_feed import DataFeed
+    # Import DataFeed from data_feed.lite after relocation
+    from data_feed.lite import DataFeed
 except ModuleNotFoundError:  # pragma: no cover
     from data_feed import DataFeed  # compatibilidad retro
 
