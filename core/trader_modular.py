@@ -66,12 +66,15 @@ from core.streams.candle_filter import CandleFilter
 from core.event_bus import EventBus
 from core.orders.order_manager import OrderManager
 from core.orders.storage_simulado import sincronizar_ordenes_simuladas
+from core.utils.utils import configurar_logger
 
 if TYPE_CHECKING:  # pragma: no cover - solo para anotaciones
     from core.notification_manager import NotificationManager
 
 UTC = timezone.utc
 
+
+log = configurar_logger("trader_modular", modo_silencioso=True)
 
 def _silence_task_result(task: asyncio.Task) -> None:
     """Consume resultados/errores de tareas lanzadas en segundo plano."""
@@ -389,6 +392,8 @@ class Trader(TraderLite):
         self.orders = OrderManager(self.modo_real, self.bus)
         if not self.modo_real:
             sincronizar_ordenes_simuladas(self.orders)
+        # Registro opcional de ventanas de cooldown por símbolo para entradas nuevas.
+        self._entrada_cooldowns: Dict[str, datetime] = {}
 
     async def ejecutar(self) -> None:
         """Inicia el trader y espera hasta que finalice la tarea principal."""
@@ -432,6 +437,79 @@ class Trader(TraderLite):
 
         target = fecha or datetime.now(UTC).date()
         self.fecha_actual = target
+
+    
+    def _puede_evaluar_entradas(self, symbol: str) -> bool:
+        """Determina si ``symbol`` puede ser evaluado para una nueva entrada."""
+
+        if getattr(self, "_stop_event", None) and self._stop_event.is_set():
+            log.debug("[%s] Entrada bloqueada: stop solicitado", symbol)
+            return False
+
+        # Evitar duplicados cuando ya existe una orden o se está ejecutando la apertura.
+        try:
+            ordenes = getattr(self, "orders", None)
+            if ordenes is not None:
+                obtener_orden = getattr(ordenes, "obtener", None)
+                if callable(obtener_orden):
+                    orden_existente = obtener_orden(symbol)
+                    if orden_existente is not None:
+                        log.debug("[%s] Entrada bloqueada: orden existente", symbol)
+                        return False
+                abriendo = getattr(ordenes, "abriendo", None)
+                if isinstance(abriendo, set) and symbol in abriendo:
+                    log.debug("[%s] Entrada bloqueada: apertura en curso", symbol)
+                    return False
+        except Exception:
+            # Ante cualquier inconsistencia, preferimos continuar para no romper el flujo.
+            log.warning("[%s] Error inspeccionando estado de órdenes", symbol, exc_info=True)
+
+        # Respeta ventanas de cooldown externas (por ejemplo tras pérdidas consecutivas).
+        cooldowns = getattr(self, "_entrada_cooldowns", None)
+        if isinstance(cooldowns, dict):
+            ventana = cooldowns.get(symbol)
+            ahora = datetime.now(UTC)
+            if isinstance(ventana, datetime) and ventana > ahora:
+                log.debug(
+                    "[%s] Entrada bloqueada: cooldown activo hasta %s",
+                    symbol,
+                    ventana.isoformat(),
+                )
+                return False
+            if isinstance(ventana, (int, float)) and ventana > ahora.timestamp():
+                log.debug(
+                    "[%s] Entrada bloqueada: cooldown activo (timestamp %.0f)",
+                    symbol,
+                    ventana,
+                )
+                return False
+
+        capital_manager = getattr(self, "capital_manager", None)
+        if capital_manager is not None:
+            try:
+                if hasattr(capital_manager, "hay_capital_libre") and not capital_manager.hay_capital_libre():
+                    log.debug("[%s] Entrada bloqueada: sin capital libre", symbol)
+                    return False
+                if hasattr(capital_manager, "tiene_capital") and not capital_manager.tiene_capital(symbol):
+                    log.debug("[%s] Entrada bloqueada: sin capital asignado", symbol)
+                    return False
+            except Exception:
+                log.warning("[%s] Error consultando capital disponible", symbol, exc_info=True)
+
+        risk = getattr(self, "risk", None)
+        if risk is not None and hasattr(risk, "permite_entrada"):
+            try:
+                correlaciones = {}
+                if hasattr(risk, "correlaciones"):
+                    correlaciones = risk.correlaciones.get(symbol, {})
+                diversidad_minima = float(getattr(self.config, "diversidad_minima", 0.0) or 0.0)
+                if not risk.permite_entrada(symbol, correlaciones, diversidad_minima):
+                    log.debug("[%s] Entrada bloqueada por gestor de riesgo", symbol)
+                    return False
+            except Exception:
+                log.warning("[%s] Error consultando gestor de riesgo", symbol, exc_info=True)
+
+        return True
 
     # Compat helpers -------------------------------------------------------
     def enqueue_notification(self, mensaje: str, nivel: str = "INFO") -> None:
