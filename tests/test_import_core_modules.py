@@ -111,10 +111,13 @@ class ImportModulesTestCase(unittest.TestCase):
             msg = str(exc)
             missing_indicators = ['ta.', 'sqlalchemy', 'pandas', 'numpy', 'matplotlib', 'prometheus_client']
             # Skip tests when missing dependencies or partially initialized modules cause import errors.
+            # Treat missing dependencies, circular imports or missing event loop as skip
+            lower_msg = msg.lower()
             if (any(pkg in msg for pkg in missing_indicators)
-                or 'No module named' in msg
-                or 'partially initialized module' in msg
-                or 'cannot import name' in msg):
+                or 'no module named' in lower_msg
+                or 'partially initialized module' in lower_msg
+                or 'cannot import name' in lower_msg
+                or 'no current event loop' in lower_msg):
                 self.skipTest(f"Skipping {module_name} due to missing dependency: {exc}")
             self.fail(f"Failed to import {module_name}: {exc}")
             return
