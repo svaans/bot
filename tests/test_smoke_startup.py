@@ -14,6 +14,7 @@ import asyncio
 import types
 import sys
 import time
+import inspect
 import pytest
 
 
@@ -48,6 +49,7 @@ def _install_stubs() -> None:
     cfg_manager = stub('config.config_manager')
     if not hasattr(cfg_manager, 'ConfigManager'):
         class Config:
+            # minimal fields used by StartupManager / Trader
             modo_real = False
             symbols = ['BTCUSDT']
             max_spread_ratio = 0.0
@@ -98,6 +100,43 @@ def _install_stubs() -> None:
         aiohttp.ClientSession = ClientSession
 
 
+def _make_startup_manager(StartupManager, Trader, feed, ConfigManager, ws_timeout, startup_timeout):
+    """
+    Crea una instancia de StartupManager adaptándose a su firma real.
+    Intenta mapear config/config_manager/cfg, data_feed/feed, trader/runner, etc.
+    """
+    params = inspect.signature(StartupManager).parameters
+    kwargs = {}
+
+    # Config: puede ser 'config_manager', 'config' o 'cfg' (o no existir)
+    if 'config_manager' in params:
+        kwargs['config_manager'] = ConfigManager()
+    elif 'config' in params:
+        kwargs['config'] = getattr(ConfigManager(), 'config', ConfigManager())
+    elif 'cfg' in params:
+        kwargs['cfg'] = getattr(ConfigManager(), 'config', ConfigManager())
+
+    # DataFeed: puede llamarse 'data_feed' o 'feed'
+    if 'data_feed' in params:
+        kwargs['data_feed'] = feed
+    elif 'feed' in params:
+        kwargs['feed'] = feed
+
+    # Trader: puede llamarse 'trader' o 'runner'
+    if 'trader' in params:
+        kwargs['trader'] = Trader()
+    elif 'runner' in params:
+        kwargs['runner'] = Trader()
+
+    # Timeouts (si existen en la firma)
+    if 'ws_timeout' in params:
+        kwargs['ws_timeout'] = ws_timeout
+    if 'startup_timeout' in params:
+        kwargs['startup_timeout'] = startup_timeout
+
+    return StartupManager(**kwargs)
+
+
 @pytest.mark.asyncio
 async def test_startup_succeeds_when_feed_becomes_active(monkeypatch):
     """
@@ -137,10 +176,11 @@ async def test_startup_succeeds_when_feed_becomes_active(monkeypatch):
         await asyncio.sleep(0.01)
     monkeypatch.setattr(Trader, 'run', fast_run, raising=True)
 
-    sm = StartupManager(
-        config_manager=ConfigManager(),
-        trader=Trader(),
-        data_feed=feed,
+    sm = _make_startup_manager(
+        StartupManager=StartupManager,
+        Trader=Trader,
+        feed=feed,
+        ConfigManager=ConfigManager,
         ws_timeout=0.5,
         startup_timeout=1.0,
     )
@@ -184,14 +224,16 @@ async def test_startup_fails_when_feed_never_active(monkeypatch):
 
     feed = df_mod.DataFeed()  # remains inactive
 
-    sm = StartupManager(
-        config_manager=ConfigManager(),
-        trader=Trader(),
-        data_feed=feed,
+    sm = _make_startup_manager(
+        StartupManager=StartupManager,
+        Trader=Trader,
+        feed=feed,
+        ConfigManager=ConfigManager,
         ws_timeout=0.1,
         startup_timeout=0.3,
     )
 
     with pytest.raises(RuntimeError):
         await sm.run()
+
 
