@@ -175,7 +175,13 @@ class TraderLite:
             queue_policy=os.getenv("DF_QUEUE_POLICY", "drop_oldest"),
             on_event=on_event,
         )
-
+        # Señal para el StartupManager: este feed se arranca desde TraderLite
+        # (vía Supervisor) y no debe iniciarse automáticamente antes de que
+        # el trader configure callbacks y símbolos.
+        try:
+            setattr(self.feed, "_managed_by_trader", True)
+        except Exception:
+            log.debug("No se pudo marcar DataFeed como gestionado por Trader")
         # Cliente de exchange (solo modo real)
         self._cliente = None
         if bool(getattr(config, "modo_real", False)) and crear_cliente is not None:
