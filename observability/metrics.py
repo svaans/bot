@@ -3,23 +3,35 @@
 from __future__ import annotations
 import time
 from asyncio import sleep as async_sleep
-from typing import Dict, Callable, Sequence
+from typing import Callable, Dict, Sequence
 
-from prometheus_client import Counter, Gauge, Histogram, REGISTRY
-from prometheus_client.metrics import MetricWrapperBase
+from core.utils.metrics_compat import (
+    Counter,
+    Gauge,
+    Histogram,
+    Metric,
+    REGISTRY,
+)
+
+
+MetricFactory = Callable[..., Metric]
 
 
 def _get_metric(
-    metric_cls: Callable[..., MetricWrapperBase],
+    metric_cls: MetricFactory,
     name: str,
     documentation: str,
     labelnames: Sequence[str] | None = None,
     **kwargs,
-) -> MetricWrapperBase:
+) -> Metric:
     """Obtiene un colector existente o crea uno nuevo si no está registrado."""
-    existing = REGISTRY._names_to_collectors.get(name)  # type: ignore[attr-defined]
-    if existing:
-        return existing
+    collectors: dict[str, Metric] | None = getattr(
+        REGISTRY, "_names_to_collectors", None
+    )
+    if collectors:
+        existing = collectors.get(name)
+        if existing is not None:
+            return existing
     if labelnames is None:
         return metric_cls(name, documentation, **kwargs)
     return metric_cls(name, documentation, labelnames, **kwargs)
