@@ -2,6 +2,7 @@ import asyncio
 import json
 import time
 import os
+import inspect
 from contextlib import suppress
 from pathlib import Path
 from typing import Optional
@@ -60,7 +61,22 @@ class StartupManager:
             self.config.intervalo_velas,
             min_bars=int(os.getenv("MIN_BARS", "400")),
         )
-        await self.trader._precargar_historico()
+        precargar = getattr(self.trader, "_precargar_historico", None)
+        if precargar:
+            try:
+                if inspect.iscoroutinefunction(precargar):
+                    await precargar()
+                else:
+                    precargar()
+            except Exception as exc:  # nosec - queremos registrar y continuar
+                self.log.warning(
+                    "Fallo al ejecutar _precargar_historico(): %s (continuando)",
+                    exc,
+                )
+        else:
+            self.log.debug(
+                "_precargar_historico() no definido en Trader; se omite."
+            )
 
     async def _validate_feeds(self) -> None:
         assert self.trader is not None and self.config is not None
