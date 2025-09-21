@@ -6,14 +6,27 @@ import threading
 import re
 import json
 import logging
+from contextlib import suppress
+from importlib import import_module
+from datetime import datetime, timezone
+from typing import TYPE_CHECKING, Any, Iterable, Callable
+
 import pandas as pd
 import psutil
-from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Iterable, Callable
-from pandas.tseries.frequencies import to_offset
+
 from .logger import configurar_logger
 from core.modo import MODO_REAL
 from core.registro_metrico import registro_metrico
+
+_frequencies_module: Any | None = None
+with suppress(Exception):
+    _frequencies_module = import_module('pandas.tseries.frequencies')
+
+if _frequencies_module and hasattr(_frequencies_module, 'to_offset'):
+    to_offset = getattr(_frequencies_module, 'to_offset')
+else:
+    def to_offset(value: str) -> str:
+        return value
 if TYPE_CHECKING:
     from core.order_model import Order
 from decimal import Decimal, InvalidOperation, ROUND_HALF_EVEN
