@@ -31,7 +31,7 @@ from observability.metrics import (
     EVALUAR_ENTRADA_LATENCY_MS,
     EVALUAR_ENTRADA_TIMEOUTS,
 )
-from prometheus_client import Counter
+from core.utils.metrics_compat import Counter
 
 """Procesa una vela de mercado y actualiza indicadores.
 
