@@ -2,13 +2,18 @@
 from __future__ import annotations
 
 import asyncio
+import os
 from collections import deque
 from typing import Deque, Dict, List
 
 import pandas as pd
 
 from binance_api.cliente import obtener_cliente, fetch_ohlcv_async
-from config.config import INTERVALO_VELAS, BACKFILL_MAX_CANDLES
+try:
+    from config.config import INTERVALO_VELAS, BACKFILL_MAX_CANDLES
+except (ImportError, AttributeError):  # pragma: no cover - compatibilidad tests
+    INTERVALO_VELAS = os.getenv("INTERVALO_VELAS", "1m")
+    BACKFILL_MAX_CANDLES = int(os.getenv("BACKFILL_MAX_CANDLES", "1000"))
 from core.utils.utils import configurar_logger
 from data_feed.persistencia_velas import PersistenciaVelas
 
