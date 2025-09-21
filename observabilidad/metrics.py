@@ -5,8 +5,13 @@ import time
 from asyncio import sleep as async_sleep
 from typing import Dict, Callable, Sequence
 
-from prometheus_client import Counter, Gauge, Histogram, REGISTRY
-from prometheus_client.metrics import MetricWrapperBase
+from core.utils.metrics_compat import (
+    Counter,
+    Gauge,
+    Histogram,
+    MetricWrapperBase,
+    REGISTRY,
+)
 
 
 def _get_metric(
