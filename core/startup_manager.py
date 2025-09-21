@@ -141,55 +141,56 @@ class StartupManager:
             raise RuntimeError(msg)
 
     async def _open_streams(self) -> None:
-        assert self.trader is not None
-        start_fn = getattr(self.trader, "ejecutar", None) or getattr(self.trader, "run", None)
-        if start_fn is None:
-            raise AttributeError("Trader no expone métodos ejecutar() ni run()")
+    assert self.trader is not None
+    start_fn = getattr(self.trader, "ejecutar", None) or getattr(self.trader, "run", None)
+    if start_fn is None:
+        raise AttributeError("Trader no expone métodos ejecutar() ni run()")
 
-        self._trader_hold = asyncio.Event()
+    self._trader_hold = asyncio.Event()
 
-        async def _run_trader() -> None:
-            exc: BaseException | None = None
-            try:
-                if inspect.iscoroutinefunction(start_fn):
-                    await start_fn()
-                else:
-                    await asyncio.to_thread(start_fn)
-            except asyncio.CancelledError:
-                self._trader_hold.set()
-                raise
-            except BaseException as err:  # pragma: no cover - logging
-                exc = err
-                self._trader_hold.set()
-                self.log.error("Trader finalizó con error inesperado: %s", err)
-            finally:
-                await self._trader_hold.wait()
-                if exc is not None:
-                    raise exc
+    async def _run_trader() -> None:
+        exc: BaseException | None = None
+        try:
+            if inspect.iscoroutinefunction(start_fn):
+                await start_fn()
+            else:
+                await asyncio.to_thread(start_fn)
+        except asyncio.CancelledError:
+            self._trader_hold.set()
+            raise
+        except BaseException as err:  # pragma: no cover - logging
+            exc = err
+            self._trader_hold.set()
+            self.log.error("Trader finalizó con error inesperado: %s", err)
+        finally:
+            await self._trader_hold.wait()
+            if exc is not None:
+                raise exc
 
-        task = asyncio.create_task(_run_trader())
+    task = asyncio.create_task(_run_trader())
 
-        feed = getattr(self.trader, "data_feed", None) or getattr(self, "data_feed", None)
-        manual_feed = bool(getattr(feed, "_managed_by_trader", False)) if feed is not None else False
-        start_feed = None
-        if feed is not None and not manual_feed:
-            start_feed = getattr(feed, "start", None)
-            if start_feed is None:
-                start_feed = getattr(feed, "iniciar", None)
-        if start_feed is not None:
-            try:
-                result = start_feed()
-            except TypeError:
-                result = None
-            if inspect.isawaitable(result):
-                self._feed_task = asyncio.create_task(result)
-        elif manual_feed:
-            self.log.debug(
-                "DataFeed gestionado por Trader; se omite arranque automático."
-            )
+    feed = getattr(self.trader, "data_feed", None) or getattr(self, "data_feed", None)
+    manual_feed = bool(getattr(feed, "_managed_by_trader", False)) if feed is not None else False
+    start_feed = None
+    if feed is not None and not manual_feed:
+        start_feed = getattr(feed, "start", None)
+        if start_feed is None:
+            start_feed = getattr(feed, "iniciar", None)
+    if start_feed is not None:
+        try:
+            result = start_feed()
+        except TypeError:
+            result = None
+        if inspect.isawaitable(result):
+            self._feed_task = asyncio.create_task(result)
+    elif manual_feed:
+        self.log.debug(
+            "DataFeed gestionado por Trader; se omite arranque automático."
+        )
 
-        self._trader_task = task
-        self.task = task
+    self._trader_task = task
+    self.task = task
+    
 
     async def _enable_strategies(self) -> None:
         assert self.trader is not None and self.config is not None
