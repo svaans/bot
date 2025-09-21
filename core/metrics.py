@@ -18,7 +18,13 @@ from collections import defaultdict
 from typing import Any, Dict
 from wsgiref.simple_server import WSGIServer
 
-from prometheus_client import Counter, Gauge, Histogram, start_wsgi_server
+from core.utils.metrics_compat import (
+    Counter,
+    Gauge,
+    Histogram,
+    HAVE_PROM,
+    start_wsgi_server,
+)
 
 try:
     import core.registro_metrico as _registro_metrico_module
@@ -383,8 +389,18 @@ def iniciar_exporter() -> WSGIServer | None:
     """
 
     port = int(os.getenv("METRICS_PORT", "8000"))
+    if not HAVE_PROM:
+        log.info("Prometheus no disponible; exporter deshabilitado")
+        return None
     try:
-        server, _ = start_wsgi_server(port)
+        result = start_wsgi_server(port)
+        if isinstance(result, tuple):
+            server, _ = result
+        else:
+            server = result
+        if server is None:
+            log.info("Prometheus no disponible; exporter deshabilitado")
+            return None
     except OSError as exc:
         log.warning("No se pudo iniciar exporter en puerto %s: %s", port, exc)
         return None
