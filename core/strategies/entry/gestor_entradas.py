@@ -6,7 +6,7 @@ from __future__ import annotations
 import asyncio
 import time
 import pandas as pd
-from prometheus_client import Histogram
+from core.utils.metrics_compat import Histogram
 from core.strategies.pesos import gestor_pesos
 from .loader import cargar_estrategias
 from indicators.correlacion import calcular_correlacion
