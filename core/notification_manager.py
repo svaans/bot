@@ -6,7 +6,23 @@ import asyncio
 import os
 from uuid import uuid4
 from dotenv import load_dotenv
-from prometheus_client import Counter
+# Prometheus puede no estar disponible en entornos de test/stub
+try:  # pragma: no cover - rama defensiva
+    from prometheus_client import Counter  # type: ignore
+except Exception:  # pragma: no cover - fallback en tests
+    class NullCounter:  # type: ignore
+        """Implementación nula para métricas ``Counter``."""
+
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            pass
+
+        def labels(self, *args: Any, **kwargs: Any) -> "NullCounter":
+            return self
+
+        def inc(self, *args: Any, **kwargs: Any) -> None:
+            return None
+
+    Counter = NullCounter  # type: ignore
 from core.utils.logger import configurar_logger
 from core.event_bus import EventBus
 
