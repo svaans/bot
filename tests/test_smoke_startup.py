@@ -48,7 +48,6 @@ def _install_stubs() -> None:
     cfg_manager = stub('config.config_manager')
     if not hasattr(cfg_manager, 'ConfigManager'):
         class Config:
-            # minimal fields used by StartupManager / Trader
             modo_real = False
             symbols = ['BTCUSDT']
             max_spread_ratio = 0.0
@@ -56,20 +55,6 @@ def _install_stubs() -> None:
             def __init__(self) -> None:
                 self.config = Config()
         cfg_manager.ConfigManager = ConfigManager
-
-    # --- DataFeed stub (we will override methods in tests) ---
-    data_feed_mod = stub('core.data_feed')
-    if not hasattr(data_feed_mod, 'DataFeed'):
-        class DataFeed:
-            def __init__(self, *a, **k) -> None:
-                self._active = False
-            async def start(self) -> None:
-                await asyncio.sleep(0)
-            def is_active(self) -> bool:
-                return self._active
-            def _set_active(self, value: bool) -> None:
-                self._active = value
-        data_feed_mod.DataFeed = DataFeed
 
     # --- Trader stub (run loop will be patched in test) ---
     trader_modular = stub('core.trader_modular')
@@ -80,7 +65,6 @@ def _install_stubs() -> None:
                 self.config = types.SimpleNamespace(max_spread_ratio=0.0)
             async def run(self) -> None:
                 self._running = True
-                # Simulate a short-running loop so StartupManager can create task
                 while self._running:
                     await asyncio.sleep(0.01)
             def stop(self) -> None:
@@ -123,12 +107,26 @@ async def test_startup_succeeds_when_feed_becomes_active(monkeypatch):
     _install_stubs()
 
     from core.startup_manager import StartupManager  # type: ignore
-    from core.data_feed import DataFeed  # type: ignore
+    import core.data_feed as df_mod  # type: ignore
     from core.trader_modular import Trader  # type: ignore
     from config.config_manager import ConfigManager  # type: ignore
 
-    # Prepare a DataFeed instance that will flip to active after a short delay
-    feed = DataFeed()
+    # --- Replace real DataFeed by a minimal dummy to avoid signature coupling ---
+    class _DummyFeed:
+        def __init__(self, *a, **k) -> None:
+            self._active = False
+        async def start(self) -> None:
+            await asyncio.sleep(0)
+        def is_active(self) -> bool:
+            return self._active
+        def _set_active(self, v: bool) -> None:
+            self._active = v
+
+    monkeypatch.setattr(df_mod, 'DataFeed', _DummyFeed, raising=True)
+
+    feed = df_mod.DataFeed()  # uses dummy
+
+    # Flip to active shortly after start()
     async def start_feed():
         await asyncio.sleep(0.01)
         feed._set_active(True)
@@ -136,27 +134,23 @@ async def test_startup_succeeds_when_feed_becomes_active(monkeypatch):
 
     # Minimal Trader.run that exits quickly (but enough to be scheduled)
     async def fast_run(self):
-        # One short iteration to get scheduled
         await asyncio.sleep(0.01)
     monkeypatch.setattr(Trader, 'run', fast_run, raising=True)
 
-    # Build StartupManager with small timeouts
     sm = StartupManager(
         config_manager=ConfigManager(),
         trader=Trader(),
         data_feed=feed,
-        ws_timeout=0.5,         # tight timeout to keep test fast
-        startup_timeout=1.0,    # overall startup limit
+        ws_timeout=0.5,
+        startup_timeout=1.0,
     )
 
     t0 = time.perf_counter()
     await sm.run()
     elapsed = time.perf_counter() - t0
 
-    # Assertions: feed is active and startup finished promptly
     assert feed.is_active() is True
-    assert elapsed < 1.0  # sanity check that it didn't hang
-    # Trader task should have been created (if StartupManager stores it)
+    assert elapsed < 1.0
     if hasattr(sm, '_trader_task'):
         assert sm._trader_task is not None
         assert not sm._trader_task.done()
@@ -171,24 +165,33 @@ async def test_startup_fails_when_feed_never_active(monkeypatch):
     _install_stubs()
 
     from core.startup_manager import StartupManager  # type: ignore
-    from core.data_feed import DataFeed  # type: ignore
+    import core.data_feed as df_mod  # type: ignore
     from core.trader_modular import Trader  # type: ignore
     from config.config_manager import ConfigManager  # type: ignore
 
-    feed = DataFeed()
-    # Ensure start() does NOT activate the feed
-    async def never_activate():
-        await asyncio.sleep(0.2)  # pretend to try connecting
-        # remains inactive
-    monkeypatch.setattr(feed, 'start', never_activate, raising=True)
+    # --- Replace real DataFeed by a minimal dummy to avoid signature coupling ---
+    class _DummyFeed:
+        def __init__(self, *a, **k) -> None:
+            self._active = False
+        async def start(self) -> None:
+            await asyncio.sleep(0.2)  # simulate trying to connect
+        def is_active(self) -> bool:
+            return self._active
+        def _set_active(self, v: bool) -> None:
+            self._active = v
+
+    monkeypatch.setattr(df_mod, 'DataFeed', _DummyFeed, raising=True)
+
+    feed = df_mod.DataFeed()  # remains inactive
 
     sm = StartupManager(
         config_manager=ConfigManager(),
         trader=Trader(),
         data_feed=feed,
-        ws_timeout=0.1,       # very short timeout to provoke failure
+        ws_timeout=0.1,
         startup_timeout=0.3,
     )
 
     with pytest.raises(RuntimeError):
         await sm.run()
+
