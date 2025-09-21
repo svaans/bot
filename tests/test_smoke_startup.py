@@ -52,6 +52,7 @@ def _install_stubs() -> None:
             # minimal fields used by StartupManager / Trader
             modo_real = False
             symbols = ['BTCUSDT']
+            intervalo_velas = '1m'  # <-- necesario para warmup_inicial
             max_spread_ratio = 0.0
         class ConfigManager:
             def __init__(self) -> None:
@@ -185,6 +186,14 @@ async def test_startup_succeeds_when_feed_becomes_active(monkeypatch):
         startup_timeout=1.0,
     )
 
+    # 🔧 Fijamos config por si el constructor no dejó símbolos/intervalo
+    if not hasattr(sm, 'config') or not hasattr(sm.config, 'symbols') or not hasattr(sm.config, 'intervalo_velas'):
+        sm.config = types.SimpleNamespace(
+            symbols=['BTCUSDT'],
+            intervalo_velas='1m',
+            modo_real=False,
+        )
+
     t0 = time.perf_counter()
     await sm.run()
     elapsed = time.perf_counter() - t0
@@ -232,6 +241,14 @@ async def test_startup_fails_when_feed_never_active(monkeypatch):
         ws_timeout=0.1,
         startup_timeout=0.3,
     )
+
+    # 🔧 Fijamos config por si el constructor no dejó símbolos/intervalo
+    if not hasattr(sm, 'config') or not hasattr(sm.config, 'symbols') or not hasattr(sm.config, 'intervalo_velas'):
+        sm.config = types.SimpleNamespace(
+            symbols=['BTCUSDT'],
+            intervalo_velas='1m',
+            modo_real=False,
+        )
 
     with pytest.raises(RuntimeError):
         await sm.run()
