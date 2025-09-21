@@ -13,7 +13,7 @@ import asyncio
 import time
 from typing import Any, Awaitable, Callable
 
-from prometheus_client import Counter, Gauge
+from core.utils.metrics_compat import Counter, Gauge
 
 # Métricas -----------------------------------------------------------------
 
