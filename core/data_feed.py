@@ -42,7 +42,10 @@ from binance_api.websocket import (
 from binance_api.cliente import fetch_ohlcv_async
 from core.utils.logger import configurar_logger
 from core.utils import intervalo_a_segundos, validar_integridad_velas, timestamp_alineado
-from config.config import BACKFILL_MAX_CANDLES
+try:
+    from config.config import BACKFILL_MAX_CANDLES
+except (ImportError, AttributeError):  # pragma: no cover - compatibilidad tests
+    BACKFILL_MAX_CANDLES = int(os.getenv("BACKFILL_MAX_CANDLES", "1000"))
 
 UTC = timezone.utc
 log = configurar_logger("datafeed", modo_silencioso=False)
