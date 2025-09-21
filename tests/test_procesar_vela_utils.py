@@ -15,13 +15,20 @@ import unittest
 
 
 def _install_stubs() -> None:
-    """Install minimal stubs for third‑party modules used by procesar_vela."""
+    """Install minimal stubs for third-party modules used by procesar_vela."""
     stubs: dict[str, object] = {
         'dotenv': types.SimpleNamespace(load_dotenv=lambda *args, **kwargs: None),
         'colorlog': types.SimpleNamespace(),
         'colorama': types.SimpleNamespace(Back=None, Fore=None, Style=None, init=lambda *args, **kwargs: None),
-        'ccxt': types.SimpleNamespace(binance=lambda *args, **kwargs: types.SimpleNamespace(set_sandbox_mode=lambda *a, **kw: None)),
-        'filelock': types.SimpleNamespace(FileLock=lambda *args, **kwargs: types.SimpleNamespace(__enter__=lambda self: None, __exit__=lambda self, exc_type, exc_val, exc_tb: False)),
+        'ccxt': types.SimpleNamespace(
+            binance=lambda *args, **kwargs: types.SimpleNamespace(set_sandbox_mode=lambda *a, **kw: None)
+        ),
+        'filelock': types.SimpleNamespace(
+            FileLock=lambda *args, **kwargs: types.SimpleNamespace(
+                __enter__=lambda self: None,
+                __exit__=lambda self, exc_type, exc_val, exc_tb: False
+            )
+        ),
         'prometheus_client': types.SimpleNamespace(
             start_http_server=lambda *args, **kwargs: None,
             start_wsgi_server=lambda *args, **kwargs: None,
@@ -39,7 +46,12 @@ def _install_stubs() -> None:
                 memory_info=lambda self: types.SimpleNamespace(rss=0),
             ),
         ),
-        'aiomonitor': types.SimpleNamespace(Monitor=lambda loop: types.SimpleNamespace(__enter__=lambda self: None, __exit__=lambda self, exc_type, exc_val, exc_tb: False)),
+        'aiomonitor': types.SimpleNamespace(
+            Monitor=lambda loop: types.SimpleNamespace(
+                __enter__=lambda self: None,
+                __exit__=lambda self, exc_type, exc_val, exc_tb: False
+            )
+        ),
         'numpy': types.ModuleType('numpy'),
         'pandas': types.ModuleType('pandas'),
         'scipy': types.ModuleType('scipy'),
@@ -59,7 +71,9 @@ def _install_stubs() -> None:
             crear_cliente=lambda *args, **kwargs: types.SimpleNamespace(load_markets=lambda: {}),
         ),
         'config.config': types.SimpleNamespace(BACKFILL_MAX_CANDLES=100, INTERVALO_VELAS='1m'),
-        'observability': types.SimpleNamespace(metrics=types.SimpleNamespace(_get_metric=lambda *args, **kwargs: None)),
+        'observability': types.SimpleNamespace(
+            metrics=types.SimpleNamespace(_get_metric=lambda *args, **kwargs: None)
+        ),
         'observability.metrics': types.SimpleNamespace(
             _get_metric=lambda *args, **kwargs: None,
             EVALUAR_ENTRADA_LATENCY_MS=None,
@@ -85,6 +99,7 @@ def _install_stubs() -> None:
             )
         ),
     }
+    # Registrar/actualizar todos los stubs anteriores
     for name, module in stubs.items():
         if name not in sys.modules:
             sys.modules[name] = module
@@ -93,6 +108,31 @@ def _install_stubs() -> None:
             for attr in dir(module):
                 if not hasattr(existing, attr):
                     setattr(existing, attr, getattr(module, attr))
+
+    # --- SQLAlchemy stub (necesario por data_feed.persistencia_velas) ---
+    # Módulo base
+    if 'sqlalchemy' not in sys.modules:
+        sa = types.ModuleType('sqlalchemy')
+        def _ctor(*args, **kwargs):
+            return types.SimpleNamespace()
+        sa.Column = _ctor
+        sa.Float = float
+        sa.Integer = int
+        sa.MetaData = _ctor
+        sa.String = str
+        sa.Table = _ctor
+        sa.create_engine = lambda *a, **k: types.SimpleNamespace(connect=lambda: None)
+        sa.select = lambda *a, **k: object()
+        sa.text = lambda *a, **k: object()
+        sys.modules['sqlalchemy'] = sa
+    # Submódulo sqlalchemy.exc con IntegrityError
+    if 'sqlalchemy.exc' not in sys.modules:
+        sa_exc = types.ModuleType('sqlalchemy.exc')
+        class IntegrityError(Exception):
+            pass
+        sa_exc.IntegrityError = IntegrityError
+        sys.modules['sqlalchemy.exc'] = sa_exc
+
 
 
 class DummyTrader:
