@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Deque, Dict, Optional
 
 import pandas as pd
-from prometheus_client import Counter, Gauge
+from core.utils.metrics_compat import Counter, Gauge
 from indicators.helpers import get_rsi, get_slope
 from indicators.retornos_volatilidad import (
     retornos_log,
