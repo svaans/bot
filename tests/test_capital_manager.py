@@ -1,4 +1,3 @@
-# tests/test_capital_manager.py
 """
 Tests for the :class:`core.capital_manager.CapitalManager` class.
 
@@ -16,17 +15,7 @@ import sys
 
 
 def _install_stubs() -> None:
-    """Register stubs for external packages referenced in capital_manager.
-
-    CapitalManager imports a wide range of modules at import time,
-    including ``dotenv``, ``colorama``, ``prometheus_client``,
-    ``binance_api`` and core modules like ``core.risk``.  To test the
-    synchronous behaviour in isolation we provide lightweight stubs
-    with the necessary attributes so that the module can import
-    successfully.  Only the attributes actually touched by
-    ``CapitalManager`` are defined.
-    """
-    # Stub helper to register modules
+    """Register stubs for external packages referenced in capital_manager."""
     def stub(name: str) -> types.ModuleType:
         mod = sys.modules.get(name)
         if mod is None:
@@ -34,7 +23,6 @@ def _install_stubs() -> None:
             sys.modules[name] = mod
         return mod
 
-    # Minimal stubs for logger
     logger_mod = stub('core.utils.logger')
     if not hasattr(logger_mod, 'configurar_logger'):
         logger_mod.configurar_logger = lambda *args, **kwargs: types.SimpleNamespace(
@@ -56,11 +44,9 @@ def _install_stubs() -> None:
         risk_mod.MarketInfo = MarketInfo
     if not hasattr(risk_mod, 'size_order'):
         def size_order(**kwargs):
-            # Always return price and a fixed quantity to avoid hitting risk logic
             price = kwargs.get('price', 0.0)
             return price, 1.0
         risk_mod.size_order = size_order
-    # Dummy RiskManager class with minimal attributes
     if not hasattr(risk_mod, 'RiskManager'):
         class RiskManager:
             def __init__(self, umbral: float = 0.1) -> None:
@@ -74,19 +60,13 @@ def _install_stubs() -> None:
     stub('binance_api.filters').get_symbol_filters = lambda symbol, client: {}
     stub('core.contexto_externo').obtener_puntaje_contexto = lambda symbol: 0.0
 
-    # Optional third-party stubs that might appear
     stub('dotenv').load_dotenv = lambda *args, **kwargs: None  # type: ignore
     stub('colorlog')
     stub('colorama')
 
 
 class DummyConfig:
-    """Simple configuration object for the CapitalManager.
-
-    Only the attributes referenced in the constructor or methods are
-    provided.  Additional attributes may be set via keyword
-    arguments.
-    """
+    """Simple configuration object for the CapitalManager."""
     def __init__(self, **kwargs) -> None:
         self.symbols = kwargs.get('symbols', ['BTC/USDT', 'ETH/USDT'])
         self.modo_real = kwargs.get('modo_real', False)
@@ -102,22 +82,19 @@ class CapitalManagerTestCase(unittest.TestCase):
         _install_stubs()
         from core.capital_manager import CapitalManager  # type: ignore
         cls.CapitalManager = CapitalManager
-        # Provide dummy risk manager instance
         cls.risk = sys.modules['core.risk'].RiskManager(umbral=0.1)
 
     def test_detectar_divisa_principal(self) -> None:
         detect = self.CapitalManager._detectar_divisa_principal
         self.assertEqual(detect(['BTC/USDT', 'ETH/USDT']), 'USDT')
         self.assertEqual(detect(['ADA/EUR', 'BNB/EUR', 'BTC/USDT']), 'EUR')
-        self.assertEqual(detect(['BTCUSDT', 'ADAUSDT']), 'EUR')  # no '/' implies EUR fallback
+        self.assertEqual(detect(['BTCUSDT', 'ADAUSDT']), 'EUR')
 
     def test_initial_capital_assignment(self) -> None:
         config = DummyConfig(symbols=['BTC/USDT', 'ETH/USDT', 'BNB/USDT'])
         cm = self.CapitalManager(config, cliente=None, risk=self.risk, fraccion_kelly=0.1)
-        # 1000 total / 3 symbols, min 20 per symbol
         expected = max(1000.0 / 3, 20.0)
         self.assertEqual(cm.capital_por_simbolo['BTC/USDT'], expected)
-        # capital currency should be detected as 'USDT'
         self.assertEqual(cm.capital_currency, 'USDT')
 
     def test_tiene_capital_and_es_moneda_base(self) -> None:
@@ -126,23 +103,19 @@ class CapitalManagerTestCase(unittest.TestCase):
         self.assertTrue(cm.tiene_capital('BTC/USDT'))
         cm.capital_por_simbolo['BTC/USDT'] = 0.0
         self.assertFalse(cm.tiene_capital('BTC/USDT'))
-        # es_moneda_base
         self.assertTrue(cm.es_moneda_base('BTC/USDT'))
         self.assertFalse(cm.es_moneda_base('ADA/EUR'))
 
     def test_capital_libre_and_hay_capital_libre(self) -> None:
         config = DummyConfig(symbols=['BTC/USDT', 'ETH/USDT'])
         cm = self.CapitalManager(config, cliente=None, risk=self.risk, fraccion_kelly=0.1)
-        # initially no positions, capital libre is total
         total_capital = sum(cm.capital_por_simbolo.values())
         self.assertAlmostEqual(cm.capital_libre(), total_capital)
         self.assertTrue(cm.hay_capital_libre())
-        # simulate open position reduces capital libre
         self.risk.posiciones_abiertas = ['BTC/USDT']
         free_after = cm.capital_libre()
         self.assertLess(free_after, total_capital)
         self.assertTrue(cm.hay_capital_libre())
-        # set both capitals to zero -> no capital libre
         cm.capital_por_simbolo = {s: 0.0 for s in cm.capital_por_simbolo}
         self.assertFalse(cm.hay_capital_libre())
 
@@ -150,10 +123,11 @@ class CapitalManagerTestCase(unittest.TestCase):
         config = DummyConfig(symbols=['BTC/USDT'])
         cm = self.CapitalManager(config, cliente=None, risk=self.risk, fraccion_kelly=0.1)
         initial = cm.capital_por_simbolo['BTC/USDT']
-        final_cap = cm.actualizar_capital('BTC/USDT', 0.1)  # 10% gain
+        final_cap = cm.actualizar_capital('BTC/USDT', 0.1)
         self.assertAlmostEqual(final_cap, initial * 1.1)
         self.assertAlmostEqual(cm.capital_por_simbolo['BTC/USDT'], initial * 1.1)
 
 
 if __name__ == '__main__':
     unittest.main()
+

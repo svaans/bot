@@ -8,6 +8,7 @@ simple spread gating.  External dependencies are stubbed out where
 necessary.
 """
 
+from __future__ import annotations
 import sys
 import types
 import unittest
@@ -46,7 +47,6 @@ def _install_stubs() -> None:
         'matplotlib.pyplot': types.ModuleType('matplotlib.pyplot'),
         'ta': types.ModuleType('ta'),
         'ta.trend': types.SimpleNamespace(ADXIndicator=lambda *args, **kwargs: None),
-        # Provide minimal stub for ta.momentum used by adaptador_persistencia
         'ta.momentum': types.SimpleNamespace(RSIIndicator=lambda *args, **kwargs: None),
         'binance_api.websocket': types.SimpleNamespace(
             escuchar_velas=lambda *args, **kwargs: None,
@@ -59,12 +59,30 @@ def _install_stubs() -> None:
             crear_cliente=lambda *args, **kwargs: types.SimpleNamespace(load_markets=lambda: {}),
         ),
         'config.config': types.SimpleNamespace(BACKFILL_MAX_CANDLES=100, INTERVALO_VELAS='1m'),
-        # Observability metrics stubbed to avoid Prometheus imports
         'observability': types.SimpleNamespace(metrics=types.SimpleNamespace(_get_metric=lambda *args, **kwargs: None)),
         'observability.metrics': types.SimpleNamespace(
             _get_metric=lambda *args, **kwargs: None,
             EVALUAR_ENTRADA_LATENCY_MS=None,
             EVALUAR_ENTRADA_TIMEOUTS=None,
+        ),
+        # Stub modules imported deeper: core.contexto_externo and websockets
+        'core.contexto_externo': types.SimpleNamespace(
+            StreamContexto=type(
+                'StreamContexto',
+                (),
+                {
+                    '__init__': lambda self: None,
+                    'actualizar_datos_externos': lambda self, *args, **kwargs: None,
+                },
+            )
+        ),
+        'websockets': types.SimpleNamespace(
+            connect=lambda *args, **kwargs: types.SimpleNamespace(
+                __aenter__=lambda self: self,
+                __aexit__=lambda self, exc_type, exc, tb: None,
+                __aiter__=lambda self: self,
+                __anext__=lambda self: (_ for _ in ()).throw(StopAsyncIteration()),
+            )
         ),
     }
     for name, module in stubs.items():
@@ -89,7 +107,6 @@ class ProcesarVelaUtilsTestCase(unittest.TestCase):
     def setUpClass(cls) -> None:
         _install_stubs()
         import core.procesar_vela as pv  # type: ignore
-        # Bind helper functions as static methods to avoid implicit 'self'
         cls._approximate_spread = staticmethod(pv._approximate_spread)  # type: ignore
         cls._spread_gate = staticmethod(pv._spread_gate)  # type: ignore
 
@@ -97,18 +114,15 @@ class ProcesarVelaUtilsTestCase(unittest.TestCase):
         snapshot = {'high': 110.0, 'low': 90.0, 'close': 100.0}
         ratio = self._approximate_spread(snapshot)
         self.assertAlmostEqual(ratio, 0.2)
-        # If close is zero or missing, ratio should be zero
         self.assertEqual(self._approximate_spread({'high': 10, 'low': 5, 'close': 0}), 0.0)
         self.assertEqual(self._approximate_spread({}), 0.0)
 
     def test_spread_gate_default(self) -> None:
-        # Without spread_guard and limit zero -> allowed always
         trader = DummyTrader(spread_guard=None, max_spread_ratio=0.0)
         permitted, ratio, limit = self._spread_gate(trader, 'BTCUSDT', {'high': 110, 'low': 90, 'close': 100})
         self.assertTrue(permitted)
         self.assertAlmostEqual(ratio, 0.2)
         self.assertEqual(limit, 0.0)
-        # With a non-zero limit, exceeding ratio should be disallowed
         trader2 = DummyTrader(spread_guard=None, max_spread_ratio=0.1)
         permitted2, ratio2, limit2 = self._spread_gate(trader2, 'ETHUSDT', {'high': 110, 'low': 90, 'close': 100})
         self.assertFalse(permitted2)
