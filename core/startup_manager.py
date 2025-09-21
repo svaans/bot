@@ -170,9 +170,12 @@ class StartupManager:
         task = asyncio.create_task(_run_trader())
 
         feed = getattr(self.trader, "data_feed", None) or getattr(self, "data_feed", None)
-        start_feed = getattr(feed, "start", None) if feed is not None else None
-        if start_feed is None and feed is not None:
-            start_feed = getattr(feed, "iniciar", None)
+        manual_feed = bool(getattr(feed, "_managed_by_trader", False)) if feed is not None else False
+        start_feed = None
+        if feed is not None and not manual_feed:
+            start_feed = getattr(feed, "start", None)
+            if start_feed is None:
+                start_feed = getattr(feed, "iniciar", None)
         if start_feed is not None:
             try:
                 result = start_feed()
@@ -180,6 +183,10 @@ class StartupManager:
                 result = None
             if inspect.isawaitable(result):
                 self._feed_task = asyncio.create_task(result)
+        elif manual_feed:
+            self.log.debug(
+                "DataFeed gestionado por Trader; se omite arranque automático."
+            )
 
         self._trader_task = task
         self.task = task
