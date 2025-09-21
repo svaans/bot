@@ -100,23 +100,6 @@ def _install_stubs() -> None:
                 return _Resp()
         aiohttp.ClientSession = ClientSession
 
-    # --- Local pandas stub (isola la sesión frente a stubs previos) ---
-    # Provee un DataFrame mínimo que acepta (data, columns) y soporta len()
-    class _MiniDF:
-        def __init__(self, data=None, columns=None):
-            self._data = list(data or [])
-            self._columns = list(columns or [])
-        def __len__(self):
-            return len(self._data)
-        # Métodos que podrían ser llamados en otras rutas del warmup
-        def to_csv(self, *a, **k):  # no-op
-            return None
-
-    pandas_mod = types.ModuleType('pandas')
-    pandas_mod.DataFrame = _MiniDF
-    pandas_mod.read_csv = lambda *a, **k: _MiniDF([], [])
-    sys.modules['pandas'] = pandas_mod
-
 
 def _make_startup_manager(StartupManager, Trader, feed, ConfigManager, ws_timeout, startup_timeout):
     """
@@ -168,6 +151,21 @@ async def test_startup_succeeds_when_feed_becomes_active(monkeypatch):
     import core.data.bootstrap as bootstrap  # type: ignore
     from core.trader_modular import Trader  # type: ignore
     from config.config_manager import ConfigManager  # type: ignore
+
+    # --- Inyectar un mini-pandas sólo en el módulo bootstrap ---
+    class _MiniDF:
+        def __init__(self, data=None, columns=None):
+            self._data = list(data or [])
+            self._columns = list(columns or [])
+        def __len__(self):
+            return len(self._data)
+        def to_csv(self, *a, **k):  # no-op
+            return None
+    _fake_pd = types.SimpleNamespace(
+        DataFrame=_MiniDF,
+        read_csv=lambda *a, **k: _MiniDF([], []),
+    )
+    monkeypatch.setattr(bootstrap, 'pd', _fake_pd, raising=False)
 
     # --- Replace real DataFeed by a minimal dummy to avoid signature coupling ---
     class _DummyFeed:
@@ -243,6 +241,21 @@ async def test_startup_fails_when_feed_never_active(monkeypatch):
     from core.trader_modular import Trader  # type: ignore
     from config.config_manager import ConfigManager  # type: ignore
 
+    # --- Inyectar un mini-pandas sólo en el módulo bootstrap ---
+    class _MiniDF:
+        def __init__(self, data=None, columns=None):
+            self._data = list(data or [])
+            self._columns = list(columns or [])
+        def __len__(self):
+            return len(self._data)
+        def to_csv(self, *a, **k):  # no-op
+            return None
+    _fake_pd = types.SimpleNamespace(
+        DataFrame=_MiniDF,
+        read_csv=lambda *a, **k: _MiniDF([], []),
+    )
+    monkeypatch.setattr(bootstrap, 'pd', _fake_pd, raising=False)
+
     # --- Replace real DataFeed by a minimal dummy to avoid signature coupling ---
     class _DummyFeed:
         def __init__(self, *a, **k) -> None:
@@ -258,7 +271,7 @@ async def test_startup_fails_when_feed_never_active(monkeypatch):
 
     feed = df_mod.DataFeed()  # remains inactive
 
-    # Parchea fetch_ohlcv_async para no fallar (aunque aquí no debería afectar al fallo por WS)
+    # Parchea fetch_ohlcv_async para no fallar
     async def fake_fetch_ohlcv_async(cliente, symbol, tf, limit=400):
         return [[i, 1.0, 1.0, 1.0, 1.0, 10.0] for i in range(min(10, limit))]
     monkeypatch.setattr(bootstrap, 'fetch_ohlcv_async', fake_fetch_ohlcv_async, raising=True)
@@ -282,6 +295,7 @@ async def test_startup_fails_when_feed_never_active(monkeypatch):
 
     with pytest.raises(RuntimeError):
         await sm.run()
+
 
 
 
