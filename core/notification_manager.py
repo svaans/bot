@@ -6,25 +6,9 @@ import asyncio
 import os
 from uuid import uuid4
 from dotenv import load_dotenv
-# Prometheus puede no estar disponible en entornos de test/stub
-try:  # pragma: no cover - rama defensiva
-    from prometheus_client import Counter  # type: ignore
-except Exception:  # pragma: no cover - fallback en tests
-    class NullCounter:  # type: ignore
-        """Implementación nula para métricas ``Counter``."""
-
-        def __init__(self, *args: Any, **kwargs: Any) -> None:
-            pass
-
-        def labels(self, *args: Any, **kwargs: Any) -> "NullCounter":
-            return self
-
-        def inc(self, *args: Any, **kwargs: Any) -> None:
-            return None
-
-    Counter = NullCounter  # type: ignore
 from core.utils.logger import configurar_logger
 from core.event_bus import EventBus
+from core.utils.metrics_compat import Counter, Metric
 
 log = configurar_logger('notification_manager', modo_silencioso=True)
 
@@ -35,18 +19,38 @@ NOTIFY_ERRORS_TOTAL = Counter(
 
 
 class _Metrics:
-    notify_sent = Counter(
-        'notify_sent_total',
-        'Notificaciones enviadas correctamente',
-    )
-    notify_retry = Counter(
-        'notify_retry_total',
-        'Reintentos de envío de notificaciones',
-    )
-    notify_failed = Counter(
-        'notify_failed_total',
-        'Notificaciones que agotaron reintentos',
-    )
+    """Inicializa métricas de forma perezosa para evitar fallos tempranos."""
+
+    _notify_sent: Metric | None = None
+    _notify_retry: Metric | None = None
+    _notify_failed: Metric | None = None
+
+    @property
+    def notify_sent(self) -> Metric:
+        if self._notify_sent is None:
+            self._notify_sent = Counter(
+                'notify_sent_total',
+                'Notificaciones enviadas correctamente',
+            )
+        return self._notify_sent
+
+    @property
+    def notify_retry(self) -> Metric:
+        if self._notify_retry is None:
+            self._notify_retry = Counter(
+                'notify_retry_total',
+                'Reintentos de envío de notificaciones',
+            )
+        return self._notify_retry
+
+    @property
+    def notify_failed(self) -> Metric:
+        if self._notify_failed is None:
+            self._notify_failed = Counter(
+                'notify_failed_total',
+                'Notificaciones que agotaron reintentos',
+            )
+        return self._notify_failed
 
 
 METRICS = _Metrics()
