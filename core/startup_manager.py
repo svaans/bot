@@ -183,6 +183,8 @@ class StartupManager:
                 result = None
             if inspect.isawaitable(result):
                 self._feed_task = asyncio.create_task(result)
+                # Cede el control para que el feed inicialice efectos secundarios inmediatos
+                await asyncio.sleep(0)
         elif manual_feed:
             self.log.debug(
                 "DataFeed gestionado por Trader; se omite arranque automático."
