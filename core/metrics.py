@@ -12,15 +12,61 @@ símbolo y acción.
 from __future__ import annotations
 
 import os
+import types
+import sys
 from collections import defaultdict
-from typing import Dict
+from typing import Any, Dict
 from wsgiref.simple_server import WSGIServer
 
 from prometheus_client import Counter, Gauge, Histogram, start_wsgi_server
 
-from core.registro_metrico import registro_metrico
+try:
+    import core.registro_metrico as _registro_metrico_module
+except ImportError:
+    _registro_metrico_module = types.SimpleNamespace(registrar=lambda *args, **kwargs: None)
+    sys.modules.setdefault("core.registro_metrico", _registro_metrico_module)
+
+registro_metrico = getattr(
+    _registro_metrico_module,
+    "registro_metrico",
+    _registro_metrico_module,
+)
+
 from core.utils.logger import configurar_logger
 from core.alertas import alert_manager
+
+
+log = configurar_logger("metrics")
+
+
+class _NullMetric:
+    """Implementación nula para objetos de métricas de Prometheus."""
+
+    def labels(self, **kwargs: Any) -> "_NullMetric":
+        return self
+
+    def inc(self, *args: Any, **kwargs: Any) -> None:
+        return None
+
+    def set(self, *args: Any, **kwargs: Any) -> None:
+        return None
+
+    def observe(self, *args: Any, **kwargs: Any) -> None:
+        return None
+
+    def time(self, *args: Any, **kwargs: Any) -> "_NullMetric":
+        return self
+
+
+def _metric_or_null(metric: Any, name: str) -> Any:
+    """Devuelve ``metric`` o un objeto nulo si está deshabilitada."""
+
+    if metric is None:
+        debug = getattr(log, "debug", None)
+        if callable(debug):
+            debug("Métrica %s deshabilitada; usando NullMetric", name)
+        return _NullMetric()
+    return metric
 
 
 _decisions: Dict[str, Dict[str, int]] = defaultdict(lambda: defaultdict(int))
@@ -138,9 +184,36 @@ CONTADOR_REGISTRO_ERRORES = Counter(
     "Errores al registrar órdenes",
 )
 
-UMBRAL_VELAS_RECHAZADAS = float(os.getenv("UMBRAL_VELAS_RECHAZADAS", 5))
 
-log = configurar_logger("metrics")
+_METRICS_WITH_FALLBACK = [
+    "VELAS_DUPLICADAS",
+    "CANDLES_DUPLICADAS_RATE",
+    "VELAS_TOTAL",
+    "VELAS_RECHAZADAS",
+    "VELAS_RECHAZADAS_PCT",
+    "WARMUP_PROGRESS",
+    "FEEDS_FUNDING_MISSING",
+    "FEEDS_OPEN_INTEREST_MISSING",
+    "FEEDS_MISSING_RATE",
+    "QUEUE_SIZE",
+    "INGEST_LATENCY",
+    "TRADER_QUEUE_SIZE",
+    "TRADER_PIPELINE_LATENCY",
+    "TRADER_PIPELINE_QUEUE_WAIT",
+    "WATCHDOG_RESTARTS",
+    "WATCHDOG_RESTART_RATE",
+    "BINANCE_WEIGHT_USED_1M",
+    "PARTIAL_CLOSE_COLLISION",
+    "CONTADOR_REGISTRO_ERRORES",
+]
+
+for _metric_name in _METRICS_WITH_FALLBACK:
+    globals()[_metric_name] = _metric_or_null(
+        globals().get(_metric_name),
+        _metric_name,
+    )
+
+UMBRAL_VELAS_RECHAZADAS = float(os.getenv("UMBRAL_VELAS_RECHAZADAS", 5))
 
 
 
