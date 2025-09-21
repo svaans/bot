@@ -52,7 +52,7 @@ def _install_stubs() -> None:
             # minimal fields used by StartupManager / Trader
             modo_real = False
             symbols = ['BTCUSDT']
-            intervalo_velas = '1m'  # <-- necesario para warmup_inicial
+            intervalo_velas = '1m'
             max_spread_ratio = 0.0
         class ConfigManager:
             def __init__(self) -> None:
@@ -99,6 +99,23 @@ def _install_stubs() -> None:
                     async def text(self): return ''
                 return _Resp()
         aiohttp.ClientSession = ClientSession
+
+    # --- Local pandas stub (isola la sesión frente a stubs previos) ---
+    # Provee un DataFrame mínimo que acepta (data, columns) y soporta len()
+    class _MiniDF:
+        def __init__(self, data=None, columns=None):
+            self._data = list(data or [])
+            self._columns = list(columns or [])
+        def __len__(self):
+            return len(self._data)
+        # Métodos que podrían ser llamados en otras rutas del warmup
+        def to_csv(self, *a, **k):  # no-op
+            return None
+
+    pandas_mod = types.ModuleType('pandas')
+    pandas_mod.DataFrame = _MiniDF
+    pandas_mod.read_csv = lambda *a, **k: _MiniDF([], [])
+    sys.modules['pandas'] = pandas_mod
 
 
 def _make_startup_manager(StartupManager, Trader, feed, ConfigManager, ws_timeout, startup_timeout):
@@ -148,6 +165,7 @@ async def test_startup_succeeds_when_feed_becomes_active(monkeypatch):
 
     from core.startup_manager import StartupManager  # type: ignore
     import core.data_feed as df_mod  # type: ignore
+    import core.data.bootstrap as bootstrap  # type: ignore
     from core.trader_modular import Trader  # type: ignore
     from config.config_manager import ConfigManager  # type: ignore
 
@@ -172,7 +190,13 @@ async def test_startup_succeeds_when_feed_becomes_active(monkeypatch):
         feed._set_active(True)
     monkeypatch.setattr(feed, 'start', start_feed)
 
-    # Minimal Trader.run that exits quickly (but enough to be scheduled)
+    # Parchea fetch_ohlcv_async para devolver OHLCV sintético
+    async def fake_fetch_ohlcv_async(cliente, symbol, tf, limit=400):
+        # timestamp, open, high, low, close, volume
+        return [[i, 1.0, 1.0, 1.0, 1.0, 10.0] for i in range(min(10, limit))]
+    monkeypatch.setattr(bootstrap, 'fetch_ohlcv_async', fake_fetch_ohlcv_async, raising=True)
+
+    # Minimal Trader.run que sale rápido (pero se agenda)
     async def fast_run(self):
         await asyncio.sleep(0.01)
     monkeypatch.setattr(Trader, 'run', fast_run, raising=True)
@@ -215,6 +239,7 @@ async def test_startup_fails_when_feed_never_active(monkeypatch):
 
     from core.startup_manager import StartupManager  # type: ignore
     import core.data_feed as df_mod  # type: ignore
+    import core.data.bootstrap as bootstrap  # type: ignore
     from core.trader_modular import Trader  # type: ignore
     from config.config_manager import ConfigManager  # type: ignore
 
@@ -232,6 +257,11 @@ async def test_startup_fails_when_feed_never_active(monkeypatch):
     monkeypatch.setattr(df_mod, 'DataFeed', _DummyFeed, raising=True)
 
     feed = df_mod.DataFeed()  # remains inactive
+
+    # Parchea fetch_ohlcv_async para no fallar (aunque aquí no debería afectar al fallo por WS)
+    async def fake_fetch_ohlcv_async(cliente, symbol, tf, limit=400):
+        return [[i, 1.0, 1.0, 1.0, 1.0, 10.0] for i in range(min(10, limit))]
+    monkeypatch.setattr(bootstrap, 'fetch_ohlcv_async', fake_fetch_ohlcv_async, raising=True)
 
     sm = _make_startup_manager(
         StartupManager=StartupManager,
@@ -252,5 +282,6 @@ async def test_startup_fails_when_feed_never_active(monkeypatch):
 
     with pytest.raises(RuntimeError):
         await sm.run()
+
 
 
