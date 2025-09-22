@@ -10,7 +10,12 @@ from __future__ import annotations
 
 import importlib
 from contextlib import suppress
-from typing import Any, Callable, ContextManager, Protocol, Self
+from typing import Any, Callable, ContextManager, Protocol
+
+try:  # Python < 3.11
+    from typing import Self  # type: ignore[attr-defined]
+except ImportError:  # pragma: no cover - ruta para versiones antiguas
+    from typing_extensions import Self
 
 __all__ = [
     "Counter",
