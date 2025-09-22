@@ -6,7 +6,7 @@ import math
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, Iterable, List, Tuple, Union, Any
+from typing import Any, Dict, Iterable, List, Tuple, Union
 
 # Rutas configurables por entorno (con valores por defecto)
 ESTRATEGIAS_PESOS_PATH = Path(os.getenv("ESTRATEGIAS_PESOS_PATH", "estado/pesos_estrategias.json"))
@@ -116,8 +116,16 @@ class GestorPesos:
 
     # ---- API principal ----
     def obtener_pesos_symbol(self, symbol: str) -> Dict[str, float]:
-        """Devuelve dict de pesos para `symbol` (vacío si no hay)."""
-        return dict(self.pesos.get(symbol, {}))
+        """Devuelve dict de pesos para ``symbol`` (vacío si no hay)."""
+        return dict(self.pesos.get(symbol.upper(), {}))
+
+    def obtener_peso(self, estrategia: str, symbol: str) -> float:
+        """Obtiene el peso asignado a ``estrategia`` para ``symbol``."""
+
+        if not estrategia:
+            return 0.0
+        bucket = self.pesos.get(symbol.upper(), {})
+        return float(bucket.get(estrategia, 0.0))
 
     def set_pesos_symbol(self, symbol: str, pesos_crudos: Dict[str, Number]) -> Dict[str, float]:
         """Establece pesos para `symbol` normalizando a (total, piso). Devuelve los pesos normalizados."""
@@ -260,4 +268,27 @@ try:
     gestor_pesos_salidas: GestorPesosSalidas = GestorPesosSalidas.from_file(PESOS_SALIDAS_PATH)
 except Exception:
     gestor_pesos_salidas = GestorPesosSalidas(ruta=PESOS_SALIDAS_PATH)
+
+
+def cargar_pesos_estrategias(
+    *, ruta: str | Path | None = None, total: float | None = None, piso: float | None = None
+) -> GestorPesos:
+    """Recarga los pesos de estrategias desde disco y devuelve el gestor global."""
+
+    global gestor_pesos
+    ruta_path = Path(ruta) if ruta is not None else gestor_pesos.ruta
+    gestor_pesos = GestorPesos.from_file(
+        ruta_path,
+        total=total if total is not None else gestor_pesos.total,
+        piso=piso if piso is not None else gestor_pesos.piso,
+    )
+    return gestor_pesos
+
+
+def obtener_peso_salida(estrategia: str, _symbol: str | None = None) -> float:
+    """Devuelve el peso configurado para una estrategia de salida."""
+
+    if not estrategia:
+        return 0.0
+    return gestor_pesos_salidas.obtener_peso_salida(estrategia)
 
