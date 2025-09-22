@@ -498,6 +498,7 @@ class Trader(TraderLite):
         self.estrategias_habilitadas = False
         self._bg_tasks: set[asyncio.Task] = set()
         self.notificador: NotificationManager | None = None
+        self._verificar_entrada_provider: str | None = None
 
         # Lazy construcciones (si los módulos existen)
         if getattr(self, "_EventBus", None):
@@ -680,11 +681,7 @@ class Trader(TraderLite):
             on_event_cb = self.on_event
 
         try:
-            if getattr(self, "_verificar_entrada", None) is None:
-                log.warning("verificar_entrada no disponible; omitiendo evaluación")
-                return None
-            resultado = await self._verificar_entrada(
-                self,
+            resultado = await self.verificar_entrada(
                 symbol,
                 df,
                 estado,
@@ -698,9 +695,77 @@ class Trader(TraderLite):
 
         if resultado:
             log.debug("[%s] Entrada candidata generada", symbol)
+            return resultado
+
+        provider = getattr(self, "_verificar_entrada_provider", None)
+        if provider is None:
+            log.warning(
+                "verificar_entrada devolvió None; omitiendo evaluación",
+                extra={"symbol": symbol, "timeframe": getattr(df, "tf", None)},
+            )
         else:
             log.debug("[%s] Sin condiciones de entrada válidas", symbol)
-        return resultado
+        return None
+
+    async def verificar_entrada(
+        self,
+        symbol: str,
+        df: pd.DataFrame,
+        estado: Any,
+        *,
+        on_event: Callable[[str, dict], None] | None = None,
+    ) -> dict[str, Any] | None:
+        """Punto único para decidir entradas.
+
+        Siempre existe para evitar advertencias por interfaces faltantes.
+        Devuelve ``None`` cuando no hay pipeline disponible o la estrategia no
+        produce una propuesta.
+        """
+
+        pipeline = getattr(self, "_verificar_entrada", None)
+        if callable(pipeline):
+            self._verificar_entrada_provider = "pipeline"
+            return await pipeline(
+                self,
+                symbol,
+                df,
+                estado,
+                on_event=on_event,
+            )
+
+        engine = getattr(self, "engine", None)
+        if engine is not None:
+            for attr in ("verificar_entrada", "evaluar_condiciones_de_entrada"):
+                fn = getattr(engine, attr, None)
+                if not callable(fn):
+                    continue
+
+                self._verificar_entrada_provider = f"engine.{attr}"
+
+                attempts = []
+                if on_event is not None:
+                    attempts.append(lambda: fn(symbol, df, estado, on_event=on_event))
+                attempts.append(lambda: fn(symbol, df, estado))
+                if on_event is not None:
+                    attempts.append(
+                        lambda: fn(self, symbol, df, estado, on_event=on_event)
+                    )
+                attempts.append(lambda: fn(self, symbol, df, estado))
+                if on_event is not None:
+                    attempts.append(lambda: fn(symbol, df, on_event=on_event))
+                    attempts.append(lambda: fn(self, symbol, df, on_event=on_event))
+                attempts.append(lambda: fn(symbol, df))
+                attempts.append(lambda: fn(self, symbol, df))
+
+                for attempt in attempts:
+                    try:
+                        result = attempt()
+                    except TypeError:
+                        continue
+                    return await _maybe_await(result)
+
+        self._verificar_entrada_provider = None
+        return None
 
     # Compat helpers -------------------------------------------------------
     def enqueue_notification(self, mensaje: str, nivel: str = "INFO") -> None:

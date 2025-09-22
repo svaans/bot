@@ -4,7 +4,7 @@ import asyncio
 from pathlib import Path
 from typing import Any, Dict, Tuple, Optional, Set, Iterable, List
 import pandas as pd
-
+import numpy as np
 from binance_api.cliente import fetch_ohlcv_async, obtener_cliente
 from core.metrics import registrar_warmup_progress
 from core.utils.utils import configurar_logger
@@ -63,17 +63,28 @@ def pending_symbols() -> Set[str]:
     return set(_pending_fetch)
 
 
+
+
+def _coerce_numeric(serie: pd.Series, *, dtype: Optional[str] = None) -> pd.Series:
+    """Convierte valores a numéricos manejando infinitos y NaN de forma explícita."""
+
+    numerica = pd.to_numeric(serie, errors='coerce')
+    numerica = numerica.replace([np.inf, -np.inf], np.nan)
+    if dtype is not None:
+        numerica = numerica.astype(dtype)
+    return numerica
+
+
 def _normalize_df(df: pd.DataFrame) -> pd.DataFrame:
     """Asegura columnas esperadas, orden y tipos básicos."""
     cols = ['timestamp', 'open', 'high', 'low', 'close', 'volume']
     # Asegurar columnas
     df = df.reindex(columns=cols, fill_value=None)
     # Coerciones seguras
-    with pd.option_context('mode.use_inf_as_na', True):
-        df['timestamp'] = pd.to_numeric(df['timestamp'], errors='coerce').astype('Int64')
-        for c in ['open', 'high', 'low', 'close', 'volume']:
-            df[c] = pd.to_numeric(df[c], errors='coerce')
-        df = df.dropna(subset=['timestamp', 'open', 'high', 'low', 'close']).copy()
+    df['timestamp'] = _coerce_numeric(df['timestamp'], dtype='Int64')
+    for c in ['open', 'high', 'low', 'close', 'volume']:
+        df[c] = _coerce_numeric(df[c])
+    df = df.dropna(subset=['timestamp', 'open', 'high', 'low', 'close']).copy()
     # Asegurar orden ascendente y sin duplicados
     df = df.sort_values('timestamp', kind='mergesort')
     df = df.drop_duplicates(subset=['timestamp'], keep='last')
