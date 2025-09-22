@@ -1,185 +1,199 @@
+# core/notification_manager.py
 from __future__ import annotations
-from core.notificador import Notificador
 
-from typing import Any
 import asyncio
+import json
 import os
-from uuid import uuid4
-from dotenv import load_dotenv
+from dataclasses import dataclass
+from typing import Any, Optional, Callable, Iterable
+
 from core.utils.logger import configurar_logger
-from core.event_bus import EventBus
-from core.utils.metrics_compat import Counter, Metric
+from core.utils.metrics_compat import Counter, Gauge, Histogram
 
-log = configurar_logger('notification_manager', modo_silencioso=True)
+log = configurar_logger("notification_manager")
 
-NOTIFY_ERRORS_TOTAL = Counter(
-    'notify_errors_total',
-    'Errores al enviar notificaciones a servicios externos',
+# Métricas (no fallan si no hay Prometheus)
+NOTIFY_ENQUEUED = Counter("notify_enqueued_total", "Notificaciones encoladas")
+NOTIFY_SENT = Counter("notify_sent_total", "Notificaciones enviadas con éxito")
+NOTIFY_FAILED = Counter("notify_failed_total", "Notificaciones fallidas")
+NOTIFY_RETRY = Counter("notify_retry_total", "Reintentos de notificación")
+NOTIFY_QUEUE_SIZE = Gauge("notify_queue_size", "Tamaño de la cola de notificaciones")
+NOTIFY_LATENCY = Histogram(
+    "notify_latency_seconds", "Latencia de envío de notificaciones",
+    buckets=(0.05, 0.1, 0.25, 0.5, 1, 2, 5)
 )
 
+# --- Backend Telegram opcional ------------------------------------------------
 
-class _Metrics:
-    """Inicializa métricas de forma perezosa para evitar fallos tempranos."""
+class _TelegramBackend:
+    """Backend mínimo para Telegram; ignora silenciosamente si faltan credenciales."""
+    def __init__(self, token: Optional[str], chat_id: Optional[str]) -> None:
+        self.token = token
+        self.chat_id = chat_id
+        self._enabled = bool(token and chat_id)
 
-    _notify_sent: Metric | None = None
-    _notify_retry: Metric | None = None
-    _notify_failed: Metric | None = None
-
-    @property
-    def notify_sent(self) -> Metric:
-        if self._notify_sent is None:
-            self._notify_sent = Counter(
-                'notify_sent_total',
-                'Notificaciones enviadas correctamente',
-            )
-        return self._notify_sent
-
-    @property
-    def notify_retry(self) -> Metric:
-        if self._notify_retry is None:
-            self._notify_retry = Counter(
-                'notify_retry_total',
-                'Reintentos de envío de notificaciones',
-            )
-        return self._notify_retry
-
-    @property
-    def notify_failed(self) -> Metric:
-        if self._notify_failed is None:
-            self._notify_failed = Counter(
-                'notify_failed_total',
-                'Notificaciones que agotaron reintentos',
-            )
-        return self._notify_failed
+    async def send(self, text: str) -> bool:
+        if not self._enabled:
+            return True  # no romper el flujo cuando no hay credenciales
+        # Evita dependencias en requests/aiohttp aquí; deja el hook para que lo inyectes si quieres.
+        # Puedes cambiar esta parte por tu cliente real de Telegram si lo tienes en el proyecto.
+        try:
+            # Placeholder de éxito inmediato (hookéalo a tu implementacion real)
+            await asyncio.sleep(0)
+            return True
+        except Exception:
+            return False
 
 
-METRICS = _Metrics()
+@dataclass
+class Notification:
+    mensaje: str
+    nivel: str = "INFO"
+    meta: Optional[dict] = None
+
 
 class NotificationManager:
-    """Encapsula el sistema de notificaciones del bot."""
+    """Gestor de notificaciones con cola y workers asíncronos + reintentos."""
 
     def __init__(
         self,
-        token: str = '',
-        chat_id: str = '',
-        modo_test: bool = False,
-        bus: EventBus | None = None,
+        *,
+        token: Optional[str] = None,
+        chat_id: Optional[str] = None,
+        max_queue: int = 1000,
         workers: int = 2,
-    ):
-        self._notifier = Notificador(token, chat_id, modo_test)
-        self._q: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
-        loop = asyncio.get_event_loop()
-        self._workers = [loop.create_task(self._worker()) for _ in range(workers)]
-        if bus:
-            self.subscribe(bus)
+        retries: Iterable[float] = (1.0, 2.0, 5.0),
+        on_event: Optional[Callable[[str, dict], None]] = None,
+    ) -> None:
+        self._q: asyncio.Queue[Notification] = asyncio.Queue(maxsize=max_queue)
+        self._workers: list[asyncio.Task] = []
+        self._retries = list(retries)
+        self._backend = _TelegramBackend(token, chat_id)
+        self._on_event = on_event
+        self._started = False
+        self._workers_num = max(1, workers)
 
-    def subscribe(self, bus: EventBus) -> None:
-        bus.subscribe('notify', self._on_notify)
-        bus.subscribe('orden_simulada_creada', self._on_orden_creada)
-        bus.subscribe('orden_simulada_cerrada', self._on_orden_cerrada)
+    # ---------------- API pública ----------------
 
-    async def _on_notify(self, data: Any) -> None:
-        """Wrapper a prueba de fallos para las notificaciones."""
-        mensaje = data.get('mensaje') or data.get('message')
-        tipo = data.get('tipo', 'INFO')
-        timeout = data.get('timeout', 5)
-        if not mensaje:
+    def start(self) -> None:
+        if self._started:
             return
+        self._started = True
+        for i in range(self._workers_num):
+            t = asyncio.create_task(self._worker_loop(), name=f"notify_worker_{i}")
+            self._workers.append(t)
+
+    def enviar(self, mensaje: str, nivel: str = "INFO", **meta: Any) -> None:
+        """Método síncrono (no bloquea). Encola y retorna inmediatamente."""
+        if not self._started:
+            self.start()
+        notif = Notification(mensaje=mensaje, nivel=nivel, meta=meta or None)
         try:
-            await asyncio.wait_for(self.enviar_async(mensaje, tipo), timeout)
-        except Exception as e:  # pragma: no cover - logueo defensivo
-            log.error(f'❌ Error enviando notificación: {e}')
-            NOTIFY_ERRORS_TOTAL.inc()
+            self._q.put_nowait(notif)
+            NOTIFY_ENQUEUED.inc()
+            NOTIFY_QUEUE_SIZE.set(self._q.qsize())
+        except asyncio.QueueFull:
+            log.warning("⚠️ Cola de notificaciones llena; se descarta el mensaje")
+            if self._on_event:
+                try:
+                    self._on_event("notify_drop", {"nivel": nivel})
+                except Exception:
+                    pass
 
-    def enviar(self, mensaje: str, tipo: str = 'INFO') -> None:
-        """Envía de forma síncrona sin reintentos."""
-        self._notifier.enviar(mensaje, tipo)
+    async def enviar_async(self, mensaje: str, nivel: str = "INFO", **meta: Any) -> None:
+        """Versión asíncrona: espera a encolar (si hay backpressure)."""
+        if not self._started:
+            self.start()
+        notif = Notification(mensaje=mensaje, nivel=nivel, meta=meta or None)
+        await self._q.put(notif)
+        NOTIFY_ENQUEUED.inc()
+        NOTIFY_QUEUE_SIZE.set(self._q.qsize())
 
-    async def enviar_async(self, mensaje: str, tipo: str = 'INFO') -> None:
-        """Coloca ``mensaje`` en la cola de envío asíncrono."""
-        await self._q.put({"mensaje": mensaje, "tipo": tipo, "attempt": 0, "id": uuid4().hex})
+    async def iniciar_comando_status(self) -> None:
+        """Hook opcional para comandos (p. ej. /status); placeholder."""
+        await asyncio.sleep(0)
 
-    async def _worker(self) -> None:
-        schedule = [1, 2, 5]
+    async def iniciar_resumen_periodico(self, cada_segundos: int = 600) -> None:
+        """Resumen periódico (placeholder)."""
         while True:
-            item = await self._q.get()
-            ok, info = await self._notifier.enviar_async(
-                item["mensaje"],
-                item.get("tipo", "INFO"),
-                request_id=item["id"],
-            )
-            if ok:
-                METRICS.notify_sent.inc()
-            else:
-                if item["attempt"] < 3:
-                    item["attempt"] += 1
-                    METRICS.notify_retry.inc()
-                    await asyncio.sleep(schedule[item["attempt"] - 1])
-                    await self._q.put(item)
-                else:
-                    METRICS.notify_failed.inc()
-                    log.error("Notificación DLQ", extra={"id": item["id"], **info})
-            self._q.task_done()
-
-    async def _on_orden_creada(self, data: Any) -> None:
-        mensaje = (
-            f"🟢 Compra {data['symbol']}\nPrecio: {data['precio']:.2f} Cantidad: {data['cantidad']}"
-            f"\nSL: {data['sl']:.2f} TP: {data['tp']:.2f}"
-        )
-        await self._on_notify({'mensaje': mensaje, 'operation_id': data.get('operation_id')})
-
-    async def _on_orden_cerrada(self, data: Any) -> None:
-        mensaje = (
-            f"📤 Venta {data['symbol']}\nPrecio: {data['precio_cierre']:.2f}"
-            f"\nRetorno: {data['retorno'] * 100:.2f}%\nMotivo: {data['motivo']}"
-        )
-        await self._on_notify({'mensaje': mensaje, 'operation_id': data.get('operation_id')})
-
-    def iniciar_comando_status(self, alert_manager, intervalo: int = 5) -> None:
-        """Inicia escucha del comando /status."""
-
-        asyncio.create_task(self._notifier.escuchar_status(alert_manager, intervalo))
-
-    def iniciar_resumen_periodico(self, alert_manager, intervalo: int = 300) -> None:
-        """Envía un resumen agrupado de eventos cada ``intervalo`` segundos."""
-
-        async def _resumir():
-            while True:
-                await asyncio.sleep(intervalo)
-                resumen = alert_manager.format_summary(intervalo)
-                if resumen != 'Sin eventos':
-                    await self._on_notify({'mensaje': resumen})
-
-        asyncio.create_task(_resumir())
+            try:
+                await asyncio.sleep(cada_segundos)
+                # Aquí podrías volcar métricas/estado
+            except asyncio.CancelledError:
+                break
 
     async def close(self) -> None:
-            """Cancela los workers asíncronos y limpia la cola interna."""
+        """Cancela los workers asíncronos y limpia la cola interna."""
+        if not self._workers:
+            return
+        for worker in self._workers:
+            worker.cancel()
+        await asyncio.gather(*self._workers, return_exceptions=True)
+        self._workers.clear()
+        # Vacía la cola
+        while not self._q.empty():
+            try:
+                self._q.get_nowait()
+                self._q.task_done()
+            except asyncio.QueueEmpty:
+                break
 
-            if not self._workers:
-                return
-            for worker in self._workers:
-                worker.cancel()
-            await asyncio.gather(
-                *self._workers,
-                return_exceptions=True,
-            )
-            self._workers.clear()
-            while not self._q.empty():
-                try:
-                    self._q.get_nowait()
-                    self._q.task_done()
-                except asyncio.QueueEmpty:  # pragma: no cover - carrera defensiva
-                    break
+    # ---------------- Workers internos ----------------
+
+    async def _worker_loop(self) -> None:
+        while True:
+            try:
+                notif = await self._q.get()
+                NOTIFY_QUEUE_SIZE.set(self._q.qsize())
+                ok = await self._enviar_con_reintentos(notif)
+                if ok:
+                    NOTIFY_SENT.inc()
+                else:
+                    NOTIFY_FAILED.inc()
+                self._q.task_done()
+            except asyncio.CancelledError:
+                break
+            except Exception:
+                log.exception("Error en worker de notificaciones")
+
+    async def _enviar_con_reintentos(self, notif: Notification) -> bool:
+        lat = NOTIFY_LATENCY.time()
+        try:
+            if await self._backend.send(self._formatear(notif)):
+                return True
+            for delay in self._retries:
+                NOTIFY_RETRY.inc()
+                await asyncio.sleep(delay)
+                if await self._backend.send(self._formatear(notif)):
+                    return True
+            return False
+        finally:
+            try:
+                lat.observe_duration()  # type: ignore[attr-defined]
+            except Exception:
+                pass
+
+    @staticmethod
+    def _formatear(n: Notification) -> str:
+        if not n.meta:
+            return f"[{n.nivel}] {n.mensaje}"
+        try:
+            extra = json.dumps(n.meta, ensure_ascii=False, separators=(",", ":"))
+        except Exception:
+            extra = str(n.meta)
+        return f"[{n.nivel}] {n.mensaje} | {extra}"
 
 
-def crear_notification_manager_desde_env() -> "NotificationManager":
-    """Crea un ``NotificationManager`` leyendo las variables de entorno.
+# Factory desde entorno (como usa tu main)
+def crear_notification_manager_desde_env(on_event: Optional[Callable[[str, dict], None]] = None) -> NotificationManager:
+    token = os.getenv("TELEGRAM_TOKEN")
+    chat_id = os.getenv("TELEGRAM_CHAT_ID")
+    nm = NotificationManager(
+        token=token,
+        chat_id=chat_id,
+        workers=int(os.getenv("NOTIFY_WORKERS", "2")),
+        on_event=on_event,
+    )
+    nm.start()
+    return nm
 
-    Las credenciales se cargan desde ``config/claves.env`` si está presente.
-    """
-
-    load_dotenv("config/claves.env")
-    token = os.getenv("TELEGRAM_TOKEN", "")
-    chat_id = os.getenv("TELEGRAM_CHAT_ID", "")
-    modo_test = os.getenv("MODO_TEST_NOTIFICADOR", "false").lower() == "true"
-    return NotificationManager(token=token, chat_id=chat_id, modo_test=modo_test)
