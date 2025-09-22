@@ -1,37 +1,34 @@
 from dataclasses import dataclass, field
-from typing import Dict, List
+from typing import Dict, List, Optional
 import os
 from dotenv import load_dotenv
 from pathlib import Path
+
 from config.development import DevelopmentConfig
 from config.production import ProductionConfig
 from core.utils.utils import configurar_logger
+
 log = configurar_logger('config_manager')
 
 
-def _cargar_float(clave, valor_defecto):
+def _cargar_float(clave: str, valor_defecto) -> float:
     try:
         return float(os.getenv(clave, valor_defecto))
     except ValueError:
-        log.warning(
-            f'⚠️ Valor inválido para {clave}. Usando valor por defecto {valor_defecto}'
-            )
+        log.warning(f'⚠️ Valor inválido para {clave}. Usando valor por defecto {valor_defecto}')
         return float(valor_defecto)
 
 
-def _cargar_int(clave, valor_defecto):
+def _cargar_int(clave: str, valor_defecto) -> int:
     try:
         return int(os.getenv(clave, valor_defecto))
     except ValueError:
-        log.warning(
-            f'⚠️ Valor inválido para {clave}. Usando valor por defecto {valor_defecto}'
-            )
+        log.warning(f'⚠️ Valor inválido para {clave}. Usando valor por defecto {valor_defecto}')
         return int(valor_defecto)
 
 
 def _parse_int_mapping(clave: str) -> Dict[str, int]:
     """Parses mappings ``SIMBOLO:valor`` separados por coma en enteros."""
-
     resultado: Dict[str, int] = {}
     raw = os.getenv(clave, "")
     if not raw:
@@ -54,7 +51,6 @@ def _parse_int_mapping(clave: str) -> Dict[str, int]:
 
 def _parse_str_mapping(clave: str) -> Dict[str, str]:
     """Parses mappings ``SIMBOLO:valor`` separados por coma en strings."""
-
     resultado: Dict[str, str] = {}
     raw = os.getenv(clave, "")
     if not raw:
@@ -73,7 +69,6 @@ def _parse_str_mapping(clave: str) -> Dict[str, str]:
 
 def _parse_float_mapping(clave: str) -> Dict[str, float]:
     """Parses mappings ``SIMBOLO:valor`` en flotantes."""
-
     resultado: Dict[str, float] = {}
     raw = os.getenv(clave, "")
     if not raw:
@@ -97,20 +92,20 @@ def _parse_float_mapping(clave: str) -> Dict[str, float]:
 @dataclass(frozen=True)
 class Config:
     """Configuración inmutable cargada desde el entorno."""
-    api_key: str
-    api_secret: str
+    api_key: Optional[str]
+    api_secret: Optional[str]
     modo_real: bool
     intervalo_velas: str
     symbols: List[str]
     umbral_riesgo_diario: float
     min_order_eur: float
     diversidad_minima: int = 2
-    capital_currency: str | None = None
+    capital_currency: Optional[str] = None
     persistencia_minima: int = 1
     peso_extra_persistencia: float = 0.5
     modo_capital_bajo: bool = False
-    telegram_token: str | None = None
-    telegram_chat_id: str | None = None
+    telegram_token: Optional[str] = None
+    telegram_chat_id: Optional[str] = None
     umbral_score_tecnico: float = 2.0
     usar_score_tecnico: bool = True
     contradicciones_bloquean_entrada: bool = True
@@ -171,110 +166,93 @@ class ConfigManager:
     """Carga y proporciona acceso a la configuración del bot."""
 
     @staticmethod
-    def load_from_env() ->Config:
-        env_path = Path(__file__).resolve(
-            ).parent.parent / 'config' / 'claves.env'
+    def load_from_env() -> Config:
+        # Cargar .env local si existe (no rompe si falta)
+        env_path = Path(__file__).resolve().parent.parent / 'config' / 'claves.env'
         load_dotenv(env_path)
+
         env_name = os.getenv('BOT_ENV', 'development').lower()
         log_dir = os.getenv('LOG_DIR', 'logs')
+
         defaults = DevelopmentConfig()
         if env_name == 'production':
             defaults = ProductionConfig()
+
+        # Símbolos
         symbols_env = os.getenv('SYMBOLS', ','.join(defaults.symbols))
-        symbols = [s.strip().upper() for s in symbols_env.split(',') if s.
-            strip()]
+        symbols = [s.strip().upper() for s in symbols_env.split(',') if s.strip()]
+        if not symbols:
+            log.error('❌ Faltan símbolos (SYMBOLS)')
+            raise ValueError('Faltan datos de configuración: SYMBOLS')
+
+        # Flags globales
+        modo_real = os.getenv('MODO_REAL', str(defaults.modo_real)).lower() == 'true'
+
+        # Claves API (solo si modo_real)
         api_key = os.environ.get('BINANCE_API_KEY')
         api_secret = os.environ.get('BINANCE_API_SECRET')
-        missing = []
-        if not api_key:
-            missing.append('BINANCE_API_KEY')
-        if not api_secret:
-            missing.append('BINANCE_API_SECRET')
-        if not symbols:
-            missing.append('SYMBOLS')
-        if missing:
-            datos = ', '.join(missing)
-            log.error(f'❌ Faltan variables de entorno requeridas: {datos}')
-            raise ValueError(f'Faltan datos de configuración: {datos}')
+        if modo_real:
+            missing = []
+            if not api_key:
+                missing.append('BINANCE_API_KEY')
+            if not api_secret:
+                missing.append('BINANCE_API_SECRET')
+            if missing:
+                datos = ', '.join(missing)
+                log.error(f'❌ Faltan variables de entorno requeridas: {datos}')
+                raise ValueError(f'Faltan datos de configuración: {datos}')
+
+        # Capital
         capital_currency = os.getenv('CAPITAL_CURRENCY')
+
+        # DataFeed queue tuning
         df_queue_limits = dict(getattr(defaults, 'df_queue_limits', {}))
         df_queue_limits.update(_parse_int_mapping('DF_QUEUE_LIMITS'))
-        df_queue_policy_by_symbol = dict(
-            getattr(defaults, 'df_queue_policy_by_symbol', {})
-        )
+        df_queue_policy_by_symbol = dict(getattr(defaults, 'df_queue_policy_by_symbol', {}))
         df_queue_policy_by_symbol.update(_parse_str_mapping('DF_QUEUE_POLICIES'))
+
+        # Distancias
         min_dist_pct = _cargar_float('MIN_DIST_PCT', getattr(defaults, 'min_dist_pct', 0.0005))
         min_dist_pct_overrides = dict(getattr(defaults, 'min_dist_pct_overrides', {}))
         min_dist_pct_overrides.update(_parse_float_mapping('MIN_DIST_PCT_OVERRIDES'))
-        df_queue_default_limit = _cargar_int(
-            'DF_QUEUE_DEFAULT_LIMIT', getattr(defaults, 'df_queue_default_limit', 2000)
-        )
-        df_queue_policy = os.getenv(
-            'DF_QUEUE_POLICY', getattr(defaults, 'df_queue_policy', 'block')
-        ).lower()
-        df_queue_coalesce_ms = _cargar_int(
-            'DF_QUEUE_COALESCE_MS', getattr(defaults, 'df_queue_coalesce_ms', 0)
-        )
-        df_queue_high_watermark = _cargar_float(
-            'DF_QUEUE_HIGH_WATERMARK',
-            getattr(defaults, 'df_queue_high_watermark', 0.8),
-        )
-        df_queue_safety_policy = os.getenv(
-            'DF_QUEUE_SAFETY_POLICY',
-            getattr(defaults, 'df_queue_safety_policy', 'drop_oldest'),
-        ).lower()
-        df_queue_alert_interval = _cargar_float(
-            'DF_QUEUE_ALERT_INTERVAL',
-            getattr(defaults, 'df_queue_alert_interval', 5.0),
-        )
-        df_metrics_log_interval = _cargar_float(
-            'DF_METRICS_LOG_INTERVAL',
-            getattr(defaults, 'df_metrics_log_interval', 5.0),
-        )
-        trader_metrics_log_interval = _cargar_float(
-            'TRADER_METRICS_LOG_INTERVAL',
-            getattr(defaults, 'trader_metrics_log_interval', 5.0),
-        )
-        trader_fastpath_enabled = (
-            os.getenv(
-                'TRADER_FASTPATH_ENABLED',
-                str(getattr(defaults, 'trader_fastpath_enabled', True)),
-            ).lower()
-            == 'true'
-        )
-        trader_fastpath_threshold = _cargar_int(
-            'TRADER_FASTPATH_THRESHOLD',
-            getattr(defaults, 'trader_fastpath_threshold', 350),
-        )
-        trader_fastpath_recovery = _cargar_int(
-            'TRADER_FASTPATH_RECOVERY',
-            getattr(defaults, 'trader_fastpath_recovery', 200),
-        )
-        trader_fastpath_skip_notifications = (
-            os.getenv(
-                'TRADER_FASTPATH_SKIP_NOTIFICATIONS',
-                str(getattr(defaults, 'trader_fastpath_skip_notifications', True)),
-            ).lower()
-            == 'true'
-        )
-        trader_fastpath_skip_entries = (
-            os.getenv(
-                'TRADER_FASTPATH_SKIP_ENTRIES',
-                str(getattr(defaults, 'trader_fastpath_skip_entries', True)),
-            ).lower()
-            == 'true'
-        )
-        trader_fastpath_skip_trend = (
-            os.getenv(
-                'TRADER_FASTPATH_SKIP_TREND',
-                str(getattr(defaults, 'trader_fastpath_skip_trend', True)),
-            ).lower()
-            == 'true'
-        )
+
+        # Queue defaults / policy
+        df_queue_default_limit = _cargar_int('DF_QUEUE_DEFAULT_LIMIT', getattr(defaults, 'df_queue_default_limit', 2000))
+        df_queue_policy = os.getenv('DF_QUEUE_POLICY', getattr(defaults, 'df_queue_policy', 'block')).lower()
+        df_queue_coalesce_ms = _cargar_int('DF_QUEUE_COALESCE_MS', getattr(defaults, 'df_queue_coalesce_ms', 0))
+        df_queue_high_watermark = _cargar_float('DF_QUEUE_HIGH_WATERMARK', getattr(defaults, 'df_queue_high_watermark', 0.8))
+        df_queue_safety_policy = os.getenv('DF_QUEUE_SAFETY_POLICY', getattr(defaults, 'df_queue_safety_policy', 'drop_oldest')).lower()
+        df_queue_alert_interval = _cargar_float('DF_QUEUE_ALERT_INTERVAL', getattr(defaults, 'df_queue_alert_interval', 5.0))
+        df_metrics_log_interval = _cargar_float('DF_METRICS_LOG_INTERVAL', getattr(defaults, 'df_metrics_log_interval', 5.0))
+        trader_metrics_log_interval = _cargar_float('TRADER_METRICS_LOG_INTERVAL', getattr(defaults, 'trader_metrics_log_interval', 5.0))
+
+        # Fastpath
+        trader_fastpath_enabled = os.getenv(
+            'TRADER_FASTPATH_ENABLED',
+            str(getattr(defaults, 'trader_fastpath_enabled', True)),
+        ).lower() == 'true'
+        trader_fastpath_threshold = _cargar_int('TRADER_FASTPATH_THRESHOLD', getattr(defaults, 'trader_fastpath_threshold', 350))
+        trader_fastpath_recovery = _cargar_int('TRADER_FASTPATH_RECOVERY', getattr(defaults, 'trader_fastpath_recovery', 200))
+        trader_fastpath_skip_notifications = os.getenv(
+            'TRADER_FASTPATH_SKIP_NOTIFICATIONS',
+            str(getattr(defaults, 'trader_fastpath_skip_notifications', True)),
+        ).lower() == 'true'
+        trader_fastpath_skip_entries = os.getenv(
+            'TRADER_FASTPATH_SKIP_ENTRIES',
+            str(getattr(defaults, 'trader_fastpath_skip_entries', True)),
+        ).lower() == 'true'
+        trader_fastpath_skip_trend = os.getenv(
+            'TRADER_FASTPATH_SKIP_TREND',
+            str(getattr(defaults, 'trader_fastpath_skip_trend', True)),
+        ).lower() == 'true'
+
+        # Timeouts por símbolo (nuevo: se toma de env si existe)
+        timeout_evaluar_por_symbol = _parse_int_mapping('TIMEOUT_EVALUAR_CONDICIONES_POR_SYMBOL')
+
         return Config(
             api_key=api_key,
             api_secret=api_secret,
-            modo_real=os.getenv('MODO_REAL', str(defaults.modo_real)).lower() == 'true',
+            modo_real=modo_real,
             intervalo_velas=os.getenv('INTERVALO_VELAS', defaults.intervalo_velas),
             symbols=symbols,
             umbral_riesgo_diario=_cargar_float('UMBRAL_RIESGO_DIARIO', defaults.umbral_riesgo_diario),
@@ -294,9 +272,9 @@ class ConfigManager:
             umbral_confirmacion_macro=_cargar_float('UMBRAL_CONFIRMACION_MACRO', getattr(defaults, 'umbral_confirmacion_macro', 0.6)),
             min_dist_pct=min_dist_pct,
             min_dist_pct_overrides=min_dist_pct_overrides,
-            fracciones_piramide=int(os.getenv('FRACCIONES_PIRAMIDE', defaults.fracciones_piramide)),
-            reserva_piramide=float(os.getenv('RESERVA_PIRAMIDE', defaults.reserva_piramide)),
-            umbral_piramide=float(os.getenv('UMBRAL_PIRAMIDE', defaults.umbral_piramide)),
+            fracciones_piramide=_cargar_int('FRACCIONES_PIRAMIDE', defaults.fracciones_piramide),
+            reserva_piramide=_cargar_float('RESERVA_PIRAMIDE', defaults.reserva_piramide),
+            umbral_piramide=_cargar_float('UMBRAL_PIRAMIDE', defaults.umbral_piramide),
             max_perdidas_diarias=_cargar_int('MAX_PERDIDAS_DIARIAS', defaults.max_perdidas_diarias),
             volumen_min_relativo=_cargar_float('VOLUMEN_MIN_RELATIVO', defaults.volumen_min_relativo),
             max_spread_ratio=_cargar_float('MAX_SPREAD_RATIO', defaults.max_spread_ratio),
@@ -339,5 +317,6 @@ class ConfigManager:
             trader_fastpath_skip_notifications=trader_fastpath_skip_notifications,
             trader_fastpath_skip_entries=trader_fastpath_skip_entries,
             trader_fastpath_skip_trend=trader_fastpath_skip_trend,
-            timeout_evaluar_condiciones_por_symbol={},
+            timeout_evaluar_condiciones_por_symbol=timeout_evaluar_por_symbol,
         )
+
