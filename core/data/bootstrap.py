@@ -2,8 +2,9 @@ import os
 import time
 import asyncio
 from pathlib import Path
-from typing import Any, Dict, Tuple, Optional, Set, Iterable
+from typing import Any, Dict, Tuple, Optional, Set, Iterable, List
 import pandas as pd
+
 from binance_api.cliente import fetch_ohlcv_async, obtener_cliente
 from core.metrics import registrar_warmup_progress
 from core.utils.utils import configurar_logger
@@ -16,21 +17,28 @@ CACHE_TTL = int(os.getenv('WARMUP_CACHE_TTL', '300'))
 _cache_dir = Path('estado/cache')
 _cache_dir.mkdir(parents=True, exist_ok=True)
 
+# symbol -> (tf, cliente, min_bars)
 _config: Dict[str, Tuple[str, Any, int]] = {}
 _pending_fetch: Set[str] = set()
 _warned: Set[str] = set()
+# Progreso por símbolo (0..1)
 _progress: Dict[str, float] = {}
 
 
 def _cache_path(symbol: str, tf: str) -> Path:
-    sanitized = symbol.replace('/', '_')
+    sanitized = symbol.replace('/', '_').upper()
     return _cache_dir / f"{sanitized}_{tf}.csv"
 
 
 def _update_progress(symbol: str, count: int, target: int = MIN_BARS) -> None:
-    progress = min(1.0, count / target)
+    target = max(1, int(target))
+    progress = min(1.0, max(0.0, count / target))
     _progress[symbol] = progress
-    registrar_warmup_progress(symbol, progress)
+    try:
+        registrar_warmup_progress(symbol, progress)
+    except Exception:
+        # Métricas opcionales; no debe romper el warmup
+        pass
 
 
 def get_progress(symbol: str) -> float:
@@ -55,65 +63,91 @@ def pending_symbols() -> Set[str]:
     return set(_pending_fetch)
 
 
+def _normalize_df(df: pd.DataFrame) -> pd.DataFrame:
+    """Asegura columnas esperadas, orden y tipos básicos."""
+    cols = ['timestamp', 'open', 'high', 'low', 'close', 'volume']
+    # Asegurar columnas
+    df = df.reindex(columns=cols, fill_value=None)
+    # Coerciones seguras
+    with pd.option_context('mode.use_inf_as_na', True):
+        df['timestamp'] = pd.to_numeric(df['timestamp'], errors='coerce').astype('Int64')
+        for c in ['open', 'high', 'low', 'close', 'volume']:
+            df[c] = pd.to_numeric(df[c], errors='coerce')
+        df = df.dropna(subset=['timestamp', 'open', 'high', 'low', 'close']).copy()
+    # Asegurar orden ascendente y sin duplicados
+    df = df.sort_values('timestamp', kind='mergesort')
+    df = df.drop_duplicates(subset=['timestamp'], keep='last')
+    # Convertir timestamp a int64 nativo si es posible
+    if pd.api.types.is_integer_dtype(df['timestamp']):
+        df['timestamp'] = df['timestamp'].astype('int64')
+    return df
+
+
 async def warmup_symbol(
     symbol: str, tf: str, cliente, min_bars: int = MIN_BARS
 ) -> Optional[pd.DataFrame]:
-    """Carga ``min_bars`` de histórico para ``symbol`` usando caché cuando es válido.
+    """Carga ``min_bars`` de histórico para ``symbol`` usando caché cuando es válida.
 
-    Si la caché contiene menos velas de las requeridas, se ignora y se solicita
-    nuevamente el histórico completo. De esta forma nos aseguramos de que el
-    parámetro ``min_bars`` tenga efecto aun cuando existan archivos previos.
-
-    Devuelve ``None`` cuando no se logra reunir la cantidad solicitada.
+    Devuelve un DataFrame normalizado (ascendente por timestamp) con exactamente
+    ``min_bars`` filas si fue posible, o ``None`` si no se alcanzó el mínimo.
     """
-    _config[symbol] = (tf, cliente, min_bars)
-    path = _cache_path(symbol, tf)
+    symbol_u = symbol.upper()
+    _config[symbol_u] = (tf, cliente, int(min_bars))
+
+    path = _cache_path(symbol_u, tf)
     df: Optional[pd.DataFrame] = None
+
+    # Intentar usar caché si es reciente
     if path.exists() and (time.time() - path.stat().st_mtime) < CACHE_TTL:
         try:
             tmp = pd.read_csv(
                 path,
                 dtype={
                     'timestamp': 'int64',
-                    'open': 'float',
-                    'high': 'float',
-                    'low': 'float',
-                    'close': 'float',
-                    'volume': 'float',
+                    'open': 'float64',
+                    'high': 'float64',
+                    'low': 'float64',
+                    'close': 'float64',
+                    'volume': 'float64',
                 },
             )
+            tmp = _normalize_df(tmp)
             if len(tmp) >= min_bars:
                 df = tmp
         except Exception:
             log.exception(f'Error leyendo caché {path}, ignorando')
+
+    # Si no hay caché válida, pedir a la API
     if df is None:
         try:
-            ohlcv = await fetch_ohlcv_async(cliente, symbol, tf, limit=min_bars)
+            ohlcv = await fetch_ohlcv_async(cliente, symbol_u, tf, limit=int(min_bars))
         except Exception as e:
-            log.warning(f'⚠️ Error obteniendo histórico de {symbol}: {e}')
+            log.warning(f'⚠️ Error obteniendo histórico de {symbol_u}: {e}')
             df = pd.DataFrame()
         else:
             df = pd.DataFrame(
                 ohlcv,
                 columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'],
             )
+            df = _normalize_df(df)
+            # Persistir caché (best-effort)
             try:
                 df.to_csv(path, index=False)
             except Exception:
                 log.exception(f'Error guardando caché {path}')
+
     if df is None:
         df = pd.DataFrame()
-    count = len(df)
-    _update_progress(symbol, count, min_bars)
+
+    count = int(len(df))
+    _update_progress(symbol_u, count, min_bars)
+
     if count < min_bars:
-        log.error(
-            '❌ Warmup incompleto para %s: %s/%s velas disponibles',
-            symbol,
-            count,
-            min_bars,
-        )
+        log.error('❌ Warmup incompleto para %s: %s/%s velas disponibles', symbol_u, count, min_bars)
         return None
-    return df.tail(min_bars)
+
+    # Mantener exactamente min_bars últimas velas
+    return df.tail(int(min_bars)).copy()
 
 
 async def warmup_inicial(
@@ -121,23 +155,32 @@ async def warmup_inicial(
 ) -> None:
     """Calienta símbolos en paralelo y asegura progreso mínimo.
 
-    Se lanza al arrancar para evitar advertencias de datos insuficientes
-    antes de evaluar estrategias.
+    - Convierte ``symbols`` a lista para evitar consumir iteradores dos veces.
+    - Reintenta selectivamente símbolos con progreso < umbral.
     """
-    cliente = obtener_cliente()
-    target = min_bars if min_bars is not None else MIN_BARS
-    await asyncio.gather(
-        *(warmup_symbol(s, tf, cliente, min_bars=target) for s in symbols)
-    )
-    umbral = 0.9
-    for s in symbols:
-        if get_progress(s) < umbral:
-            await warmup_symbol(s, tf, cliente, min_bars=target)
+    symbols_list: List[str] = [s.upper() for s in symbols]
+    try:
+        cliente = obtener_cliente()
+    except Exception as e:
+        log.warning(f'⚠️ No se pudo obtener cliente: {e}')
+        cliente = None
+
+    target = int(min_bars if min_bars is not None else MIN_BARS)
+
+    # Lanzar warmup en paralelo
+    await asyncio.gather(*(warmup_symbol(s, tf, cliente, min_bars=target) for s in symbols_list))
+
+    # Reintentos selectivos bajo umbral
+    umbral = float(os.getenv('WARMUP_SUCCESS_THRESHOLD', '0.9'))
+    retry = [s for s in symbols_list if get_progress(s) < umbral]
+    for s in retry:
+        await warmup_symbol(s, tf, cliente, min_bars=target)
 
 
 def mark_warned(symbol: str) -> None:
-    _warned.add(symbol)
+    _warned.add(symbol.upper())
 
 
 def was_warned(symbol: str) -> bool:
-    return symbol in _warned
+    return symbol.upper() in _warned
+
