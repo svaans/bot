@@ -6,27 +6,14 @@ import threading
 import re
 import json
 import logging
-from contextlib import suppress
-from importlib import import_module
-from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Any, Iterable, Callable
-
 import pandas as pd
 import psutil
-
+from datetime import datetime, timezone
+from typing import TYPE_CHECKING, Iterable, Callable
+from pandas.tseries.frequencies import to_offset
 from .logger import configurar_logger
 from core.modo import MODO_REAL
 from core.registro_metrico import registro_metrico
-
-_frequencies_module: Any | None = None
-with suppress(Exception):
-    _frequencies_module = import_module('pandas.tseries.frequencies')
-
-if _frequencies_module and hasattr(_frequencies_module, 'to_offset'):
-    to_offset = getattr(_frequencies_module, 'to_offset')
-else:
-    def to_offset(value: str) -> str:
-        return value
 if TYPE_CHECKING:
     from core.order_model import Order
 from decimal import Decimal, InvalidOperation, ROUND_HALF_EVEN
@@ -55,19 +42,12 @@ _MAPA_SEGUNDOS_INTERVALO = {
 
 
 def intervalo_a_segundos(intervalo: str) -> int:
-    """Devuelve el equivalente en segundos de ``intervalo``.
-
-    Si el intervalo no está mapeado se devuelve ``60`` por defecto.
-    """
+    """Devuelve el equivalente en segundos de ``intervalo``."""
     return _MAPA_SEGUNDOS_INTERVALO.get(intervalo, 60)
 
 
 def timestamp_alineado(ts_ms: int, intervalo: str) -> bool:
-    """Verifica que ``ts_ms`` esté alineado al inicio del intervalo.
-
-    El timestamp debe venir en milisegundos y corresponder exactamente al
-    comienzo del bloque temporal definido por ``intervalo``.
-    """
+    """Verifica que ``ts_ms`` esté alineado al inicio del intervalo."""
     periodo = intervalo_a_segundos(intervalo) * 1000
     return ts_ms % periodo == 0
 
@@ -78,11 +58,7 @@ def validar_integridad_velas(
     log: logging.Logger,
     registrar_candles_duplicadas: Callable[[str, int], None] | None = None,
 ) -> bool:
-    """Verifica duplicados, huecos y desalineaciones en ``candles``.
-
-    Registra métricas y opcionalmente contabiliza duplicados mediante
-    ``registrar_candles_duplicadas``.
-    """
+    """Verifica duplicados, huecos y desalineaciones en ``candles``."""
     timestamps = sorted(int(float(c["timestamp"])) for c in candles if "timestamp" in c)
     if len(timestamps) < 2:
         return True
@@ -102,16 +78,12 @@ def validar_integridad_velas(
             desalineados += 1
         prev = curr
     if dupes:
-        registro_metrico.registrar(
-            "velas_duplicadas", {"symbol": symbol, "tf": tf, "count": dupes}
-        )
+        registro_metrico.registrar("velas_duplicadas", {"symbol": symbol, "tf": tf, "count": dupes})
         if registrar_candles_duplicadas:
             registrar_candles_duplicadas(symbol, dupes)
         log.warning(f"[{symbol}] {dupes} velas duplicadas detectadas en {tf}")
     if gaps:
-        registro_metrico.registrar(
-            "velas_gap", {"symbol": symbol, "tf": tf, "count": gaps}
-        )
+        registro_metrico.registrar("velas_gap", {"symbol": symbol, "tf": tf, "count": gaps})
         log.warning(f"[{symbol}] Gap de {gaps} velas en {tf}")
     if desalineados:
         log.error(f"[{symbol}] Timestamps desalineados en {tf}: {desalineados}")
@@ -119,12 +91,7 @@ def validar_integridad_velas(
 
 
 def safe_resample(df: pd.DataFrame, freq: str):
-    """Devuelve un resampler validado para ``df``.
-
-    Normaliza ``freq`` a minúsculas, reemplaza el alias ``T`` por ``min``
-    y valida la frecuencia con ``to_offset``. Lanza ``ValueError`` si la
-    frecuencia no es válida.
-    """
+    """Devuelve un resampler validado para ``df``."""
     norm = freq.lower().strip()
     if norm.endswith("t"):
         norm = norm[:-1] + "min"
@@ -145,43 +112,37 @@ def obtener_uso_recursos() -> tuple[float, float]:
     return cpu, memoria
 
 
-def respaldar_archivo(ruta):
+def respaldar_archivo(ruta: str) -> None:
     if os.path.exists(ruta):
         backup = ruta.replace('.json', '_backup.json')
         shutil.copy(ruta, backup)
 
 
-def is_valid_number(value) ->bool:
+def is_valid_number(value) -> bool:
     """Verifica si un valor es un número finito y válido."""
     try:
         num = float(value)
-        return not (pd.isna(num) or pd.isnull(num) or num != num or num in
-            [float('inf'), float('-inf')])
+        return not (pd.isna(num) or num != num or num in [float('inf'), float('-inf')])
     except (ValueError, TypeError):
         return False
 
 
-def guardar_operacion_en_csv(symbol, info, ruta=ORDENES_DIR, intentos: int = 3):
+def guardar_operacion_en_csv(symbol: str, info: dict, ruta: str = ORDENES_DIR, intentos: int = 3) -> None:
     os.makedirs(ruta, exist_ok=True)
-    archivo = os.path.join(ruta,
-        f"ordenes_{symbol.replace('/', '_')}_resultado.csv")
-    columnas_orden = ['symbol', 'precio_entrada', 'precio_cierre',
-        'retorno_total', 'stop_loss', 'take_profit', 'cantidad',
-        'motivo_cierre', 'fecha_cierre', 'estrategias_activas']
+    archivo = os.path.join(ruta, f"ordenes_{symbol.replace('/', '_')}_resultado.csv")
+    columnas_orden = [
+        'symbol', 'precio_entrada', 'precio_cierre', 'retorno_total', 'stop_loss', 'take_profit',
+        'cantidad', 'motivo_cierre', 'fecha_cierre', 'estrategias_activas'
+    ]
     if isinstance(info.get('estrategias_activas'), dict):
         info['estrategias_activas'] = json.dumps(info['estrategias_activas'])
-    if 'retorno_total' not in info or not isinstance(info['retorno_total'],
-        (float, int)):
+    if 'retorno_total' not in info or not isinstance(info['retorno_total'], (float, int)):
         try:
             entrada = float(info.get('precio_entrada', 0))
             cierre = float(info.get('precio_cierre', 0))
-            if entrada > 0:
-                info['retorno_total'] = round((cierre - entrada) / entrada, 6)
-            else:
-                info['retorno_total'] = 0.0
+            info['retorno_total'] = round((cierre - entrada) / entrada, 6) if entrada > 0 else 0.0
         except ValueError as e:
-            log.warning(f'⚠️ Error calculando retorno_total para {symbol}: {e}'
-                )
+            log.warning(f'⚠️ Error calculando retorno_total para {symbol}: {e}')
             info['retorno_total'] = 0.0
     fila = {col: info.get(col, '') for col in columnas_orden}
     df = pd.DataFrame([fila])
@@ -199,21 +160,14 @@ def guardar_operacion_en_csv(symbol, info, ruta=ORDENES_DIR, intentos: int = 3):
                 time.sleep(1)
 
 
-def validar_dataframe(df, columnas):
-    return df is not None and not df.empty and all(col in df.columns for
-        col in columnas)
+def validar_dataframe(df: pd.DataFrame, columnas: list[str]) -> bool:
+    return df is not None and not df.empty and all(col in df.columns for col in columnas)
 
 
 def verificar_integridad_datos(
     df: pd.DataFrame, max_gap_pct: float = 0.5
 ) -> tuple[bool, pd.DataFrame]:
-    """Comprueba valores nulos y gaps en ``df``.
-
-    Devuelve una tupla ``(ok, df_limpio)`` sin modificar el DataFrame original.
-
-    Si se detectan NaNs, gaps temporales amplios o variaciones extremas,
-    ``ok`` será ``False``.
-    """
+    """Comprueba valores nulos y gaps en ``df`` y devuelve (ok, df_limpio)."""
     if df is None or df.empty:
         return False, df
 
@@ -225,9 +179,6 @@ def verificar_integridad_datos(
         return False, df_limpio
 
     if 'timestamp' in df_limpio.columns:
-        # ``timestamp`` llega en milisegundos desde epoch; sin especificar la
-        # unidad Pandas asume nanosegundos, lo que puede generar fechas de 1970
-        # o valores NaT y producir falsos positivos al buscar gaps.
         ts = pd.to_datetime(df_limpio['timestamp'], unit='ms', errors='coerce')
         if ts.isna().any():
             return False, df_limpio
@@ -246,8 +197,7 @@ def verificar_integridad_datos(
     return True, df_limpio
 
 
-def validar_tp(tp: float, precio: float, max_relativo: float=1.05,
-    max_absoluto: float=0.03) ->float:
+def validar_tp(tp: float, precio: float, max_relativo: float = 1.05, max_absoluto: float = 0.03) -> float:
     """Limita el Take Profit a valores razonables."""
     limite_rel = precio * max_relativo
     limite_abs = precio * (1 + max_absoluto)
@@ -258,25 +208,17 @@ def validar_tp(tp: float, precio: float, max_relativo: float=1.05,
     return tp
 
 
-def distancia_minima_valida(precio: float, sl: float, tp: float, min_pct:
-    float=0.0005) ->bool:
-    """Comprueba que SL y TP estén a una distancia mínima de ``precio``.
-
-    La distancia se evalúa en términos porcentuales de ``precio``. Si
-    cualquiera de los niveles está demasiado cerca se considera inválido.
-    """
-    return abs(precio - sl) >= precio * min_pct and abs(tp - precio
-        ) >= precio * min_pct
+def distancia_minima_valida(precio: float, sl: float, tp: float, min_pct: float = 0.0005) -> bool:
+    """Comprueba que SL y TP estén a una distancia mínima de ``precio``."""
+    return abs(precio - sl) >= precio * min_pct and abs(tp - precio) >= precio * min_pct
 
 
-def margen_tp_sl_valido(tp: float, sl: float, precio_actual: float, min_pct:
-    float=0.0005) ->bool:
+def margen_tp_sl_valido(tp: float, sl: float, precio_actual: float, min_pct: float = 0.0005) -> bool:
     """Valida que la distancia entre TP y SL sea suficiente."""
     return abs(tp - sl) >= precio_actual * min_pct
 
 
-def validar_ratio_beneficio(entrada: float, sl: float, tp: float,
-    ratio_minimo: float) ->bool:
+def validar_ratio_beneficio(entrada: float, sl: float, tp: float, ratio_minimo: float) -> bool:
     """Comprueba que el ratio beneficio/riesgo cumpla el mínimo requerido."""
     riesgo = entrada - sl
     beneficio = tp - entrada
@@ -285,7 +227,7 @@ def validar_ratio_beneficio(entrada: float, sl: float, tp: float,
     return beneficio / riesgo >= ratio_minimo
 
 
-def segundos_transcurridos(timestamp_iso):
+def segundos_transcurridos(timestamp_iso) -> float:
     """Devuelve los segundos transcurridos desde un timestamp ISO o epoch."""
     try:
         if isinstance(timestamp_iso, (int, float)):
@@ -303,37 +245,29 @@ def segundos_transcurridos(timestamp_iso):
         return (ahora - inicio).total_seconds()
     except (ValueError, TypeError) as e:
         log.warning(f'⚠️ Error calculando segundos desde {timestamp_iso}: {e}')
-        return 0
+        return 0.0
 
 
-def leer_csv_seguro(ruta: str, log_lineas=None, expected_cols: (int | None)
-    =None) ->pd.DataFrame:
-    """Carga ``ruta`` ignorando líneas corruptas y evitando interrupciones."""
+def leer_csv_seguro(ruta: str, log_lineas=None, expected_cols: int | None = None) -> pd.DataFrame:
+    """Carga ``ruta`` ignorando líneas corruptas."""
     logger = configurar_logger('csv_reader', modo_silencioso=True)
     line_logger = None
     if log_lineas:
-        line_logger = log_lineas if hasattr(log_lineas, 'warning'
-            ) else configurar_logger('csv_corrupto', modo_silencioso=True)
+        line_logger = log_lineas if hasattr(log_lineas, 'warning') else configurar_logger('csv_corrupto', modo_silencioso=True)
     try:
         df = pd.read_csv(ruta)
         if expected_cols and df.shape[1] < expected_cols:
-            logger.warning(
-                f'⚠️ {ruta} tiene {df.shape[1]} columnas (<{expected_cols}). Reintentando con líneas omitidas'
-                )
+            logger.warning(f'⚠️ {ruta} tiene {df.shape[1]} columnas (<{expected_cols}). Reintentando con líneas omitidas')
             df = pd.read_csv(ruta, on_bad_lines='skip')
         return df
     except pd.errors.ParserError as e:
-        logger.warning(
-            f'⚠️ Error leyendo archivo {ruta}: {e}. Reintentando con líneas omitidas'
-            )
+        logger.warning(f'⚠️ Error leyendo archivo {ruta}: {e}. Reintentando con líneas omitidas')
         if line_logger:
-
-            def _bad_line(line: list[str]) ->None:
+            def _bad_line(line: list[str]) -> None:
                 line_logger.warning(f'{ruta} => {line}')
                 return None
             try:
-                return pd.read_csv(ruta, on_bad_lines=_bad_line, engine=
-                    'python')
+                return pd.read_csv(ruta, on_bad_lines=_bad_line, engine='python')
             except Exception as err:
                 logger.error(f'❌ No se pudo recuperar {ruta}: {err}')
                 return pd.DataFrame()
@@ -350,19 +284,14 @@ def leer_csv_seguro(ruta: str, log_lineas=None, expected_cols: (int | None)
         return pd.DataFrame()
 
 
-def leer_reporte_seguro(path: str, columnas_esperadas: int=24) ->pd.DataFrame:
+def leer_reporte_seguro(path: str, columnas_esperadas: int = 24) -> pd.DataFrame:
     """Lee un reporte diario garantizando la estructura correcta."""
     try:
         df = pd.read_csv(path)
         if df.shape[1] < columnas_esperadas:
-            raise ValueError(
-                f'📛 Columnas esperadas: {columnas_esperadas}, encontradas: {df.shape[1]}'
-                )
+            raise ValueError(f'📛 Columnas esperadas: {columnas_esperadas}, encontradas: {df.shape[1]}')
         if df.shape[1] > columnas_esperadas:
-            log.warning(
-                f'⚠️ Columnas extras detectadas en {path}: {df.shape[1]}. '
-                f'Se recortarán a {columnas_esperadas}.'
-            )
+            log.warning(f'⚠️ Columnas extras detectadas en {path}: {df.shape[1]}. Se recortarán a {columnas_esperadas}.')
             df = df.iloc[:, :columnas_esperadas]
         return df
     except Exception as e:
@@ -370,11 +299,13 @@ def leer_reporte_seguro(path: str, columnas_esperadas: int=24) ->pd.DataFrame:
         return pd.DataFrame()
 
 
-def dividir_dataframe_en_bloques(df, n_bloques=10):
+def dividir_dataframe_en_bloques(df: pd.DataFrame, n_bloques: int = 10) -> list[pd.DataFrame]:
     """Divide ``df`` en ``n_bloques`` del mismo tamaño."""
     bloques = []
     total = len(df)
-    tam_bloque = total // n_bloques
+    if n_bloques <= 0:
+        return [df.copy()]
+    tam_bloque = max(1, total // n_bloques)
     for i in range(n_bloques):
         inicio = i * tam_bloque
         fin = (i + 1) * tam_bloque if i < n_bloques - 1 else total
@@ -385,7 +316,7 @@ def dividir_dataframe_en_bloques(df, n_bloques=10):
 lock_archivo = threading.Lock()
 
 
-def guardar_orden_simulada(symbol: str, nueva_orden: dict):
+def guardar_orden_simulada(symbol: str, nueva_orden: dict) -> None:
     archivo = f"ordenes_simuladas/{symbol.replace('/', '_').lower()}.parquet"
     for intento in range(3):
         try:
@@ -406,51 +337,39 @@ def guardar_orden_simulada(symbol: str, nueva_orden: dict):
         except ValueError as e:
             try:
                 timestamp = int(time.time())
-                corrupto = archivo.replace('.parquet',
-                    f'_corrupto_{timestamp}.parquet')
+                corrupto = archivo.replace('.parquet', f'_corrupto_{timestamp}.parquet')
                 os.rename(archivo, corrupto)
-                log.warning(
-                    f'⚠️ Archivo corrupto renombrado: {archivo} → {corrupto} — Error: {e}'
-                    )
+                log.warning(f'⚠️ Archivo corrupto renombrado: {archivo} → {corrupto} — Error: {e}')
             except OSError as err:
                 log.error(f'❌ Error al renombrar archivo corrupto: {err}')
                 raise
             ordenes = [nueva_orden]
         except PermissionError:
-            log.error(f'⏳ Archivo en uso ({archivo}) — intento {intento + 1}/3'
-                )
+            log.error(f'⏳ Archivo en uso ({archivo}) — intento {intento + 1}/3')
             time.sleep(0.5)
         except Exception as e:
             log.error(f'❌ Error inesperado guardando orden simulada: {e}')
             raise
-    log.error(
-        f'❌ No se pudo guardar la orden simulada para {symbol} tras 3 intentos.'
-        )
+    log.error(f'❌ No se pudo guardar la orden simulada para {symbol} tras 3 intentos.')
 
 
-def guardar_orden_real(symbol: str, orden: (dict | Order)):
-    """
-    Guarda una orden real en un archivo Parquet por símbolo de forma segura, eficiente y precisa.
-    """
+def guardar_orden_real(symbol: str, orden: dict | Order) -> None:
+    """Guarda una orden real en un archivo Parquet por símbolo."""
     try:
-        data = orden.to_parquet_record() if hasattr(orden, 'to_parquet_record'
-            ) else orden.copy()
+        data = orden.to_parquet_record() if hasattr(orden, 'to_parquet_record') else orden.copy()
     except Exception as e:
         log.error(f'❌ No se pudo convertir la orden a formato Parquet: {e}')
         return
     archivo = f"ordenes_reales/{symbol.replace('/', '_').lower()}.parquet"
     os.makedirs(os.path.dirname(archivo), exist_ok=True)
-    campos_flotantes = ['precio_entrada', 'precio_cierre', 'cantidad',
-        'stop_loss', 'take_profit', 'retorno_total']
+    campos_flotantes = ['precio_entrada', 'precio_cierre', 'cantidad', 'stop_loss', 'take_profit', 'retorno_total']
     for campo in campos_flotantes:
         try:
             valor = data.get(campo)
             if valor is not None:
                 data[campo] = float(round_decimal(valor, 8))
         except (InvalidOperation, TypeError):
-            log.warning(
-                f'⚠️ Valor inválido en campo {campo}: {valor}. Se asignará 0.0'
-                )
+            log.warning(f'⚠️ Valor inválido en campo {campo}: {valor}. Se asignará 0.0')
             data[campo] = 0.0
     if isinstance(data.get('timestamp'), (pd.Timestamp, datetime)):
         data['timestamp'] = data['timestamp'].timestamp()
@@ -463,11 +382,9 @@ def guardar_orden_real(symbol: str, orden: (dict | Order)):
                 try:
                     df = pd.read_parquet(archivo)
                     data_set = {json.dumps(data, sort_keys=True)}
-                    ordenes = [o for o in df.to_dict('records') if json.
-                        dumps(o, sort_keys=True) not in data_set]
+                    ordenes = [o for o in df.to_dict('records') if json.dumps(o, sort_keys=True) not in data_set]
                 except (OSError, ValueError) as e:
-                    backup = archivo.replace('.parquet',
-                        f'_corrupto_{int(datetime.now().timestamp())}.parquet')
+                    backup = archivo.replace('.parquet', f'_corrupto_{int(datetime.now().timestamp())}.parquet')
                     os.rename(archivo, backup)
                     log.warning(f'⚠️ Archivo corrupto renombrado: {backup}')
                     ordenes = []
@@ -477,3 +394,4 @@ def guardar_orden_real(symbol: str, orden: (dict | Order)):
     except Exception as e:
         log.error(f'❌ Error guardando orden real en {archivo}: {e}')
         raise
+

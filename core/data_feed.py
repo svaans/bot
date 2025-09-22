@@ -1,36 +1,24 @@
 """
-Versión simplificada de DataFeed para limpiar complejidad innecesaria.
-- Enfoque: mínimo viable y estable para ingesta de velas cerradas.
-- Mantiene: backfill básico, cola por símbolo con backpressure (drop_oldest|block),
-  timeout del handler, reinicio por inactividad, opción combinado vs individual sin duplicaciones.
-- Elimina: coalesce en cola, políticas múltiples por símbolo, exceso de métricas y contadores,
-  notificador complejo (se reemplaza por callbacks), contadores poco accionables.
+DataFeed — Ingesta mínima y estable de velas cerradas con backfill.
 
-Dependencias esperadas (del proyecto original):
-- binance_api.websocket: escuchar_velas, escuchar_velas_combinado, InactividadTimeoutError
-- binance_api.cliente: fetch_ohlcv_async
-- core.utils: intervalo_a_segundos, validar_integridad_velas, timestamp_alineado
-- core.utils.logger: configurar_logger
-- config.config: BACKFILL_MAX_CANDLES
+Compatibilidad esperada:
+- Usado por Trader/StartupManager:
+  - Atributos: .activos (prop), ._managed_by_trader (flag opcional)
+  - Métodos: precargar(), escuchar(), iniciar()/start(), detener()
+  - Utilidad: verificar_continuidad()
 
-API principal:
-- DataFeedLite(intervalo, *, handler_timeout=2.0, inactivity_intervals=10,
-               queue_max=2000, queue_policy="drop_oldest", monitor_interval=5,
-               backpressure=True, cancel_timeout=5,
-               on_event: callable | None = None)
-- escuchar(symbols, handler, cliente=None)
-- iniciar()  (relanza con la última config)
-- detener()
-
-Eventos (si se pasa on_event): on_event(evento: str, data: dict) -> None
+Notas:
+- Elimina dependencia dura de config.config.BACKFILL_MAX_CANDLES.
+- Añade is_active() y start() como alias de iniciar() para compat.
 """
 from __future__ import annotations
+
 import asyncio
 import os
 import random
 import time
 from typing import Any, Awaitable, Callable, Dict, Iterable, List
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone
 from enum import Enum
 from collections import defaultdict
 
@@ -40,20 +28,14 @@ from binance_api.websocket import (
     InactividadTimeoutError,
 )
 from binance_api.cliente import fetch_ohlcv_async
+from core.utils.utils import intervalo_a_segundos, validar_integridad_velas, timestamp_alineado
 from core.utils.logger import configurar_logger
-from core.utils import intervalo_a_segundos, validar_integridad_velas, timestamp_alineado
-try:
-    from config.config import BACKFILL_MAX_CANDLES
-except (ImportError, AttributeError):  # pragma: no cover - compatibilidad tests
-    BACKFILL_MAX_CANDLES = int(os.getenv("BACKFILL_MAX_CANDLES", "1000"))
 
 UTC = timezone.utc
 log = configurar_logger("datafeed", modo_silencioso=False)
 
 
 def _safe_float(value: Any, default: float) -> float:
-    """Convierte ``value`` a ``float`` devolviendo ``default`` ante error."""
-
     try:
         return float(value)
     except (TypeError, ValueError):
@@ -92,24 +74,23 @@ class DataFeed:
         self.tiempo_inactividad = self.intervalo_segundos * self.inactivity_intervals
         self.queue_max = max(0, queue_max)
         self.queue_policy = queue_policy if queue_policy in {"drop_oldest", "block"} else "drop_oldest"
+
         monitor_interval_value = _safe_float(monitor_interval, 5.0)
         self.monitor_interval = max(0.05, monitor_interval_value)
+
         if consumer_timeout_intervals is None:
-            consumer_timeout_intervals = _safe_float(
-                os.getenv("DF_CONSUMER_TIMEOUT_INTERVALS"),
-                1.5,
-            )
+            consumer_timeout_intervals = _safe_float(os.getenv("DF_CONSUMER_TIMEOUT_INTERVALS"), 1.5)
         consumer_timeout_intervals = _safe_float(consumer_timeout_intervals, 1.5)
         self.consumer_timeout_intervals = max(1.0, consumer_timeout_intervals)
+
         if consumer_timeout_min is None:
             consumer_timeout_min = _safe_float(os.getenv("DF_CONSUMER_TIMEOUT_MIN"), 30.0)
         consumer_timeout_min = _safe_float(consumer_timeout_min, 30.0)
         self.consumer_timeout_min = max(0.0, consumer_timeout_min)
+
         raw_consumer_timeout = self.intervalo_segundos * self.consumer_timeout_intervals
-        self.consumer_timeout = max(
-            self.consumer_timeout_min,
-            min(self.tiempo_inactividad, raw_consumer_timeout),
-        )
+        self.consumer_timeout = max(self.consumer_timeout_min, min(self.tiempo_inactividad, raw_consumer_timeout))
+
         self.backpressure = bool(backpressure)
         self.cancel_timeout = max(0.5, cancel_timeout)
         self.on_event = on_event
@@ -140,19 +121,25 @@ class DataFeed:
         # Backfill
         self.min_buffer_candles = int(os.getenv("MIN_BUFFER_CANDLES", "30"))
         self._last_backfill_ts: Dict[str, int] = {}
+        self._backfill_max = int(os.getenv("BACKFILL_MAX_CANDLES", "1000"))
 
-    # ---------------- API pública ----------------
+        # Bandera opcional de gestión (la pondrá TraderLite)
+        self._managed_by_trader: bool = bool(getattr(self, "_managed_by_trader", False))
+
+    # ---------- API pública ----------
     @property
     def activos(self) -> bool:
         """Indica si el feed tiene streams activos."""
-
         if not self._running:
             return False
         return any(not t.done() for t in self._tasks.values())
 
+    # Compat extra con StartupManager
+    def is_active(self) -> bool:
+        return self.activos
+
     def verificar_continuidad(self, *, max_gap_intervals: int | None = None) -> bool:
         """Verifica que los backfills previos no tengan huecos grandes."""
-
         if not self._symbols:
             return True
         intervalo_ms = self.intervalo_segundos * 1000
@@ -176,7 +163,6 @@ class DataFeed:
         minimo: int | None = None,
     ) -> None:
         """Realiza backfill manual para ``symbols`` sin iniciar el stream."""
-
         symbols_list = [s.upper() for s in symbols]
         if not symbols_list:
             return
@@ -191,8 +177,8 @@ class DataFeed:
             except (TypeError, ValueError):
                 pass
         try:
+            self._symbols = symbols_list
             for symbol in symbols_list:
-                self._symbols = symbols_list
                 await self._do_backfill(symbol)
         finally:
             if minimo is not None:
@@ -200,6 +186,7 @@ class DataFeed:
             self._symbols = prev_symbols
             if cliente is not None:
                 self._cliente = prev_cliente
+
     async def escuchar(
         self,
         symbols: Iterable[str],
@@ -223,11 +210,10 @@ class DataFeed:
             self._set_consumer_state(s, ConsumerState.STARTING)
             self._consumer_tasks[s] = asyncio.create_task(self._consumer(s), name=f"consumer_{s}")
 
-        # Monitores (inactividad + consumers)
+        # Monitores
         self._monitor_inactividad_task = asyncio.create_task(self._monitor_inactividad(), name="monitor_inactividad")
         self._monitor_consumers_task = asyncio.create_task(
-            self._monitor_consumers(self.consumer_timeout),
-            name="monitor_consumers",
+            self._monitor_consumers(self.consumer_timeout), name="monitor_consumers"
         )
 
         # Streams
@@ -248,6 +234,10 @@ class DataFeed:
             log.warning("No se puede iniciar(): faltan símbolos o handler")
             return
         await self.escuchar(self._symbols, self._handler, self._cliente)
+
+    # Alias de compat
+    async def start(self) -> None:
+        await self.iniciar()
 
     async def detener(self) -> None:
         """Cancela tareas y limpia estado."""
@@ -274,7 +264,7 @@ class DataFeed:
         self._consumer_last.clear()
         self._consumer_state.clear()
 
-    # ---------------- Internos: producción ----------------
+    # ---------- Internos: producción ----------
     async def _stream_simple(self, symbol: str) -> None:
         backoff = 0.5
         primera_vez = True
@@ -295,7 +285,11 @@ class DataFeed:
                     mensaje_timeout=self.tiempo_inactividad,
                     backpressure=self.backpressure,
                     ultimo_timestamp=self._last_close_ts.get(symbol),
-                    ultimo_cierre=(self._ultimo_candle.get(symbol, {}).get("close") if self._ultimo_candle.get(symbol) else None),
+                    ultimo_cierre=(
+                        self._ultimo_candle.get(symbol, {}).get("close")
+                        if self._ultimo_candle.get(symbol)
+                        else None
+                    ),
                 )
                 log.info(f"{symbol}: stream finalizado; reintentando…")
                 backoff = min(60.0, backoff * 2)
@@ -325,6 +319,7 @@ class DataFeed:
                     async def _w(c: dict) -> None:
                         await self._handle_candle(sym, c)
                     return _w
+
                 handlers = {s: await wrap(s) for s in symbols}
 
                 await escuchar_velas_combinado(
@@ -340,7 +335,11 @@ class DataFeed:
                     ultimos={
                         s: {
                             "ultimo_timestamp": self._last_close_ts.get(s),
-                            "ultimo_cierre": (self._ultimo_candle.get(s, {}).get("close") if self._ultimo_candle.get(s) else None),
+                            "ultimo_cierre": (
+                                self._ultimo_candle.get(s, {}).get("close")
+                                if self._ultimo_candle.get(s)
+                                else None
+                            ),
                         }
                         for s in symbols
                     },
@@ -359,9 +358,9 @@ class DataFeed:
                 backoff = min(60.0, backoff * 2)
                 await asyncio.sleep(backoff)
 
-    # ---------------- Internos: cola y consumo ----------------
+    # ---------- Internos: cola y consumo ----------
     async def _handle_candle(self, symbol: str, candle: dict) -> None:
-        # Filtra solo velas cerradas y timestamps válidos (alineados a intervalo)
+        # Filtra solo velas cerradas y timestamps válidos
         if not candle.get("is_closed", True):
             return
         ts = candle.get("timestamp")
@@ -375,6 +374,7 @@ class DataFeed:
         if q is None:
             return
         candle.setdefault("_df_enqueue_time", time.monotonic())
+
         # Backpressure: block o drop_oldest
         if self.queue_policy == "block" or not q.maxsize:
             await q.put(candle)
@@ -388,9 +388,9 @@ class DataFeed:
                         _ = q.get_nowait()
                         q.task_done()
                     except asyncio.QueueEmpty:
-                        # si no se pudo liberar, reintentar ciclo
                         await asyncio.sleep(0)
                         continue
+
         self._last_close_ts[symbol] = ts
         self._ultimo_candle[symbol] = {
             k: candle.get(k) for k in ("timestamp", "open", "high", "low", "close", "volume")
@@ -407,7 +407,6 @@ class DataFeed:
             return
         while self._running:
             c = await q.get()
-            start = time.perf_counter()
             try:
                 await asyncio.wait_for(handler(c), timeout=self.handler_timeout)
                 self._set_consumer_state(symbol, ConsumerState.HEALTHY)
@@ -420,7 +419,7 @@ class DataFeed:
             finally:
                 q.task_done()
                 self._consumer_last[symbol] = time.monotonic()
-                # seguridad: detectar loop de mismo timestamp
+                # Seguridad: detectar loop de mismo timestamp
                 ts = c.get("timestamp")
                 prev = getattr(self, f"_last_processed_{symbol}", None)
                 if ts is not None:
@@ -441,7 +440,7 @@ class DataFeed:
                 pass
         self._consumer_tasks[symbol] = asyncio.create_task(self._consumer(symbol), name=f"consumer_{symbol}")
 
-    # ---------------- Internos: monitores ----------------
+    # ---------- Internos: monitores ----------
     async def _monitor_inactividad(self) -> None:
         try:
             while self._running:
@@ -510,7 +509,7 @@ class DataFeed:
                     pass
             self._tasks[symbol] = asyncio.create_task(self._stream_simple(symbol), name=f"stream_{symbol}")
 
-    # ---------------- Internos: backfill ----------------
+    # ---------- Internos: backfill ----------
     async def _do_backfill(self, symbol: str) -> None:
         if not self._cliente:
             return
@@ -529,7 +528,8 @@ class DataFeed:
                 self._last_backfill_ts[symbol] = last_ts
                 return
             since = last_ts + 1
-        restante_total = min(max(faltan, self.min_buffer_candles), BACKFILL_MAX_CANDLES)
+
+        restante_total = min(max(faltan, self.min_buffer_candles), self._backfill_max)
         ohlcv: List[List[float]] = []
         while restante_total > 0:
             limit = min(100, restante_total)
@@ -548,6 +548,7 @@ class DataFeed:
             await asyncio.sleep(0)
         if not ohlcv:
             return
+
         self._last_backfill_ts[symbol] = ohlcv[-1][0]
         validar_integridad_velas(symbol, self.intervalo, ({"timestamp": o[0]} for o in ohlcv), log)
         for o in ohlcv:
@@ -563,7 +564,7 @@ class DataFeed:
             }
             await self._handle_candle(symbol, c)
 
-    # ---------------- Utilidades ----------------
+    # ---------- Utilidades ----------
     def _set_consumer_state(self, symbol: str, state: ConsumerState) -> None:
         prev = self._consumer_state.get(symbol)
         if prev == state:
@@ -577,4 +578,5 @@ class DataFeed:
                 self.on_event(evento, data)
             except Exception:
                 log.exception("on_event lanzó excepción")
+
 
