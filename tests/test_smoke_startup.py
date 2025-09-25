@@ -52,23 +52,62 @@ def _install_stubs() -> None:
         aiohttp.ClientSession = ClientSession
 
 
+def _construct_trader(Trader, cfg_obj: object | None = None):
+    """
+    Construye Trader adaptándose a su firma.
+    - Si requiere 'config' en __init__, se pasa un config mínimo (namespace).
+    - Si no, se instancia sin args.
+    """
+    try:
+        params = inspect.signature(Trader).parameters
+    except Exception:
+        return Trader()
+
+    kwargs = {}
+    if 'config' in params:
+        if cfg_obj is None:
+            cfg_obj = types.SimpleNamespace(
+                symbols=['BTCUSDT'],
+                intervalo_velas='1m',
+                modo_real=False,
+                max_spread_ratio=0.0,
+            )
+        kwargs['config'] = cfg_obj
+    return Trader(**kwargs)
+
+
 def _make_startup_manager(StartupManager, Trader, feed, ConfigManager, ws_timeout, startup_timeout):
     params = inspect.signature(StartupManager).parameters
     kwargs = {}
+    # Config (diversas firmas posibles)
+    cfg_obj = None
     if 'config_manager' in params:
-        kwargs['config_manager'] = ConfigManager()
+        cm = ConfigManager()
+        kwargs['config_manager'] = cm
+        cfg_obj = getattr(cm, 'config', cm)
     elif 'config' in params:
-        kwargs['config'] = getattr(ConfigManager(), 'config', ConfigManager())
+        cfg_obj = getattr(ConfigManager(), 'config', ConfigManager())
+        kwargs['config'] = cfg_obj
     elif 'cfg' in params:
-        kwargs['cfg'] = getattr(ConfigManager(), 'config', ConfigManager())
+        cfg_obj = getattr(ConfigManager(), 'config', ConfigManager())
+        kwargs['cfg'] = cfg_obj
+    else:
+        # Por si StartupManager toma config por seteo posterior
+        cfg_obj = getattr(ConfigManager(), 'config', ConfigManager())
+
+    # DataFeed
     if 'data_feed' in params:
         kwargs['data_feed'] = feed
     elif 'feed' in params:
         kwargs['feed'] = feed
+
+    # Trader (ahora SIEMPRE usando el constructor adaptable)
     if 'trader' in params:
-        kwargs['trader'] = Trader()
+        kwargs['trader'] = _construct_trader(Trader, cfg_obj)
     elif 'runner' in params:
-        kwargs['runner'] = Trader()
+        kwargs['runner'] = _construct_trader(Trader, cfg_obj)
+
+    # Timeouts
     if 'ws_timeout' in params:
         kwargs['ws_timeout'] = ws_timeout
     if 'startup_timeout' in params:
@@ -84,7 +123,6 @@ async def test_startup_succeeds_when_feed_becomes_active(monkeypatch):
     """
     _install_stubs()
 
-    # ← limpiar contaminación de módulos de otros tests
     if 'core.startup_manager' in sys.modules:
         del sys.modules['core.startup_manager']
 
@@ -225,6 +263,7 @@ async def test_startup_fails_when_feed_never_active(monkeypatch):
 
     with pytest.raises(RuntimeError):
         await sm.run()
+
 
 
 
