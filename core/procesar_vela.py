@@ -135,6 +135,20 @@ def spread_gate_default(
         return (False, None)
 
 
+def _spread_gate(
+    bid: Optional[float],
+    ask: Optional[float],
+    *,
+    max_spread_pct: float = 0.15,
+) -> bool:
+    """
+    Gate simplificado solicitado por tests: devuelve solo el booleano (permitido).
+    Implementado como envoltorio de `spread_gate_default`.
+    """
+    ok, _pct = spread_gate_default(bid, ask, max_spread_pct=max_spread_pct)
+    return ok
+
+
 @dataclass
 class SymbolState:
     """Estado local del pipeline para cada símbolo (solo concerns de procesar_vela)."""
@@ -184,7 +198,7 @@ class BufferManager:
         try:
             df = pd.DataFrame(list(st.buffer), columns=COLUMNS)
         except Exception:
-            # Si falla (p.ej. tipos extra), reintenta saneando dicts
+            # Saneado por si hay tipos raros en dicts
             try:
                 rows = []
                 for c in st.buffer:
@@ -246,16 +260,14 @@ async def procesar_vela(trader: Any, vela: dict) -> None:
             CANDLES_IGNORADAS.labels(reason=reason).inc()
             return
 
-        # 2) Control rápido por spread (si hay guardia y si el dato viene en la vela)
+        # 2) Control por spread (si hay guardia y si el dato viene en la vela)
         spread_ratio = vela.get("spread_ratio") or vela.get("spread")
         sg = getattr(trader, "spread_guard", None)
         if spread_ratio is not None and sg is not None:
             try:
-                # Si no permite, ignoramos la vela para entradas (pero conservamos el buffer)
                 if hasattr(sg, "allows"):
                     if not sg.allows(symbol, float(spread_ratio)):
                         ENTRADAS_RECHAZADAS.labels(symbol=symbol, reason="spread_guard").inc()
-                        # Igual almacenamos la vela para mantener el histórico actualizado
                         lock = _buffers.get_lock(symbol)
                         async with lock:
                             _buffers.append(symbol, vela)
@@ -268,7 +280,7 @@ async def procesar_vela(trader: Any, vela: dict) -> None:
                             _buffers.append(symbol, vela)
                         return
             except Exception:
-                # En caso de error del guard, no bloqueamos la entrada por seguridad
+                # No bloquear por fallo del guard
                 pass
 
         # 3) Append al buffer por símbolo (protegido por lock)
@@ -281,21 +293,18 @@ async def procesar_vela(trader: Any, vela: dict) -> None:
             CANDLES_IGNORADAS.labels(reason="empty_df").inc()
             return
 
-        # 4) Fast-path (modo degradado) si estás bajo presión
+        # 4) Fast-path si estás bajo presión
         cfg = getattr(trader, "config", None)
         fast_enabled = bool(getattr(cfg, "trader_fastpath_enabled", True))
         if fast_enabled:
             threshold = int(getattr(cfg, "trader_fastpath_threshold", 350))
-            if len(df) >= threshold:
-                if getattr(cfg, "trader_fastpath_skip_entries", True):
-                    ENTRADAS_RECHAZADAS.labels(symbol=symbol, reason="fastpath_skip_entries").inc()
-                    return
+            if len(df) >= threshold and getattr(cfg, "trader_fastpath_skip_entries", True):
+                ENTRADAS_RECHAZADAS.labels(symbol=symbol, reason="fastpath_skip_entries").inc()
+                return
 
-        # 5) Estado por símbolo (compatible con Trader.estado del núcleo)
+        # 5) Estado por símbolo (compatible con Trader.estado)
         estado_trader = getattr(trader, "estado", None)
-        estado_symbol = None
-        if isinstance(estado_trader, dict):
-            estado_symbol = estado_trader.get(symbol)
+        estado_symbol = estado_trader.get(symbol) if isinstance(estado_trader, dict) else None
 
         # 6) Evaluar condiciones de entrada (delegado al Trader)
         propuesta = await trader.evaluar_condiciones_de_entrada(symbol, df, estado_symbol)
@@ -305,7 +314,7 @@ async def procesar_vela(trader: Any, vela: dict) -> None:
         side = str(propuesta.get("side", "long")).lower()
         ENTRADAS_CANDIDATAS.labels(symbol=symbol, side=side).inc()
 
-        # 7) Validación final (distancia mínima ya la aplicó verificar_entrada; aquí gates extra si quieres)
+        # 7) Validación final
         precio = float(propuesta.get("precio_entrada", df.iloc[-1]["close"]))
         if not _is_num(precio) or precio <= 0:
             ENTRADAS_RECHAZADAS.labels(symbol=symbol, reason="bad_price").inc()
@@ -317,13 +326,11 @@ async def procesar_vela(trader: Any, vela: dict) -> None:
             ENTRADAS_RECHAZADAS.labels(symbol=symbol, reason="orders_missing").inc()
             return
 
-        # Construir parámetros seguros
         sl = float(propuesta.get("stop_loss", 0.0))
         tp = float(propuesta.get("take_profit", 0.0))
         meta = dict(propuesta.get("meta", {}))
         meta.update({"score": propuesta.get("score")})
 
-        # Evitar duplicados: si ya hay orden abierta, no abrir otra
         try:
             obtener = getattr(orders, "obtener", None)
             ya = obtener(symbol) if callable(obtener) else None
@@ -333,11 +340,9 @@ async def procesar_vela(trader: Any, vela: dict) -> None:
         except Exception:
             pass
 
-        # Llamada al manager
         try:
             await _abrir_orden(orders, symbol, side, precio, sl, tp, meta)
             ENTRADAS_ABIERTAS.labels(symbol=symbol, side=side).inc()
-            # Notificación opcional
             notify = getattr(trader, "enqueue_notification", None)
             if callable(notify):
                 notify(f"Abrir {side} {symbol} @ {precio:.6f}", "INFO")
@@ -377,16 +382,14 @@ async def _abrir_orden(
     if not callable(crear):
         raise RuntimeError("OrderManager no implementa crear(...)")
 
-    # Asegura límites sanos
     if precio <= 0:
         raise ValueError("precio_entrada inválido")
     if sl <= 0 or tp <= 0:
-        # Permite apertura con SL/TP pendientes, pero mejor registra
         log.debug("[%s] SL/TP no establecidos al abrir (sl=%.6f, tp=%.6f)", symbol, sl, tp)
 
-    # Ejecuta la creación; se asume que OrderManager maneja modo real/simulado
     res = crear(symbol=symbol, side=side, precio=precio, sl=sl, tp=tp, meta=meta)
     if asyncio.iscoroutine(res):
         await res
+
 
 
