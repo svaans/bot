@@ -150,12 +150,21 @@ async def warmup_symbol(
     if df is None:
         df = pd.DataFrame()
 
-    count = int(len(df))
+    # Harden contra stubs sin __len__
+    try:
+        count = int(len(df))
+    except Exception:
+        count = 0
+
     _update_progress(symbol_u, count, min_bars)
 
     if count < min_bars:
         log.error('❌ Warmup incompleto para %s: %s/%s velas disponibles', symbol_u, count, min_bars)
-        return None
+        # Devolver un DF vacío coherente (o None)
+        try:
+            return pd.DataFrame(columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+        except Exception:
+            return None
 
     # Mantener exactamente min_bars últimas velas
     return df.tail(int(min_bars)).copy()
@@ -194,4 +203,5 @@ def mark_warned(symbol: str) -> None:
 
 def was_warned(symbol: str) -> bool:
     return symbol.upper() in _warned
+
 

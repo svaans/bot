@@ -197,7 +197,8 @@ async def test_startup_succeeds_when_feed_becomes_active(monkeypatch):
     # Minimal Trader.run que sale rápido (pero se agenda)
     async def fast_run(self):
         await asyncio.sleep(0.01)
-    monkeypatch.setattr(Trader, 'run', fast_run, raising=True)
+    # ← permitir inyectar aunque no exista previamente
+    monkeypatch.setattr(Trader, 'run', fast_run, raising=False)
 
     sm = _make_startup_manager(
         StartupManager=StartupManager,
@@ -295,6 +296,7 @@ async def test_startup_fails_when_feed_never_active(monkeypatch):
 
     with pytest.raises(RuntimeError):
         await sm.run()
+
 
 
 

@@ -90,6 +90,51 @@ def _hash_buffer(items: Deque[dict]) -> Tuple[int, int]:
     return (len(items), int(items[-1].get("timestamp", 0)))
 
 
+# ──────────────────────────────────────────────────────────────────────────────
+# Helpers solicitados por tests: spread
+# ──────────────────────────────────────────────────────────────────────────────
+
+def _approximate_spread(bid: Optional[float], ask: Optional[float]) -> Optional[float]:
+    """
+    Devuelve spread (ask - bid) si ambos existen y son coherentes.
+    None si falta dato o ask < bid.
+    """
+    try:
+        if bid is None or ask is None:
+            return None
+        b = float(bid)
+        a = float(ask)
+        s = a - b
+        if s < 0:
+            return None
+        return s
+    except Exception:
+        return None
+
+
+def spread_gate_default(
+    bid: Optional[float],
+    ask: Optional[float],
+    *,
+    max_spread_pct: float = 0.15,  # 0.15% por defecto; ajustable en tests
+) -> Tuple[bool, Optional[float]]:
+    """
+    Acepta/deniega según spread relativo. Retorna (permitido, spread_pct).
+    Si no se puede calcular → (False, None).
+    """
+    s = _approximate_spread(bid, ask)
+    if s is None:
+        return (False, None)
+    try:
+        mid = (float(bid) + float(ask)) / 2.0
+        if mid <= 0:
+            return (False, None)
+        pct = 100.0 * (s / mid)
+        return (pct <= max_spread_pct, pct)
+    except Exception:
+        return (False, None)
+
+
 @dataclass
 class SymbolState:
     """Estado local del pipeline para cada símbolo (solo concerns de procesar_vela)."""
@@ -343,4 +388,5 @@ async def _abrir_orden(
     res = crear(symbol=symbol, side=side, precio=precio, sl=sl, tp=tp, meta=meta)
     if asyncio.iscoroutine(res):
         await res
+
 
