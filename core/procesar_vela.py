@@ -99,13 +99,10 @@ def _approximate_spread(
     ask: Optional[float] = None,
 ) -> Optional[float]:
     """
-    Modos de uso:
-      - _approximate_spread(snapshot: dict) -> ratio (spread relativo, 0..+inf)
-        Usa keys 'high','low','close'. Devuelve (high - low) / close si cohérente.
-      - _approximate_spread(bid: float, ask: float) -> ratio relativo usando midprice:
-        Devuelve (ask - bid) / ((ask + bid)/2).
-
-    Si no es posible calcular, devuelve None.
+    Modos:
+      - _approximate_spread(snapshot: dict) -> ratio relativo (spread/close).
+        Si 'close' <= 0 pero high>=low, devuelve 0.0 (comportamiento esperado por tests).
+      - _approximate_spread(bid: float, ask: float) -> ratio relativo usando midprice.
     """
     try:
         # Modo snapshot
@@ -113,10 +110,12 @@ def _approximate_spread(
             h = float(snapshot_or_bid.get("high", float("nan")))
             l = float(snapshot_or_bid.get("low", float("nan")))
             c = float(snapshot_or_bid.get("close", float("nan")))
-            if any(map(lambda v: not _is_num(v), (h, l, c))) or c <= 0 or h < l:
+            if not (_is_num(h) and _is_num(l) and _is_num(c)) or h < l:
                 return None
             spread_abs = h - l
-            # ratio relativo simple respecto al close
+            if c <= 0:
+                # Según tests: tratar como 0.0 (no penalizar)
+                return 0.0
             return spread_abs / c
 
         # Modo bid/ask
@@ -156,21 +155,19 @@ def spread_gate_default(
 
 def _resolve_spread_limit(trader: Any, default_ratio: float = 0.0015) -> float:
     """
-    Devuelve el límite de spread *relativo* (no en %) como fracción (p.ej., 0.0015 == 0.15%).
-    Busca en trader.config.max_spread_ratio o trader.max_spread_ratio.
+    Devuelve el límite de spread *relativo* (fracción, no %).
+    Si el límite <= 0 → se interpreta como "sin límite" (gate deshabilitado).
     """
     try:
         cfg = getattr(trader, "config", None)
         if cfg is not None and hasattr(cfg, "max_spread_ratio"):
             v = float(getattr(cfg, "max_spread_ratio"))
-            if v >= 0:
-                return v
+            return v
     except Exception:
         pass
     try:
         v = float(getattr(trader, "max_spread_ratio", default_ratio))
-        if v >= 0:
-            return v
+        return v
     except Exception:
         pass
     return default_ratio
@@ -184,19 +181,17 @@ def _spread_gate(
     """
     Gate solicitado por tests.
 
-    Entrada:
-      - trader: usado para obtener límite (ratio relativo, p.ej. 0.0015)
-      - symbol: no se usa aquí, pero mantenemos la firma para trazabilidad
-      - snapshot: dict con 'high','low','close'
-
-    Salida:
-      - (permitido: bool, ratio: float|None, limit: float|None)
-        ratio y limit se devuelven como fracciones (no en %).
+    - Devuelve (permitido, ratio, limit) donde ratio/limit son fracciones (no %).
+    - Si limit <= 0 → gate deshabilitado → permitido siempre.
     """
     limit = _resolve_spread_limit(trader, default_ratio=0.0015)
     ratio = _approximate_spread(snapshot)
     if ratio is None:
+        # Si no se puede calcular, negar pero devolver limit
         return (False, None, limit)
+    if limit <= 0:
+        # Sin límite: permitir todo
+        return (True, ratio, limit)
     return (ratio <= limit, ratio, limit)
 
 
@@ -441,6 +436,7 @@ async def _abrir_orden(
     res = crear(symbol=symbol, side=side, precio=precio, sl=sl, tp=tp, meta=meta)
     if asyncio.iscoroutine(res):
         await res
+
 
 
 
