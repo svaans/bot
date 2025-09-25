@@ -6,7 +6,7 @@ import math
 import time
 from collections import deque
 from dataclasses import dataclass, field
-from typing import Any, Deque, Dict, Optional, Tuple
+from typing import Any, Deque, Dict, Optional, Tuple, Union
 
 import pandas as pd
 
@@ -94,20 +94,42 @@ def _hash_buffer(items: Deque[dict]) -> Tuple[int, int]:
 # Helpers solicitados por tests: spread
 # ──────────────────────────────────────────────────────────────────────────────
 
-def _approximate_spread(bid: Optional[float], ask: Optional[float]) -> Optional[float]:
+def _approximate_spread(
+    snapshot_or_bid: Union[dict, float, int, None],
+    ask: Optional[float] = None,
+) -> Optional[float]:
     """
-    Devuelve spread (ask - bid) si ambos existen y son coherentes.
-    None si falta dato o ask < bid.
+    Modos de uso:
+      - _approximate_spread(snapshot: dict) -> ratio (spread relativo, 0..+inf)
+        Usa keys 'high','low','close'. Devuelve (high - low) / close si cohérente.
+      - _approximate_spread(bid: float, ask: float) -> ratio relativo usando midprice:
+        Devuelve (ask - bid) / ((ask + bid)/2).
+
+    Si no es posible calcular, devuelve None.
     """
     try:
-        if bid is None or ask is None:
+        # Modo snapshot
+        if ask is None and isinstance(snapshot_or_bid, dict):
+            h = float(snapshot_or_bid.get("high", float("nan")))
+            l = float(snapshot_or_bid.get("low", float("nan")))
+            c = float(snapshot_or_bid.get("close", float("nan")))
+            if any(map(lambda v: not _is_num(v), (h, l, c))) or c <= 0 or h < l:
+                return None
+            spread_abs = h - l
+            # ratio relativo simple respecto al close
+            return spread_abs / c
+
+        # Modo bid/ask
+        if snapshot_or_bid is None or ask is None:
             return None
-        b = float(bid)
+        b = float(snapshot_or_bid)
         a = float(ask)
-        s = a - b
-        if s < 0:
+        if not (_is_num(b) and _is_num(a)) or a <= 0 or b <= 0 or a < b:
             return None
-        return s
+        mid = (a + b) / 2.0
+        if mid <= 0:
+            return None
+        return (a - b) / mid
     except Exception:
         return None
 
@@ -116,37 +138,66 @@ def spread_gate_default(
     bid: Optional[float],
     ask: Optional[float],
     *,
-    max_spread_pct: float = 0.15,  # 0.15% por defecto; ajustable en tests
+    max_spread_pct: float = 0.15,  # 0.15% por defecto; ajustable
 ) -> Tuple[bool, Optional[float]]:
     """
     Acepta/deniega según spread relativo. Retorna (permitido, spread_pct).
     Si no se puede calcular → (False, None).
     """
-    s = _approximate_spread(bid, ask)
-    if s is None:
+    r = _approximate_spread(bid, ask)
+    if r is None:
         return (False, None)
     try:
-        mid = (float(bid) + float(ask)) / 2.0
-        if mid <= 0:
-            return (False, None)
-        pct = 100.0 * (s / mid)
+        pct = 100.0 * r
         return (pct <= max_spread_pct, pct)
     except Exception:
         return (False, None)
 
 
+def _resolve_spread_limit(trader: Any, default_ratio: float = 0.0015) -> float:
+    """
+    Devuelve el límite de spread *relativo* (no en %) como fracción (p.ej., 0.0015 == 0.15%).
+    Busca en trader.config.max_spread_ratio o trader.max_spread_ratio.
+    """
+    try:
+        cfg = getattr(trader, "config", None)
+        if cfg is not None and hasattr(cfg, "max_spread_ratio"):
+            v = float(getattr(cfg, "max_spread_ratio"))
+            if v >= 0:
+                return v
+    except Exception:
+        pass
+    try:
+        v = float(getattr(trader, "max_spread_ratio", default_ratio))
+        if v >= 0:
+            return v
+    except Exception:
+        pass
+    return default_ratio
+
+
 def _spread_gate(
-    bid: Optional[float],
-    ask: Optional[float],
-    *,
-    max_spread_pct: float = 0.15,
-) -> bool:
+    trader: Any,
+    symbol: str,
+    snapshot: dict,
+) -> Tuple[bool, Optional[float], Optional[float]]:
     """
-    Gate simplificado solicitado por tests: devuelve solo el booleano (permitido).
-    Implementado como envoltorio de `spread_gate_default`.
+    Gate solicitado por tests.
+
+    Entrada:
+      - trader: usado para obtener límite (ratio relativo, p.ej. 0.0015)
+      - symbol: no se usa aquí, pero mantenemos la firma para trazabilidad
+      - snapshot: dict con 'high','low','close'
+
+    Salida:
+      - (permitido: bool, ratio: float|None, limit: float|None)
+        ratio y limit se devuelven como fracciones (no en %).
     """
-    ok, _pct = spread_gate_default(bid, ask, max_spread_pct=max_spread_pct)
-    return ok
+    limit = _resolve_spread_limit(trader, default_ratio=0.0015)
+    ratio = _approximate_spread(snapshot)
+    if ratio is None:
+        return (False, None, limit)
+    return (ratio <= limit, ratio, limit)
 
 
 @dataclass
@@ -390,6 +441,7 @@ async def _abrir_orden(
     res = crear(symbol=symbol, side=side, precio=precio, sl=sl, tp=tp, meta=meta)
     if asyncio.iscoroutine(res):
         await res
+
 
 
 
