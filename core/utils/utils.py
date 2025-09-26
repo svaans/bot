@@ -10,7 +10,15 @@ import pandas as pd
 import psutil
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Iterable, Callable
-from pandas.tseries.frequencies import to_offset
+import types
+
+try:
+    from pandas.tseries.frequencies import to_offset
+except Exception:  # pragma: no cover - fallback para entornos sin pandas completo
+    def to_offset(freq: str):
+        if not isinstance(freq, str) or not freq:
+            raise ValueError("Frecuencia inválida: pandas no disponible")
+        return types.SimpleNamespace(freqstr=freq)
 from .logger import configurar_logger
 from core.modo import MODO_REAL
 from core.registro_metrico import registro_metrico
