@@ -257,7 +257,7 @@ class TraderLite:
         except Exception:
             log.exception("Error cerrando supervisor")
         if self._runner_task:
-            with contextlib.suppress(Exception):
+            with contextlib.suppress(asyncio.CancelledError, Exception):
                 await self._runner_task
 
     # ------------------- utilidades internas -------------------
