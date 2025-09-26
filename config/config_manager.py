@@ -343,18 +343,18 @@ class ConfigManager:
         )
 
 
-def reload(self) -> Config:
-        """Recarga la configuración desde el entorno y la expone en ``config``."""
-
-        cfg = self.load_from_env()
-        self._config = cfg
-        self.config = cfg
-        return cfg
-
-
-    def get_config(self) -> Config:
-        """Devuelve la configuración actual, recargándola si es necesario."""
-
-        if self._config is None:
-            return self.reload()
-        return self._config
+    def reload(self) -> Config:
+            """Recarga la configuración desde el entorno y la expone en ``config``."""
+    
+            cfg = self.load_from_env()
+            self._config = cfg
+            self.config = cfg
+            return cfg
+    
+    
+        def get_config(self) -> Config:
+            """Devuelve la configuración actual, recargándola si es necesario."""
+    
+            if self._config is None:
+                return self.reload()
+            return self._config
