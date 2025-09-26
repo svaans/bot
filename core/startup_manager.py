@@ -367,7 +367,7 @@ class StartupManager:
         try:
             result = cerrar()
             if inspect.isawaitable(result):
-                with suppress(Exception):
+                with suppress(asyncio.CancelledError, Exception):
                     await result
         except Exception:
             # Registro suavizado: en rollback no queremos interrumpir
