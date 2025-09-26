@@ -165,6 +165,28 @@ class Config:
 class ConfigManager:
     """Carga y proporciona acceso a la configuración del bot."""
 
+    def __init__(self, *, auto_load: bool = True) -> None:
+        """Inicializa el administrador de configuración.
+
+        Parameters
+        ----------
+        auto_load:
+            Cuando es ``True`` (por defecto) carga inmediatamente la
+            configuración desde las variables de entorno. Los tests
+            unitarios inyectan este objeto sin preparar el entorno, por lo
+            que es importante exponer siempre un atributo ``config`` con al
+            menos los campos básicos utilizados por el resto del sistema.
+        """
+
+        self._config: Optional[Config] = None
+        # ``config`` debe existir incluso si aún no se cargó nada para que
+        # componentes antiguos que acceden directamente al atributo no
+        # fallen con ``AttributeError``.
+        self.config: Optional[Config] = None
+
+        if auto_load:
+            self.reload()
+
     @staticmethod
     def load_from_env() -> Config:
         # Cargar .env local si existe (no rompe si falta)
@@ -320,3 +342,19 @@ class ConfigManager:
             timeout_evaluar_condiciones_por_symbol=timeout_evaluar_por_symbol,
         )
 
+
+def reload(self) -> Config:
+        """Recarga la configuración desde el entorno y la expone en ``config``."""
+
+        cfg = self.load_from_env()
+        self._config = cfg
+        self.config = cfg
+        return cfg
+
+
+    def get_config(self) -> Config:
+        """Devuelve la configuración actual, recargándola si es necesario."""
+
+        if self._config is None:
+            return self.reload()
+        return self._config
