@@ -107,6 +107,9 @@ def _approximate_spread(
     try:
         # Modo snapshot
         if ask is None and isinstance(snapshot_or_bid, dict):
+            if not snapshot_or_bid:
+                # Tests esperan 0.0 cuando faltan datos por completo.
+                return 0.0
             h = float(snapshot_or_bid.get("high", float("nan")))
             l = float(snapshot_or_bid.get("low", float("nan")))
             c = float(snapshot_or_bid.get("close", float("nan")))
