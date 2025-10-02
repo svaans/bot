@@ -1,140 +1,152 @@
+# tests/test_main_bootstrap_isolado.py
+"""
+Prueba aislada del bootstrap de main.py sin depender de implementaciones reales.
+- Instala stubs SOLO durante este archivo y los limpia al finalizar.
+- Verifica que main.main() arranca y termina con una tarea corta.
+- Verifica que run_with_optional_aiomonitor() hace fallback si no hay aiomonitor.
+"""
+
+from __future__ import annotations
+
 import asyncio
 import importlib
+import os
 import sys
 import types
-import os
-import builtins
+from contextlib import contextmanager
+
 import pytest
 
+
+# ---------- Utilidades de aislamiento de módulos ----------
+
+@contextmanager
+def patch_sys_module(name: str, module: types.ModuleType):
+    """Inserta temporalmente un módulo en sys.modules y lo restaura al salir."""
+    prev = sys.modules.get(name, None)
+    sys.modules[name] = module
+    try:
+        yield
+    finally:
+        if prev is None:
+            sys.modules.pop(name, None)
+        else:
+            sys.modules[name] = prev
+
+
 @pytest.fixture(autouse=True)
-def _isolation_sysmodules(monkeypatch):
-    prev: dict[str, types.ModuleType | None] = {}
-
-    def put(name: str, module: types.ModuleType) -> None:
-        prev[name] = sys.modules.get(name)
-        sys.modules[name] = module
-
-    # -------------------------
-    # 1) Stubs para core.*
-    # -------------------------
-    # Hot reload
+def _isolate_and_stub_modules(monkeypatch):
+    """
+    Instala stubs mínimos para dependencias llamadas desde main.py.
+    Se limpian al final para no afectar a otros tests.
+    """
+    # ---- core.hot_reload ----
     core_hot_reload = types.ModuleType("core.hot_reload")
-
     def _stub_start_hot_reload(path=None, modules=None):
-        class _Obs:
-            pass
-
+        class _Obs: pass
         return _Obs()
-
     def _stub_stop_hot_reload(observer):
         return None
-
     core_hot_reload.start_hot_reload = _stub_start_hot_reload
     core_hot_reload.stop_hot_reload = _stub_stop_hot_reload
-    put("core.hot_reload", core_hot_reload)
 
-    # Supervisor
+    # ---- core.supervisor ----
     core_supervisor = types.ModuleType("core.supervisor")
-
     async def _stub_start_supervision():
         return None
-
     async def _stub_stop_supervision():
         return None
-
     core_supervisor.start_supervision = _stub_start_supervision
     core_supervisor.stop_supervision = _stub_stop_supervision
-    put("core.supervisor", core_supervisor)
 
-    # Notification manager
+    # ---- core.metrics ----
+    core_metrics = types.ModuleType("core.metrics")
+    class _ExporterServer:
+        def shutdown(self): pass
+        def server_close(self): pass
+    def _stub_iniciar_exporter():
+        return _ExporterServer()
+    core_metrics.iniciar_exporter = _stub_iniciar_exporter
+
+    # ---- core.notification_manager ----
     core_notifier = types.ModuleType("core.notification_manager")
-
     def _stub_crear_notification_manager_desde_env():
         class _N:
             def enviar(self, texto, nivel="INFO"):
+                # No hace I/O real; devuelve tupla para trazabilidad si se necesitara.
                 return (texto, nivel)
-
         return _N()
-
     core_notifier.crear_notification_manager_desde_env = _stub_crear_notification_manager_desde_env
-    put("core.notification_manager", core_notifier)
 
-    # Exporter/métricas
-    core_metrics = types.ModuleType("core.metrics")
-
-    class _ExporterServer:
-        def shutdown(self):
-            pass
-
-        def server_close(self):
-            pass
-
-    def _stub_iniciar_exporter():
-        return _ExporterServer()
-
-    core_metrics.iniciar_exporter = _stub_iniciar_exporter
-    put("core.metrics", core_metrics)
-
-    # StartupManager que devuelve (bot, tarea_bot, config) como exige main.py
+    # ---- core.startup_manager ----
     core_startup = types.ModuleType("core.startup_manager")
-
     class _Cfg:
         modo_real = False
-
     class _Bot:
-        def solicitar_parada(self):
-            pass
-
-        async def cerrar(self):
-            await asyncio.sleep(0)
-
+        def solicitar_parada(self): pass
+        async def cerrar(self): await asyncio.sleep(0)
     class StartupManager:
+        def __init__(self, *a, **k): pass
         async def run(self):
             async def tarea():
-                # tarea principal del bot que termina sola rápidamente
+                # tarea principal que termina sola rápidamente
                 await asyncio.sleep(0.05)
-
             return _Bot(), asyncio.create_task(tarea()), _Cfg()
-
     core_startup.StartupManager = StartupManager
-    put("core.startup_manager", core_startup)
 
-    yield
+    # Instala todos los stubs con limpieza garantizada
+    with patch_sys_module("core.hot_reload", core_hot_reload), \
+         patch_sys_module("core.supervisor", core_supervisor), \
+         patch_sys_module("core.metrics", core_metrics), \
+         patch_sys_module("core.notification_manager", core_notifier), \
+         patch_sys_module("core.startup_manager", core_startup):
+        # Invalidar cachés de import para que main.py coja estos stubs
+        importlib.invalidate_caches()
+        yield
+    # Al salir, los patch_sys_module restauran sys.modules → no contamina
 
-    sys.modules.pop("main", None)
 
-    for name, backup in prev.items():
-        if backup is None:
-            sys.modules.pop(name, None)
-        else:
-            sys.modules[name] = backup
+# ---------- Tests ----------
 
 @pytest.mark.asyncio
-async def test_main_arranca_y_termina_ok():
+async def test_main_arranca_y_termina_ok(monkeypatch):
     """
-    Verifica que main.main():
-      - Arranca con stubs.
-      - Espera a que la tarea principal finalice.
-      - Ejecuta la secuencia de apagado sin excepciones.
+    Verifica que main.main() arranca con stubs y finaliza sin bloquear.
+    Se impone un timeout estricto por seguridad.
     """
+    # Forzar que si main lee variables de entorno, no habilite modos especiales
+    monkeypatch.delenv("AIOMONITOR", raising=False)
+
+    # (Re)importar main con los stubs presentes
+    sys.modules.pop("main", None)
+    importlib.invalidate_caches()
     main = importlib.import_module("main")
-    await main.main()  # si algo falla, pytest capturará la excepción
+
+    # Ejecutar main.main() con timeout para evitar bloqueos inesperados
+    await asyncio.wait_for(main.main(), timeout=1.0)
+
 
 def test_runner_aiomonitor_fallback_sin_aiomonitor(monkeypatch):
     """
-    Con AIOMONITOR=1 y sin el paquete instalado, el runner debe hacer fallback a asyncio.run(),
-    tal y como contempla run_with_optional_aiomonitor().
+    Con AIOMONITOR=1 y sin 'aiomonitor' instalado/importable,
+    run_with_optional_aiomonitor() debe usar asyncio.run() como fallback.
     """
+    # AIOMONITOR activado pero módulo no disponible
     monkeypatch.setenv("AIOMONITOR", "1")
-
-    # Asegurar que 'aiomonitor' NO está importable
     if "aiomonitor" in sys.modules:
         del sys.modules["aiomonitor"]
 
-    ran = {"ok": False}
-    async def _coro():
-        ran["ok"] = True
+    # (Re)importar main para coger el comportamiento actual
+    sys.modules.pop("main", None)
+    importlib.invalidate_caches()
     main = importlib.import_module("main")
 
+    ran = {"ok": False}
+
+    async def _coro():
+        ran["ok"] = True
+
+    # Ejecutar el runner; no debería requerir aiomonitor
     main.run_with_optional_aiomonitor(_coro())
     assert ran["ok"] is True
+
