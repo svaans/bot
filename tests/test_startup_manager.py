@@ -10,6 +10,7 @@ y llamar a sus funciones.  Cada prueba se centra en un fragmento de lógica.
 from __future__ import annotations
 
 import asyncio
+from typing import Generator
 import importlib
 import sys
 import types
@@ -153,7 +154,7 @@ def _install_startup_stubs() -> None:
 
 
 @pytest.fixture(autouse=True)
-def install_startup_stubs(monkeypatch) -> None:
+def install_startup_stubs(monkeypatch) -> Generator[None, None, None]:
     """Instala stubs antes de cada prueba y vacía el caché de importación."""
     _install_startup_stubs()
     sys.modules.pop('core.startup_manager', None)

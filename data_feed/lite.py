@@ -33,6 +33,9 @@ from typing import Any, Awaitable, Callable, Dict, Iterable, List
 from datetime import datetime, timezone, timedelta
 from enum import Enum
 from collections import defaultdict
+from contextlib import suppress
+
+_SENTINEL = object()
 
 from binance_api.websocket import (
     escuchar_velas,
@@ -251,6 +254,10 @@ class DataFeed:
 
     async def detener(self) -> None:
         """Cancela tareas y limpia estado."""
+        self._running = False
+        for q in getattr(self, "_queues", {}).values():
+            with suppress(Exception):
+                q.put_nowait(_SENTINEL)
         tasks = set()
         tasks.update(self._tasks.values())
         tasks.update(self._consumer_tasks.values())
@@ -265,7 +272,9 @@ class DataFeed:
                 await asyncio.wait_for(asyncio.gather(*tasks, return_exceptions=True), timeout=self.cancel_timeout)
             except asyncio.TimeoutError:
                 log.warning("Timeout cancelando tareas")
-        self._running = False
+        for task in getattr(self, "_consumer_tasks", {}).values():
+            if not task.done():
+                task.cancel()
         self._tasks.clear()
         self._consumer_tasks.clear()
         self._queues.clear()
@@ -405,31 +414,45 @@ class DataFeed:
         handler = self._handler
         if handler is None:
             return
-        while self._running:
-            c = await q.get()
-            start = time.perf_counter()
-            try:
-                await asyncio.wait_for(handler(c), timeout=self.handler_timeout)
-                self._set_consumer_state(symbol, ConsumerState.HEALTHY)
-            except asyncio.TimeoutError:
-                log.error(f"{symbol}: handler superó {self.handler_timeout}s; vela omitida")
-            except asyncio.CancelledError:
-                raise
-            except Exception:
-                log.exception(f"{symbol}: error procesando vela")
-            finally:
-                q.task_done()
-                self._consumer_last[symbol] = time.monotonic()
-                # seguridad: detectar loop de mismo timestamp
-                ts = c.get("timestamp")
-                prev = getattr(self, f"_last_processed_{symbol}", None)
-                if ts is not None:
-                    if prev is not None and ts <= prev:
-                        self._set_consumer_state(symbol, ConsumerState.LOOP)
-                        log.error(f"{symbol}: consumer sin avanzar timestamp (prev={prev} actual={ts})")
-                        await self._reiniciar_consumer(symbol)
-                        continue
-                    setattr(self, f"_last_processed_{symbol}", ts)
+        try:
+            while True:
+                try:
+                    candle = await q.get()
+                except asyncio.CancelledError:
+                    break
+
+                if candle is _SENTINEL:
+                    q.task_done()
+                    break
+
+                try:
+                    await asyncio.wait_for(handler(candle), timeout=self.handler_timeout)
+                    self._set_consumer_state(symbol, ConsumerState.HEALTHY)
+                except asyncio.TimeoutError:
+                    log.error(f"{symbol}: handler superó {self.handler_timeout}s; vela omitida")
+                except asyncio.CancelledError:
+                    break
+                except Exception:
+                    log.exception(f"{symbol}: error procesando vela")
+                finally:
+                    q.task_done()
+                    self._consumer_last[symbol] = time.monotonic()
+                    # seguridad: detectar loop de mismo timestamp
+                    ts = candle.get("timestamp")
+                    prev = getattr(self, f"_last_processed_{symbol}", None)
+                    if ts is not None:
+                        if prev is not None and ts <= prev:
+                            self._set_consumer_state(symbol, ConsumerState.LOOP)
+                            log.error(
+                                f"{symbol}: consumer sin avanzar timestamp (prev={prev} actual={ts})"
+                            )
+                            await self._reiniciar_consumer(symbol)
+                            continue
+                        setattr(self, f"_last_processed_{symbol}", ts)
+        except RuntimeError as e:
+            if "Event loop is closed" in str(e):
+                return
+            raise
 
     async def _reiniciar_consumer(self, symbol: str) -> None:
         t = self._consumer_tasks.get(symbol)

@@ -9,6 +9,7 @@ quantize levels.  To avoid external requests in tests, the exchange
 client is replaced with a dummy implementation.
 """
 
+import asyncio
 import unittest
 import sys
 import os
@@ -37,7 +38,12 @@ sys.modules.setdefault(
         )
     ),
 )
-
+# Ensure observability metrics exposes a real asyncio.Event for the stop flag used by background workers.
+metrics_module = sys.modules.setdefault(
+    'observability.metrics',
+    types.SimpleNamespace(start_background_worker=lambda *args, **kwargs: None),
+)
+metrics_module.background_worker_stop_event = asyncio.Event()
 from core.risk.validador_ordenes import validar_orden
 
 

@@ -178,12 +178,24 @@ class StartupManager:
                     self._trader_hold.set()
                 self.log.error("Trader finalizó con error inesperado: %s", err)
             finally:
-                # Evitar deadlock: aseguramos set() y esperamos como mucho 1s (si alguien quisiera sincronizar)
-                if self._trader_hold and not self._trader_hold.is_set():
-                    self._trader_hold.set()
-                if self._trader_hold:
+                # Asegura liberar la barrera de salida
+                if getattr(self, "_trader_hold", None) is not None:
                     with suppress(Exception):
-                        await asyncio.wait_for(self._trader_hold.wait(), timeout=1.0)
+                        self._trader_hold.set()
+
+                    # Sólo await si .wait() es realmente awaitable (evita warnings en tests con mocks)
+                    wait_fn = getattr(self._trader_hold, "wait", None)
+                    if callable(wait_fn):
+                        try:
+                            res = wait_fn()
+                            if inspect.isawaitable(res):
+                                with suppress(Exception):
+                                    await asyncio.wait_for(res, timeout=1.0)
+                            # si no es awaitable (mock), no await → sin warning
+                        except Exception:
+                            pass
+
+                # re-lanzar excepción si hubo fallo en la tarea principal
                 if exc is not None:
                     raise exc
 
