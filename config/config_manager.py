@@ -352,9 +352,9 @@ class ConfigManager:
             return cfg
     
     
-        def get_config(self) -> Config:
-            """Devuelve la configuración actual, recargándola si es necesario."""
+    def get_config(self) -> Config:
+        """Devuelve la configuración actual, recargándola si es necesario."""
     
-            if self._config is None:
-                return self.reload()
-            return self._config
+        if self._config is None:
+            return self.reload()
+        return self._config
