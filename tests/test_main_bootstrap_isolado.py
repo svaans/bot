@@ -128,25 +128,30 @@ async def test_main_arranca_y_termina_ok(monkeypatch):
 
 def test_runner_aiomonitor_fallback_sin_aiomonitor(monkeypatch):
     """
-    Con AIOMONITOR=1 y sin 'aiomonitor' instalado/importable,
-    run_with_optional_aiomonitor() debe usar asyncio.run() como fallback.
+    Con AIOMONITOR=1 y forzando ImportError de 'aiomonitor',
+    run_with_optional_aiomonitor() debe usar asyncio.run() (fallback) sin importar el paquete real.
     """
-    # AIOMONITOR activado pero módulo no disponible
-    monkeypatch.setenv("AIOMONITOR", "1")
-    if "aiomonitor" in sys.modules:
-        del sys.modules["aiomonitor"]
+    import importlib
 
-    # (Re)importar main para coger el comportamiento actual
+    monkeypatch.setenv("AIOMONITOR", "1")
+
+    # Forzar ImportError para 'aiomonitor' incluso si está instalado
+    _orig_import_module = importlib.import_module
+    def _fake_import_module(name, package=None):
+        if name == "aiomonitor":
+            raise ImportError("forced by test")
+        return _orig_import_module(name, package)
+    monkeypatch.setattr(importlib, "import_module", _fake_import_module, raising=True)
+
+    # Reimportar main limpio
     sys.modules.pop("main", None)
     importlib.invalidate_caches()
     main = importlib.import_module("main")
 
     ran = {"ok": False}
+    async def _coro(): ran["ok"] = True
 
-    async def _coro():
-        ran["ok"] = True
-
-    # Ejecutar el runner; no debería requerir aiomonitor
     main.run_with_optional_aiomonitor(_coro())
     assert ran["ok"] is True
+
 

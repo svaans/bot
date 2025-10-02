@@ -6,7 +6,7 @@ determine if a residual order amount can be executed.  To avoid
 network calls in tests, this suite uses ``unittest.mock`` to patch
 ``binance_api.cliente.obtener_cliente`` and supply fake market data.
 """
-
+import asyncio
 import unittest
 import sys
 import os
@@ -31,6 +31,12 @@ sys.modules.setdefault(
         )
     ),
 )
+# Ensure observability metrics exposes a real asyncio.Event so awaited calls succeed.
+metrics_module = sys.modules.setdefault(
+    'observability.metrics',
+    types.SimpleNamespace(start_background_worker=lambda *args, **kwargs: None),
+)
+metrics_module.background_worker_stop_event = asyncio.Event()
 
 # Add repository root to sys.path so core modules can be imported
 TEST_DIR = os.path.dirname(__file__)
