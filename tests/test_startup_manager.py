@@ -14,6 +14,7 @@ import importlib
 import sys
 import types
 import time
+from typing import Any  # <- añadido
 
 import pytest
 
@@ -122,7 +123,12 @@ def _install_startup_stubs() -> None:
 
     core_utils_logger = stub_module('core.utils.logger')
     if not hasattr(core_utils_logger, 'configurar_logger'):
-        core_utils_logger.configurar_logger = lambda *args, **kwargs: types.SimpleNamespace(info=lambda *a, **k: None, warning=lambda *a, **k: None, error=lambda *a, **k: None, critical=lambda *a, **k: None)
+        core_utils_logger.configurar_logger = lambda *args, **kwargs: types.SimpleNamespace(
+            info=lambda *a, **k: None,
+            warning=lambda *a, **k: None,
+            error=lambda *a, **k: None,
+            critical=lambda *a, **k: None
+        )
 
     core_utils_utils = stub_module('core.utils.utils')
     if not hasattr(core_utils_utils, 'configurar_logger'):
@@ -261,7 +267,12 @@ async def test_check_storage_unwritable(monkeypatch) -> None:
     """``_check_storage`` devuelve False cuando no puede escribir en el directorio."""
     importlib.invalidate_caches()
     sm_mod = importlib.import_module('core.startup_manager')
-    snapshot_path = types.SimpleNamespace(parent=types.SimpleNamespace(mkdir=lambda parents, exist_ok: None), write_text=lambda content: (_ for _ in ()).throw(IOError('no write')), unlink=lambda: None)
+    snapshot_path = types.SimpleNamespace(
+        parent=types.SimpleNamespace(mkdir=lambda parents, exist_ok: None),
+        write_text=lambda content: (_ for _ in ()).throw(IOError('no write')),
+        unlink=lambda: None
+    )
     monkeypatch.setattr(sm_mod, 'SNAPSHOT_PATH', snapshot_path, raising=True)
     sm = sm_mod.StartupManager(trader=types.SimpleNamespace())
     assert await sm._check_storage() is False
+
