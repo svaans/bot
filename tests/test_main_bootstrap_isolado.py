@@ -128,30 +128,38 @@ async def test_main_arranca_y_termina_ok(monkeypatch):
 
 def test_runner_aiomonitor_fallback_sin_aiomonitor(monkeypatch):
     """
-    Con AIOMONITOR=1 y forzando ImportError de 'aiomonitor',
-    run_with_optional_aiomonitor() debe usar asyncio.run() (fallback) sin importar el paquete real.
+    Fuerza ImportError de 'aiomonitor' interceptando el import nativo, para
+    verificar que run_with_optional_aiomonitor() usa asyncio.run() como fallback.
     """
-    import importlib
+    import importlib, builtins, sys
 
     monkeypatch.setenv("AIOMONITOR", "1")
 
-    # Forzar ImportError para 'aiomonitor' incluso si está instalado
-    _orig_import_module = importlib.import_module
-    def _fake_import_module(name, package=None):
-        if name == "aiomonitor":
-            raise ImportError("forced by test")
-        return _orig_import_module(name, package)
-    monkeypatch.setattr(importlib, "import_module", _fake_import_module, raising=True)
+    # Garantiza que no quede nada precargado
+    sys.modules.pop("aiomonitor", None)
 
-    # Reimportar main limpio
+    # Intercepta el import nativo
+    _orig_import = builtins.__import__
+    def _fake_import(name, globals=None, locals=None, fromlist=(), level=0):
+        # Bloquea cualquier variación ("aiomonitor", "aiomonitor.*")
+        top = name.split(".", 1)[0]
+        if top == "aiomonitor":
+            raise ImportError("forced by test")
+        return _orig_import(name, globals, locals, fromlist, level)
+    monkeypatch.setattr(builtins, "__import__", _fake_import, raising=True)
+
+    # Reimporta main limpio
     sys.modules.pop("main", None)
     importlib.invalidate_caches()
     main = importlib.import_module("main")
 
     ran = {"ok": False}
-    async def _coro(): ran["ok"] = True
+    async def _coro():
+        ran["ok"] = True
 
+    # Debe caer en el except y ejecutar asyncio.run(_coro)
     main.run_with_optional_aiomonitor(_coro())
     assert ran["ok"] is True
+
 
 

@@ -62,6 +62,11 @@ class RemainderExecutableTestCase(unittest.TestCase):
     """Unit tests for ``remainder_executable``."""
 
     def setUp(self):
+        # Provide a fresh asyncio.Event for the background worker stop hook so
+        # any awaited ``wait()`` calls interact with a real event object instead
+        # of a ``MagicMock``.  This prevents RuntimeWarning messages under
+        # ``pytest-asyncio`` strict mode.
+        metrics_module.background_worker_stop_event = asyncio.Event()
         # Market metadata for our fake symbol
         self.market_data = {
             "BTC/USDT": {
