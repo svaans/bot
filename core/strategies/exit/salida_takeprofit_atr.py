@@ -2,7 +2,7 @@ import math
 from typing import Dict, List
 
 import pandas as pd
-from indicators.helpers import get_atr
+from indicadores.helpers import get_atr
 from core.utils import configurar_logger
 from core.strategies.exit.salida_utils import resultado_salida
 from core.orders.order_model import ajustar_tick_size

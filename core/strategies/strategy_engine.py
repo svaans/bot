@@ -14,7 +14,7 @@ from core.strategies.entry.validadores import (
     validar_volumen_real,
     validar_spread,
 )
-from indicators.helpers import get_rsi, get_momentum, get_slope
+from indicadores.helpers import get_rsi, get_momentum, get_slope
 import pandas as pd
 from core.evaluacion_tecnica import evaluar_estrategias
 from core.strategies.entry.validaciones_tecnicas import hay_contradicciones

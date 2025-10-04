@@ -1,8 +1,8 @@
 """Detección de tendencia del mercado y evaluación de señales persistentes."""
 import pandas as pd
 from typing import Sequence
-from indicators.helpers import get_rsi
-from indicators.adx import calcular_adx
+from indicadores.helpers import get_rsi
+from indicadores.adx import calcular_adx
 from core.strategies.entry.gestor_entradas import evaluar_estrategias
 from core.estrategias import obtener_estrategias_por_tendencia
 from core.utils.utils import configurar_logger

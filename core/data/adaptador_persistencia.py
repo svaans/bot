@@ -3,7 +3,7 @@ from math import isclose
 import pandas as pd
 from ta.momentum import RSIIndicator
 from core.utils.utils import configurar_logger
-from indicators.helpers import get_slope
+from indicadores.helpers import get_slope
 log = configurar_logger('persistencia')
 
 

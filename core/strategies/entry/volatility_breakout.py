@@ -1,5 +1,5 @@
 import pandas as pd
-from indicators.volatilidad import calcular_volatility_breakout
+from indicadores.volatilidad import calcular_volatility_breakout
 
 
 def volatility_breakout(df: pd.DataFrame) ->dict:

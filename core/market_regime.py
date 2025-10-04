@@ -1,6 +1,6 @@
 import pandas as pd
 from math import isclose
-from indicators.helpers import get_atr
+from indicadores.helpers import get_atr
 from core.utils.market_utils import calcular_slope_pct
 
 

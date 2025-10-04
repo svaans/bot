@@ -14,7 +14,7 @@ import numpy as np
 import pandas as pd
 
 from data_feed.candle_builder import backfill
-from indicators.retornos_volatilidad import (
+from indicadores.retornos_volatilidad import (
     retornos_log,
     retornos_simples,
     verificar_consistencia,

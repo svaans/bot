@@ -1,5 +1,5 @@
 import pandas as pd
-from indicators.adx import calcular_adx
+from indicadores.adx import calcular_adx
 
 
 def estrategia_adx(df: pd.DataFrame) ->dict:

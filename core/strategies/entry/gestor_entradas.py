@@ -9,7 +9,7 @@ import pandas as pd
 from core.utils.metrics_compat import Histogram
 from core.strategies.pesos import gestor_pesos
 from .loader import cargar_estrategias
-from indicators.correlacion import calcular_correlacion
+from indicadores.correlacion import calcular_correlacion
 from core.strategies.entry.validador_entradas import verificar_liquidez_orden
 from core.estrategias import obtener_estrategias_por_tendencia, calcular_sinergia
 from core.scoring import calcular_score_tecnico

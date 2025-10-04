@@ -1,5 +1,5 @@
 import pandas as pd
-from indicators.ema_stochrsi import calcular_cruce_ema_stochrsi
+from indicadores.ema_stochrsi import calcular_cruce_ema_stochrsi
 
 
 def estrategia_cruce_ema_stochrsi(df: pd.DataFrame) ->dict:

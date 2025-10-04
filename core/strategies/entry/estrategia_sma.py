@@ -1,5 +1,5 @@
 import pandas as pd
-from indicators.sma import calcular_cruce_sma
+from indicadores.sma import calcular_cruce_sma
 
 
 def estrategia_sma(df: pd.DataFrame) ->dict:

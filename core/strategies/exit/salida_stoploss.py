@@ -7,8 +7,8 @@ from core.strategies.entry.gestor_entradas import evaluar_estrategias
 from core.strategies.pesos import gestor_pesos
 from core.utils import configurar_logger
 from core.strategies.exit.salida_utils import resultado_salida
-from indicators.helpers import get_rsi, get_momentum, get_slope
-from indicators.vwap import calcular_vwap
+from indicadores.helpers import get_rsi, get_momentum, get_slope
+from indicadores.vwap import calcular_vwap
 from core.scoring import calcular_score_tecnico
 from config.exit_defaults import load_exit_config
 from core.orders.order_model import ajustar_tick_size

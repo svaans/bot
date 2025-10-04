@@ -1,5 +1,5 @@
 import pandas as pd
-from indicators.bollinger import calcular_bollinger
+from indicadores.bollinger import calcular_bollinger
 
 
 def estrategia_bollinger_breakout(df: pd.DataFrame) ->dict:

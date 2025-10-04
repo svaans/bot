@@ -1,5 +1,5 @@
 import pandas as pd
-from indicators.sma_bajista import calcular_cruce_sma_bajista
+from indicadores.sma_bajista import calcular_cruce_sma_bajista
 
 
 def estrategia_sma_bajista(df: pd.DataFrame) ->dict:

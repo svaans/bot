@@ -1,5 +1,5 @@
 import pandas as pd
-from indicators.atr_breakout import calcular_atr_breakout
+from indicadores.atr_breakout import calcular_atr_breakout
 
 
 def estrategia_atr_breakout(df: pd.DataFrame) ->dict:

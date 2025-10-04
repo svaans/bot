@@ -1,5 +1,5 @@
 import pandas as pd
-from indicators.macd import calcular_macd
+from indicadores.macd import calcular_macd
 
 
 def estrategia_macd(df: pd.DataFrame) ->dict:

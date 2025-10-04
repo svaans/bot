@@ -1,6 +1,6 @@
 import pandas as pd
 """Funciones de análisis adicional para salidas."""
-from indicators.ema import calcular_cruce_ema
+from indicadores.ema import calcular_cruce_ema
 
 
 def _patron_reversion(df: pd.DataFrame) ->bool:

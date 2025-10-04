@@ -1,5 +1,5 @@
 import pandas as pd
-from indicators.ichimoku import calcular_ichimoku_breakout
+from indicadores.ichimoku import calcular_ichimoku_breakout
 
 
 def estrategia_ichimoku_breakout(df: pd.DataFrame) ->dict:

@@ -1,5 +1,5 @@
 import pandas as pd
-from indicators.vwap import calcular_vwap
+from indicadores.vwap import calcular_vwap
 
 
 def estrategia_vwap_breakout(df: pd.DataFrame) ->dict:

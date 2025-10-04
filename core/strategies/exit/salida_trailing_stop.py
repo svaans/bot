@@ -1,5 +1,5 @@
 import pandas as pd
-from indicators.helpers import get_atr
+from indicadores.helpers import get_atr
 from core.utils import configurar_logger
 from core.strategies.exit.salida_utils import resultado_salida
 from config.exit_defaults import load_exit_config

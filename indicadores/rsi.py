@@ -1,6 +1,6 @@
 import pandas as pd
 import numpy as np
-from indicators.helpers import filtrar_cerradas, serie_cierres, sanitize_series
+from indicadores.helpers import filtrar_cerradas, serie_cierres, sanitize_series
 try:
     from numba import jit
 except Exception:

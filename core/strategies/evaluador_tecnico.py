@@ -3,7 +3,7 @@ import os
 import asyncio
 from typing import Dict
 import pandas as pd
-from indicators.helpers import get_rsi
+from indicadores.helpers import get_rsi
 from data_feed.candle_builder import backfill
 from core.utils.utils import configurar_logger
 log = configurar_logger('eval_tecnico')

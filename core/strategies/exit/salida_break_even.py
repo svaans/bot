@@ -1,5 +1,5 @@
 import pandas as pd
-from indicators.helpers import get_atr
+from indicadores.helpers import get_atr
 from core.utils import configurar_logger
 from config.exit_defaults import load_exit_config
 log = configurar_logger('salida_break_even')

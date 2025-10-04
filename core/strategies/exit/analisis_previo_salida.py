@@ -1,7 +1,7 @@
 import pandas as pd
 from typing import Dict, Any
-from indicators.helpers import get_rsi, get_momentum, get_slope
-from indicators.divergencia_rsi import detectar_divergencia_alcista
+from indicadores.helpers import get_rsi, get_momentum, get_slope
+from indicadores.divergencia_rsi import detectar_divergencia_alcista
 from core.strategies.tendencia import detectar_tendencia
 from core.scoring import PESOS_SCORE_TECNICO
 from core.utils import configurar_logger

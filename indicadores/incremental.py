@@ -5,7 +5,7 @@ from collections import deque
 from math import isclose
 import pandas as pd
 
-from indicators.atr import calcular_atr
+from indicadores.atr import calcular_atr
 
 def actualizar_rsi_incremental(estado, periodo: int = 14) -> float | None:
     """Actualiza el RSI de forma incremental y devuelve el valor calculado.

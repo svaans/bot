@@ -4,7 +4,7 @@ import pandas as pd
 import numpy as np
 from core.utils.utils import configurar_logger
 from core.utils.logger import _should_log
-from indicators.helpers import get_rsi
+from indicadores.helpers import get_rsi
 from core.utils.market_utils import calcular_atr_pct, calcular_slope_pct
 from core.ajustador_riesgo import (
     ajustar_sl_tp_riesgo,

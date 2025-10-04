@@ -1,5 +1,5 @@
 import pandas as pd
-from indicators.helpers import get_momentum
+from indicadores.helpers import get_momentum
 
 
 def estrategia_momentum(df: pd.DataFrame) ->dict:

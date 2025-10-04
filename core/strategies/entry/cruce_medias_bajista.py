@@ -1,5 +1,5 @@
 import pandas as pd
-from indicators.ema_bajista import calcular_cruce_ema_bajista
+from indicadores.ema_bajista import calcular_cruce_ema_bajista
 
 
 def cruce_medias_bajista(df: pd.DataFrame) ->dict:

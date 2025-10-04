@@ -1,6 +1,6 @@
 import pandas as pd
 from core.utils.utils import configurar_logger
-from indicators.helpers import get_rsi
+from indicadores.helpers import get_rsi
 from core.utils.logger import _should_log
 UMBRAL_PERDIDA_DIA = -0.02
 UMBRAL_CERCANIA_EXTREMO = 0.003

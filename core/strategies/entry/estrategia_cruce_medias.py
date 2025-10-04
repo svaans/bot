@@ -1,5 +1,5 @@
 import pandas as pd
-from indicators.medias import calcular_cruce_medias
+from indicadores.medias import calcular_cruce_medias
 
 
 def estrategia_cruce_medias(df: pd.DataFrame) ->dict:

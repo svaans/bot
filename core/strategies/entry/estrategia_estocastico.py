@@ -1,5 +1,5 @@
 import pandas as pd
-from indicators.estocastico import calcular_cruce_estocastico
+from indicadores.estocastico import calcular_cruce_estocastico
 
 
 def estrategia_estocastico(df: pd.DataFrame) ->dict:

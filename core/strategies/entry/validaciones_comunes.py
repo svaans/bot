@@ -1,7 +1,7 @@
 from __future__ import annotations
 import pandas as pd
-from indicators.helpers import get_rsi, get_slope
-from indicators.volumen import calcular_volumen_alto
+from indicadores.helpers import get_rsi, get_slope
+from indicadores.volumen import calcular_volumen_alto
 from typing import Tuple
 
 

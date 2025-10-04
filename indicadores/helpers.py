@@ -12,11 +12,11 @@ from dataclasses import dataclass
 from typing import Any, Callable, Hashable
 
 import pandas as pd
-from indicators.momentum import calcular_momentum
-from indicators.atr import calcular_atr
-from indicators.slope import calcular_slope
-from indicators.volumen import calcular_volumen_normalizado
-from indicators.volatilidad import calcular_volatilidad_normalizada
+from indicadores.momentum import calcular_momentum
+from indicadores.atr import calcular_atr
+from indicadores.slope import calcular_slope
+from indicadores.volumen import calcular_volumen_normalizado
+from indicadores.volatilidad import calcular_volatilidad_normalizada
 
 
 def filtrar_cerradas(df: pd.DataFrame) -> pd.DataFrame:
@@ -111,7 +111,7 @@ def clear_cache(df: pd.DataFrame) -> None:
 
 def get_rsi(data, periodo: int = 14, serie_completa: bool = False):
     """Obtiene el RSI con soporte para ``DataFrame`` o ``Series``."""
-    from indicators.rsi import calcular_rsi
+    from indicadores.rsi import calcular_rsi
     if isinstance(data, pd.Series):
         return calcular_rsi(data, periodo, serie_completa)
     key = ('rsi', periodo, serie_completa)

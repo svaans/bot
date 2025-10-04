@@ -1,5 +1,5 @@
 import pandas as pd
-from indicators.helpers import filtrar_cerradas
+from indicadores.helpers import filtrar_cerradas
 
 
 def calcular_bollinger(df: pd.DataFrame, periodo: int=20, desviacion: float=2.0

@@ -1,5 +1,5 @@
 import pandas as pd
-from indicators.divergencia_rsi import calcular_divergencia_rsi
+from indicadores.divergencia_rsi import calcular_divergencia_rsi
 
 
 def estrategia_divergencia_rsi(df: pd.DataFrame) ->dict:

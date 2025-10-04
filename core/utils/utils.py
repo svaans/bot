@@ -1,13 +1,13 @@
-"""Funciones utilitarias compartidas en el bot."""
+"""Funciones utilitarias compartidas por el bot."""
 from __future__ import annotations
 
 import json
 import math
 import os
 from datetime import datetime, timezone
-from decimal import Decimal, ROUND_HALF_UP
+from decimal import ROUND_HALF_UP, Decimal
 from pathlib import Path
-from typing import Any, Iterable, Mapping
+from typing import Any, Iterable, Mapping, Sequence
 
 import pandas as pd
 
@@ -20,30 +20,32 @@ __all__ = [
     "intervalo_a_segundos",
     "timestamp_alineado",
     "is_valid_number",
+    "validar_integridad_velas",
     "guardar_orden_real",
     "round_decimal",
     "ESTADO_DIR",
 ]
-
 
 ESTADO_DIR = Path(os.getenv("ESTADO_DIR", "estado")).expanduser()
 ESTADO_DIR.mkdir(parents=True, exist_ok=True)
 
 
 def leer_csv_seguro(path: str | os.PathLike[str], *, expected_cols: int | None = None, **kwargs: Any) -> pd.DataFrame:
-    """Lee un CSV retornando DataFrame vacío ante fallos."""
+    """Lee un CSV devolviendo ``DataFrame`` vacío ante errores."""
     try:
         df = pd.read_csv(path, **kwargs)
     except FileNotFoundError:
         return pd.DataFrame()
     except Exception:
         return pd.DataFrame()
+    
     if expected_cols is not None and df.shape[1] != expected_cols:
         return pd.DataFrame()
     return df
 
 
 def validar_dataframe(df: Any, columnas: Iterable[str]) -> bool:
+    """Valida que ``df`` sea un ``DataFrame`` con las columnas solicitadas."""
     if df is None or not isinstance(df, pd.DataFrame):
         return False
     if df.empty:
@@ -52,6 +54,7 @@ def validar_dataframe(df: Any, columnas: Iterable[str]) -> bool:
 
 
 def intervalo_a_segundos(intervalo: str) -> int:
+    """Convierte un intervalo estilo Binance (``"1m"``) a segundos."""
     mapping = {
         "1m": 60,
         "3m": 180,
@@ -73,6 +76,7 @@ def intervalo_a_segundos(intervalo: str) -> int:
 
 
 def timestamp_alineado(timestamp: int | float, intervalo: str) -> bool:
+    """Verifica que ``timestamp`` esté alineado al intervalo especificado."""
     base_ms = intervalo_a_segundos(intervalo) * 1000
     if base_ms <= 0:
         return False
@@ -84,6 +88,7 @@ def timestamp_alineado(timestamp: int | float, intervalo: str) -> bool:
 
 
 def is_valid_number(valor: Any, *, allow_none: bool = False) -> bool:
+    """Comprueba que ``valor`` sea un número finito."""
     if valor is None:
         return allow_none
     try:
@@ -92,8 +97,74 @@ def is_valid_number(valor: Any, *, allow_none: bool = False) -> bool:
         return False
     return not math.isnan(numero) and math.isfinite(numero)
 
+def validar_integridad_velas(
+    symbol_or_velas: str | Iterable[Mapping[str, Any]] | Iterable[Sequence[Any]],
+    intervalo: str,
+    velas: Iterable[Mapping[str, Any]] | Iterable[Sequence[Any]] | None = None,
+    logger: Any | None = None,
+) -> bool:
+    """Chequea que las velas estén ordenadas y sin huecos para un ``intervalo``.
+
+    Permite tanto invocaciones `validar_integridad_velas(velas, intervalo)` como
+    `validar_integridad_velas(symbol, intervalo, velas, logger)` para mantener
+    compatibilidad con código legado.
+    """
+
+    if velas is None:
+        if isinstance(symbol_or_velas, str):
+            raise TypeError("Se esperaba iterable de velas como primer argumento")
+        items = list(symbol_or_velas)  # type: ignore[arg-type]
+        symbol = None
+    else:
+        symbol = str(symbol_or_velas) if symbol_or_velas is not None else None
+        items = list(velas)
+
+    if not items:
+        return True
+
+    paso = intervalo_a_segundos(intervalo) * 1000
+    if paso <= 0:
+        return False
+
+    anterior: int | None = None
+    for vela in items:
+        timestamp: int | None = None
+        if isinstance(vela, Mapping):
+            for key in ("timestamp", "open_time", "close_time", "time"):
+                raw = vela.get(key)
+                if raw is not None:
+                    try:
+                        timestamp = int(float(raw))
+                        break
+                    except (TypeError, ValueError):
+                        if logger:
+                            logger.warning(f"{symbol or 'candles'}: timestamp inválido en vela")
+                        return False
+        else:
+            if not vela:
+                return False
+            try:
+                timestamp = int(float(vela[0]))
+            except (TypeError, ValueError):
+                if logger:
+                    logger.warning(f"{symbol or 'candles'}: timestamp inválido en vela")
+                return False
+
+        if timestamp is None:
+            return False
+
+        if anterior is not None and timestamp - anterior != paso:
+            if logger:
+                logger.warning(
+                    f"{symbol or 'candles'}: gap detectado ({timestamp - anterior} ms != {paso} ms)"
+                )
+            return False
+        anterior = timestamp
+    return True
+
 
 def guardar_orden_real(symbol: str, data: Mapping[str, Any], *, carpeta: Path | None = None) -> Path:
+    """Persiste datos de órdenes reales en un archivo JSONL."""
     carpeta = carpeta or (ESTADO_DIR / "ordenes_reales")
     carpeta.mkdir(parents=True, exist_ok=True)
     fecha = datetime.now(timezone.utc).strftime("%Y%m%d")
@@ -105,6 +176,7 @@ def guardar_orden_real(symbol: str, data: Mapping[str, Any], *, carpeta: Path | 
 
 
 def round_decimal(valor: float | Decimal, digits: int = 8) -> float:
+    """Redondea ``valor`` al número de decimales indicado."""
     quant = Decimal(10) ** -digits
     dec = Decimal(str(valor)).quantize(quant, rounding=ROUND_HALF_UP)
     return float(dec)

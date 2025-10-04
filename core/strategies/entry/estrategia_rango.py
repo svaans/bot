@@ -1,5 +1,5 @@
 import pandas as pd
-from indicators.rango import detectar_ruptura_por_rango
+from indicadores.rango import detectar_ruptura_por_rango
 
 
 def estrategia_rango(df: pd.DataFrame) ->dict:

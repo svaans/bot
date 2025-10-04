@@ -1,5 +1,5 @@
-from indicators.helpers import get_rsi
-from indicators.macd import calcular_macd
+from indicadores.helpers import get_rsi
+from indicadores.macd import calcular_macd
 from config.exit_defaults import load_exit_config
 from core.utils import configurar_logger
 

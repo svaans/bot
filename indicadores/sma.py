@@ -1,5 +1,5 @@
 import pandas as pd
-from indicators.helpers import serie_cierres
+from indicadores.helpers import serie_cierres
 
 def calcular_cruce_sma(data, rapida: int = 20, lenta: int = 50) -> bool:
     """Determina si existe cruce alcista de medias móviles.

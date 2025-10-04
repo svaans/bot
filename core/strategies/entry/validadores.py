@@ -2,8 +2,8 @@
 from __future__ import annotations
 from math import isclose
 import pandas as pd
-from indicators.bollinger import calcular_bollinger
-from indicators.helpers import get_rsi, get_slope
+from indicadores.bollinger import calcular_bollinger
+from indicadores.helpers import get_rsi, get_slope
 from core.utils.utils import round_decimal
 
 
