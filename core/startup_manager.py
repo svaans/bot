@@ -14,6 +14,7 @@ from config.config_manager import ConfigManager
 from core.trader_modular import Trader
 from core.utils.utils import configurar_logger
 from core.data.bootstrap import warmup_inicial
+from core.diag.phase_logger import phase
 
 if TYPE_CHECKING:  # pragma: no cover - solo para hints
     from config.config_manager import Config
@@ -70,7 +71,8 @@ class StartupManager:
             await self._load_config()
             # (no re-agregar _stop_trader)
 
-            await self._bootstrap()
+            with phase("_bootstrap"):
+                await asyncio.wait_for(self._bootstrap(), timeout=15)
 
             assert self.trader is not None, "Trader no inicializado tras bootstrap"
             feed = getattr(self.trader, "data_feed", None) or getattr(self, "data_feed", None)
@@ -236,10 +238,17 @@ class StartupManager:
                 with suppress(Exception):
                     setattr(trader_cfg, "ws_timeout", raw_timeout)
 
-        await self._wait_ws(float(raw_timeout))
+        ws_timeout = float(raw_timeout)
+        with phase("_wait_ws", extra={"timeout": ws_timeout}):
+            await asyncio.wait_for(
+                self._wait_ws(ws_timeout),
+                timeout=ws_timeout + 5,
+            )
 
         # Verificación de desincronización de reloj
-        if not await self._check_clock_drift():
+        with phase("_check_clock_drift"):
+            clock_ok = await asyncio.wait_for(self._check_clock_drift(), timeout=5)
+        if not clock_ok:
             if self.config is not None:
                 if is_dataclass(self.config):
                     self.config = replace(self.config, modo_real=False)

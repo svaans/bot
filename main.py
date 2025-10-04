@@ -45,6 +45,7 @@ from typing import Any, Optional, Tuple
 from core.hot_reload import start_hot_reload, stop_hot_reload
 from core.supervisor import start_supervision, stop_supervision
 from core.notification_manager import crear_notification_manager_desde_env
+from core.diag.phase_logger import phase
 from core.startup_manager import StartupManager
 from core.metrics import iniciar_exporter
 
@@ -138,7 +139,11 @@ async def main():
     try:
         startup = StartupManager()
         # [No verificado] Se asume que run() devuelve (bot, tarea_bot, config).
-        triple: Tuple[Any, Any, Any] = await startup.run()
+        with phase("StartupManager.run"):
+            triple: Tuple[Any, Any, Any] = await asyncio.wait_for(
+                startup.run(),
+                timeout=30,
+            )
         if not isinstance(triple, tuple) or len(triple) != 3:
             raise RuntimeError("StartupManager.run() no devolvió (bot, tarea_bot, config)")
         bot, tarea_bot, config = triple
