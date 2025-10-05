@@ -8,7 +8,7 @@ import os
 import time
 from collections import deque
 from dataclasses import dataclass, field
-from typing import Any, Deque, Dict, Optional, Tuple, Union
+from typing import Any, Deque, Dict, Iterable, Optional, Tuple, Union
 
 import pandas as pd
 
@@ -18,7 +18,7 @@ from prometheus_client import Gauge
 from core.utils.metrics_compat import Counter, Histogram
 
 try:  # pragma: no cover - métricas opcionales
-    from core.metrics import LAST_BAR_AGE, WARMUP_RESTANTE
+    from core.metrics import BUFFER_SIZE, LAST_BAR_AGE, WARMUP_RESTANTE
 except Exception:  # pragma: no cover - fallback si core.metrics no está disponible
     class _NullMetric:
         def labels(self, *_args: Any, **_kwargs: Any) -> "_NullMetric":  # type: ignore[name-defined]
@@ -29,6 +29,7 @@ except Exception:  # pragma: no cover - fallback si core.metrics no está dispon
 
     WARMUP_RESTANTE = _NullMetric()  # type: ignore[assignment]
     LAST_BAR_AGE = _NullMetric()  # type: ignore[assignment]
+    BUFFER_SIZE = _NullMetric()  # type: ignore[assignment]
 
 try:  # Preferir constante compartida para coherencia con warmup
     from core.data.bootstrap import MIN_BARS as _DEFAULT_MIN_BARS
@@ -309,15 +310,34 @@ class BufferManager:
         return lock
 
     def append(self, symbol: str, candle: dict) -> None:
-        st = self._get_state(symbol)
+        sym = symbol.upper()
+        st = self._get_state(sym)
         st.buffer.append(candle)
         tf = candle.get("timeframe") or candle.get("interval") or candle.get("tf")
         if tf:
             st.timeframe = str(tf)
         try:
-            BUFFERS_TAM.labels(symbol=symbol).set(len(st.buffer))
+            BUFFERS_TAM.labels(symbol=sym).set(len(st.buffer))
         except Exception as exc:
             log.warning("No se pudo actualizar métrica BUFFERS_TAM: %s", exc)
+        try:
+            tf_label = st.timeframe or str(tf or "")
+            if tf_label:
+                BUFFER_SIZE.labels(symbol=sym, timeframe=tf_label).set(len(st.buffer))
+        except Exception as exc:
+            log.debug("No se pudo actualizar métrica buffer_size: %s", exc)
+
+    def extend(self, symbol: str, candles: Iterable[dict]) -> None:
+        for candle in candles:
+            self.append(symbol, candle)
+
+    def snapshot(self, symbol: str) -> list[dict]:
+        st = self._get_state(symbol)
+        return list(st.buffer)
+
+    def size(self, symbol: str) -> int:
+        st = self._get_state(symbol)
+        return len(st.buffer)
 
     def dataframe(self, symbol: str) -> Optional[pd.DataFrame]:
         st = self._get_state(symbol)
@@ -370,7 +390,14 @@ class BufferManager:
 
 
 # Instancia de módulo (compartida)
-_buffers = BufferManager(maxlen=600)
+_BUFFER_MAXLEN = max(600, int(os.getenv("PROCESAR_VELA_BUFFER_MAXLEN", "1500")))
+_buffers = BufferManager(maxlen=_BUFFER_MAXLEN)
+
+
+def get_buffer_manager() -> BufferManager:
+    """Devuelve el administrador de buffers global utilizado por el pipeline."""
+
+    return _buffers
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -442,6 +469,12 @@ async def procesar_vela(trader: Any, vela: dict) -> None:
             if timeframe:
                 timeframe = str(timeframe)
                 _attach_timeframe(df, timeframe)
+
+        ready_checker = getattr(trader, "is_symbol_ready", None)
+        timeframe_label = str(timeframe) if timeframe else "unknown"
+        if callable(ready_checker) and not ready_checker(symbol, timeframe_label):
+            CANDLES_IGNORADAS.labels(reason="backfill_pending").inc()
+            return
 
         timeframe_label = str(timeframe) if timeframe else "unknown"
         min_needed = _resolve_min_bars(trader)

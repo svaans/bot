@@ -128,7 +128,17 @@ class Trader(TraderLite):
 
     async def _precargar_historico(self, velas: int | None = None) -> None:
         """Realiza un backfill inicial antes de abrir streams."""
-        await self.feed.precargar(self.config.symbols, cliente=self._cliente, minimo=velas)
+        used_backfill = False
+        if hasattr(self, "start_backfill") and callable(self.start_backfill):
+            try:
+                await self.start_backfill()
+                used_backfill = True
+            except Exception:
+                log.exception("Fallo en backfill configurado; se intenta precargar desde DataFeed")
+        if hasattr(self, "feed") and callable(getattr(self.feed, "precargar", None)):
+            await self.feed.precargar(self.config.symbols, cliente=self._cliente, minimo=velas)
+        if used_backfill:
+            return
 
     def habilitar_estrategias(self) -> None:
         """Marca las estrategias como habilitadas (bandera de compatibilidad)."""

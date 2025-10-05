@@ -98,6 +98,18 @@
 85. `core/persistencia_tecnica.py` guarda resultados de indicadores en almacenamiento.
 86. `core/data/` aloja datos auxiliares utilizados por el motor.
 87. `core/utils/` contiene funciones generales de apoyo.
+
+### Backfill histórico (Pegaso)
+- El servicio `core/backfill_service.py` precarga velas históricas antes de procesar señales.
+- Soporta modo **A** (backfill antes del stream) y modo **B** (backfill en paralelo al stream). En modo B las velas en vivo se retienen hasta completar el histórico.
+- Se expone la métrica `buffer_size{symbol,timeframe}` y contadores para requests, gaps y duración del backfill.
+- Variables de entorno clave:
+  - `BACKFILL_ENABLED` (`true|false`)
+  - `BACKFILL_MODE` (`A|B`)
+  - `BACKFILL_MIN_NEEDED` y `BACKFILL_WARMUP_EXTRA`
+  - `BACKFILL_PAGE_LIMIT`, `BACKFILL_MAX_REFETCHES`, `BACKFILL_CONCURRENCY`
+  - `BACKFILL_HEADROOM` controla el headroom del buffer combinado.
+- El `TraderLite` inicializa el servicio y sólo evalúa estrategias cuando `is_symbol_ready()` devuelve `True`.
 88. `core/config_manager/` centraliza lectura de parámetros en ejecución.
 89. La comunicación interna se basa en `asyncio` para operación concurrente.
 77. `core/scoring.py` produce un score global a partir de señales.

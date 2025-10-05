@@ -121,6 +121,36 @@ LAST_BAR_AGE = Gauge(
     ["symbol", "timeframe"],
 )
 
+BACKFILL_REQUESTS_TOTAL = Counter(
+    "backfill_requests_total",
+    "Solicitudes de backfill por símbolo y timeframe",
+    ["symbol", "timeframe", "status"],
+)
+
+BACKFILL_KLINES_FETCHED_TOTAL = Counter(
+    "backfill_klines_fetched_total",
+    "Número de velas obtenidas durante el backfill",
+    ["symbol", "timeframe"],
+)
+
+BACKFILL_DURATION_SECONDS = Histogram(
+    "backfill_duration_seconds",
+    "Duración del backfill por símbolo",
+    ["symbol", "timeframe"],
+)
+
+BACKFILL_GAPS_FOUND_TOTAL = Counter(
+    "backfill_gaps_found_total",
+    "Huecos detectados durante el backfill",
+    ["symbol", "timeframe"],
+)
+
+BUFFER_SIZE = Gauge(
+    "buffer_size",
+    "Tamaño del buffer de velas precargadas",
+    ["symbol", "timeframe"],
+)
+
 FEEDS_FUNDING_MISSING = Counter(
     "feeds_funding_missing_total",
     "Consultas de funding rate ausentes por símbolo y razón",
@@ -203,6 +233,11 @@ _METRICS_WITH_FALLBACK = [
     "WARMUP_PROGRESS",
     "WARMUP_RESTANTE",
     "LAST_BAR_AGE",
+    "BACKFILL_REQUESTS_TOTAL",
+    "BACKFILL_KLINES_FETCHED_TOTAL",
+    "BACKFILL_DURATION_SECONDS",
+    "BACKFILL_GAPS_FOUND_TOTAL",
+    "BUFFER_SIZE",
     "FEEDS_FUNDING_MISSING",
     "FEEDS_OPEN_INTEREST_MISSING",
     "FEEDS_MISSING_RATE",
