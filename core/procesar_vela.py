@@ -2,7 +2,9 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import math
+import os
 import time
 from collections import deque
 from dataclasses import dataclass, field
@@ -14,6 +16,13 @@ from core.utils.logger import configurar_logger
 from prometheus_client import Gauge
 
 from core.utils.metrics_compat import Counter, Histogram
+
+try:  # Preferir constante compartida para coherencia con warmup
+    from core.data.bootstrap import MIN_BARS as _DEFAULT_MIN_BARS
+except Exception:  # pragma: no cover - fallback cuando no existe el módulo
+    _DEFAULT_MIN_BARS = int(os.getenv("MIN_BARS", "400"))
+
+DEFAULT_MIN_BARS = _DEFAULT_MIN_BARS
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Métricas (compatibles aunque no haya prometheus_client)
@@ -60,6 +69,45 @@ log = configurar_logger("procesar_vela")
 # ──────────────────────────────────────────────────────────────────────────────
 
 COLUMNS = ("timestamp", "open", "high", "low", "close", "volume")
+
+
+def _attach_timeframe(df: pd.DataFrame, timeframe: Optional[str]) -> None:
+    """Adjunta el timeframe al DataFrame sin contaminar columnas."""
+
+    if not timeframe:
+        return
+
+    try:
+        object.__setattr__(df, "tf", timeframe)
+    except Exception:
+        with contextlib.suppress(Exception):
+            df.attrs["tf"] = timeframe
+
+
+def _resolve_min_bars(trader: Any, default: int = DEFAULT_MIN_BARS) -> int:
+    """Determina el mínimo de velas requerido para evaluar estrategias."""
+
+    candidatos: list[Any] = []
+
+    for attr in ("min_bars", "min_buffer_candles", "min_velas"):
+        candidatos.append(getattr(trader, attr, None))
+
+    cfg = getattr(trader, "config", None)
+    if cfg is not None:
+        for attr in ("min_bars", "min_buffer_candles", "min_velas", "min_velas_evaluacion"):
+            candidatos.append(getattr(cfg, attr, None))
+
+    for valor in candidatos:
+        if valor is None:
+            continue
+        try:
+            entero = int(valor)
+        except (TypeError, ValueError):
+            continue
+        if entero > 0:
+            return entero
+
+    return default
 
 def _is_num(x: Any) -> bool:
     try:
@@ -206,6 +254,7 @@ class SymbolState:
     buffer: Deque[dict] = field(default_factory=lambda: deque(maxlen=600))
     last_hash: Tuple[int, int] = (0, 0)
     last_df: Optional[pd.DataFrame] = None
+    timeframe: Optional[str] = None
 
 
 class BufferManager:
@@ -233,6 +282,9 @@ class BufferManager:
     def append(self, symbol: str, candle: dict) -> None:
         st = self._get_state(symbol)
         st.buffer.append(candle)
+        tf = candle.get("timeframe") or candle.get("interval") or candle.get("tf")
+        if tf:
+            st.timeframe = str(tf)
         try:
             BUFFERS_TAM.labels(symbol=symbol).set(len(st.buffer))
         except Exception as exc:
@@ -242,6 +294,8 @@ class BufferManager:
         st = self._get_state(symbol)
         h = _hash_buffer(st.buffer)
         if h == st.last_hash and st.last_df is not None:
+            if st.timeframe:
+                _attach_timeframe(st.last_df, st.timeframe)
             return st.last_df
 
         if not st.buffer:
@@ -280,6 +334,7 @@ class BufferManager:
         except Exception:
             pass
 
+        _attach_timeframe(df, st.timeframe)
         st.last_df = df
         st.last_hash = h
         return df
@@ -361,6 +416,28 @@ async def procesar_vela(trader: Any, vela: dict) -> None:
         estado_symbol = estado_trader.get(symbol) if isinstance(estado_trader, dict) else None
 
         # 6) Evaluar condiciones de entrada (delegado al Trader)
+        timeframe = getattr(df, "tf", None)
+        if not timeframe:
+            timeframe = (
+                vela.get("timeframe")
+                or vela.get("interval")
+                or vela.get("tf")
+                or getattr(getattr(trader, "config", None), "intervalo_velas", None)
+            )
+            if timeframe:
+                timeframe = str(timeframe)
+                _attach_timeframe(df, timeframe)
+
+        min_needed = _resolve_min_bars(trader)
+        log.debug(
+            "pre-eval",
+            extra={
+                "symbol": symbol,
+                "timeframe": timeframe,
+                "buffer_len": len(df),
+                "min_needed": min_needed,
+            },
+        )
         propuesta = await trader.evaluar_condiciones_de_entrada(symbol, df, estado_symbol)
         if not propuesta:
             return

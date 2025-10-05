@@ -436,7 +436,9 @@ class DataFeed:
 
         # Normaliza el timestamp para mantener consistencia río abajo
         candle["timestamp"] = ts
-
+        candle.setdefault("timeframe", self.intervalo)
+        candle.setdefault("interval", self.intervalo)
+        candle.setdefault("tf", self.intervalo)
         last = self._last_close_ts.get(symbol)
         if last is not None and ts <= last:
             # duplicado o out-of-order
