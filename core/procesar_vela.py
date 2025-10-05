@@ -15,10 +15,17 @@ import pandas as pd
 from core.utils.logger import configurar_logger
 from prometheus_client import Gauge
 
+from core.metrics_helpers import safe_inc, safe_set
 from core.utils.metrics_compat import Counter, Histogram
 
 try:  # pragma: no cover - métricas opcionales
-    from core.metrics import BUFFER_SIZE, LAST_BAR_AGE, WARMUP_RESTANTE
+    from core.metrics import (
+        BUFFER_SIZE,
+        BUFFERS_TAM,
+        ENTRADAS_RECHAZADAS,
+        LAST_BAR_AGE,
+        WARMUP_RESTANTE,
+    )
 except Exception:  # pragma: no cover - fallback si core.metrics no está disponible
     class _NullMetric:
         def labels(self, *_args: Any, **_kwargs: Any) -> "_NullMetric":  # type: ignore[name-defined]
@@ -30,6 +37,16 @@ except Exception:  # pragma: no cover - fallback si core.metrics no está dispon
     WARMUP_RESTANTE = _NullMetric()  # type: ignore[assignment]
     LAST_BAR_AGE = _NullMetric()  # type: ignore[assignment]
     BUFFER_SIZE = _NullMetric()  # type: ignore[assignment]
+    BUFFERS_TAM = Gauge(
+        "buffers_tam",
+        "Tamaño del buffer actual por símbolo y timeframe",
+        ["symbol", "timeframe"],
+    )
+    ENTRADAS_RECHAZADAS = Counter(
+        "procesar_vela_entradas_rechazadas_total",
+        "Entradas rechazadas tras validaciones finales",
+        ["symbol", "timeframe", "reason"],
+    )
 
 try:  # Preferir constante compartida para coherencia con warmup
     from core.data.bootstrap import MIN_BARS as _DEFAULT_MIN_BARS
@@ -55,11 +72,6 @@ CANDLES_IGNORADAS = Counter(
     "Velas ignoradas por validación previa o falta de datos",
     ["reason"],
 )
-BUFFERS_TAM = Gauge(
-    "buffers_tam",
-    "Tamaño del buffer actual por símbolo",
-    ["symbol"],
-)
 ENTRADAS_CANDIDATAS = Counter(
     "procesar_vela_entradas_candidatas_total",
     "Entradas candidatas generadas por símbolo",
@@ -69,11 +81,6 @@ ENTRADAS_ABIERTAS = Counter(
     "procesar_vela_entradas_abiertas_total",
     "Entradas abiertas (OrderManager)",
     ["symbol", "side"],
-)
-ENTRADAS_RECHAZADAS = Counter(
-    "procesar_vela_entradas_rechazadas_total",
-    "Entradas rechazadas tras validaciones finales",
-    ["symbol", "reason"],
 )
 
 log = configurar_logger("procesar_vela")
@@ -316,14 +323,24 @@ class BufferManager:
         tf = candle.get("timeframe") or candle.get("interval") or candle.get("tf")
         if tf:
             st.timeframe = str(tf)
+        tf_label = st.timeframe or (str(tf) if tf else None)
         try:
-            BUFFERS_TAM.labels(symbol=sym).set(len(st.buffer))
+            safe_set(
+                BUFFERS_TAM,
+                len(st.buffer),
+                symbol=sym,
+                timeframe=tf_label or "unknown",
+            )
         except Exception as exc:
             log.warning("No se pudo actualizar métrica BUFFERS_TAM: %s", exc)
         try:
-            tf_label = st.timeframe or str(tf or "")
             if tf_label:
-                BUFFER_SIZE.labels(symbol=sym, timeframe=tf_label).set(len(st.buffer))
+                safe_set(
+                    BUFFER_SIZE,
+                    len(st.buffer),
+                    symbol=sym,
+                    timeframe=tf_label,
+                )
         except Exception as exc:
             log.debug("No se pudo actualizar métrica buffer_size: %s", exc)
 
@@ -419,6 +436,14 @@ async def procesar_vela(trader: Any, vela: dict) -> None:
         if not symbol:
             CANDLES_IGNORADAS.labels(reason="no_symbol").inc()
             return
+        
+        timeframe_hint = (
+            vela.get("timeframe")
+            or vela.get("interval")
+            or vela.get("tf")
+            or getattr(getattr(trader, "config", None), "intervalo_velas", None)
+        )
+        timeframe_label = str(timeframe_hint) if timeframe_hint else "unknown"
 
         ok, reason = _validar_candle(vela)
         if not ok:
@@ -432,14 +457,24 @@ async def procesar_vela(trader: Any, vela: dict) -> None:
             try:
                 if hasattr(sg, "allows"):
                     if not sg.allows(symbol, float(spread_ratio)):
-                        ENTRADAS_RECHAZADAS.labels(symbol=symbol, reason="spread_guard").inc()
+                        safe_inc(
+                            ENTRADAS_RECHAZADAS,
+                            symbol=symbol,
+                            timeframe=timeframe_label,
+                            reason="spread_guard",
+                        )
                         lock = _buffers.get_lock(symbol)
                         async with lock:
                             _buffers.append(symbol, vela)
                         return
                 elif hasattr(sg, "permite_entrada"):
                     if not bool(sg.permite_entrada(symbol, {}, 0.0)):
-                        ENTRADAS_RECHAZADAS.labels(symbol=symbol, reason="spread_guard").inc()
+                        safe_inc(
+                            ENTRADAS_RECHAZADAS,
+                            symbol=symbol,
+                            timeframe=timeframe_label,
+                            reason="spread_guard",
+                        )
                         lock = _buffers.get_lock(symbol)
                         async with lock:
                             _buffers.append(symbol, vela)
@@ -459,24 +494,19 @@ async def procesar_vela(trader: Any, vela: dict) -> None:
             return
         
         timeframe = getattr(df, "tf", None)
-        if not timeframe:
-            timeframe = (
-                vela.get("timeframe")
-                or vela.get("interval")
-                or vela.get("tf")
-                or getattr(getattr(trader, "config", None), "intervalo_velas", None)
-            )
-            if timeframe:
-                timeframe = str(timeframe)
-                _attach_timeframe(df, timeframe)
+        if timeframe:
+            timeframe = str(timeframe)
+            timeframe_label = timeframe
+        else:
+            if timeframe_hint:
+                timeframe = str(timeframe_hint)
+                timeframe_label = timeframe
 
         ready_checker = getattr(trader, "is_symbol_ready", None)
-        timeframe_label = str(timeframe) if timeframe else "unknown"
         if callable(ready_checker) and not ready_checker(symbol, timeframe_label):
             CANDLES_IGNORADAS.labels(reason="backfill_pending").inc()
             return
 
-        timeframe_label = str(timeframe) if timeframe else "unknown"
         min_needed = _resolve_min_bars(trader)
 
         try:
@@ -499,7 +529,12 @@ async def procesar_vela(trader: Any, vela: dict) -> None:
         if fast_enabled:
             threshold = int(getattr(cfg, "trader_fastpath_threshold", 350))
             if len(df) >= threshold and getattr(cfg, "trader_fastpath_skip_entries", True):
-                ENTRADAS_RECHAZADAS.labels(symbol=symbol, reason="fastpath_skip_entries").inc()
+                safe_inc(
+                    ENTRADAS_RECHAZADAS,
+                    symbol=symbol,
+                    timeframe=timeframe_label,
+                    reason="fastpath_skip_entries",
+                )
                 return
 
         # 5) Estado por símbolo (compatible con Trader.estado)
@@ -526,13 +561,23 @@ async def procesar_vela(trader: Any, vela: dict) -> None:
         # 7) Validación final
         precio = float(propuesta.get("precio_entrada", df.iloc[-1]["close"]))
         if not _is_num(precio) or precio <= 0:
-            ENTRADAS_RECHAZADAS.labels(symbol=symbol, reason="bad_price").inc()
+            safe_inc(
+                ENTRADAS_RECHAZADAS,
+                symbol=symbol,
+                timeframe=timeframe_label,
+                reason="bad_price",
+            )
             return
 
         # 8) Apertura de orden
         orders = getattr(trader, "orders", None)
         if orders is None or not hasattr(orders, "crear"):
-            ENTRADAS_RECHAZADAS.labels(symbol=symbol, reason="orders_missing").inc()
+            safe_inc(
+                ENTRADAS_RECHAZADAS,
+                symbol=symbol,
+                timeframe=timeframe_label,
+                reason="orders_missing",
+            )
             return
 
         sl = float(propuesta.get("stop_loss", 0.0))
@@ -544,7 +589,12 @@ async def procesar_vela(trader: Any, vela: dict) -> None:
             obtener = getattr(orders, "obtener", None)
             ya = obtener(symbol) if callable(obtener) else None
             if ya is not None:
-                ENTRADAS_RECHAZADAS.labels(symbol=symbol, reason="ya_abierta").inc()
+                safe_inc(
+                    ENTRADAS_RECHAZADAS,
+                    symbol=symbol,
+                    timeframe=timeframe_label,
+                    reason="ya_abierta",
+                )
                 return
         except Exception:
             pass

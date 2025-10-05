@@ -97,6 +97,11 @@ VELAS_RECHAZADAS = Counter(
     "Velas rechazadas por símbolo y razón",
     ["symbol", "reason"],
 )
+ENTRADAS_RECHAZADAS = Counter(
+    "procesar_vela_entradas_rechazadas_total",
+    "Entradas rechazadas tras validaciones finales",
+    ["symbol", "timeframe", "reason"],
+)
 VELAS_RECHAZADAS_PCT = Gauge(
     "velas_rechazadas_pct",
     "Porcentaje de velas rechazadas por símbolo",
@@ -148,6 +153,11 @@ BACKFILL_GAPS_FOUND_TOTAL = Counter(
 BUFFER_SIZE = Gauge(
     "buffer_size",
     "Tamaño del buffer de velas precargadas",
+    ["symbol", "timeframe"],
+)
+BUFFERS_TAM = Gauge(
+    "buffers_tam",
+    "Tamaño del buffer actual por símbolo y timeframe",
     ["symbol", "timeframe"],
 )
 
@@ -230,6 +240,7 @@ _METRICS_WITH_FALLBACK = [
     "VELAS_TOTAL",
     "VELAS_RECHAZADAS",
     "VELAS_RECHAZADAS_PCT",
+    "ENTRADAS_RECHAZADAS",
     "WARMUP_PROGRESS",
     "WARMUP_RESTANTE",
     "LAST_BAR_AGE",
@@ -242,6 +253,7 @@ _METRICS_WITH_FALLBACK = [
     "FEEDS_OPEN_INTEREST_MISSING",
     "FEEDS_MISSING_RATE",
     "QUEUE_SIZE",
+    "BUFFERS_TAM",
     "INGEST_LATENCY",
     "TRADER_QUEUE_SIZE",
     "TRADER_PIPELINE_LATENCY",
