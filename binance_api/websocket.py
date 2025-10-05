@@ -94,8 +94,8 @@ async def escuchar_velas(
     real_step = _intervalo_segundos(intervalo)
     intervalo_segundos = max(0.5, real_step / 60)
     paso_ms = int(real_step * 1000)
+    await asyncio.sleep(intervalo_segundos)
     while True:
-        await asyncio.sleep(intervalo_segundos)
         state.ultimo_ts += paso_ms
         ruido = random.uniform(-0.3, 0.3)
         open_price = max(1.0, state.ultimo_close + ruido)
@@ -118,6 +118,10 @@ async def escuchar_velas(
         }
         state.ultimo_close = close_price
         await _call_handler(handler, candle)
+        try:
+            await asyncio.sleep(intervalo_segundos)
+        except asyncio.CancelledError:
+            raise
 
 
 async def escuchar_velas_combinado(
