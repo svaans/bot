@@ -138,9 +138,8 @@ async def escuchar_velas(
             await asyncio.sleep(intervalo_segundos)
         except asyncio.CancelledError:
             raise
-
-        current_task = asyncio.current_task()
-        if current_task is not None and current_task.cancelling():
+            
+        if _is_being_cancelled():
             raise asyncio.CancelledError
 
         current_close_time += paso_ms
@@ -254,3 +253,19 @@ def _build_backfill_candle(
         "volume": 30.0,
         "is_closed": True,
     }
+
+def _is_being_cancelled() -> bool:
+    """Indica si la tarea actual está en proceso de cancelación."""
+
+    task = asyncio.current_task()
+    if task is None:
+        return False
+
+    cancelling = getattr(task, "cancelling", None)
+    if callable(cancelling):  # Python 3.11+
+        try:
+            return bool(cancelling())
+        except Exception:  # pragma: no cover - defensivo ante implementaciones futuras
+            return False
+
+    return task.cancelled()
