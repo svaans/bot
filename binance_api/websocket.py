@@ -120,6 +120,11 @@ async def escuchar_velas(
         state.ultimo_ts = current_close_time
         state.ultimo_close = float(candle["close"])
         await emitir_candle(candle)
+        # Cede el control al event loop para permitir cancelaciones inmediatas
+        # antes de iniciar el bucle productor recurrente. Esto evita que, en
+        # entornos de test donde ``asyncio.sleep`` está parcheado a dormir 0s,
+        # se emitan velas adicionales antes de que la cancelación se procese.
+        await asyncio.sleep(0)
 
     while True:
         try:
