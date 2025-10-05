@@ -125,6 +125,13 @@ async def escuchar_velas(
         # entornos de test donde ``asyncio.sleep`` está parcheado a dormir 0s,
         # se emitan velas adicionales antes de que la cancelación se procese.
         await asyncio.sleep(0)
+        # Además, esperamos un intervalo completo cancelable. Así damos margen
+        # para que un consumidor que cancele tras recibir el backfill detenga
+        # la tarea antes de que se genere una nueva vela.
+        try:
+            await asyncio.sleep(intervalo_segundos)
+        except asyncio.CancelledError:
+            raise
 
     while True:
         try:
