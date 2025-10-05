@@ -1,6 +1,7 @@
 # core/hot_reload.py
 from __future__ import annotations
 
+import errno
 import os
 import sys
 import time
@@ -156,6 +157,34 @@ class _DebouncedReloader(FileSystemEventHandler):
             subprocess.Popen(argv, env=os.environ.copy(), close_fds=False)
             os._exit(0)
 
+def _schedule_observer(
+    observer,
+    handler: FileSystemEventHandler,
+    root: Path,
+    *,
+    ignore_patterns: Iterable[str] | None = None,
+) -> None:
+    """Helper to schedule the observer with optional ignore patterns."""
+
+    extra_kwargs = {}
+    if ignore_patterns:
+        patterns = sorted(set(ignore_patterns))
+        if patterns:
+            extra_kwargs = {
+                "ignore_patterns": patterns,
+                "ignore_directories": True,
+            }
+
+    if extra_kwargs:
+        try:
+            observer.schedule(handler, str(root), recursive=True, **extra_kwargs)
+            return
+        except TypeError:
+            # Backend no soporta ignore_patterns; reintenta sin filtros.
+            pass
+
+    observer.schedule(handler, str(root), recursive=True)
+
 
 def start_hot_reload(
     path: Path,
@@ -164,6 +193,7 @@ def start_hot_reload(
     debounce_seconds: float = 1.0,
     exclude: Optional[Iterable[str]] = None,
     polling: Optional[bool] = None,
+    ignore_patterns: Optional[Iterable[str]] = None,
     verbose: bool = True,
 ):
     """
@@ -183,6 +213,8 @@ def start_hot_reload(
     polling : bool | None
         Forzar PollingObserver (útil en FS remotos o contenedores).
     verbose : bool
+    ignore_patterns : Iterable[str] | None
+        Patrones shell-style adicionales a ignorar en watchdog (si el backend lo soporta).
         Mostrar logs en consola.
     """
     root = Path(path).resolve()
@@ -194,15 +226,54 @@ def start_hot_reload(
         excludes |= {str(x) for x in exclude}
 
     handler = _DebouncedReloader(root, debounce_seconds=debounce_seconds, exclude=excludes, verbose=verbose)
+    ignore_patterns_set: Set[str] = set()
+    for item in excludes:
+        if not item:
+            continue
+        # Ignora el directorio y su contenido
+        ignore_patterns_set.add(f"*/{item}")
+        ignore_patterns_set.add(f"*/{item}/*")
+    if ignore_patterns:
+        ignore_patterns_set.update(str(p) for p in ignore_patterns)
 
     # Heurística para elegir backend
     force_poll = polling if polling is not None else (os.getenv("WATCHDOG_POLLING", "0") == "1")
     observer_cls = PollingObserver if force_poll else Observer
-    observer = observer_cls()  # type: ignore[call-arg]
 
-    # Observa recursivamente
-    observer.schedule(handler, str(root), recursive=True)
-    observer.start()
+    def _instantiate(cls):
+        try:
+            return cls(timeout=1.0)  # type: ignore[call-arg]
+        except TypeError:
+            return cls()  # type: ignore[call-arg]
+
+    def _start(cls):
+        observer_instance = _instantiate(cls)
+        _schedule_observer(
+            observer_instance,
+            handler,
+            root,
+            ignore_patterns=ignore_patterns_set,
+        )
+        observer_instance.start()
+        return observer_instance
+
+    if observer_cls is PollingObserver:
+        observer = _start(observer_cls)
+    else:
+        try:
+            observer = _start(observer_cls)
+        except OSError as exc:
+            if getattr(exc, "errno", None) == errno.ENOSPC:
+                if verbose:
+                    print(
+                        "⚠️  Límite de inotify alcanzado; cambiando a modo polling.",
+                    )
+                    sys.stdout.flush()
+                observer_cls = PollingObserver
+                observer = _start(observer_cls)
+            else:
+                raise
+
 
     if verbose:
         excludes_str = ", ".join(sorted(excludes))
