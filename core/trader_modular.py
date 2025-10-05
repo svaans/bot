@@ -171,11 +171,8 @@ class TraderLite:
         # DataFeedLite
         self.feed = DataFeed(
             config.intervalo_velas,
-            handler_timeout=float(os.getenv("DF_HANDLER_TIMEOUT_SEC", "2.0")),
-            inactivity_intervals=int(os.getenv("DF_INACTIVITY_INTERVALS", "10")),
-            queue_max=int(os.getenv("DF_QUEUE_MAX", "2000")),
-            queue_policy=os.getenv("DF_QUEUE_POLICY", "drop_oldest"),
             on_event=on_event,
+            **self._resolve_data_feed_kwargs(),
         )
         # Señal para el StartupManager: este feed se arranca desde TraderLite
         try:
@@ -227,6 +224,86 @@ class TraderLite:
 
         # Configurar guardia de spread (puede devolver None si está deshabilitado).
         self.spread_guard = self._create_spread_guard()
+
+    def _resolve_data_feed_kwargs(self) -> Dict[str, Any]:
+        """Obtiene parámetros del ``DataFeed`` combinando config y entorno."""
+
+        def _resolve(
+            attr: str | None,
+            env_key: str,
+            default: Any,
+            caster: Callable[[Any], Any],
+        ) -> Any:
+            if attr and hasattr(self.config, attr):
+                value = getattr(self.config, attr)
+                if value is not None:
+                    try:
+                        return caster(value)
+                    except (TypeError, ValueError):
+                        log.warning(
+                            "Valor inválido para %s=%r en Config; usando fallback",
+                            attr,
+                            value,
+                        )
+            env_value = os.getenv(env_key)
+            if env_value is not None:
+                try:
+                    return caster(env_value)
+                except (TypeError, ValueError):
+                    log.warning(
+                        "Valor inválido para %s=%r en entorno; usando %r",
+                        env_key,
+                        env_value,
+                        default,
+                    )
+            return caster(default)
+
+        kwargs: Dict[str, Any] = {
+            "handler_timeout": _resolve("handler_timeout", "DF_HANDLER_TIMEOUT_SEC", 2.0, float),
+            "inactivity_intervals": _resolve("inactivity_intervals", "DF_INACTIVITY_INTERVALS", 10, int),
+            "queue_max": _resolve("df_queue_default_limit", "DF_QUEUE_MAX", 2000, int),
+            "queue_policy": _resolve("df_queue_policy", "DF_QUEUE_POLICY", "drop_oldest", lambda x: str(x).lower()),
+            "monitor_interval": _resolve("monitor_interval", "DF_MONITOR_INTERVAL", 5.0, float),
+            "cancel_timeout": _resolve(None, "DF_CANCEL_TIMEOUT", 5.0, float),
+        }
+        kwargs["backpressure"] = self._resolve_backpressure()
+        return kwargs
+
+    def _resolve_backpressure(self) -> bool:
+        valor = getattr(self.config, "df_backpressure", None)
+        if valor is not None:
+            return bool(valor)
+        raw = os.getenv("DF_BACKPRESSURE")
+        if raw is None:
+            return True
+        return str(raw).lower() == "true"
+
+    def _update_estado_con_candle(self, candle: dict) -> bool:
+        """Actualiza buffers/estado y decide si se procesa la vela."""
+
+        sym = candle.get("symbol")
+        if not sym or sym not in self.estado:
+            return True
+
+        estado = self.estado[sym]
+        if not estado.candle_filter.accept(candle):
+            log.debug(
+                "Vela rechazada por CandleFilter",
+                extra={
+                    "symbol": sym,
+                    "timestamp": candle.get("timestamp"),
+                    "estadisticas": dict(estado.candle_filter.estadisticas),
+                },
+            )
+            return False
+
+        estado.ultimo_timestamp = candle.get("timestamp", estado.ultimo_timestamp)
+        estado.buffer.append(candle)
+        try:
+            self.supervisor.tick_data(sym)
+        except Exception:
+            log.exception("Error notificando tick_data al supervisor")
+        return True
 
     # -------------------- API pública --------------------
     def start(self) -> None:
@@ -310,12 +387,8 @@ class TraderLite:
         self._emit("trader_start", {"symbols": symbols, "intervalo": self.config.intervalo_velas})
 
         async def _handler(c: dict) -> None:
-            # Actualiza estado mínimo y delega
-            sym = c.get("symbol")
-            if sym in self.estado:
-                est = self.estado[sym]
-                est.ultimo_timestamp = c.get("timestamp", est.ultimo_timestamp)
-                est.buffer.append(c)
+            if not self._update_estado_con_candle(c):
+                return
             await self._handler_invoker(c)
 
         # Registrar latidos periódicos

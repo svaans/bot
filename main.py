@@ -158,10 +158,7 @@ async def main():
                 raise RuntimeError("tarea_bot no es Task ni coroutine")
     except Exception as e:
         msg = str(e)
-        if 'Desincronización de reloj' in msg:
-            print('❌ Desincronización de reloj detectada. '
-                  'Sincroniza la hora del sistema (p.ej., usando NTP) y reinicia el bot.')
-        elif 'Storage no disponible' in msg:
+        if 'Storage no disponible' in msg:
             print('❌ Almacenamiento no disponible. '
                   'Verifica los permisos de escritura en el directorio de datos.')
         else:
