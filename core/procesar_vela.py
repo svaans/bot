@@ -17,6 +17,19 @@ from prometheus_client import Gauge
 
 from core.utils.metrics_compat import Counter, Histogram
 
+try:  # pragma: no cover - métricas opcionales
+    from core.metrics import LAST_BAR_AGE, WARMUP_RESTANTE
+except Exception:  # pragma: no cover - fallback si core.metrics no está disponible
+    class _NullMetric:
+        def labels(self, *_args: Any, **_kwargs: Any) -> "_NullMetric":  # type: ignore[name-defined]
+            return self
+
+        def set(self, *_args: Any, **_kwargs: Any) -> None:
+            return None
+
+    WARMUP_RESTANTE = _NullMetric()  # type: ignore[assignment]
+    LAST_BAR_AGE = _NullMetric()  # type: ignore[assignment]
+
 try:  # Preferir constante compartida para coherencia con warmup
     from core.data.bootstrap import MIN_BARS as _DEFAULT_MIN_BARS
 except Exception:  # pragma: no cover - fallback cuando no existe el módulo
@@ -138,6 +151,22 @@ def _hash_buffer(items: Deque[dict]) -> Tuple[int, int]:
     if not items:
         return (0, 0)
     return (len(items), int(items[-1].get("timestamp", 0)))
+
+
+def _normalize_timestamp(value: Any) -> Optional[float]:
+    """Normaliza timestamps en segundos (acepta ms)."""
+
+    if value is None:
+        return None
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return None
+    if numeric <= 0:
+        return None
+    if numeric >= 1e11:
+        return numeric / 1000.0
+    return numeric
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -401,6 +430,35 @@ async def procesar_vela(trader: Any, vela: dict) -> None:
         if df is None or df.empty:
             CANDLES_IGNORADAS.labels(reason="empty_df").inc()
             return
+        
+        timeframe = getattr(df, "tf", None)
+        if not timeframe:
+            timeframe = (
+                vela.get("timeframe")
+                or vela.get("interval")
+                or vela.get("tf")
+                or getattr(getattr(trader, "config", None), "intervalo_velas", None)
+            )
+            if timeframe:
+                timeframe = str(timeframe)
+                _attach_timeframe(df, timeframe)
+
+        timeframe_label = str(timeframe) if timeframe else "unknown"
+        min_needed = _resolve_min_bars(trader)
+
+        try:
+            faltan = max(0, min_needed - len(df)) if min_needed > 0 else 0
+            WARMUP_RESTANTE.labels(symbol, timeframe_label).set(faltan)
+        except Exception:
+            pass
+
+        try:
+            last_ts = _normalize_timestamp(df.iloc[-1]["timestamp"])
+            if last_ts is not None:
+                edad = max(0.0, time.time() - last_ts)
+                LAST_BAR_AGE.labels(symbol, timeframe_label).set(edad)
+        except Exception:
+            pass
 
         # 4) Fast-path si estás bajo presión
         cfg = getattr(trader, "config", None)
@@ -416,19 +474,6 @@ async def procesar_vela(trader: Any, vela: dict) -> None:
         estado_symbol = estado_trader.get(symbol) if isinstance(estado_trader, dict) else None
 
         # 6) Evaluar condiciones de entrada (delegado al Trader)
-        timeframe = getattr(df, "tf", None)
-        if not timeframe:
-            timeframe = (
-                vela.get("timeframe")
-                or vela.get("interval")
-                or vela.get("tf")
-                or getattr(getattr(trader, "config", None), "intervalo_velas", None)
-            )
-            if timeframe:
-                timeframe = str(timeframe)
-                _attach_timeframe(df, timeframe)
-
-        min_needed = _resolve_min_bars(trader)
         log.debug(
             "pre-eval",
             extra={

@@ -109,6 +109,18 @@ WARMUP_PROGRESS = Gauge(
     ["symbol"],
 )
 
+WARMUP_RESTANTE = Gauge(
+    "warmup_restante",
+    "Velas que faltan para evaluar",
+    ["symbol", "timeframe"],
+)
+
+LAST_BAR_AGE = Gauge(
+    "last_bar_age_seconds",
+    "Segundos desde el cierre de la última vela",
+    ["symbol", "timeframe"],
+)
+
 FEEDS_FUNDING_MISSING = Counter(
     "feeds_funding_missing_total",
     "Consultas de funding rate ausentes por símbolo y razón",
@@ -189,6 +201,8 @@ _METRICS_WITH_FALLBACK = [
     "VELAS_RECHAZADAS",
     "VELAS_RECHAZADAS_PCT",
     "WARMUP_PROGRESS",
+    "WARMUP_RESTANTE",
+    "LAST_BAR_AGE",
     "FEEDS_FUNDING_MISSING",
     "FEEDS_OPEN_INTEREST_MISSING",
     "FEEDS_MISSING_RATE",

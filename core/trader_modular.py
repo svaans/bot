@@ -43,6 +43,7 @@ import os
 from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+import time
 from typing import Any, Awaitable, Callable, Deque, Dict, List, Optional, TYPE_CHECKING
 
 import pandas as pd
@@ -103,6 +104,91 @@ def _max_estrategias_buffer() -> int:
     return int(os.getenv("MAX_ESTRATEGIAS_BUFFER", str(_max_buffer_velas())))
 
 
+_TF_UNIT_SECONDS: Dict[str, int] = {
+    "s": 1,
+    "m": 60,
+    "h": 60 * 60,
+    "d": 24 * 60 * 60,
+    "w": 7 * 24 * 60 * 60,
+}
+
+
+def tf_seconds(timeframe: Optional[str]) -> int:
+    """Convierte un timeframe textual (``1m``, ``5m``, ``1h``) a segundos."""
+
+    if not timeframe:
+        return 0
+
+    tf = str(timeframe).strip().lower()
+    if not tf:
+        return 0
+
+    if tf.endswith("ms"):
+        try:
+            return int(float(tf[:-2]) / 1000.0)
+        except ValueError:
+            return 0
+
+    unit = tf[-1]
+    factor = _TF_UNIT_SECONDS.get(unit)
+    if factor is None:
+        return 0
+
+    value_part = tf[:-1] or "0"
+    try:
+        value = float(value_part)
+    except ValueError:
+        return 0
+
+    return int(value * factor)
+
+
+def _normalize_timestamp(value: Any) -> Optional[float]:
+    """Normaliza un timestamp que puede venir en milisegundos o segundos."""
+
+    if value is None:
+        return None
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return None
+    if numeric <= 0:
+        return None
+    # Heurística: >= 10^11 implica ms (fecha ~1973 en adelante)
+    if numeric >= 1e11:
+        return numeric / 1000.0
+    return numeric
+
+
+def _reason_none(
+    symbol: str,
+    timeframe: Optional[str],
+    buf_len: int,
+    min_bars: int,
+    last_bar_ts: Optional[float],
+    now_ts: Optional[float],
+) -> str:
+    """Determina el motivo por el cual no se debe evaluar la estrategia aún."""
+
+    if timeframe is None:
+        return "timeframe_none"
+
+    if min_bars > 0 and buf_len < min_bars:
+        return "warmup"
+
+    tf_secs = tf_seconds(timeframe)
+    if (
+        tf_secs > 0
+        and last_bar_ts is not None
+        and now_ts is not None
+        and last_bar_ts > 0
+        and (now_ts - last_bar_ts) < tf_secs
+    ):
+        return "waiting_close"
+
+    return "ready"
+
+
 @dataclass
 class EstadoSimbolo:
     """Estado mínimo por símbolo.
@@ -158,6 +244,7 @@ class TraderLite:
         self.estado: Dict[str, EstadoSimbolo] = {s: EstadoSimbolo() for s in config.symbols}
         # Registro de tendencia por símbolo (utilizado por procesar_vela)
         self.estado_tendencia: Dict[str, Any] = {s: None for s in config.symbols}
+        self._last_evaluated_bar: Dict[tuple[str, str], int] = {}
 
         # Protección dinámica ante spreads amplios (lazy import abajo).
         self.spread_guard: Any | None = None
@@ -544,6 +631,46 @@ class TraderLite:
             await handler(*args, **kwargs)
 
         return _invoke
+    
+    def _resolve_min_bars_requirement(self) -> int:
+        """Obtiene el mínimo de velas requerido para evaluar entradas."""
+
+        candidatos: List[Any] = [getattr(self, "min_bars", None)]
+        cfg = getattr(self, "config", None)
+        if cfg is not None:
+            for attr in ("min_bars", "min_buffer_candles", "min_velas", "min_velas_evaluacion"):
+                candidatos.append(getattr(cfg, attr, None))
+
+        for valor in candidatos:
+            if valor is None:
+                continue
+            try:
+                entero = int(valor)
+            except (TypeError, ValueError):
+                continue
+            if entero > 0:
+                return entero
+
+        return 0
+
+    def _should_evaluate(
+        self,
+        symbol: str,
+        timeframe: Optional[str],
+        last_bar_ts: Optional[int],
+    ) -> bool:
+        """Controla que solo se evalúe una vez por vela cerrada."""
+
+        if last_bar_ts is None:
+            return True
+
+        key = (symbol.upper(), str(timeframe or ""))
+        prev = self._last_evaluated_bar.get(key)
+        if prev == last_bar_ts:
+            return False
+
+        self._last_evaluated_bar[key] = last_bar_ts
+        return True
 
 
 class Trader(TraderLite):
@@ -746,6 +873,76 @@ class Trader(TraderLite):
         if not isinstance(df, pd.DataFrame) or df.empty:
             log.warning("[%s] DataFrame inválido al evaluar entrada", symbol)
             return None
+        
+        timeframe: Optional[str] = getattr(df, "tf", None)
+        if timeframe is None:
+            attrs_tf: Optional[str] = None
+            if hasattr(df, "attrs"):
+                try:
+                    attrs_tf = df.attrs.get("tf")  # type: ignore[assignment]
+                except Exception:
+                    attrs_tf = None
+            if attrs_tf:
+                timeframe = str(attrs_tf)
+            else:
+                config_tf = getattr(getattr(self, "config", None), "intervalo_velas", None)
+                timeframe = str(config_tf) if config_tf else None
+        timeframe_str = str(timeframe) if timeframe else None
+
+        buf_len = len(df)
+        min_bars = self._resolve_min_bars_requirement()
+        last_bar_ts_raw: Optional[int] = None
+        if buf_len:
+            try:
+                last_bar_ts_raw = int(df.iloc[-1]["timestamp"])
+            except Exception:
+                last_bar_ts_raw = None
+
+        last_bar_ts = _normalize_timestamp(last_bar_ts_raw)
+        now_ts = time.time()
+        reason = _reason_none(symbol, timeframe_str, buf_len, min_bars, last_bar_ts, now_ts)
+
+        if reason == "warmup":
+            log.debug(
+                "[%s] Warmup incompleto; omitiendo evaluación",
+                symbol,
+                extra={
+                    "symbol": symbol,
+                    "timeframe": timeframe_str,
+                    "reason": reason,
+                    "buffer_len": buf_len,
+                    "min_needed": min_bars,
+                },
+            )
+            return None
+
+        if reason == "waiting_close":
+            log.debug(
+                "[%s] Esperando cierre de vela para evaluar",
+                symbol,
+                extra={
+                    "symbol": symbol,
+                    "timeframe": timeframe_str,
+                    "reason": reason,
+                    "buffer_len": buf_len,
+                    "min_needed": min_bars,
+                },
+            )
+            return None
+
+        if not self._should_evaluate(symbol, timeframe_str, last_bar_ts_raw):
+            log.debug(
+                "[%s] Saltando evaluación (sin nueva vela cerrada)",
+                symbol,
+                extra={
+                    "symbol": symbol,
+                    "timeframe": timeframe_str,
+                    "reason": "duplicate_bar",
+                    "buffer_len": buf_len,
+                    "min_needed": min_bars,
+                },
+            )
+            return None
 
         on_event_cb: Callable[[str, dict], None] | None = None
         if hasattr(self, "_emit"):
@@ -771,13 +968,18 @@ class Trader(TraderLite):
             return resultado
 
         provider = getattr(self, "_verificar_entrada_provider", None)
-        if provider is None:
-            log.warning(
-                "verificar_entrada devolvió None; omitiendo evaluación",
-                extra={"symbol": symbol, "timeframe": getattr(df, "tf", None)},
-            )
-        else:
-            log.debug("[%s] Sin condiciones de entrada válidas", symbol)
+        log.debug(
+            "[%s] Sin condiciones de entrada válidas",
+            symbol,
+            extra={
+                "symbol": symbol,
+                "timeframe": timeframe_str,
+                "reason": "sin_senal" if provider else "pipeline_missing",
+                "buffer_len": buf_len,
+                "min_needed": min_bars,
+                "provider": provider,
+            },
+        )
         return None
 
     async def verificar_entrada(
