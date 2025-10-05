@@ -127,6 +127,10 @@ async def escuchar_velas(
         except asyncio.CancelledError:
             raise
 
+        current_task = asyncio.current_task()
+        if current_task is not None and current_task.cancelling():
+            raise asyncio.CancelledError
+
         current_close_time += paso_ms
         state.ultimo_ts = current_close_time
         ruido = random.uniform(-0.3, 0.3)
