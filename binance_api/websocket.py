@@ -85,30 +85,63 @@ async def escuchar_velas(
 ) -> None:
     """Genera velas artificiales y las envía al ``handler``.
 
-    El stream se ejecuta hasta que la tarea sea cancelada. No lanza
-    :class:`InactividadTimeoutError` en modo simulado; en su lugar mantiene un
-    ritmo constante controlado por ``intervalo``.
+    Reglas clave para la simulación:
+
+    * Si ``ultimo_timestamp`` está presente, se emite **solo** la vela
+      inmediatamente posterior a ese cierre para evitar backfills agresivos.
+    * Dos velas con el mismo ``close_time`` no se entregan más de una vez.
+    * El loop principal mantiene un ritmo constante controlado por
+      ``intervalo``.
     """
 
     state = _init_state(symbol, intervalo, ultimo_timestamp, ultimo_cierre)
     real_step = _intervalo_segundos(intervalo)
     intervalo_segundos = max(0.5, real_step / 60)
     paso_ms = int(real_step * 1000)
-    await asyncio.sleep(intervalo_segundos)
+    last_emitted_close_time: Optional[int] = None
+    current_close_time = state.ultimo_ts
+
+    async def emitir_candle(candle: Dict[str, Any]) -> None:
+        nonlocal last_emitted_close_time
+        close_time = int(candle.get("close_time", 0))
+        if last_emitted_close_time is not None and close_time <= last_emitted_close_time:
+            return
+        last_emitted_close_time = close_time
+        await _call_handler(handler, candle)
+
+    if ultimo_timestamp is not None:
+        current_close_time = _calc_next_close_time(ultimo_timestamp, intervalo)
+        candle = _build_backfill_candle(
+            symbol,
+            intervalo,
+            current_close_time,
+            state.ultimo_close if ultimo_cierre is None else float(ultimo_cierre),
+        )
+        state.ultimo_ts = current_close_time
+        state.ultimo_close = float(candle["close"])
+        await emitir_candle(candle)
+
     while True:
-        state.ultimo_ts += paso_ms
+        try:
+            await asyncio.sleep(intervalo_segundos)
+        except asyncio.CancelledError:
+            raise
+
+        current_close_time += paso_ms
+        state.ultimo_ts = current_close_time
         ruido = random.uniform(-0.3, 0.3)
         open_price = max(1.0, state.ultimo_close + ruido)
         close_price = max(1.0, open_price + random.uniform(-0.2, 0.2))
         high_price = max(open_price, close_price) + random.uniform(0.0, 0.1)
         low_price = min(open_price, close_price) - random.uniform(0.0, 0.1)
         volume = max(10.0, random.uniform(25.0, 35.0))
+
         candle = {
             "event_time": int(time.time() * 1000),
             "symbol": symbol,
             "intervalo": intervalo,
-            "open_time": state.ultimo_ts,
-            "close_time": state.ultimo_ts,
+            "open_time": current_close_time,
+            "close_time": current_close_time,
             "open": round(open_price, 6),
             "high": round(high_price, 6),
             "low": round(low_price, 6),
@@ -117,11 +150,7 @@ async def escuchar_velas(
             "is_closed": True,
         }
         state.ultimo_close = close_price
-        await _call_handler(handler, candle)
-        try:
-            await asyncio.sleep(intervalo_segundos)
-        except asyncio.CancelledError:
-            raise
+        await emitir_candle(candle)
 
 
 async def escuchar_velas_combinado(
@@ -176,3 +205,36 @@ async def escuchar_velas_combinado(
     finally:
         for task in tasks:
             task.cancel()
+
+
+def _calc_next_close_time(ultimo_ts: int, intervalo: str) -> int:
+    """Devuelve el ``close_time`` inmediatamente posterior a ``ultimo_ts``."""
+
+    step_ms = int(_intervalo_segundos(intervalo) * 1000)
+    return ((int(ultimo_ts) // step_ms) + 1) * step_ms
+
+
+def _build_backfill_candle(
+    symbol: str,
+    intervalo: str,
+    close_time: int,
+    last_close: float,
+) -> Dict[str, Any]:
+    """Crea una vela determinista para el arranque del stream."""
+
+    base = max(1.0, float(last_close))
+    high = round(base + 0.05, 6)
+    low = round(max(0.1, base - 0.05), 6)
+    return {
+        "event_time": int(time.time() * 1000),
+        "symbol": symbol,
+        "intervalo": intervalo,
+        "open_time": close_time,
+        "close_time": close_time,
+        "open": round(base, 6),
+        "high": high,
+        "low": low,
+        "close": round(base, 6),
+        "volume": 30.0,
+        "is_closed": True,
+    }
