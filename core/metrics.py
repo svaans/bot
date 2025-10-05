@@ -97,8 +97,8 @@ VELAS_RECHAZADAS = Counter(
     "Velas rechazadas por símbolo y razón",
     ["symbol", "reason"],
 )
-ENTRADAS_RECHAZADAS = Counter(
-    "procesar_vela_entradas_rechazadas_total",
+ENTRADAS_RECHAZADAS_V2 = Counter(
+    "procesar_vela_entradas_rechazadas_total_v2",
     "Entradas rechazadas tras validaciones finales",
     ["symbol", "timeframe", "reason"],
 )
@@ -150,14 +150,9 @@ BACKFILL_GAPS_FOUND_TOTAL = Counter(
     ["symbol", "timeframe"],
 )
 
-BUFFER_SIZE = Gauge(
-    "buffer_size",
+BUFFER_SIZE_V2 = Gauge(
+    "buffer_size_v2",
     "Tamaño del buffer de velas precargadas",
-    ["symbol", "timeframe"],
-)
-BUFFERS_TAM = Gauge(
-    "buffers_tam",
-    "Tamaño del buffer actual por símbolo y timeframe",
     ["symbol", "timeframe"],
 )
 
@@ -240,7 +235,7 @@ _METRICS_WITH_FALLBACK = [
     "VELAS_TOTAL",
     "VELAS_RECHAZADAS",
     "VELAS_RECHAZADAS_PCT",
-    "ENTRADAS_RECHAZADAS",
+    "ENTRADAS_RECHAZADAS_V2",
     "WARMUP_PROGRESS",
     "WARMUP_RESTANTE",
     "LAST_BAR_AGE",
@@ -248,12 +243,11 @@ _METRICS_WITH_FALLBACK = [
     "BACKFILL_KLINES_FETCHED_TOTAL",
     "BACKFILL_DURATION_SECONDS",
     "BACKFILL_GAPS_FOUND_TOTAL",
-    "BUFFER_SIZE",
+    "BUFFER_SIZE_V2",
     "FEEDS_FUNDING_MISSING",
     "FEEDS_OPEN_INTEREST_MISSING",
     "FEEDS_MISSING_RATE",
     "QUEUE_SIZE",
-    "BUFFERS_TAM",
     "INGEST_LATENCY",
     "TRADER_QUEUE_SIZE",
     "TRADER_PIPELINE_LATENCY",

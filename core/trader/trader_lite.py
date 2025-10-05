@@ -16,7 +16,7 @@ from core.metrics import (
     BACKFILL_GAPS_FOUND_TOTAL,
     BACKFILL_KLINES_FETCHED_TOTAL,
     BACKFILL_REQUESTS_TOTAL,
-    BUFFER_SIZE,
+    BUFFER_SIZE_V2,
 )
 from core.procesar_vela import get_buffer_manager
 from core.utils.timeframes import tf_to_ms
@@ -234,7 +234,7 @@ class TraderLite:
                 backfill_klines_fetched_total=BACKFILL_KLINES_FETCHED_TOTAL,
                 backfill_duration_seconds=BACKFILL_DURATION_SECONDS,
                 backfill_gaps_found_total=BACKFILL_GAPS_FOUND_TOTAL,
-                buffer_size=BUFFER_SIZE,
+                buffer_size_v2=BUFFER_SIZE_V2,
             )
             self._backfill_service = BackfillService(
                 fetch_klines=self._fetch_klines_for_backfill,

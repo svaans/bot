@@ -91,11 +91,11 @@ def reset_buffers() -> Generator[Any, None, None]:
         for name in (
             "ENTRADAS_CANDIDATAS",
             "ENTRADAS_ABIERTAS",
-            "ENTRADAS_RECHAZADAS",
+            "ENTRADAS_RECHAZADAS_V2",
             "CANDLES_IGNORADAS",
             "HANDLER_EXCEPTIONS",
             "EVAL_LATENCY",
-            "BUFFERS_TAM",
+            "BUFFER_SIZE_V2",
             "WARMUP_RESTANTE",
             "LAST_BAR_AGE",
         )

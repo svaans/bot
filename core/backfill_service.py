@@ -81,7 +81,7 @@ class BackfillService:
             "fetched": getattr(metrics, "backfill_klines_fetched_total", _NullMetric()),
             "duration": getattr(metrics, "backfill_duration_seconds", _NullMetric()),
             "gaps": getattr(metrics, "backfill_gaps_found_total", _NullMetric()),
-            "buffer": getattr(metrics, "buffer_size", _NullMetric()),
+            "buffer": getattr(metrics, "buffer_size_v2", _NullMetric()),
         }
 
     # ------------------------------------------------------------------ API pública

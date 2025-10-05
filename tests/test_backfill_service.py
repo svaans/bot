@@ -76,7 +76,7 @@ class DummyMetrics:
         self.backfill_klines_fetched_total = DummyCounter()
         self.backfill_duration_seconds = DummyHistogram()
         self.backfill_gaps_found_total = DummyCounter()
-        self.buffer_size = DummyGauge()
+        self.buffer_size_v2 = DummyGauge()
 
 
 class BufferStub:
@@ -137,7 +137,7 @@ async def test_backfill_run_loads_expected_candles() -> None:
     key = tuple(sorted({"symbol": "BTC/EUR", "timeframe": "5m", "status": "ok"}.items()))
     assert metrics.backfill_requests_total.values[key] == 1
     gauge_key = tuple(sorted({"symbol": "BTC/EUR", "timeframe": "5m"}.items()))
-    assert metrics.buffer_size.values[gauge_key] == len(stored)
+    assert metrics.buffer_size_v2.values[gauge_key] == len(stored)
 
 
 @pytest.mark.asyncio

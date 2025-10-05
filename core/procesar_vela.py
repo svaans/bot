@@ -20,9 +20,8 @@ from core.utils.metrics_compat import Counter, Histogram
 
 try:  # pragma: no cover - métricas opcionales
     from core.metrics import (
-        BUFFER_SIZE,
-        BUFFERS_TAM,
-        ENTRADAS_RECHAZADAS,
+        BUFFER_SIZE_V2,
+        ENTRADAS_RECHAZADAS_V2,
         LAST_BAR_AGE,
         WARMUP_RESTANTE,
     )
@@ -36,14 +35,9 @@ except Exception:  # pragma: no cover - fallback si core.metrics no está dispon
 
     WARMUP_RESTANTE = _NullMetric()  # type: ignore[assignment]
     LAST_BAR_AGE = _NullMetric()  # type: ignore[assignment]
-    BUFFER_SIZE = _NullMetric()  # type: ignore[assignment]
-    BUFFERS_TAM = Gauge(
-        "buffers_tam",
-        "Tamaño del buffer actual por símbolo y timeframe",
-        ["symbol", "timeframe"],
-    )
-    ENTRADAS_RECHAZADAS = Counter(
-        "procesar_vela_entradas_rechazadas_total",
+    BUFFER_SIZE_V2 = _NullMetric()  # type: ignore[assignment]
+    ENTRADAS_RECHAZADAS_V2 = Counter(
+        "procesar_vela_entradas_rechazadas_total_v2",
         "Entradas rechazadas tras validaciones finales",
         ["symbol", "timeframe", "reason"],
     )
@@ -326,23 +320,13 @@ class BufferManager:
         tf_label = st.timeframe or (str(tf) if tf else None)
         try:
             safe_set(
-                BUFFERS_TAM,
+                BUFFER_SIZE_V2,
                 len(st.buffer),
                 symbol=sym,
                 timeframe=tf_label or "unknown",
             )
         except Exception as exc:
-            log.warning("No se pudo actualizar métrica BUFFERS_TAM: %s", exc)
-        try:
-            if tf_label:
-                safe_set(
-                    BUFFER_SIZE,
-                    len(st.buffer),
-                    symbol=sym,
-                    timeframe=tf_label,
-                )
-        except Exception as exc:
-            log.debug("No se pudo actualizar métrica buffer_size: %s", exc)
+            log.debug("No se pudo actualizar métrica buffer_size_v2: %s", exc)
 
     def extend(self, symbol: str, candles: Iterable[dict]) -> None:
         for candle in candles:
@@ -458,7 +442,7 @@ async def procesar_vela(trader: Any, vela: dict) -> None:
                 if hasattr(sg, "allows"):
                     if not sg.allows(symbol, float(spread_ratio)):
                         safe_inc(
-                            ENTRADAS_RECHAZADAS,
+                            ENTRADAS_RECHAZADAS_V2,
                             symbol=symbol,
                             timeframe=timeframe_label,
                             reason="spread_guard",
@@ -470,7 +454,7 @@ async def procesar_vela(trader: Any, vela: dict) -> None:
                 elif hasattr(sg, "permite_entrada"):
                     if not bool(sg.permite_entrada(symbol, {}, 0.0)):
                         safe_inc(
-                            ENTRADAS_RECHAZADAS,
+                            ENTRADAS_RECHAZADAS_V2,
                             symbol=symbol,
                             timeframe=timeframe_label,
                             reason="spread_guard",
@@ -530,7 +514,7 @@ async def procesar_vela(trader: Any, vela: dict) -> None:
             threshold = int(getattr(cfg, "trader_fastpath_threshold", 350))
             if len(df) >= threshold and getattr(cfg, "trader_fastpath_skip_entries", True):
                 safe_inc(
-                    ENTRADAS_RECHAZADAS,
+                    ENTRADAS_RECHAZADAS_V2,
                     symbol=symbol,
                     timeframe=timeframe_label,
                     reason="fastpath_skip_entries",
@@ -562,7 +546,7 @@ async def procesar_vela(trader: Any, vela: dict) -> None:
         precio = float(propuesta.get("precio_entrada", df.iloc[-1]["close"]))
         if not _is_num(precio) or precio <= 0:
             safe_inc(
-                ENTRADAS_RECHAZADAS,
+                ENTRADAS_RECHAZADAS_V2,
                 symbol=symbol,
                 timeframe=timeframe_label,
                 reason="bad_price",
@@ -573,7 +557,7 @@ async def procesar_vela(trader: Any, vela: dict) -> None:
         orders = getattr(trader, "orders", None)
         if orders is None or not hasattr(orders, "crear"):
             safe_inc(
-                ENTRADAS_RECHAZADAS,
+                ENTRADAS_RECHAZADAS_V2,
                 symbol=symbol,
                 timeframe=timeframe_label,
                 reason="orders_missing",
@@ -590,7 +574,7 @@ async def procesar_vela(trader: Any, vela: dict) -> None:
             ya = obtener(symbol) if callable(obtener) else None
             if ya is not None:
                 safe_inc(
-                    ENTRADAS_RECHAZADAS,
+                    ENTRADAS_RECHAZADAS_V2,
                     symbol=symbol,
                     timeframe=timeframe_label,
                     reason="ya_abierta",

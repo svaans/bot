@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from core.metrics import BUFFERS_TAM, ENTRADAS_RECHAZADAS
+from core.metrics import BUFFER_SIZE_V2, ENTRADAS_RECHAZADAS_V2
 from core.metrics_helpers import safe_inc, safe_set
 
 
@@ -12,22 +12,22 @@ def _labels_of(metric) -> set[str]:
 
 
 def test_entradas_rechazadas_labels() -> None:
-    assert _labels_of(ENTRADAS_RECHAZADAS) == {"symbol", "timeframe", "reason"}
+    assert _labels_of(ENTRADAS_RECHAZADAS_V2) == {"symbol", "timeframe", "reason"}
 
 
-def test_buffers_tam_labels() -> None:
-    assert _labels_of(BUFFERS_TAM) == {"symbol", "timeframe"}
+def test_buffer_size_v2_labels() -> None:
+    assert _labels_of(BUFFER_SIZE_V2) == {"symbol", "timeframe"}
 
 
 def test_safe_helpers_do_not_crash() -> None:
     safe_inc(
-        ENTRADAS_RECHAZADAS,
+        ENTRADAS_RECHAZADAS_V2,
         symbol="BTC/EUR",
         timeframe="5m",
         reason="x",
     )
     safe_set(
-        BUFFERS_TAM,
+        BUFFER_SIZE_V2,
         123,
         symbol="BTC/EUR",
         timeframe="5m",
