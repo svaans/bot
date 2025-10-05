@@ -60,7 +60,7 @@ def configurar_logger(nombre: str, *, modo_silencioso: bool | None = None, nivel
             logger = _CONFIGURED[nombre]
         else:
             logger = logging.getLogger(nombre)
-            logger.setLevel(logging.INFO)
+            logger.setLevel(logging.DEBUG)
             logger.propagate = False
             logger.handlers.clear()
             logger.addHandler(_build_handler())
