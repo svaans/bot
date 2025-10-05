@@ -11,7 +11,9 @@ from typing import Any, Deque, Dict, Optional, Tuple, Union
 import pandas as pd
 
 from core.utils.logger import configurar_logger
-from core.utils.metrics_compat import Counter, Gauge, Histogram
+from prometheus_client import Gauge
+
+from core.utils.metrics_compat import Counter, Histogram
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Métricas (compatibles aunque no haya prometheus_client)
@@ -31,8 +33,8 @@ CANDLES_IGNORADAS = Counter(
     ["reason"],
 )
 BUFFERS_TAM = Gauge(
-    "procesar_vela_buffer_size",
-    "Tamaño del buffer de velas por símbolo",
+    "buffers_tam",
+    "Tamaño del buffer actual por símbolo",
     ["symbol"],
 )
 ENTRADAS_CANDIDATAS = Counter(
@@ -231,7 +233,10 @@ class BufferManager:
     def append(self, symbol: str, candle: dict) -> None:
         st = self._get_state(symbol)
         st.buffer.append(candle)
-        BUFFERS_TAM.labels(symbol=symbol).set(len(st.buffer))
+        try:
+            BUFFERS_TAM.labels(symbol=symbol).set(len(st.buffer))
+        except Exception as exc:
+            log.warning("No se pudo actualizar métrica BUFFERS_TAM: %s", exc)
 
     def dataframe(self, symbol: str) -> Optional[pd.DataFrame]:
         st = self._get_state(symbol)
