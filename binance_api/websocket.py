@@ -62,7 +62,9 @@ def _init_state(symbol: str, intervalo: str, ultimo_timestamp: Optional[int], ul
     if ultimo_timestamp:
         base_ts = int(ultimo_timestamp)
     else:
-        base_ts = now_ms - step_ms
+        # Alinea el timestamp al cierre más reciente completado para evitar
+        # discrepancias con consumidores que validan la integridad del stream.
+        base_ts = max(0, ((now_ms // step_ms) - 1) * step_ms)
     close = ultimo_cierre if ultimo_cierre is not None else 100.0
     return _StreamState(symbol, intervalo, base_ts, float(close))
 

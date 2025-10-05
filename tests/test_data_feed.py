@@ -58,6 +58,30 @@ async def test_handle_candle_enqueues_closed_aligned(capture_events: list[tuple[
 
 
 @pytest.mark.asyncio
+async def test_handle_candle_accepts_close_time_when_timestamp_missing() -> None:
+    feed = make_feed()
+    symbol = "ETHUSDT"
+    feed._queues[symbol] = asyncio.Queue()
+
+    base_ts = 1_650_000_000_000
+    candle = {
+        "symbol": symbol,
+        "close_time": base_ts,
+        "open_time": base_ts - 60_000,
+        "is_closed": True,
+    }
+
+    await feed._handle_candle(symbol, candle)
+
+    assert feed._queues[symbol].qsize() == 1
+    queued = feed._queues[symbol].get_nowait()
+    feed._queues[symbol].task_done()
+    assert queued["timestamp"] == base_ts
+    assert feed._stats[symbol]["received"] == 1
+    assert feed._last_close_ts[symbol] == base_ts
+
+
+@pytest.mark.asyncio
 async def test_handle_candle_ignores_non_closed() -> None:
     feed = make_feed()
     symbol = "ETHUSDT"

@@ -94,6 +94,26 @@ async def test_escuchar_velas_emits_candles(monkeypatch: pytest.MonkeyPatch) -> 
     assert candle["is_closed"] is True
 
 
+def test_init_state_aligns_to_interval_boundary(monkeypatch: pytest.MonkeyPatch) -> None:
+    now_ms = 1_650_000_123_456
+
+    class DummyDatetime:
+        @staticmethod
+        def now(_tz):
+            class _Now:
+                def timestamp(self) -> float:
+                    return now_ms / 1000
+
+            return _Now()
+
+    monkeypatch.setattr(ws, "datetime", DummyDatetime)
+
+    state = ws._init_state("BTCUSDT", "1m", ultimo_timestamp=None, ultimo_cierre=None)
+
+    assert state.ultimo_ts % 60000 == 0
+    assert state.ultimo_ts == ((now_ms // 60000) - 1) * 60000
+
+
 @pytest.mark.asyncio
 async def test_escuchar_velas_combinado_dispatches_to_handlers(monkeypatch: pytest.MonkeyPatch) -> None:
     """Multiple symbol stream should forward messages to each handler."""

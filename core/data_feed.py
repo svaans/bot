@@ -412,8 +412,30 @@ class DataFeed:
         if not candle.get("is_closed", True):
             return
         ts = candle.get("timestamp")
+        if ts is None:
+            for key in (
+                "close_time",
+                "closeTime",
+                "open_time",
+                "openTime",
+                "event_time",
+                "eventTime",
+            ):
+                candidato = candle.get(key)
+                if candidato is not None:
+                    ts = candidato
+                    break
+
+        try:
+            ts = int(float(ts)) if ts is not None else None
+        except (TypeError, ValueError):
+            ts = None
         if ts is None or not timestamp_alineado(ts, self.intervalo):
             return
+        
+
+        # Normaliza el timestamp para mantener consistencia río abajo
+        candle["timestamp"] = ts
 
         last = self._last_close_ts.get(symbol)
         if last is not None and ts <= last:
