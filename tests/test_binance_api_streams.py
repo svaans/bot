@@ -55,6 +55,13 @@ async def test_escuchar_velas_emits_candles(monkeypatch: pytest.MonkeyPatch) -> 
 
     monkeypatch.setattr(ws.random, "uniform", deterministic_uniform)
 
+    original_sleep = asyncio.sleep
+
+    async def fast_sleep(_: float) -> None:
+        await original_sleep(0)
+
+    monkeypatch.setattr(ws.asyncio, "sleep", fast_sleep)
+
     captured: list[Dict[str, float | int | str | bool]] = []
     received = asyncio.Event()
 
@@ -91,6 +98,52 @@ async def test_escuchar_velas_emits_candles(monkeypatch: pytest.MonkeyPatch) -> 
     assert candle["high"] == pytest.approx(101.05)
     assert candle["low"] == pytest.approx(100.95)
     assert candle["volume"] == pytest.approx(30.0)
+    assert candle["is_closed"] is True
+
+
+@pytest.mark.asyncio
+async def test_escuchar_velas_5m_marks_closed(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Five-minute stream should emit candles flagged as closed."""
+
+    def deterministic_uniform(a: float, b: float) -> float:
+        return (a + b) / 2.0
+
+    monkeypatch.setattr(ws.random, "uniform", deterministic_uniform)
+
+    original_sleep = asyncio.sleep
+
+    async def fast_sleep(_: float, result: object | None = None) -> object | None:
+        return await original_sleep(0, result=result)
+
+    monkeypatch.setattr(ws.asyncio, "sleep", fast_sleep)
+
+    captured: list[Dict[str, float | int | str | bool]] = []
+
+    async def handler(candle: Dict[str, float | int | str | bool]) -> None:
+        captured.append(candle)
+        raise asyncio.CancelledError
+
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(
+            ws.escuchar_velas(
+                "BTCUSDT",
+                "5m",
+                handler,
+                {},
+                timeout_inactividad=5.0,
+                _heartbeat=1.0,
+                ultimo_timestamp=300_000,
+                ultimo_cierre=101.0,
+            ),
+            timeout=2.0,
+        )
+
+    assert captured, "the websocket simulator should produce at least one candle"
+    candle = captured[0]
+    assert candle["symbol"] == "BTCUSDT"
+    assert candle["intervalo"] == "5m"
+    assert candle["open_time"] == 600_000
+    assert candle["close_time"] == 600_000
     assert candle["is_closed"] is True
 
 

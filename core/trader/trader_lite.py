@@ -499,10 +499,15 @@ class TraderLite:
         if last_bar_ts is None:
             return True
 
-        key = (symbol.upper(), str(timeframe or ""))
+        try:
+            normalized_ts = int(last_bar_ts)
+        except (TypeError, ValueError):
+            return True
+
+        key = (symbol.upper(), str(timeframe or "").lower())
         prev = self._last_evaluated_bar.get(key)
-        if prev == last_bar_ts:
+        if prev is not None and normalized_ts <= prev:
             return False
 
-        self._last_evaluated_bar[key] = last_bar_ts
+        self._last_evaluated_bar[key] = normalized_ts
         return True
