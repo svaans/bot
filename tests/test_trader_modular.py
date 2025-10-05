@@ -5,44 +5,7 @@ import pytest
 from core.trader_modular import TraderLite
 
 
-class DummySupervisor:
-    def __init__(self) -> None:
-        self.ticks: list[tuple[str, bool]] = []
-
-    def start_supervision(self) -> None:
-        return None
-
-    def supervised_task(self, *args, **kwargs) -> None:  # pragma: no cover - interfaz dummy
-        return None
-
-    def beat(self, *args, **kwargs) -> None:  # pragma: no cover - interfaz dummy
-        return None
-
-    def tick_data(self, symbol: str, reinicio: bool = False) -> None:
-        self.ticks.append((symbol, reinicio))
-
-    async def shutdown(self) -> None:  # pragma: no cover - interfaz dummy
-        return None
-
-
-class DummyConfig:
-    def __init__(self, **overrides) -> None:
-        self.symbols = ["BTCUSDT"]
-        self.intervalo_velas = "1m"
-        self.modo_real = False
-        self.max_spread_ratio = 0.0
-        self.spread_dynamic = False
-        self.spread_guard_window = 50
-        self.spread_guard_hysteresis = 0.15
-        self.spread_guard_max_limit = 0.05
-        self.handler_timeout = 2.0
-        self.inactivity_intervals = 10
-        self.df_queue_default_limit = 2000
-        self.df_queue_policy = "drop_oldest"
-        self.monitor_interval = 5.0
-        self.df_backpressure = True
-        for key, value in overrides.items():
-            setattr(self, key, value)
+from .factories import DummyConfig, DummySupervisor
 
 
 @pytest.mark.asyncio
