@@ -124,6 +124,8 @@ class TraderLite:
         except Exception:
             log.debug("No se pudo marcar DataFeed como gestionado por Trader")
 
+        self._datafeed_connected_emitted = False
+
         # Cliente de exchange (solo modo real)
         self._cliente = None
         crear_cliente_fn = _crear_cliente_factory()
@@ -602,6 +604,7 @@ class TraderLite:
         async def _handler(c: dict) -> None:
             sym = self._extract_symbol(c)
             ts = self._extract_timestamp(c)
+            self._maybe_emit_datafeed_connected(sym, ts)
             handler_ref = getattr(self, "_handler", None)
             handler_id = id(handler_ref) if handler_ref is not None else None
             handler_line = (
@@ -680,6 +683,31 @@ class TraderLite:
                 self.on_event(evt, data)
             except Exception:
                 pass
+
+    def _maybe_emit_datafeed_connected(self, symbol: str, ts: int | None) -> None:
+        if self._datafeed_connected_emitted:
+            return
+        bus = getattr(self, "event_bus", None) or getattr(self, "bus", None)
+        payload = {"symbol": symbol}
+        if ts is not None:
+            payload["timestamp"] = ts
+        if bus is None:
+            return
+        emit = getattr(bus, "emit", None)
+        if callable(emit):
+            try:
+                emit("datafeed_connected", payload)
+                self._datafeed_connected_emitted = True
+                return
+            except Exception:
+                log.debug("No se pudo emitir evento datafeed_connected", exc_info=True)
+        publish = getattr(bus, "publish", None)
+        if callable(publish):
+            try:
+                asyncio.create_task(publish("datafeed_connected", payload))
+                self._datafeed_connected_emitted = True
+            except Exception:
+                log.debug("No se pudo publicar evento datafeed_connected", exc_info=True)
 
     def _descubrir_handler_default(self) -> Callable[[dict], Awaitable[None]]:
         """Intento suave de usar `core.procesar_vela.procesar_vela` si existe.
