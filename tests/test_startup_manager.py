@@ -102,3 +102,26 @@ async def test_wait_ws_failure_event_pre_set() -> None:
 
     with pytest.raises(RuntimeError, match="host inalcanzable"):
         await manager._wait_ws(1.0)
+
+
+@pytest.mark.asyncio
+async def test_wait_ws_failure_with_threading_event() -> None:
+    """Soporta señales de error provenientes de ``threading.Event``."""
+
+    success = threading.Event()
+    failure = threading.Event()
+    feed = SimpleNamespace(
+        ws_connected_event=success,
+        ws_failed_event=failure,
+        ws_failure_reason="fallo thread",
+    )
+    manager = StartupManager(trader=_DummyTrader(feed))
+
+    async def _trigger_failure() -> None:
+        await asyncio.sleep(0.05)
+        failure.set()
+
+    asyncio.create_task(_trigger_failure())
+
+    with pytest.raises(RuntimeError, match="fallo thread"):
+        await manager._wait_ws(1.0)
