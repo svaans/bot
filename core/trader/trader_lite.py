@@ -364,11 +364,56 @@ class TraderLite:
             )
         return result
 
+    @staticmethod
+    def _extract_symbol(candle: dict, *, fallback: str = "") -> str:
+        if not isinstance(candle, dict):
+            return str(fallback).upper()
+        for key in ("symbol", "s"):
+            value = candle.get(key)
+            if value:
+                return str(value).upper()
+        return str(fallback).upper()
+
+    @staticmethod
+    def _extract_timestamp(candle: dict) -> Any:
+        if not isinstance(candle, dict):
+            return None
+        for key in ("timestamp", "close_time", "closeTime", "open_time", "openTime"):
+            value = candle.get(key)
+            if value is None:
+                continue
+            try:
+                return int(value)
+            except (TypeError, ValueError):
+                try:
+                    return float(value)
+                except (TypeError, ValueError):
+                    return value
+        return None
+
     def _update_estado_con_candle(self, candle: dict) -> bool:
         """Actualiza buffers/estado y decide si se procesa la vela."""
 
-        sym = str(candle.get("symbol") or "").upper()
+        sym = self._extract_symbol(candle)
+        ts = self._extract_timestamp(candle)
+        log.debug(
+            "update_estado.enter",
+            extra={
+                "symbol": sym,
+                "timestamp": ts,
+                "stage": "Trader._update_estado_con_candle",
+            },
+        )
         if not sym or sym not in self.estado:
+            log.debug(
+                "update_estado.exit",
+                extra={
+                    "symbol": sym,
+                    "timestamp": ts,
+                    "stage": "Trader._update_estado_con_candle",
+                    "result": "passthrough",
+                },
+            )
             return True
         
         timeframe_raw = (
@@ -385,24 +430,72 @@ class TraderLite:
         if self._backfill_service is not None:
             should_process, normalized = self._backfill_service.handle_live_candle(sym, timeframe, candle)
             if not should_process:
+                log.debug(
+                    "update_estado.skip",
+                    extra={
+                        "symbol": sym,
+                        "timestamp": ts,
+                        "stage": "Trader._update_estado_con_candle",
+                        "reason": "backfill_not_ready",
+                    },
+                )
+                log.debug(
+                    "update_estado.exit",
+                    extra={
+                        "symbol": sym,
+                        "timestamp": ts,
+                        "stage": "Trader._update_estado_con_candle",
+                        "result": "skipped",
+                    },
+                )
                 return False
             if normalized is not None:
                 for key in ("open_time", "close_time", "timeframe", "timestamp"):
                     if key not in candle and key in normalized:
                         candle[key] = normalized[key]
                 timeframe = str(candle.get("timeframe", timeframe))
+                ts = self._extract_timestamp(candle)
 
         if not self.is_symbol_ready(sym, timeframe):
+            log.debug(
+                "update_estado.skip",
+                extra={
+                    "symbol": sym,
+                    "timestamp": ts,
+                    "stage": "Trader._update_estado_con_candle",
+                    "reason": "symbol_not_ready",
+                },
+            )
+            log.debug(
+                "update_estado.exit",
+                extra={
+                    "symbol": sym,
+                    "timestamp": ts,
+                    "stage": "Trader._update_estado_con_candle",
+                    "result": "skipped",
+                },
+            )
             return False
 
         estado = self.estado[sym]
         if not estado.candle_filter.accept(candle):
             log.debug(
-                "Vela rechazada por CandleFilter",
+                "update_estado.skip",
                 extra={
                     "symbol": sym,
-                    "timestamp": candle.get("timestamp"),
+                    "timestamp": ts,
+                    "stage": "Trader._update_estado_con_candle",
+                    "reason": "candle_filter",
                     "estadisticas": dict(estado.candle_filter.estadisticas),
+                },
+            )
+            log.debug(
+                "update_estado.exit",
+                extra={
+                    "symbol": sym,
+                    "timestamp": ts,
+                    "stage": "Trader._update_estado_con_candle",
+                    "result": "skipped",
                 },
             )
             return False
@@ -413,6 +506,16 @@ class TraderLite:
             self.supervisor.tick_data(sym)
         except Exception:
             log.exception("Error notificando tick_data al supervisor")
+        ts = self._extract_timestamp(candle)
+        log.debug(
+            "update_estado.exit",
+            extra={
+                "symbol": sym,
+                "timestamp": ts,
+                "stage": "Trader._update_estado_con_candle",
+                "result": "accepted",
+            },
+        )
         return True
 
     # -------------------- API pública --------------------
@@ -497,9 +600,37 @@ class TraderLite:
         self._emit("trader_start", {"symbols": symbols, "intervalo": self.config.intervalo_velas})
 
         async def _handler(c: dict) -> None:
-            if not self._update_estado_con_candle(c):
-                return
-            await self._procesar_vela(c)
+            sym = self._extract_symbol(c)
+            ts = self._extract_timestamp(c)
+            log.debug(
+                "handler.enter",
+                extra={
+                    "symbol": sym,
+                    "timestamp": ts,
+                    "stage": "Trader._handler",
+                },
+            )
+            outcome = "accepted"
+            try:
+                should_process = self._update_estado_con_candle(c)
+                if not should_process:
+                    outcome = "skipped"
+                    return
+                await self._procesar_vela(c)
+                outcome = "processed"
+            except Exception:
+                outcome = "error"
+                raise
+            finally:
+                log.debug(
+                    "handler.exit",
+                    extra={
+                        "symbol": sym,
+                        "timestamp": ts,
+                        "stage": "Trader._handler",
+                        "result": outcome,
+                    },
+                )
 
         # Registrar latidos periódicos
         self.supervisor.supervised_task(
@@ -658,7 +789,32 @@ class TraderLite:
     async def _procesar_vela(self, candle: dict) -> None:
         """Procesa la vela aceptada por ``_update_estado_con_candle``."""
 
-        await self._handler_invoker(candle)
+        sym = self._extract_symbol(candle)
+        ts = self._extract_timestamp(candle)
+        log.debug(
+            "procesar_vela.enter",
+            extra={
+                "symbol": sym,
+                "timestamp": ts,
+                "stage": "Trader._procesar_vela",
+            },
+        )
+        outcome = "ok"
+        try:
+            await self._handler_invoker(candle)
+        except Exception:
+            outcome = "error"
+            raise
+        finally:
+            log.debug(
+                "procesar_vela.exit",
+                extra={
+                    "symbol": sym,
+                    "timestamp": ts,
+                    "stage": "Trader._procesar_vela",
+                    "result": outcome,
+                },
+            )
     
     def _resolve_min_bars_requirement(self) -> int:
         """Obtiene el mínimo de velas requerido para evaluar entradas."""
