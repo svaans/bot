@@ -61,3 +61,44 @@ async def test_wait_ws_timeout_without_signal() -> None:
 
     with pytest.raises(RuntimeError, match="WS no conectado"):
         await manager._wait_ws(0.1)
+
+
+@pytest.mark.asyncio
+async def test_wait_ws_fails_fast_on_failure_event() -> None:
+    """Si se emite la señal de error se aborta sin esperar al timeout."""
+
+    success = asyncio.Event()
+    failure = asyncio.Event()
+    feed = SimpleNamespace(
+        ws_connected_event=success,
+        ws_failed_event=failure,
+        ws_failure_reason="fallo handshake",
+    )
+    manager = StartupManager(trader=_DummyTrader(feed))
+
+    async def _fail_later() -> None:
+        await asyncio.sleep(0.05)
+        failure.set()
+
+    asyncio.create_task(_fail_later())
+
+    with pytest.raises(RuntimeError, match="fallo handshake"):
+        await manager._wait_ws(1.0)
+
+
+@pytest.mark.asyncio
+async def test_wait_ws_failure_event_pre_set() -> None:
+    """La señal de error previa debe detener inmediatamente la espera."""
+
+    success = asyncio.Event()
+    failure = asyncio.Event()
+    failure.set()
+    feed = SimpleNamespace(
+        ws_connected_event=success,
+        ws_failed_event=failure,
+        ws_failure_reason="host inalcanzable",
+    )
+    manager = StartupManager(trader=_DummyTrader(feed))
+
+    with pytest.raises(RuntimeError, match="host inalcanzable"):
+        await manager._wait_ws(1.0)
