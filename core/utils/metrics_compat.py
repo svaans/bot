@@ -27,17 +27,36 @@ class _BaseMetric:
     _children: Dict[Tuple[str, ...], "_BaseMetric"] = field(default_factory=dict)
     _metric: Any | None = None
 
-    def labels(self, *values: str) -> "_BaseMetric":
+    def labels(self, *values: str, **kwargs: str) -> "_BaseMetric":
         if not self.labelnames:
             return self
-        if len(values) != len(self.labelnames):
-            raise ValueError("Número de labels inválido")
-        key = tuple(values)
+        if kwargs:
+            if values:
+                raise TypeError("labels() no acepta argumentos mixtos posicionales y nombrados")
+            missing = [name for name in self.labelnames if name not in kwargs]
+            if missing:
+                raise ValueError(f"Faltan labels requeridas: {', '.join(missing)}")
+            extra = sorted(set(kwargs) - set(self.labelnames))
+            if extra:
+                raise ValueError(f"Labels desconocidas: {', '.join(extra)}")
+            ordered_values = tuple(kwargs[name] for name in self.labelnames)
+        else:
+            if len(values) != len(self.labelnames):
+                raise ValueError("Número de labels inválido")
+            ordered_values = tuple(values)
+
+        key = ordered_values
         if key not in self._children:
-            child = self.__class__(self.name, self.documentation)
+            child = object.__new__(self.__class__)
+            child.name = self.name
+            child.documentation = self.documentation
             child.labelnames = ()
-            if self._metric is not None:
-                child._metric = self._metric.labels(*values)
+            child._children = {}
+            if hasattr(self, "_value"):
+                child._value = 0.0
+            if hasattr(self, "_observations"):
+                child._observations = []
+            child._metric = self._metric.labels(*ordered_values) if self._metric is not None else None
             self._children[key] = child
         return self._children[key]
 
