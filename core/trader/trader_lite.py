@@ -499,7 +499,7 @@ class TraderLite:
         async def _handler(c: dict) -> None:
             if not self._update_estado_con_candle(c):
                 return
-            await self._handler_invoker(c)
+            await self._procesar_vela(c)
 
         # Registrar latidos periódicos
         self.supervisor.supervised_task(
@@ -654,6 +654,11 @@ class TraderLite:
             await handler(*args, **kwargs)
 
         return _invoke
+
+    async def _procesar_vela(self, candle: dict) -> None:
+        """Procesa la vela aceptada por ``_update_estado_con_candle``."""
+
+        await self._handler_invoker(candle)
     
     def _resolve_min_bars_requirement(self) -> int:
         """Obtiene el mínimo de velas requerido para evaluar entradas."""
