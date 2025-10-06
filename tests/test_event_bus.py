@@ -41,6 +41,24 @@ async def test_event_bus_wait_resolves_on_emit() -> None:
 
 
 @pytest.mark.asyncio
+async def test_event_bus_wait_sync_blocks_until_event() -> None:
+    bus = EventBus()
+    bus.start()
+
+    async def trigger() -> None:
+        await asyncio.sleep(0.01)
+        await bus.publish("ready", {"ok": True})
+
+    result, _ = await asyncio.gather(
+        asyncio.to_thread(bus.wait_sync, "ready", 1.0),
+        trigger(),
+    )
+
+    assert result == {"ok": True}
+    await bus.close()
+
+
+@pytest.mark.asyncio
 async def test_event_bus_close_stops_dispatcher() -> None:
     bus = EventBus()
     closed = False
