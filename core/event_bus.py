@@ -16,12 +16,14 @@ class EventBus:
         self._queue: asyncio.Queue[tuple[str, Any]] = asyncio.Queue()
         self._waiters: Dict[str, List["EventBus._Waiter"]] = defaultdict(list)
         self._task: asyncio.Task | None = None
+        self._loop: asyncio.AbstractEventLoop | None = None
         self._closed = False
         try:
             loop = asyncio.get_running_loop()
         except RuntimeError:
             loop = None
         if loop and loop.is_running():
+            self._loop = loop
             self._task = loop.create_task(self._dispatcher())
 
     @dataclass(slots=True)
@@ -38,6 +40,7 @@ class EventBus:
         except RuntimeError:
             return
         if loop.is_running():
+            self._loop = loop
             self._task = loop.create_task(self._dispatcher())
 
     def subscribe(self, event_type: str, callback: Callable[[Any], Awaitable[None]]) -> None:
@@ -51,8 +54,12 @@ class EventBus:
         try:
             loop = asyncio.get_running_loop()
         except RuntimeError:
+            loop = None
+        if loop and loop.is_running():
+            loop.create_task(self.publish(event_type, data))
             return
-        loop.create_task(self.publish(event_type, data))
+        if self._loop and not self._loop.is_closed():
+            asyncio.run_coroutine_threadsafe(self.publish(event_type, data), self._loop)
 
     async def publish(self, event_type: str, data: Any | None) -> None:
         """Publish ``data`` for ``event_type``."""
@@ -84,6 +91,39 @@ class EventBus:
             raise
         return waiter.payload
 
+    def wait_sync(self, event_type: str, timeout: float | None = None) -> Any | None:
+        """Block the current thread until ``event_type`` arrives or timeout expires.
+
+        Parameters
+        ----------
+        event_type:
+            Nombre del evento a esperar.
+        timeout:
+            Tiempo máximo de espera en segundos. ``None`` implica espera indefinida.
+
+        Returns
+        -------
+        Any | None
+            El *payload* recibido para ``event_type`` si llega a tiempo.
+
+        Raises
+        ------
+        RuntimeError
+            Si el bus no está asociado a ningún *event loop* activo.
+        asyncio.TimeoutError
+            Si se agota el tiempo de espera configurado.
+        """
+
+        if self._loop is None or self._loop.is_closed():
+            raise RuntimeError("EventBus.wait_sync() requiere un loop activo")
+
+        future = asyncio.run_coroutine_threadsafe(self.wait(event_type, timeout), self._loop)
+        try:
+            return future.result()
+        except Exception:
+            future.cancel()
+            raise
+
     async def _dispatcher(self) -> None:
         while not self._closed:
             event_type, data = await self._queue.get()
@@ -108,12 +148,14 @@ class EventBus:
                 await self._task
             except asyncio.CancelledError:
                 pass
+        self._task = None
         for event_type, waiters in list(self._waiters.items()):
             for waiter in waiters:
                 if not waiter.event.is_set():
                     waiter.payload = None
                     waiter.event.set()
             self._waiters.pop(event_type, None)
+        self._loop = None
 
     def _resolve_waiters(self, event_type: str, data: Any | None) -> None:
         waiters = self._waiters.pop(event_type, [])
