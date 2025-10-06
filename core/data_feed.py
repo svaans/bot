@@ -8,6 +8,8 @@ Compatibilidad esperada con el resto del bot:
 - Atributos:
     .activos (propiedad booleana)
     ._managed_by_trader (flag opcional; el Trader puede marcarlo en tiempo de arranque)
+    .ws_connected_event (asyncio.Event)
+    .ws_failed_event (asyncio.Event)
 - Métodos:
     precargar(symbols, cliente, minimo)
     escuchar(symbols, handler, cliente)
@@ -150,8 +152,11 @@ class DataFeed:
         self._handler_wrapper_calls: int = 0
         self._handler_log_events: int = 0
 
-        # Señal de conexión del WebSocket (para StartupManager u otros coordinadores)
+        # Señales de conexión del WebSocket (para StartupManager u otros coordinadores)
         self.ws_connected_event: asyncio.Event = asyncio.Event()
+
+        self.ws_failed_event: asyncio.Event = asyncio.Event()
+        self._ws_failure_reason: str | None = None
 
     # ─────────────────────── API pública ───────────────────────
 
@@ -230,6 +235,8 @@ class DataFeed:
 
         # Nueva señal por cada arranque para evitar estados residuales
         self.ws_connected_event = asyncio.Event()
+        self.ws_failed_event = asyncio.Event()
+        self._ws_failure_reason = None
 
         self._symbols = list({s.upper() for s in symbols})
         if not self._symbols:
@@ -326,6 +333,8 @@ class DataFeed:
 
         # La señal se reinicia para futuros arranques
         self.ws_connected_event = asyncio.Event()
+        self.ws_failed_event = asyncio.Event()
+        self._ws_failure_reason = None
 
     # ─────────────────────── Producción (WS) ───────────────────────
 
@@ -365,6 +374,9 @@ class DataFeed:
             except InactividadTimeoutError:
                 log.warning("%s: reinicio por inactividad", symbol)
                 self._emit("ws_inactividad", {"symbol": symbol})
+                if not self.ws_connected_event.is_set():
+                    self._signal_ws_failure("Timeout de inactividad durante el arranque del WS")
+                    return
                 backoff = 0.5
                 await asyncio.sleep(backoff)
 
@@ -374,6 +386,9 @@ class DataFeed:
             except Exception as e:
                 log.exception("%s: error en stream; reintentando", symbol)
                 self._emit("ws_error", {"symbol": symbol, "error": str(e)})
+                if not self.ws_connected_event.is_set():
+                    self._signal_ws_failure(e)
+                    return
                 backoff = min(60.0, backoff * 2)
                 await asyncio.sleep(backoff)
 
@@ -425,6 +440,9 @@ class DataFeed:
             except InactividadTimeoutError:
                 log.warning("stream combinado: reinicio por inactividad")
                 self._emit("ws_inactividad", {"symbols": symbols})
+                if not self.ws_connected_event.is_set():
+                    self._signal_ws_failure("Timeout de inactividad durante el arranque del WS")
+                    return
                 backoff = 0.5
                 await asyncio.sleep(backoff)
 
@@ -434,6 +452,9 @@ class DataFeed:
             except Exception as e:
                 log.exception("stream combinado: error; reintentando")
                 self._emit("ws_error", {"symbols": symbols, "error": str(e)})
+                if not self.ws_connected_event.is_set():
+                    self._signal_ws_failure(e)
+                    return
                 backoff = min(60.0, backoff * 2)
                 await asyncio.sleep(backoff)
 
@@ -484,7 +505,7 @@ class DataFeed:
             return
 
         if not self.ws_connected_event.is_set():
-            self.ws_connected_event.set()
+            self._signal_ws_connected(symbol)
 
         q = self._queues.get(symbol)
         if q is None:
@@ -850,6 +871,38 @@ class DataFeed:
         self._emit("backfill_ok", {"symbol": symbol, "candles": len(ohlcv)})
 
     # ─────────────────────── Utilidades ───────────────────────
+
+    def _signal_ws_connected(self, symbol: str | None = None) -> None:
+        if self.ws_connected_event.is_set():
+            return
+        self.ws_connected_event.set()
+        payload = {"intervalo": self.intervalo}
+        if symbol is not None:
+            payload["symbol"] = symbol
+        self._emit("ws_connected", payload)
+
+    def _signal_ws_failure(self, error: BaseException | str | None = None) -> None:
+        if self.ws_failed_event.is_set():
+            return
+        reason: str | None
+        if isinstance(error, BaseException):
+            reason = f"{error.__class__.__name__}: {error}"
+        elif error:
+            reason = str(error)
+        else:
+            reason = None
+        if not reason:
+            reason = "error de conexión no especificado"
+        self._ws_failure_reason = reason
+        self.ws_failed_event.set()
+        payload = {"intervalo": self.intervalo}
+        if reason:
+            payload["reason"] = reason
+        self._emit("ws_connect_failed", payload)
+
+    @property
+    def ws_failure_reason(self) -> str | None:
+        return self._ws_failure_reason
 
     def _set_consumer_state(self, symbol: str, state: ConsumerState) -> None:
         prev = self._consumer_state.get(symbol)
