@@ -506,27 +506,50 @@ class DataFeed:
 
         while self._running:
             c = await q.get()
+            sym = str(c.get("symbol") or symbol).upper()
+            ts = c.get("timestamp") or c.get("close_time") or c.get("open_time")
+            outcome = "ok"
+            log.debug(
+                "consumer.enter",
+                extra={
+                    "symbol": sym,
+                    "timestamp": ts,
+                    "stage": "DataFeed._consumer",
+                },
+            )
             try:
                 await asyncio.wait_for(handler(c), timeout=self.handler_timeout)
                 self._set_consumer_state(symbol, ConsumerState.HEALTHY)
                 self._stats[symbol]["processed"] += 1
 
             except asyncio.TimeoutError:
+                outcome = "timeout"
                 log.error("%s: handler superó %.3fs; vela omitida", symbol, self.handler_timeout)
                 self._emit("handler_timeout", {"symbol": symbol})
                 self._stats[symbol]["handler_timeouts"] += 1
 
             except asyncio.CancelledError:
+                outcome = "cancelled"
                 raise
 
             except Exception as e:
+                outcome = "error"
                 log.exception("%s: error procesando vela", symbol)
                 self._emit("consumer_error", {"symbol": symbol, "error": str(e)})
                 self._stats[symbol]["consumer_errors"] += 1
 
             finally:
-                q.task_done()
                 self._consumer_last[symbol] = time.monotonic()
+                log.debug(
+                    "consumer.exit",
+                    extra={
+                        "symbol": sym,
+                        "timestamp": ts,
+                        "stage": "DataFeed._consumer",
+                        "result": outcome,
+                    },
+                )
+                q.task_done()
                 # Seguridad: detectar loop de mismo timestamp
                 ts = c.get("timestamp")
                 prev = getattr(self, f"_last_processed_{symbol}", None)
