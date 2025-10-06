@@ -146,6 +146,9 @@ class DataFeed:
 
         # Estadísticas rápidas por símbolo
         self._stats: Dict[str, Dict[str, int]] = defaultdict(lambda: defaultdict(int))
+        self._handler_expected_info: dict[str, int | str | None] | None = None
+        self._handler_wrapper_calls: int = 0
+        self._handler_log_events: int = 0
 
     # ─────────────────────── API pública ───────────────────────
 
@@ -226,6 +229,18 @@ class DataFeed:
         if not self._symbols:
             log.warning("Sin símbolos para escuchar()")
             return
+        
+        self._handler_log_events = 0
+        self._handler_wrapper_calls = 0
+        handler_info = self._describe_handler(handler)
+        self._handler_expected_info = handler_info
+        log.debug(
+            "handler.registered",
+            extra={
+                "stage": "DataFeed.escuchar",
+                **{k: v for k, v in handler_info.items() if v is not None},
+            },
+        )
 
         self._handler = handler
         self._cliente = cliente
@@ -500,21 +515,47 @@ class DataFeed:
         q = self._queues[symbol]
         self._consumer_last[symbol] = time.monotonic()
         self._set_consumer_state(symbol, ConsumerState.STARTING)
-        handler = self._handler
-        if handler is None:
-            return
 
         while self._running:
             c = await q.get()
             sym = str(c.get("symbol") or symbol).upper()
             ts = c.get("timestamp") or c.get("close_time") or c.get("open_time")
             outcome = "ok"
+            handler = self._handler
+            if handler is None:
+                log.error(
+                    "handler.missing",
+                    extra={
+                        "symbol": sym,
+                        "timestamp": ts,
+                        "stage": "DataFeed._consumer",
+                    },
+                )
+                q.task_done()
+                continue
+            handler_info = self._describe_handler(handler)
+            if self._handler_expected_info and handler_info["id"] != self._handler_expected_info["id"]:
+                log.warning(
+                    "handler.mismatch",
+                    extra={
+                        "symbol": sym,
+                        "timestamp": ts,
+                        "stage": "DataFeed._consumer",
+                        "expected_id": self._handler_expected_info["id"],
+                        "expected_line": self._handler_expected_info.get("line"),
+                        "actual_id": handler_info["id"],
+                        "actual_line": handler_info.get("line"),
+                    },
+                )
             log.debug(
                 "consumer.enter",
                 extra={
                     "symbol": sym,
                     "timestamp": ts,
                     "stage": "DataFeed._consumer",
+                    "handler_id": handler_info["id"],
+                    "handler_qualname": handler_info.get("qualname"),
+                    "handler_line": handler_info.get("line"),
                 },
             )
             try:
@@ -547,9 +588,17 @@ class DataFeed:
                         "timestamp": ts,
                         "stage": "DataFeed._consumer",
                         "result": outcome,
+                        "handler_id": handler_info["id"],
+                        "handler_wrapper_calls": self._handler_wrapper_calls,
                     },
                 )
                 q.task_done()
+                if (
+                    outcome == "ok"
+                    and self._handler_log_events == 0
+                    and not getattr(handler, "__df_debug_wrapper__", False)
+                ):
+                    self._activate_handler_debug_wrapper()
                 # Seguridad: detectar loop de mismo timestamp
                 ts = c.get("timestamp")
                 prev = getattr(self, f"_last_processed_{symbol}", None)
@@ -568,6 +617,77 @@ class DataFeed:
             with contextlib.suppress(Exception):
                 await asyncio.wait_for(t, timeout=self.cancel_timeout)
         self._consumer_tasks[symbol] = asyncio.create_task(self._consumer(symbol), name=f"consumer_{symbol}")
+
+    def _note_handler_log(self) -> None:
+        """Registra que el handler final emitió logs propios."""
+
+        self._handler_log_events += 1
+
+    def _describe_handler(self, handler: Callable[[dict], Awaitable[None]]) -> dict[str, int | str | None]:
+        """Extrae metadatos relevantes del handler para trazabilidad."""
+
+        qualname = getattr(handler, "__qualname__", None)
+        code = getattr(handler, "__code__", None)
+        line = code.co_firstlineno if code else None
+        module = getattr(handler, "__module__", None)
+        return {
+            "id": id(handler),
+            "qualname": qualname,
+            "line": line,
+            "module": module,
+        }
+
+    def _activate_handler_debug_wrapper(self) -> None:
+        """Envuelve el handler para instrumentar llamadas cuando falta evidencia de logs."""
+
+        if self._handler is None:
+            return
+
+        if getattr(self._handler, "__df_debug_wrapper__", False):
+            return
+
+        original = self._handler
+        handler_info = self._describe_handler(original)
+
+        async def _wrapped(candle: dict) -> None:
+            self._handler_wrapper_calls += 1
+            call_idx = self._handler_wrapper_calls
+            log.debug(
+                "handler.wrapper.enter",
+                extra={
+                    "stage": "DataFeed._consumer",
+                    "handler_id": handler_info["id"],
+                    "handler_line": handler_info.get("line"),
+                    "call": call_idx,
+                },
+            )
+            try:
+                await original(candle)
+            finally:
+                log.debug(
+                    "handler.wrapper.exit",
+                    extra={
+                        "stage": "DataFeed._consumer",
+                        "handler_id": handler_info["id"],
+                        "handler_line": handler_info.get("line"),
+                        "call": call_idx,
+                    },
+                )
+
+        setattr(_wrapped, "__df_debug_wrapper__", True)
+        setattr(_wrapped, "__df_original__", original)
+        setattr(_wrapped, "__qualname__", getattr(original, "__qualname__", _wrapped.__qualname__))
+        self._handler = _wrapped
+        self._handler_expected_info = self._describe_handler(_wrapped)
+        log.warning(
+            "handler.wrapper.enabled",
+            extra={
+                "stage": "DataFeed._consumer",
+                "handler_id": handler_info["id"],
+                "handler_line": handler_info.get("line"),
+                "reason": "missing_trader_logs",
+            },
+        )
 
     # ─────────────────────── Monitores ───────────────────────
 

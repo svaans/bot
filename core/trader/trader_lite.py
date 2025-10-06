@@ -602,12 +602,28 @@ class TraderLite:
         async def _handler(c: dict) -> None:
             sym = self._extract_symbol(c)
             ts = self._extract_timestamp(c)
+            handler_ref = getattr(self, "_handler", None)
+            handler_id = id(handler_ref) if handler_ref is not None else None
+            handler_line = (
+                getattr(getattr(handler_ref, "__code__", None), "co_firstlineno", None)
+                if handler_ref is not None
+                else None
+            )
+            handler_qualname = getattr(handler_ref, "__qualname__", None) if handler_ref else None
+            if hasattr(self, "feed") and hasattr(self.feed, "_note_handler_log"):
+                try:
+                    self.feed._note_handler_log()
+                except Exception:
+                    pass
             log.debug(
                 "handler.enter",
                 extra={
                     "symbol": sym,
                     "timestamp": ts,
                     "stage": "Trader._handler",
+                    "handler_id": handler_id,
+                    "handler_qualname": handler_qualname,
+                    "handler_line": handler_line,
                 },
             )
             outcome = "accepted"
@@ -629,6 +645,9 @@ class TraderLite:
                         "timestamp": ts,
                         "stage": "Trader._handler",
                         "result": outcome,
+                        "handler_id": handler_id,
+                        "handler_qualname": handler_qualname,
+                        "handler_line": handler_line,
                     },
                 )
 

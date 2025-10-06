@@ -53,6 +53,23 @@ def _build_handler() -> logging.Handler:
     return handler
 
 
+def _ensure_root_logger() -> None:
+    """Guarantee a StreamHandler in the root logger with DEBUG level."""
+
+    root_logger = logging.getLogger()
+    if not root_logger.handlers:
+        root_logger.addHandler(_build_handler())
+    else:
+        # Reutilizamos el primer handler existente asegurando que emita a stdout.
+        has_stream_handler = any(isinstance(h, logging.StreamHandler) for h in root_logger.handlers)
+        if not has_stream_handler:
+            root_logger.addHandler(_build_handler())
+    root_logger.setLevel(logging.DEBUG)
+
+
+_ensure_root_logger()
+
+
 def configurar_logger(nombre: str, *, modo_silencioso: bool | None = None, nivel: int | None = None) -> logging.Logger:
     """Devuelve un logger configurado con formato JSON y singleton por nombre."""
     with _LOCK:
@@ -61,10 +78,15 @@ def configurar_logger(nombre: str, *, modo_silencioso: bool | None = None, nivel
         else:
             logger = logging.getLogger(nombre)
             logger.setLevel(logging.DEBUG)
-            logger.propagate = False
             logger.handlers.clear()
             logger.addHandler(_build_handler())
+            logger.propagate = False
             _CONFIGURED[nombre] = logger
+        if nombre in {"trader", "trader_modular"}:
+            # Estos loggers deben propagar al root para asegurar visibilidad completa.
+            logger.handlers.clear()
+            logger.setLevel(logging.DEBUG)
+            logger.propagate = True
     if nivel is not None:
         logger.setLevel(nivel)
     if modo_silencioso is None:
