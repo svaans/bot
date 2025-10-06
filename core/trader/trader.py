@@ -61,6 +61,7 @@ class Trader(TraderLite):
             self.bus = self._EventBus()
         else:
             self.bus = None
+        self.event_bus = self.bus
 
         if getattr(self, "_OrderManager", None) and getattr(self, "bus", None) is not None:
             self.orders = self._OrderManager(self.modo_real, self.bus)
