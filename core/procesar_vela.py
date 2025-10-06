@@ -417,7 +417,7 @@ async def procesar_vela(trader: Any, vela: dict) -> None:
         # 1) Validaciones mínimas y normalización
         symbol = str(vela.get("symbol") or vela.get("par") or "").upper()
         if not symbol:
-            CANDLES_IGNORADAS.labels(reason="no_symbol").inc()
+            safe_inc(CANDLES_IGNORADAS, reason="no_symbol")
             return
         
         timeframe_hint = (
@@ -430,7 +430,7 @@ async def procesar_vela(trader: Any, vela: dict) -> None:
 
         ok, reason = _validar_candle(vela)
         if not ok:
-            CANDLES_IGNORADAS.labels(reason=reason).inc()
+            safe_inc(CANDLES_IGNORADAS, reason=reason)
             return
 
         # 2) Control por spread (si hay guardia y si el dato viene en la vela)
@@ -471,7 +471,7 @@ async def procesar_vela(trader: Any, vela: dict) -> None:
             df = _buffers.dataframe(symbol)
 
         if df is None or df.empty:
-            CANDLES_IGNORADAS.labels(reason="empty_df").inc()
+            safe_inc(CANDLES_IGNORADAS, reason="empty_df")
             return
         
         timeframe = getattr(df, "tf", None)
@@ -485,14 +485,19 @@ async def procesar_vela(trader: Any, vela: dict) -> None:
 
         ready_checker = getattr(trader, "is_symbol_ready", None)
         if callable(ready_checker) and not ready_checker(symbol, timeframe_label):
-            CANDLES_IGNORADAS.labels(reason="backfill_pending").inc()
+            safe_inc(CANDLES_IGNORADAS, reason="backfill_pending")
             return
 
         min_needed = _resolve_min_bars(trader)
 
         try:
             faltan = max(0, min_needed - len(df)) if min_needed > 0 else 0
-            WARMUP_RESTANTE.labels(symbol, timeframe_label).set(faltan)
+            safe_set(
+                WARMUP_RESTANTE,
+                float(faltan),
+                symbol=symbol,
+                timeframe=(timeframe_label or "unknown"),
+            )
         except Exception:
             pass
 
@@ -500,7 +505,12 @@ async def procesar_vela(trader: Any, vela: dict) -> None:
             last_ts = _normalize_timestamp(df.iloc[-1]["timestamp"])
             if last_ts is not None:
                 edad = max(0.0, time.time() - last_ts)
-                LAST_BAR_AGE.labels(symbol, timeframe_label).set(edad)
+                safe_set(
+                    LAST_BAR_AGE,
+                    float(edad),
+                    symbol=symbol,
+                    timeframe=(timeframe_label or "unknown"),
+                )
         except Exception:
             pass
 
@@ -536,7 +546,7 @@ async def procesar_vela(trader: Any, vela: dict) -> None:
             return
 
         side = str(propuesta.get("side", "long")).lower()
-        ENTRADAS_CANDIDATAS.labels(symbol=symbol, side=side).inc()
+        safe_inc(ENTRADAS_CANDIDATAS, symbol=symbol, side=side)
 
         # 7) Validación final
         precio = float(propuesta.get("precio_entrada", df.iloc[-1]["close"]))
@@ -578,20 +588,20 @@ async def procesar_vela(trader: Any, vela: dict) -> None:
 
         try:
             await _abrir_orden(orders, symbol, side, precio, sl, tp, meta)
-            ENTRADAS_ABIERTAS.labels(symbol=symbol, side=side).inc()
+            safe_inc(ENTRADAS_ABIERTAS, symbol=symbol, side=side)
             notify = getattr(trader, "enqueue_notification", None)
             if callable(notify):
                 notify(f"Abrir {side} {symbol} @ {precio:.6f}", "INFO")
         except asyncio.CancelledError:
             raise
         except Exception as e:
-            HANDLER_EXCEPTIONS.inc()
+            safe_inc(HANDLER_EXCEPTIONS)
             log.exception("Error abriendo orden para %s: %s", symbol, e)
 
     except asyncio.CancelledError:
         raise
     except Exception as e:
-        HANDLER_EXCEPTIONS.inc()
+        safe_inc(HANDLER_EXCEPTIONS)
         log.exception("Excepción en procesar_vela: %s", e)
     finally:
         try:
