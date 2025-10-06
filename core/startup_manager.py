@@ -326,6 +326,20 @@ class StartupManager:
                 self.log.debug(
                     "EventBus sin soporte de wait() o ausente; se recurre a sondeo de actividad.",
                 )
+
+        event = getattr(feed, "ws_connected_event", None)
+        if event is not None:
+            try:
+                if isinstance(event, asyncio.Event):
+                    await asyncio.wait_for(event.wait(), timeout=timeout)
+                    return
+                wait_result = await asyncio.wait_for(asyncio.to_thread(event.wait, timeout), timeout=timeout + 0.1)
+                if wait_result:
+                    return
+            except asyncio.TimeoutError as exc:
+                raise RuntimeError("WS no conectado") from exc
+            except Exception:
+                self.log.debug("Fallo al esperar ws_connected_event; se recurre a sondeo.", exc_info=True)
                 
         start = time.time()
         while time.time() - start < timeout:
