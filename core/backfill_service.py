@@ -434,17 +434,25 @@ class BackfillService:
             return _NullMetric()
         payload = {"symbol": symbol, "timeframe": timeframe}
         payload.update(labels)
+        label_names = (
+            getattr(metric, "labelnames", None)
+            or getattr(metric, "_labelnames", None)
+            or ()
+        )
+        if label_names:
+            filtered = {key: payload.get(key, "") for key in label_names}
+            try:
+                return metric.labels(**filtered)
+            except TypeError:
+                values = [filtered.get(name, "") for name in label_names]
+                try:
+                    return metric.labels(*values)
+                except Exception:
+                    return _NullMetric()
         try:
             return metric.labels(**payload)
-        except TypeError:
-            label_names = getattr(metric, "labelnames", ())
-            if not label_names:
-                return metric
-            values = [payload.get(label, "") for label in label_names]
-            try:
-                return metric.labels(*values)
-            except Exception:
-                return _NullMetric()
+        except Exception:
+            return metric
 
     def _update_buffer_metric(self, symbol: str, timeframe: str, size: int) -> None:
         try:
