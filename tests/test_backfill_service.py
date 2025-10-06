@@ -34,6 +34,7 @@ class DummyCounterChild:
 class DummyGauge:
     def __init__(self) -> None:
         self.values: Dict[Tuple[Tuple[str, str], ...], float] = {}
+        self.labelnames = ("timeframe",)
 
     def labels(self, **labels: str) -> "DummyGauge":
         key = tuple(sorted(labels.items()))
@@ -136,7 +137,7 @@ async def test_backfill_run_loads_expected_candles() -> None:
 
     key = tuple(sorted({"symbol": "BTC/EUR", "timeframe": "5m", "status": "ok"}.items()))
     assert metrics.backfill_requests_total.values[key] == 1
-    gauge_key = tuple(sorted({"symbol": "BTC/EUR", "timeframe": "5m"}.items()))
+    gauge_key = tuple(sorted({"timeframe": "5m"}.items()))
     assert metrics.buffer_size_v2.values[gauge_key] == len(stored)
 
 
