@@ -100,7 +100,7 @@ VELAS_RECHAZADAS = Counter(
 ENTRADAS_RECHAZADAS_V2 = Counter(
     "procesar_vela_entradas_rechazadas_total_v2",
     "Entradas rechazadas tras validaciones finales",
-    ["symbol", "timeframe", "reason"],
+    ["timeframe", "reason"],
 )
 VELAS_RECHAZADAS_PCT = Gauge(
     "velas_rechazadas_pct",
