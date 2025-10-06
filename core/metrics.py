@@ -153,7 +153,7 @@ BACKFILL_GAPS_FOUND_TOTAL = Counter(
 BUFFER_SIZE_V2 = Gauge(
     "buffer_size_v2",
     "Tamaño del buffer de velas precargadas",
-    ["symbol", "timeframe"],
+    ["timeframe"],
 )
 
 FEEDS_FUNDING_MISSING = Counter(
