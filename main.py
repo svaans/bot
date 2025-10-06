@@ -138,11 +138,17 @@ async def main():
     # 1) Arranque del bot
     try:
         startup = StartupManager()
+        # El timeout global de arranque debe contemplar los plazos internos del
+        # StartupManager (warmup, espera de feeds, etc.). Utilizamos la
+        # configuración calculada por la propia instancia y añadimos un margen
+        # defensivo para evitar ocultar errores reales tras un TimeoutError.
+        startup_timeout = getattr(startup, "startup_timeout", 90.0) or 90.0
+        timeout_margin = 5.0
         # [No verificado] Se asume que run() devuelve (bot, tarea_bot, config).
         with phase("StartupManager.run"):
             triple: Tuple[Any, Any, Any] = await asyncio.wait_for(
                 startup.run(),
-                timeout=30,
+                timeout=startup_timeout + timeout_margin,
             )
         if not isinstance(triple, tuple) or len(triple) != 3:
             raise RuntimeError("StartupManager.run() no devolvió (bot, tarea_bot, config)")
