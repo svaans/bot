@@ -30,6 +30,9 @@ except Exception:  # pragma: no cover
     def validar_dataframe(df: pd.DataFrame, columnas: list[str]) -> bool:  # fallback mínimo
         return df is not None and not df.empty and all(col in df.columns for col in columnas)
 
+# Logging estructurado
+from core.utils.logger import configurar_logger
+
 # Import corregido: esta función vive en persistencia_tecnica
 try:
     from core.persistencia_tecnica import coincidencia_parcial
@@ -39,6 +42,9 @@ except Exception:  # pragma: no cover
 
 
 ColumnsBase = ["timestamp", "open", "high", "low", "close", "volume"]
+
+
+log = configurar_logger("entry_verifier", modo_silencioso=True)
 
 
 def _emit(on_event: Optional[Callable[[str, dict], None]], evt: str, data: dict) -> None:
@@ -182,29 +188,69 @@ async def verificar_entrada(
       - meta: dict con detalles internos (puedes extenderlo)
     o None si no procede.
     """
+    symbol_norm = str(symbol or "").upper()
+    ts_value: Any = None
+    log.debug(
+        "verificar_entrada.enter",
+        extra={
+            "symbol": symbol_norm,
+            "timestamp": ts_value,
+            "stage": "verificar_entrada",
+        },
+    )
+
+    def _reject(reason: str, *, extra: Optional[dict] = None) -> Optional[dict]:
+        payload = {
+            "symbol": symbol_norm,
+            "timestamp": ts_value,
+            "stage": "verificar_entrada",
+            "decision": "rechazada",
+            "reason": reason,
+        }
+        if extra:
+            payload.update(extra)
+        log.debug("verificar_entrada.exit", extra=payload)
+        return None
+
+    def _approve(resultado: dict) -> dict:
+        payload = {
+            "symbol": symbol_norm,
+            "timestamp": ts_value,
+            "stage": "verificar_entrada",
+            "decision": "permitida",
+            "reason": "ok",
+            "side": resultado.get("side"),
+            "score": resultado.get("score"),
+        }
+        log.debug("verificar_entrada.exit", extra=payload)
+        return resultado
     # Chequeos básicos
     if not isinstance(df, pd.DataFrame) or df.empty:
         _emit(on_event, "entry_skip", {"symbol": symbol, "reason": "empty_df"})
-        return None
+        return _reject("empty_df")
     if not validar_dataframe(df, ColumnsBase):
         _emit(on_event, "entry_skip", {"symbol": symbol, "reason": "invalid_columns"})
-        return None
+        return _reject("invalid_columns")
 
     df = _sanear_df(df)
     if df.empty:
         _emit(on_event, "entry_skip", {"symbol": symbol, "reason": "sanitized_empty"})
-        return None
+        return _reject("sanitized_empty")
 
     # Última vela
     last = df.iloc[-1]
     precio = float(last["close"])
-    ts = int(last["timestamp"])
+    try:
+        ts_value = int(last["timestamp"])
+    except (TypeError, ValueError):
+        ts_candidate = last.get("timestamp")
+        ts_value = None if pd.isna(ts_candidate) else ts_candidate
 
     # Respeta la puerta de entrada del Trader (capital, riesgo, cooldown, etc.)
     gate = getattr(trader, "_puede_evaluar_entradas", None)
     if callable(gate) and not gate(symbol):
         _emit(on_event, "entry_gate_blocked", {"symbol": symbol})
-        return None
+        return _reject("gate_blocked")
 
     # Timeout configurable por símbolo
     timeout = _timeout_para_symbol(trader, symbol)
@@ -217,10 +263,10 @@ async def verificar_entrada(
         )
     except asyncio.TimeoutError:
         _emit(on_event, "entry_timeout", {"symbol": symbol, "timeout": timeout})
-        return None
+        return _reject("timeout", extra={"timeout": timeout})
 
     if not resultado_engine:
-        return None
+        return _reject("engine_no_result")
 
     # Normalización mínima del resultado del engine
     side = str(resultado_engine.get("side", "long")).lower()
@@ -232,31 +278,31 @@ async def verificar_entrada(
     cfg = getattr(trader, "config", None)
     if cfg is None:
         _emit(on_event, "entry_skip", {"symbol": symbol, "reason": "config_missing"})
-        return None
+        return _reject("config_missing")
 
     # Reglas de contradicción
     bloquea_contra = bool(getattr(cfg, "contradicciones_bloquean_entrada", True))
     if bloquea_contra and contradicciones:
         _emit(on_event, "entry_skip", {"symbol": symbol, "reason": "contradicciones"})
-        return None
+        return _reject("contradicciones")
 
     # Validación de score técnico
     if not _validar_score(cfg, resultado_engine):
         _emit(on_event, "entry_skip", {"symbol": symbol, "reason": "score_bajo"})
-        return None
+        return _reject("score_bajo")
 
     # Persistencia técnica (si está activada/instanciada)
     resultado_engine = _aplicar_persistencia(trader, symbol, resultado_engine, on_event=on_event)
     if not resultado_engine.get("persistencia_ok", True):
         _emit(on_event, "entry_skip", {"symbol": symbol, "reason": "persistencia"})
-        return None
+        return _reject("persistencia")
 
     # Distancias mínimas SL/TP
     min_pct = _min_dist_pct(trader, symbol)
     sl, tp = _build_niveles(precio, min_pct)
     if not _validar_distancias(precio, sl, tp, min_pct):
         _emit(on_event, "entry_skip", {"symbol": symbol, "reason": "distancias"})
-        return None
+        return _reject("distancias")
 
     # Enriquecimiento opcional con coincidencia parcial (histórico↔pesos)
     try:
@@ -274,7 +320,7 @@ async def verificar_entrada(
         "stop_loss": sl,
         "take_profit": tp,
         "score": score,
-        "timestamp": ts,
+        "timestamp": ts_value,
         "persistencia_ok": bool(resultado_engine.get("persistencia_ok", True)),
         "meta": {
             "min_dist_pct": min_pct,
@@ -284,7 +330,7 @@ async def verificar_entrada(
     }
 
     _emit(on_event, "entry_candidate", {"symbol": symbol, "side": side, "score": score})
-    return propuesta
+    return _approve(propuesta)
 
 
 
