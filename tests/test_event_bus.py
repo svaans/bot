@@ -26,6 +26,21 @@ async def test_event_bus_publish_and_subscribe() -> None:
 
 
 @pytest.mark.asyncio
+async def test_event_bus_wait_resolves_on_emit() -> None:
+    bus = EventBus()
+
+    async def trigger() -> None:
+        await asyncio.sleep(0)
+        bus.emit("ready", {"ok": True})
+
+    asyncio.create_task(trigger())
+    data = await asyncio.wait_for(bus.wait("ready"), timeout=1)
+
+    assert data == {"ok": True}
+    await bus.close()
+
+
+@pytest.mark.asyncio
 async def test_event_bus_close_stops_dispatcher() -> None:
     bus = EventBus()
     closed = False
