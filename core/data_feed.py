@@ -232,6 +232,15 @@ class DataFeed:
         self._combined = len(self._symbols) > 1
         self._running = True
 
+        log.info(
+            "suscrito",
+            extra={
+                "symbols": self._symbols,
+                "intervalo": self.intervalo,
+                "combined": self._combined,
+            },
+        )
+
         # Colas + consumers
         self._queues = {s: asyncio.Queue(maxsize=self.queue_max) for s in self._symbols}
         for s in self._symbols:
@@ -455,6 +464,11 @@ class DataFeed:
             return
 
         candle.setdefault("_df_enqueue_time", time.monotonic())
+
+        log.debug(
+            "recv candle",
+            extra={"symbol": symbol, "timestamp": ts, "queue_size": q.qsize()},
+        )
 
         # Backpressure: block o drop_oldest
         if self.queue_policy == "block" or not q.maxsize:
