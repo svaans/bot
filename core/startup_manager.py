@@ -56,7 +56,17 @@ class StartupManager:
         self._trader_hold: Optional[asyncio.Event] = None
 
         self.ws_timeout = ws_timeout
-        self.startup_timeout = startup_timeout
+        if startup_timeout is None:
+            env_timeout = os.getenv("STARTUP_TIMEOUT")
+            try:
+                self.startup_timeout = float(env_timeout) if env_timeout else 90.0
+            except (TypeError, ValueError):
+                self.startup_timeout = 90.0
+        else:
+            try:
+                self.startup_timeout = float(startup_timeout)
+            except (TypeError, ValueError):
+                self.startup_timeout = 90.0
 
         self.event_bus = None
         if self.trader is not None:
