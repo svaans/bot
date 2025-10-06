@@ -58,6 +58,10 @@ class StartupManager:
         self.ws_timeout = ws_timeout
         self.startup_timeout = startup_timeout
 
+        self.event_bus = None
+        if self.trader is not None:
+            self.event_bus = getattr(self.trader, "event_bus", None) or getattr(self.trader, "bus", None)
+
         if self.config is not None and ws_timeout is not None:
             with suppress(Exception):
                 setattr(self.config, "ws_timeout", ws_timeout)
@@ -94,6 +98,13 @@ class StartupManager:
             await self._open_streams()
             executed.append(self._stop_streams)
 
+            ws_timeout = self._resolve_ws_timeout()
+            with phase("_wait_ws", extra={"timeout": ws_timeout}):
+                await asyncio.wait_for(
+                    self._wait_ws(ws_timeout),
+                    timeout=ws_timeout + 5,
+                )
+
             await self._enable_strategies()
 
             assert self.task is not None, "La tarea principal del Trader no quedó inicializada"
@@ -117,6 +128,8 @@ class StartupManager:
             self.config = ConfigManager.load_from_env()
         if self.trader is None:
             self.trader = Trader(self.config)  # type: ignore[arg-type]
+        if self.trader is not None and self.event_bus is None:
+            self.event_bus = getattr(self.trader, "event_bus", None) or getattr(self.trader, "bus", None)
 
     async def _bootstrap(self) -> None:
         assert self.trader is not None and self.config is not None
@@ -224,10 +237,14 @@ class StartupManager:
         elif manual_feed:
             self.log.debug("DataFeed gestionado por Trader; se omite arranque automático.")
 
-    async def _enable_strategies(self) -> None:
+        if self.trader is not None:
+            bus = getattr(self.trader, "event_bus", None) or getattr(self.trader, "bus", None)
+            if bus is not None:
+                self.event_bus = bus
+
+    def _resolve_ws_timeout(self) -> float:
         assert self.trader is not None and self.config is not None
 
-        # Normaliza ws_timeout
         raw_timeout = getattr(self.config, "ws_timeout", None) or self.ws_timeout
         if raw_timeout is None:
             raw_timeout = float(os.getenv("WS_TIMEOUT", "30"))
@@ -238,12 +255,16 @@ class StartupManager:
                 with suppress(Exception):
                     setattr(trader_cfg, "ws_timeout", raw_timeout)
 
-        ws_timeout = float(raw_timeout)
-        with phase("_wait_ws", extra={"timeout": ws_timeout}):
-            await asyncio.wait_for(
-                self._wait_ws(ws_timeout),
-                timeout=ws_timeout + 5,
-            )
+        try:
+            timeout_val = float(raw_timeout)
+        except (TypeError, ValueError):
+            timeout_val = float(os.getenv("WS_TIMEOUT", "30"))
+
+        self.ws_timeout = timeout_val
+        return timeout_val
+
+    async def _enable_strategies(self) -> None:
+        assert self.trader is not None and self.config is not None
 
         # Verificación de desincronización de reloj
         with phase("_check_clock_drift"):
@@ -278,6 +299,24 @@ class StartupManager:
     async def _wait_ws(self, timeout: float) -> None:
         """Espera a que el DataFeed reporte actividad hasta `timeout` segundos."""
         assert self.trader is not None
+
+        feed = getattr(self.trader, "data_feed", None) or getattr(self, "data_feed", None)
+        managed = bool(getattr(feed, "_managed_by_trader", False)) if feed is not None else False
+
+        if managed:
+            bus = self.event_bus or getattr(self.trader, "event_bus", None) or getattr(self.trader, "bus", None)
+            wait_fn = getattr(bus, "wait", None) if bus is not None else None
+            if callable(wait_fn):
+                try:
+                    await asyncio.wait_for(wait_fn("datafeed_connected"), timeout=timeout)
+                    return
+                except asyncio.TimeoutError as exc:
+                    raise RuntimeError("WS no conectado") from exc
+            else:
+                self.log.debug(
+                    "EventBus sin soporte de wait() o ausente; se recurre a sondeo de actividad.",
+                )
+                
         start = time.time()
         while time.time() - start < timeout:
             feed = getattr(self.trader, "data_feed", None) or getattr(self, "data_feed", None)
