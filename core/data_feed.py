@@ -150,6 +150,9 @@ class DataFeed:
         self._handler_wrapper_calls: int = 0
         self._handler_log_events: int = 0
 
+        # Señal de conexión del WebSocket (para StartupManager u otros coordinadores)
+        self.ws_connected_event: asyncio.Event = asyncio.Event()
+
     # ─────────────────────── API pública ───────────────────────
 
     @property
@@ -224,6 +227,9 @@ class DataFeed:
     ) -> None:
         """Inicia el stream por símbolo (o combinado si hay >1)."""
         await self.detener()
+
+        # Nueva señal por cada arranque para evitar estados residuales
+        self.ws_connected_event = asyncio.Event()
 
         self._symbols = list({s.upper() for s in symbols})
         if not self._symbols:
@@ -317,6 +323,9 @@ class DataFeed:
         self._monitor_consumers_task = None
         self._consumer_last.clear()
         self._consumer_state.clear()
+
+        # La señal se reinicia para futuros arranques
+        self.ws_connected_event = asyncio.Event()
 
     # ─────────────────────── Producción (WS) ───────────────────────
 
@@ -473,6 +482,9 @@ class DataFeed:
         if not validar_integridad_velas(symbol, self.intervalo, [candle], log):
             self._emit("candle_invalid", {"symbol": symbol, "ts": ts})
             return
+
+        if not self.ws_connected_event.is_set():
+            self.ws_connected_event.set()
 
         q = self._queues.get(symbol)
         if q is None:
