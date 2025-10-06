@@ -102,7 +102,7 @@
 ### Backfill histórico (Pegaso)
 - El servicio `core/backfill_service.py` precarga velas históricas antes de procesar señales.
 - Soporta modo **A** (backfill antes del stream) y modo **B** (backfill en paralelo al stream). En modo B las velas en vivo se retienen hasta completar el histórico.
-- Se expone la métrica `buffer_size_v2{symbol,timeframe}` y contadores para requests, gaps y duración del backfill.
+- Se expone la métrica `buffer_size_v2{timeframe}` y contadores para requests, gaps y duración del backfill.
 - Variables de entorno clave:
   - `BACKFILL_ENABLED` (`true|false`)
   - `BACKFILL_MODE` (`A|B`)
