@@ -356,31 +356,72 @@ class StartupManager:
             return
 
         async_events: dict[str, asyncio.Event] = {}
+        thread_events: dict[str, Any] = {}
         if isinstance(success_event, asyncio.Event):
             async_events["success"] = success_event
+        elif success_event is not None and callable(getattr(success_event, "wait", None)):
+            thread_events["success"] = success_event
         if isinstance(failure_event, asyncio.Event):
             async_events["failure"] = failure_event
+        elif failure_event is not None and callable(getattr(failure_event, "wait", None)):
+            thread_events["failure"] = failure_event
 
-        if async_events:
-            tasks = {label: asyncio.create_task(evt.wait(), name=f"wait_ws_{label}") for label, evt in async_events.items()}
+        async def _wait_async_evt(evt: asyncio.Event) -> bool:
+            await evt.wait()
+            return True
+
+        async def _wait_thread_evt(evt: Any) -> bool | None:
+            loop = asyncio.get_running_loop()
+            wait_fn = getattr(evt, "wait", None)
+            if not callable(wait_fn):
+                return None
             try:
-                done, _ = await asyncio.wait(tasks.values(), timeout=timeout, return_when=asyncio.FIRST_COMPLETED)
+                result = await loop.run_in_executor(None, lambda: wait_fn(timeout))
+            except Exception:
+                self.log.debug("Fallo al esperar threading.Event; degradando a sondeo.", exc_info=True)
+                return None
+            return bool(result)
+
+        wait_tasks: dict[str, asyncio.Task[bool | None]] = {}
+        for label, evt in async_events.items():
+            wait_tasks[label] = asyncio.create_task(_wait_async_evt(evt), name=f"wait_ws_{label}")
+        for label, evt in thread_events.items():
+            wait_tasks[label] = asyncio.create_task(_wait_thread_evt(evt), name=f"wait_ws_{label}")
+
+        if wait_tasks:
+            try:
+                done, _ = await asyncio.wait(
+                    wait_tasks.values(), timeout=timeout, return_when=asyncio.FIRST_COMPLETED
+                )
             except Exception:
                 self.log.debug("Fallo al esperar ws_connected_event; se recurre a sondeo.", exc_info=True)
-
             else:
                 if not done:
                     raise RuntimeError(_failure_message())
-                for label, task in tasks.items():
+                degrade_to_poll = False
+                for label, task in wait_tasks.items():
                     if task in done:
-                        if label == "success":
+                        try:
+                            triggered = task.result()
+                        except Exception:
+                            triggered = None
+                        if triggered is None:
+                            degrade_to_poll = True
+                            continue
+                        if label == "success" and triggered:
                             return
-                        raise RuntimeError(_failure_message())
+                        if label == "failure" and triggered:
+                            raise RuntimeError(_failure_message())
+                if degrade_to_poll:
+                    self.log.debug("Eventos incompatibles con espera directa; degradando a sondeo.")
+                else:
+                    # Si ninguna tarea reportó éxito/fallo se considera timeout
+                    raise RuntimeError(_failure_message())
             finally:
-                for task in tasks.values():
+                for task in wait_tasks.values():
                     if not task.done():
                         task.cancel()
-                await asyncio.gather(*tasks.values(), return_exceptions=True)
+                await asyncio.gather(*wait_tasks.values(), return_exceptions=True)
                 
         start = time.time()
         while time.time() - start < timeout:
