@@ -322,7 +322,6 @@ class BufferManager:
             safe_set(
                 BUFFER_SIZE_V2,
                 len(st.buffer),
-                symbol=sym,
                 timeframe=tf_label or "unknown",
             )
         except Exception as exc:
@@ -443,7 +442,6 @@ async def procesar_vela(trader: Any, vela: dict) -> None:
                     if not sg.allows(symbol, float(spread_ratio)):
                         safe_inc(
                             ENTRADAS_RECHAZADAS_V2,
-                            symbol=symbol,
                             timeframe=timeframe_label,
                             reason="spread_guard",
                         )
@@ -455,7 +453,6 @@ async def procesar_vela(trader: Any, vela: dict) -> None:
                     if not bool(sg.permite_entrada(symbol, {}, 0.0)):
                         safe_inc(
                             ENTRADAS_RECHAZADAS_V2,
-                            symbol=symbol,
                             timeframe=timeframe_label,
                             reason="spread_guard",
                         )
@@ -515,7 +512,6 @@ async def procesar_vela(trader: Any, vela: dict) -> None:
             if len(df) >= threshold and getattr(cfg, "trader_fastpath_skip_entries", True):
                 safe_inc(
                     ENTRADAS_RECHAZADAS_V2,
-                    symbol=symbol,
                     timeframe=timeframe_label,
                     reason="fastpath_skip_entries",
                 )
@@ -547,7 +543,6 @@ async def procesar_vela(trader: Any, vela: dict) -> None:
         if not _is_num(precio) or precio <= 0:
             safe_inc(
                 ENTRADAS_RECHAZADAS_V2,
-                symbol=symbol,
                 timeframe=timeframe_label,
                 reason="bad_price",
             )
@@ -558,7 +553,6 @@ async def procesar_vela(trader: Any, vela: dict) -> None:
         if orders is None or not hasattr(orders, "crear"):
             safe_inc(
                 ENTRADAS_RECHAZADAS_V2,
-                symbol=symbol,
                 timeframe=timeframe_label,
                 reason="orders_missing",
             )
@@ -575,7 +569,6 @@ async def procesar_vela(trader: Any, vela: dict) -> None:
             if ya is not None:
                 safe_inc(
                     ENTRADAS_RECHAZADAS_V2,
-                    symbol=symbol,
                     timeframe=timeframe_label,
                     reason="ya_abierta",
                 )
