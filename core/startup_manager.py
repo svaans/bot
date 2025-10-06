@@ -257,7 +257,7 @@ class StartupManager:
 
         raw_timeout = getattr(self.config, "ws_timeout", None) or self.ws_timeout
         if raw_timeout is None:
-            raw_timeout = float(os.getenv("WS_TIMEOUT", "30"))
+            raw_timeout = float(os.getenv("WS_TIMEOUT", "10"))
             with suppress(Exception):
                 setattr(self.config, "ws_timeout", raw_timeout)
             trader_cfg = getattr(self.trader, "config", None)
@@ -327,19 +327,60 @@ class StartupManager:
                     "EventBus sin soporte de wait() o ausente; se recurre a sondeo de actividad.",
                 )
 
-        event = getattr(feed, "ws_connected_event", None)
-        if event is not None:
+        success_event = getattr(feed, "ws_connected_event", None)
+        failure_event = getattr(feed, "ws_failed_event", None)
+
+        def _event_is_set(evt: Any) -> bool:
+            if evt is None:
+                return False
+            if isinstance(evt, asyncio.Event):
+                return evt.is_set()
+            is_set = getattr(evt, "is_set", None)
+            if callable(is_set):
+                try:
+                    return bool(is_set())
+                except Exception:
+                    return False
+            return False
+
+        def _failure_message() -> str:
+            reason = getattr(feed, "ws_failure_reason", None)
+            base = "WS no conectado"
+            if reason:
+                return f"{base}: {reason}"
+            return base
+
+        if _event_is_set(failure_event):
+            raise RuntimeError(_failure_message())
+        if _event_is_set(success_event):
+            return
+
+        async_events: dict[str, asyncio.Event] = {}
+        if isinstance(success_event, asyncio.Event):
+            async_events["success"] = success_event
+        if isinstance(failure_event, asyncio.Event):
+            async_events["failure"] = failure_event
+
+        if async_events:
+            tasks = {label: asyncio.create_task(evt.wait(), name=f"wait_ws_{label}") for label, evt in async_events.items()}
             try:
-                if isinstance(event, asyncio.Event):
-                    await asyncio.wait_for(event.wait(), timeout=timeout)
-                    return
-                wait_result = await asyncio.wait_for(asyncio.to_thread(event.wait, timeout), timeout=timeout + 0.1)
-                if wait_result:
-                    return
-            except asyncio.TimeoutError as exc:
-                raise RuntimeError("WS no conectado") from exc
+                done, _ = await asyncio.wait(tasks.values(), timeout=timeout, return_when=asyncio.FIRST_COMPLETED)
             except Exception:
                 self.log.debug("Fallo al esperar ws_connected_event; se recurre a sondeo.", exc_info=True)
+
+            else:
+                if not done:
+                    raise RuntimeError(_failure_message())
+                for label, task in tasks.items():
+                    if task in done:
+                        if label == "success":
+                            return
+                        raise RuntimeError(_failure_message())
+            finally:
+                for task in tasks.values():
+                    if not task.done():
+                        task.cancel()
+                await asyncio.gather(*tasks.values(), return_exceptions=True)
                 
         start = time.time()
         while time.time() - start < timeout:
@@ -349,6 +390,12 @@ class StartupManager:
                 continue
 
             activo = False
+            success_event = getattr(feed, "ws_connected_event", success_event)
+            failure_event = getattr(feed, "ws_failed_event", failure_event)
+            if _event_is_set(failure_event):
+                raise RuntimeError(_failure_message())
+            if _event_is_set(success_event):
+                return
             # Propiedad o método `activos`
             if hasattr(feed, "activos"):
                 try:
@@ -367,7 +414,7 @@ class StartupManager:
             if activo:
                 return
             await asyncio.sleep(0.1)
-        raise RuntimeError('WS no conectado')
+        raise RuntimeError(_failure_message())
 
     async def _check_clock_drift(self) -> bool:
         """Comprueba desincronización respecto al server de Binance. Tolerante a fallos de red."""
