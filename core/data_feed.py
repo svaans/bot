@@ -348,6 +348,8 @@ class DataFeed:
                     primera_vez = False
 
                 await self._do_backfill(symbol)
+                if not self.ws_connected_event.is_set():
+                    self._signal_ws_connected(symbol)
 
                 await escuchar_velas(
                     symbol,
@@ -402,6 +404,9 @@ class DataFeed:
                     primera_vez = False
 
                 await asyncio.gather(*(self._do_backfill(s) for s in symbols))
+                if not self.ws_connected_event.is_set():
+                    objetivo = symbols[0] if symbols else None
+                    self._signal_ws_connected(objetivo)
 
                 async def wrap(sym: str):
                     async def _w(c: dict) -> None:
