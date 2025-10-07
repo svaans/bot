@@ -325,8 +325,34 @@ class DataFeed:
             t.cancel()
 
         if tasks:
-            with contextlib.suppress(asyncio.TimeoutError):
-                await asyncio.wait_for(asyncio.gather(*tasks, return_exceptions=True), timeout=self.cancel_timeout)
+            done: set[asyncio.Task[Any]]
+            pending: set[asyncio.Task[Any]]
+            done, pending = await asyncio.wait(tasks, timeout=self.cancel_timeout)
+
+            for task in done:
+                try:
+                    _ = task.result()
+                except asyncio.CancelledError:
+                    continue
+                except Exception as exc:  # pragma: no cover - logging only
+                    log.error(
+                        "tarea_finalizo_con_error",
+                        extra={
+                            "task_name": task.get_name(),
+                            "error": repr(exc),
+                        },
+                    )
+
+            if pending:
+                log.error(
+                    "tareas_no_finalizaron_a_tiempo",
+                    extra={
+                        "timeout": self.cancel_timeout,
+                        "pending_tasks": [t.get_name() for t in pending],
+                    },
+                )
+                for task in pending:
+                    task.cancel()
 
         self._running = False
         self._tasks.clear()
