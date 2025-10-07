@@ -35,6 +35,9 @@ from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Awaitable, Callable, Dict, Iterable, List, Optional
 
+
+COMBINED_STREAM_KEY = "__combined__"
+
 from binance_api.websocket import (
     escuchar_velas,
     escuchar_velas_combinado,
@@ -69,6 +72,13 @@ def _safe_float(value: Any, default: float) -> float:
         return default
 
 
+def _safe_int(value: Any, default: int) -> int:
+    try:
+        return int(value)
+    except Exception:
+        return default
+
+
 class DataFeed:
     """DataFeed robusto y legible para velas cerradas."""
 
@@ -86,6 +96,8 @@ class DataFeed:
         backpressure: bool = os.getenv("DF_BACKPRESSURE", "true").lower() == "true",
         cancel_timeout: float = float(os.getenv("DF_CANCEL_TIMEOUT", "5")),
         on_event: Optional[Callable[[str, dict], None]] = None,
+        max_reconnect_attempts: int | None = None,
+        max_reconnect_time: float | None = None,
     ) -> None:
         # Config base
         self.intervalo = intervalo
@@ -115,6 +127,24 @@ class DataFeed:
         self.cancel_timeout = max(0.5, float(cancel_timeout))
         self.on_event = on_event
 
+        if max_reconnect_attempts is None:
+            env_max_retries = _safe_int(os.getenv("DF_WS_MAX_RETRIES", "0"), 0)
+            max_reconnect_attempts = env_max_retries
+        if max_reconnect_attempts is not None and max_reconnect_attempts <= 0:
+            max_reconnect_attempts = None
+        self.max_reconnect_attempts: int | None = (
+            int(max_reconnect_attempts) if max_reconnect_attempts is not None else None
+        )
+
+        if max_reconnect_time is None:
+            env_max_downtime = _safe_float(os.getenv("DF_WS_MAX_DOWNTIME_SEC", "0"), 0.0)
+            max_reconnect_time = env_max_downtime
+        if max_reconnect_time is not None and max_reconnect_time <= 0:
+            max_reconnect_time = None
+        self.max_reconnect_time: float | None = (
+            float(max_reconnect_time) if max_reconnect_time is not None else None
+        )
+
         # Estado interno
         self._running = False
         self._symbols: List[str] = []
@@ -133,6 +163,8 @@ class DataFeed:
         self._last_monotonic: Dict[str, float] = {}       # llegada de último candle a productor
         self._consumer_last: Dict[str, float] = {}        # último avance de consumer
         self._consumer_state: Dict[str, ConsumerState] = {}
+        self._reconnect_attempts: Dict[str, int] = {}
+        self._reconnect_since: Dict[str, float] = {}
 
         # Monitores
         self._monitor_inactividad_task: asyncio.Task | None = None
@@ -265,6 +297,8 @@ class DataFeed:
         self._cliente = cliente
         self._combined = len(self._symbols) > 1
         self._running = True
+        self._reconnect_attempts.clear()
+        self._reconnect_since.clear()
 
         log.info(
             "suscrito",
@@ -362,6 +396,8 @@ class DataFeed:
         self._monitor_consumers_task = None
         self._consumer_last.clear()
         self._consumer_state.clear()
+        self._reconnect_attempts.clear()
+        self._reconnect_since.clear()
 
         # La señal se reinicia para futuros arranques manteniendo referencias existentes
         if isinstance(self.ws_connected_event, asyncio.Event):
@@ -408,6 +444,8 @@ class DataFeed:
                 )
                 log.info("%s: stream finalizado; reintentando…", symbol)
                 self._emit("ws_end", {"symbol": symbol})
+                if not self._register_reconnect_attempt(symbol, "stream_end"):
+                    return
                 backoff = min(60.0, backoff * 2)
                 await asyncio.sleep(backoff)
 
@@ -416,6 +454,8 @@ class DataFeed:
                 self._emit("ws_inactividad", {"symbol": symbol})
                 if not self.ws_connected_event.is_set():
                     self._signal_ws_failure("Timeout de inactividad durante el arranque del WS")
+                    return
+                if not self._register_reconnect_attempt(symbol, "inactividad"):
                     return
                 backoff = 0.5
                 await asyncio.sleep(backoff)
@@ -428,6 +468,8 @@ class DataFeed:
                 self._emit("ws_error", {"symbol": symbol, "error": str(e)})
                 if not self.ws_connected_event.is_set():
                     self._signal_ws_failure(e)
+                    return
+                if not self._register_reconnect_attempt(symbol, "error"):
                     return
                 backoff = min(60.0, backoff * 2)
                 await asyncio.sleep(backoff)
@@ -477,6 +519,8 @@ class DataFeed:
                 )
                 log.info("stream combinado finalizado; reintentando…")
                 self._emit("ws_end", {"symbols": symbols})
+                if not self._register_reconnect_attempt(COMBINED_STREAM_KEY, "stream_end"):
+                    return
                 backoff = min(60.0, backoff * 2)
                 await asyncio.sleep(backoff)
 
@@ -485,6 +529,8 @@ class DataFeed:
                 self._emit("ws_inactividad", {"symbols": symbols})
                 if not self.ws_connected_event.is_set():
                     self._signal_ws_failure("Timeout de inactividad durante el arranque del WS")
+                    return
+                if not self._register_reconnect_attempt(COMBINED_STREAM_KEY, "inactividad"):
                     return
                 backoff = 0.5
                 await asyncio.sleep(backoff)
@@ -497,6 +543,8 @@ class DataFeed:
                 self._emit("ws_error", {"symbols": symbols, "error": str(e)})
                 if not self.ws_connected_event.is_set():
                     self._signal_ws_failure(e)
+                    return
+                if not self._register_reconnect_attempt(COMBINED_STREAM_KEY, "error"):
                     return
                 backoff = min(60.0, backoff * 2)
                 await asyncio.sleep(backoff)
@@ -540,6 +588,10 @@ class DataFeed:
         if last is not None and ts <= last:
             # duplicado o out-of-order
             return
+
+        self._reset_reconnect_tracking(symbol)
+        if self._combined:
+            self._reset_reconnect_tracking(COMBINED_STREAM_KEY)
 
         # Validación rápida de integridad (streaming) usando la propia vela
         # Espera dicts con al menos 'timestamp' y, si están presentes OHLCV, se validan.
@@ -957,6 +1009,69 @@ class DataFeed:
         if reason:
             payload["reason"] = reason
         self._emit("ws_connect_failed", payload)
+
+    def _register_reconnect_attempt(self, key: str, reason: str) -> bool:
+        if self.max_reconnect_attempts is None and self.max_reconnect_time is None:
+            return True
+
+        now = time.monotonic()
+        attempts = self._reconnect_attempts.get(key, 0) + 1
+        self._reconnect_attempts[key] = attempts
+        since = self._reconnect_since.get(key)
+        if since is None:
+            since = now
+            self._reconnect_since[key] = since
+        elapsed = max(0.0, now - since)
+
+        payload = {
+            "key": key,
+            "attempts": attempts,
+            "elapsed": elapsed,
+            "reason": reason,
+        }
+
+        if self.max_reconnect_attempts is not None and attempts > self.max_reconnect_attempts:
+            payload["max_attempts"] = self.max_reconnect_attempts
+            log.error(
+                "ws.max_retries_exceeded",
+                extra={
+                    "key": key,
+                    "attempts": attempts,
+                    "max_attempts": self.max_reconnect_attempts,
+                    "reason": reason,
+                },
+            )
+            self._emit("ws_retries_exceeded", payload)
+            self._signal_ws_failure(
+                f"Se superó el máximo de reintentos permitidos ({self.max_reconnect_attempts})"
+            )
+            return False
+
+        if self.max_reconnect_time is not None and elapsed >= self.max_reconnect_time:
+            payload["max_downtime"] = self.max_reconnect_time
+            log.error(
+                "ws.downtime_exceeded",
+                extra={
+                    "key": key,
+                    "elapsed": elapsed,
+                    "max_downtime": self.max_reconnect_time,
+                    "reason": reason,
+                },
+            )
+            self._emit("ws_downtime_exceeded", payload)
+            self._signal_ws_failure(
+                f"Se superó el máximo de tiempo sin conexión ({self.max_reconnect_time:.1f}s)"
+            )
+            return False
+
+        self._emit("ws_retry", payload)
+        return True
+
+    def _reset_reconnect_tracking(self, key: str) -> None:
+        if key in self._reconnect_attempts:
+            self._reconnect_attempts.pop(key, None)
+        if key in self._reconnect_since:
+            self._reconnect_since.pop(key, None)
 
     @property
     def ws_failure_reason(self) -> str | None:
