@@ -24,17 +24,26 @@ class PersistenciaTecnica:
         """Devuelve ``True`` si ``estrategia`` ha estado activa ``minimo`` velas."""
         return self.conteo.get(symbol, {}).get(estrategia, 0) >= self.minimo
 
-    def filtrar_persistentes(self, symbol: str, estrategias: Dict[str, bool]
-        ) -> Dict[str, bool]:
+    def filtrar_persistentes(
+        self,
+        symbol: str,
+        estrategias: Dict[str, bool],
+    ) -> Dict[str, bool]:
         """Actualiza contadores y retorna solo estrategias persistentes."""
         self.actualizar(symbol, estrategias)
-        return {e: (True) for e, act in estrategias.items() if act and self
-            .es_persistente(symbol, e)}
+        return {
+            estrategia: True
+            for estrategia, activa in estrategias.items()
+            if activa and self.es_persistente(symbol, estrategia)
+        }
 
-def export_state(self) -> dict[str, Any]:
+    def export_state(self) -> dict[str, Any]:
         """Serializa el estado actual para persistirlo en snapshots."""
         conteo = {
-            str(symbol): {str(estrategia): int(valor) for estrategia, valor in estrategias.items()}
+            str(symbol): {
+                str(estrategia): int(valor)
+                for estrategia, valor in estrategias.items()
+            }
             for symbol, estrategias in self.conteo.items()
         }
         return {
@@ -43,52 +52,53 @@ def export_state(self) -> dict[str, Any]:
             'conteo': conteo,
         }
 
-def load_state(self, data: Mapping[str, Any]) -> None:
-    """Restaura el estado del snapshot previo, ignorando formatos inválidos."""
-    if not isinstance(data, Mapping):
-        return
+    def load_state(self, data: Mapping[str, Any]) -> None:
+        """Restaura el estado del snapshot previo, ignorando formatos inválidos."""
 
-    minimo = data.get('minimo')
-    if isinstance(minimo, (int, float)):
-        self.minimo = int(minimo)
+        if not isinstance(data, Mapping):
+            return
 
-    peso_extra = data.get('peso_extra')
-    if isinstance(peso_extra, (int, float)):
-        self.peso_extra = float(peso_extra)
+        minimo = data.get('minimo')
+        if isinstance(minimo, (int, float)):
+            self.minimo = int(minimo)
 
-    conteo_raw = data.get('conteo')
-    if not isinstance(conteo_raw, Mapping):
-        return
+        peso_extra = data.get('peso_extra')
+        if isinstance(peso_extra, (int, float)):
+            self.peso_extra = float(peso_extra)
 
-    conteo: Dict[str, Dict[str, int]] = {}
-    for symbol, estrategias in conteo_raw.items():
-        if not isinstance(estrategias, Mapping):
-            continue
-        symbol_key = str(symbol)
-        cleaned: Dict[str, int] = {}
-        for estrategia, valor in estrategias.items():
-            try:
-                cleaned[str(estrategia)] = int(valor)
-            except (TypeError, ValueError):
+        conteo_raw = data.get('conteo')
+        if not isinstance(conteo_raw, Mapping):
+            return
+
+        conteo: Dict[str, Dict[str, int]] = {}
+        for symbol, estrategias in conteo_raw.items():
+            if not isinstance(estrategias, Mapping):
                 continue
-        conteo[symbol_key] = cleaned
+            symbol_key = str(symbol)
+            cleaned: Dict[str, int] = {}
+            for estrategia, valor in estrategias.items():
+                try:
+                    cleaned[str(estrategia)] = int(valor)
+                except (TypeError, ValueError):
+                    continue
+            conteo[symbol_key] = cleaned
 
-    self.conteo = conteo
+        self.conteo = conteo
 
 
-def coincidencia_parcial(historial: Sequence[dict], pesos: Dict[str, float],
-    ventanas: int = 5) -> float:
-    """Calcula un puntaje de coincidencia parcial de estrategias en las últimas ``ventanas`` velas."""
-    if len(historial) < ventanas:
-        return 0.0
-    recientes = list(historial)[-ventanas:]
-    conteo: Dict[str, int] = {}
-    for estrategias in recientes:
-        for nombre, activa in estrategias.items():
-            if activa:
-                conteo[nombre] = conteo.get(nombre, 0) + 1
-    puntaje = 0.0
-    for nombre, veces in conteo.items():
-        fraccion = veces / ventanas
-        puntaje += pesos.get(nombre, 0) * fraccion
-    return puntaje
+    def coincidencia_parcial(historial: Sequence[dict], pesos: Dict[str, float],
+        ventanas: int = 5) -> float:
+        """Calcula un puntaje de coincidencia parcial de estrategias en las últimas ``ventanas`` velas."""
+        if len(historial) < ventanas:
+            return 0.0
+        recientes = list(historial)[-ventanas:]
+        conteo: Dict[str, int] = {}
+        for estrategias in recientes:
+            for nombre, activa in estrategias.items():
+                if activa:
+                    conteo[nombre] = conteo.get(nombre, 0) + 1
+        puntaje = 0.0
+        for nombre, veces in conteo.items():
+            fraccion = veces / ventanas
+            puntaje += pesos.get(nombre, 0) * fraccion
+        return puntaje
