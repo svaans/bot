@@ -1,5 +1,7 @@
+from __future__ import annotations
+
 from dataclasses import dataclass, field
-from typing import Dict, Sequence
+from typing import Any, Dict, Mapping, Sequence
 
 
 @dataclass
@@ -9,7 +11,7 @@ class PersistenciaTecnica:
     peso_extra: float = 0.5
     conteo: Dict[str, Dict[str, int]] = field(default_factory=dict)
 
-    def actualizar(self, symbol: str, estrategias: Dict[str, bool]) ->None:
+    def actualizar(self, symbol: str, estrategias: Dict[str, bool]) -> None:
         """Actualiza los contadores de persistencia."""
         actual = self.conteo.setdefault(symbol, {})
         for nombre in list(actual.keys()):
@@ -18,16 +20,60 @@ class PersistenciaTecnica:
         for nombre, activa in estrategias.items():
             actual[nombre] = actual.get(nombre, 0) + 1 if activa else 0
 
-    def es_persistente(self, symbol: str, estrategia: str) ->bool:
+    def es_persistente(self, symbol: str, estrategia: str) -> bool:
         """Devuelve ``True`` si ``estrategia`` ha estado activa ``minimo`` velas."""
         return self.conteo.get(symbol, {}).get(estrategia, 0) >= self.minimo
 
     def filtrar_persistentes(self, symbol: str, estrategias: Dict[str, bool]
-        ) ->Dict[str, bool]:
+        ) -> Dict[str, bool]:
         """Actualiza contadores y retorna solo estrategias persistentes."""
         self.actualizar(symbol, estrategias)
         return {e: (True) for e, act in estrategias.items() if act and self
             .es_persistente(symbol, e)}
+
+def export_state(self) -> dict[str, Any]:
+        """Serializa el estado actual para persistirlo en snapshots."""
+        conteo = {
+            str(symbol): {str(estrategia): int(valor) for estrategia, valor in estrategias.items()}
+            for symbol, estrategias in self.conteo.items()
+        }
+        return {
+            'minimo': int(self.minimo),
+            'peso_extra': float(self.peso_extra),
+            'conteo': conteo,
+        }
+
+    def load_state(self, data: Mapping[str, Any]) -> None:
+        """Restaura el estado del snapshot previo, ignorando formatos inválidos."""
+        if not isinstance(data, Mapping):
+            return
+
+        minimo = data.get('minimo')
+        if isinstance(minimo, (int, float)):
+            self.minimo = int(minimo)
+
+        peso_extra = data.get('peso_extra')
+        if isinstance(peso_extra, (int, float)):
+            self.peso_extra = float(peso_extra)
+
+        conteo_raw = data.get('conteo')
+        if not isinstance(conteo_raw, Mapping):
+            return
+
+        conteo: Dict[str, Dict[str, int]] = {}
+        for symbol, estrategias in conteo_raw.items():
+            if not isinstance(estrategias, Mapping):
+                continue
+            symbol_key = str(symbol)
+            cleaned: Dict[str, int] = {}
+            for estrategia, valor in estrategias.items():
+                try:
+                    cleaned[str(estrategia)] = int(valor)
+                except (TypeError, ValueError):
+                    continue
+            conteo[symbol_key] = cleaned
+
+        self.conteo = conteo
 
 
 def coincidencia_parcial(historial: Sequence[dict], pesos: Dict[str, float],
