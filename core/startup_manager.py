@@ -236,11 +236,11 @@ class StartupManager:
         feed = getattr(self.trader, "data_feed", None) or getattr(self, "data_feed", None)
         manual_feed = bool(getattr(feed, "_managed_by_trader", False)) if feed is not None else False
 
-        start_feed = None
-        if feed is not None and not manual_feed:
-            start_feed = getattr(feed, "start", None) or getattr(feed, "iniciar", None)
+        start_feed = getattr(feed, "start", None) or getattr(feed, "iniciar", None) if feed else None
 
-        if start_feed is not None:
+        async def _launch_feed(reason: str) -> None:
+            if start_feed is None:
+                return
             try:
                 result = start_feed()
             except TypeError:
@@ -249,13 +249,26 @@ class StartupManager:
                 self._feed_task = asyncio.create_task(result, name="DataFeedStart")
                 # dar turno al loop para efectos secundarios inmediatos del feed
                 await asyncio.sleep(0)
-        elif manual_feed:
-            self.log.debug("DataFeed gestionado por Trader; se omite arranque automático.")
-
+            self.log.debug("DataFeed iniciado (%s).", reason)
+            
+        bus = None
         if self.trader is not None:
             bus = getattr(self.trader, "event_bus", None) or getattr(self.trader, "bus", None)
             if bus is not None:
                 self.event_bus = bus
+
+        wait_fn = getattr(bus, "wait", None) if bus is not None else None
+
+        if start_feed is not None and not manual_feed:
+            await _launch_feed("startup_manager")
+        elif manual_feed:
+            if callable(wait_fn):
+                self.log.debug("DataFeed gestionado por Trader; se omite arranque automático.")
+            else:
+                self.log.warning(
+                    "DataFeed gestionado pero sin soporte de EventBus.wait(); se arranca como fallback.",
+                )
+                await _launch_feed("fallback_autostart")
 
     def _resolve_ws_timeout(self) -> float:
         assert self.trader is not None and self.config is not None
