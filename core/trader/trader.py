@@ -103,6 +103,26 @@ class Trader(TraderLite):
         else:
             self.pesos_por_simbolo = {symbol: {} for symbol in config.symbols}
 
+    def start(self) -> None:
+        """Arranca el trader y asegura la sincronización inicial de órdenes."""
+        super().start()
+
+        if not self.modo_real:
+            return
+
+        ordenes = getattr(self, "orders", None)
+        if ordenes is None:
+            return
+
+        start_sync = getattr(ordenes, "start_sync", None)
+        if not callable(start_sync):
+            return
+
+        try:
+            start_sync()
+        except Exception:  # pragma: no cover - log defensivo
+            log.exception("No se pudo iniciar la sincronización de órdenes tras el arranque")
+
     async def ejecutar(self) -> None:
         """Inicia el trader y espera hasta que finalice la tarea principal."""
         self.start()
