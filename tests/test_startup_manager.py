@@ -5,6 +5,7 @@ import asyncio
 import json
 import threading
 import time
+from contextlib import suppress
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -485,3 +486,41 @@ async def test_wait_ws_managed_feed_event_bus_timeout() -> None:
 
     with pytest.raises(RuntimeError, match="WS no conectado"):
         await manager._wait_ws(0.1)
+
+
+@pytest.mark.asyncio
+async def test_open_streams_runs_sync_start_on_loop_thread() -> None:
+    """El trader síncrono debe ejecutarse en el mismo hilo del event loop."""
+
+    loop_thread = threading.get_ident()
+
+    class _Bus:
+        async def wait(self, event_name: str) -> None:
+            assert event_name == "datafeed_connected"
+
+    class _Trader:
+        def __init__(self) -> None:
+            self.thread_id: int | None = None
+            self.started = False
+            self.data_feed = SimpleNamespace(_managed_by_trader=True)
+            self.event_bus = _Bus()
+
+        def ejecutar(self) -> None:
+            asyncio.get_running_loop()
+            self.thread_id = threading.get_ident()
+            self.started = True
+
+    trader = _Trader()
+    manager = StartupManager(trader=trader)
+
+    await manager._open_streams()
+    await asyncio.sleep(0)
+
+    assert trader.started is True
+    assert trader.thread_id == loop_thread
+    assert manager.task is not None
+
+    if manager.task and not manager.task.done():
+        manager.task.cancel()
+        with suppress(Exception):
+            await manager.task
