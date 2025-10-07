@@ -76,26 +76,30 @@ _orders: Dict[str, int] = defaultdict(int)
 _buy_rejected_insufficient_funds: int = 0
 _correlacion_btc: Dict[str, float] = {}
 
-_velas_total: Dict[str, int] = defaultdict(int)
-_velas_rechazadas: Dict[str, Dict[str, int]] = defaultdict(lambda: defaultdict(int))
+_velas_total: Dict[tuple[str, str], int] = defaultdict(int)
+_velas_rechazadas: Dict[tuple[str, str], Dict[str, int]] = defaultdict(lambda: defaultdict(int))
 
 # ---- Definición de métricas ----
 VELAS_DUPLICADAS = Counter(
     "candles_duplicates_total",
     "Velas duplicadas detectadas por símbolo",
-    ["symbol"],
+    ["symbol", "timeframe"],
 )
 CANDLES_DUPLICADAS_RATE = Gauge(
     "candles_duplicates_rate",
     "Tasa de velas duplicadas por minuto",
-    ["symbol"],
+    ["symbol", "timeframe"],
 )
 
-VELAS_TOTAL = Counter("velas_total", "Velas recibidas por símbolo", ["symbol"])
+VELAS_TOTAL = Counter(
+    "velas_total",
+    "Velas recibidas por símbolo",
+    ["symbol", "timeframe"],
+)
 VELAS_RECHAZADAS = Counter(
     "velas_rechazadas_total",
     "Velas rechazadas por símbolo y razón",
-    ["symbol", "reason"],
+    ["symbol", "timeframe", "reason"],
 )
 ENTRADAS_RECHAZADAS_V2 = Counter(
     "procesar_vela_entradas_rechazadas_total_v2",
@@ -105,7 +109,7 @@ ENTRADAS_RECHAZADAS_V2 = Counter(
 VELAS_RECHAZADAS_PCT = Gauge(
     "velas_rechazadas_pct",
     "Porcentaje de velas rechazadas por símbolo",
-    ["symbol"],
+    ["symbol", "timeframe"],
 )
 
 WARMUP_PROGRESS = Gauge(
@@ -190,17 +194,18 @@ INGEST_LATENCY = Histogram(
 TRADER_QUEUE_SIZE = Gauge(
     "trader_queue_size",
     "Tamaño de la cola interna del Trader",
+    ["symbol", "timeframe"],
 )
 TRADER_PIPELINE_LATENCY = Histogram(
     "trader_pipeline_latency_seconds",
     "Latencia del procesamiento de velas en el trader modular",
-    ["symbol"],
+    ["symbol", "timeframe"],
     buckets=(0.05, 0.1, 0.25, 0.5, 1, 2, 5, 10),
 )
 TRADER_PIPELINE_QUEUE_WAIT = Histogram(
     "trader_pipeline_queue_wait_seconds",
     "Tiempo que una vela espera en la cola interna del trader",
-    ["symbol"],
+    ["symbol", "timeframe"],
     buckets=(0.01, 0.05, 0.1, 0.25, 0.5, 1, 2, 5),
 )
 
@@ -297,14 +302,21 @@ def registrar_registro_error() -> None:
     registro_metrico.registrar("order_register_error", {})
 
 
-def registrar_candles_duplicadas(symbol: str, count: int) -> None:
+def registrar_candles_duplicadas(symbol: str, count: int, timeframe: str | None = None) -> None:
     if count <= 0:
         return
-    VELAS_DUPLICADAS.labels(symbol=symbol).inc(count)
-    rate = alert_manager.record("candles_duplicates", symbol, count)
-    CANDLES_DUPLICADAS_RATE.labels(symbol=symbol).set(rate * 60)
-    if alert_manager.should_alert("candles_duplicates", symbol):
-        log.warning(f"[{symbol}] tasa de velas duplicadas {rate * 60:.2f}/min excede umbral")
+    timeframe_label = timeframe or "unknown"
+    VELAS_DUPLICADAS.labels(symbol=symbol, timeframe=timeframe_label).inc(count)
+    key = f"{symbol}:{timeframe_label}"
+    rate = alert_manager.record("candles_duplicates", key, count)
+    CANDLES_DUPLICADAS_RATE.labels(symbol=symbol, timeframe=timeframe_label).set(rate * 60)
+    if alert_manager.should_alert("candles_duplicates", key):
+        log.warning(
+            "[%s %s] tasa de velas duplicadas %.2f/min excede umbral",
+            symbol,
+            timeframe_label,
+            rate * 60,
+        )
 
 
 def _registrar_feed_missing(symbol: str) -> None:
@@ -344,26 +356,40 @@ def registrar_warmup_progress(symbol: str, progress: float) -> None:
     registro_metrico.registrar("warmup_progress", {"symbol": symbol, "progress": progress})
 
 
-def registrar_vela_recibida(symbol: str) -> None:
-    _velas_total[symbol] += 1
-    VELAS_TOTAL.labels(symbol=symbol).inc()
-    _actualizar_porcentaje(symbol)
+def registrar_vela_recibida(symbol: str, timeframe: str | None = None) -> None:
+    timeframe_label = timeframe or "unknown"
+    key = (symbol, timeframe_label)
+    _velas_total[key] += 1
+    VELAS_TOTAL.labels(symbol=symbol, timeframe=timeframe_label).inc()
+    _actualizar_porcentaje(symbol, timeframe_label)
 
 
-def registrar_vela_rechazada(symbol: str, reason: str) -> None:
-    _velas_rechazadas[symbol][reason] += 1
-    VELAS_RECHAZADAS.labels(symbol=symbol, reason=reason).inc()
-    registro_metrico.registrar("vela_rechazada", {"symbol": symbol, "reason": reason})
-    pct = _actualizar_porcentaje(symbol)
+def registrar_vela_rechazada(symbol: str, reason: str, timeframe: str | None = None) -> None:
+    timeframe_label = timeframe or "unknown"
+    key = (symbol, timeframe_label)
+    _velas_rechazadas[key][reason] += 1
+    VELAS_RECHAZADAS.labels(symbol=symbol, timeframe=timeframe_label, reason=reason).inc()
+    registro_metrico.registrar(
+        "vela_rechazada",
+        {"symbol": symbol, "timeframe": timeframe_label, "reason": reason},
+    )
+    pct = _actualizar_porcentaje(symbol, timeframe_label)
     if pct > UMBRAL_VELAS_RECHAZADAS:
-        log.warning(f"[{symbol}] porcentaje de velas rechazadas {pct:.2f}% supera umbral {UMBRAL_VELAS_RECHAZADAS}%")
+        log.warning(
+            "[%s %s] porcentaje de velas rechazadas %.2f%% supera umbral %s%%",
+            symbol,
+            timeframe_label,
+            pct,
+            UMBRAL_VELAS_RECHAZADAS,
+        )
 
 
-def _actualizar_porcentaje(symbol: str) -> float:
-    total = _velas_total[symbol]
-    rechazadas = sum(_velas_rechazadas[symbol].values())
+def _actualizar_porcentaje(symbol: str, timeframe: str) -> float:
+    key = (symbol, timeframe)
+    total = _velas_total[key]
+    rechazadas = sum(_velas_rechazadas[key].values())
     pct = (rechazadas / total * 100) if total else 0.0
-    VELAS_RECHAZADAS_PCT.labels(symbol=symbol).set(pct)
+    VELAS_RECHAZADAS_PCT.labels(symbol=symbol, timeframe=timeframe).set(pct)
     return pct
 
 
