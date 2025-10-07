@@ -518,9 +518,44 @@ async def test_open_streams_runs_sync_start_on_loop_thread() -> None:
 
     assert trader.started is True
     assert trader.thread_id == loop_thread
-    assert manager.task is not None
 
-    if manager.task and not manager.task.done():
-        manager.task.cancel()
-        with suppress(Exception):
-            await manager.task
+@pytest.mark.asyncio
+async def test_open_streams_autostarts_managed_feed_without_wait() -> None:
+    """Si el feed es gestionado pero el bus no soporta wait() se arranca como fallback."""
+
+    class _Feed:
+        def __init__(self) -> None:
+            self._managed_by_trader = True
+            self.start_calls = 0
+
+        async def start(self) -> None:
+            self.start_calls += 1
+            await asyncio.sleep(0)
+
+    class _Trader:
+        def __init__(self, feed: _Feed) -> None:
+            self.data_feed = feed
+            self.event_bus = SimpleNamespace()  # sin wait()
+            self.started = asyncio.Event()
+
+        async def ejecutar(self) -> None:
+            self.started.set()
+            await asyncio.sleep(10)
+
+    feed = _Feed()
+    trader = _Trader(feed)
+    manager = StartupManager(trader=trader)
+    manager.log = _CapturingLogger()
+
+    await manager._open_streams()
+    await asyncio.wait_for(trader.started.wait(), timeout=0.5)
+    await asyncio.sleep(0)
+
+    assert feed.start_calls == 1
+    assert any(
+        call["message"]
+        == "DataFeed gestionado pero sin soporte de EventBus.wait(); se arranca como fallback."
+        for call in manager.log.warning_calls
+    )
+
+    await manager._stop_streams()
