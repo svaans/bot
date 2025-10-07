@@ -125,3 +125,198 @@ async def test_wait_ws_failure_with_threading_event() -> None:
 
     with pytest.raises(RuntimeError, match="fallo thread"):
         await manager._wait_ws(1.0)
+
+
+@pytest.mark.asyncio
+async def test_wait_ws_success_event_pre_set() -> None:
+    """Un feed debe desbloquear al instante si el éxito ya está señalado."""
+
+    event = asyncio.Event()
+    event.set()
+    feed = SimpleNamespace(ws_connected_event=event)
+    manager = StartupManager(trader=_DummyTrader(feed))
+
+    await manager._wait_ws(0.1)
+
+
+@pytest.mark.asyncio
+async def test_wait_ws_success_threading_event_pre_set() -> None:
+    """Compatibilidad con ``threading.Event`` preactivado."""
+
+    event = threading.Event()
+    event.set()
+    feed = SimpleNamespace(ws_connected_event=event)
+    manager = StartupManager(trader=_DummyTrader(feed))
+
+    await manager._wait_ws(0.1)
+
+
+@pytest.mark.asyncio
+async def test_wait_ws_polling_property_activos() -> None:
+    """Cuando no hay eventos recurre a la propiedad ``activos``."""
+
+    class _PropertyFeed:
+        def __init__(self) -> None:
+            self._flag = False
+
+        @property
+        def activos(self) -> bool:
+            return self._flag
+
+    feed = _PropertyFeed()
+    manager = StartupManager(trader=_DummyTrader(feed))
+
+    async def _activate() -> None:
+        await asyncio.sleep(0.05)
+        feed._flag = True
+
+    asyncio.create_task(_activate())
+
+    await manager._wait_ws(1.0)
+
+
+@pytest.mark.asyncio
+async def test_wait_ws_polling_callable_activos() -> None:
+    """También acepta ``activos`` como método callable."""
+
+    class _CallableFeed:
+        def __init__(self) -> None:
+            self._flag = False
+
+        def activos(self) -> bool:
+            return self._flag
+
+    feed = _CallableFeed()
+    manager = StartupManager(trader=_DummyTrader(feed))
+
+    async def _activate() -> None:
+        await asyncio.sleep(0.05)
+        feed._flag = True
+
+    asyncio.create_task(_activate())
+
+    await manager._wait_ws(1.0)
+
+
+@pytest.mark.asyncio
+async def test_wait_ws_polling_is_active_method() -> None:
+    """La ruta de fallback ``is_active()`` debe habilitar el flujo."""
+
+    class _IsActiveFeed:
+        def __init__(self) -> None:
+            self._flag = False
+
+        def is_active(self) -> bool:
+            return self._flag
+
+    feed = _IsActiveFeed()
+    manager = StartupManager(trader=_DummyTrader(feed))
+
+    async def _activate() -> None:
+        await asyncio.sleep(0.05)
+        feed._flag = True
+
+    asyncio.create_task(_activate())
+
+    await manager._wait_ws(1.0)
+
+
+@pytest.mark.asyncio
+async def test_wait_ws_reloads_feed_reference_during_polling() -> None:
+    """Debe detectar si el Trader actualiza ``data_feed`` dinámicamente."""
+
+    initial_feed = SimpleNamespace(ws_connected_event=None)
+    trader = _DummyTrader(initial_feed)
+    manager = StartupManager(trader=trader)
+
+    replacement_event = asyncio.Event()
+    replacement_feed = SimpleNamespace(ws_connected_event=replacement_event)
+
+    async def _swap_feed() -> None:
+        await asyncio.sleep(0.05)
+        trader.data_feed = replacement_feed
+        replacement_event.set()
+
+    asyncio.create_task(_swap_feed())
+
+    await manager._wait_ws(1.0)
+
+
+@pytest.mark.asyncio
+async def test_wait_ws_degrades_thread_event_to_polling() -> None:
+    """Si ``wait`` de un ``threading.Event`` falla, debe degradar a sondeo."""
+
+    class _BrokenEvent:
+        def wait(self, timeout: float | None = None) -> bool:  # pragma: no cover - simula fallo
+            raise RuntimeError("thread wait incompatible")
+
+    class _Feed:
+        def __init__(self) -> None:
+            self.ws_connected_event = _BrokenEvent()
+            self._flag = False
+
+        def activos(self) -> bool:
+            return self._flag
+
+    feed = _Feed()
+    manager = StartupManager(trader=_DummyTrader(feed))
+
+    async def _activate() -> None:
+        await asyncio.sleep(0.05)
+        feed._flag = True
+
+    asyncio.create_task(_activate())
+
+    await manager._wait_ws(1.0)
+
+
+@pytest.mark.asyncio
+async def test_wait_ws_failure_thread_event_timeout_results_in_error() -> None:
+    """Un ``threading.Event`` de fallo que no se activa provoca timeout final."""
+
+    class _TimeoutEvent(threading.Event):
+        def wait(self, timeout: float | None = None) -> bool:
+            super().wait(timeout=timeout)
+            return False
+
+    failure = _TimeoutEvent()
+    feed = SimpleNamespace(ws_connected_event=None, ws_failed_event=failure)
+    manager = StartupManager(trader=_DummyTrader(feed))
+
+    with pytest.raises(RuntimeError, match="WS no conectado"):
+        await manager._wait_ws(0.2)
+
+
+@pytest.mark.asyncio
+async def test_wait_ws_managed_feed_uses_event_bus_success() -> None:
+    """Feeds gestionados por el Trader utilizan ``event_bus.wait``."""
+
+    class _Bus:
+        async def wait(self, event_name: str) -> None:
+            assert event_name == "datafeed_connected"
+            await asyncio.sleep(0.05)
+
+    feed = SimpleNamespace(_managed_by_trader=True)
+    trader = _DummyTrader(feed)
+    trader.event_bus = _Bus()
+    manager = StartupManager(trader=trader)
+
+    await manager._wait_ws(0.5)
+
+
+@pytest.mark.asyncio
+async def test_wait_ws_managed_feed_event_bus_timeout() -> None:
+    """Si el bus no responde a tiempo se propaga ``RuntimeError``."""
+
+    class _Bus:
+        async def wait(self, event_name: str) -> None:  # pragma: no cover - espera excesiva
+            assert event_name == "datafeed_connected"
+            await asyncio.sleep(1.0)
+
+    feed = SimpleNamespace(_managed_by_trader=True)
+    trader = _DummyTrader(feed)
+    trader.event_bus = _Bus()
+    manager = StartupManager(trader=trader)
+
+    with pytest.raises(RuntimeError, match="WS no conectado"):
+        await manager._wait_ws(0.1)
