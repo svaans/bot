@@ -376,3 +376,12 @@
 300. Para consultas o soporte, utilice los canales definidos en el repositorio.
 301. Mantenga siempre copias de seguridad y pruebe en entornos controlados.
 302. ¡Feliz trading y contribuciones seguras!
+
+## 34. Integridad del Flujo de Datos
+303. El `DataFeed` sólo emite velas cerradas y descarta registros con timestamps fuera de alineación.
+304. `_last_close_ts` evita duplicados al ignorar velas con timestamps menores o iguales al último enviado.
+305. El Trader normaliza símbolos a mayúsculas y rellena el timeframe cuando no llega en la vela.
+306. Cada símbolo mantiene filtros (`estado.candle_filter`) y buffers validados antes de activar estrategias.
+307. `TraderLite.is_symbol_ready` bloquea la evaluación hasta completar el backfill histórico configurado.
+308. `StrategyEngine.evaluar_entrada` nunca retorna `permitido=None`; marca `False` y motivo `"error"` ante fallos.
+309. Consulte `docs/integridad_flujo_datos.md` para obtener la explicación completa de estas salvaguardas.
