@@ -804,7 +804,22 @@ class DataFeed:
                     if ahora - last <= current_timeout:
                         continue
                     queue = self._queues.get(s)
-                    if queue is None or queue.empty():
+                    if queue is None:
+                        continue
+                    if queue.empty():
+                        stream_task = self._tasks.get(s)
+                        stream_alive = stream_task is not None and not stream_task.done()
+                        last_producer = self._last_monotonic.get(s)
+                        producer_idle = (
+                            last_producer is None
+                            or ahora - last_producer > max(self.tiempo_inactividad, current_timeout)
+                        )
+                        if not stream_alive or producer_idle:
+                            self._set_consumer_state(s, ConsumerState.STALLED)
+                            log.warning("%s: consumer sin datos; reiniciando stream…", s)
+                            self._emit("consumer_idle_no_data", {"symbol": s})
+                            await self._reiniciar_stream(s)
+                            self._consumer_last[s] = time.monotonic()
                         continue
                     self._set_consumer_state(s, ConsumerState.STALLED)
                     log.warning("%s: consumer sin progreso; reiniciando…", s)
