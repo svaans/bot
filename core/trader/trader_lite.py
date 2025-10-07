@@ -125,6 +125,7 @@ class TraderLite:
             log.debug("No se pudo marcar DataFeed como gestionado por Trader")
 
         self._datafeed_connected_emitted = False
+        self._connection_signal_task: asyncio.Task | None = None
 
         # Cliente de exchange (solo modo real)
         self._cliente = None
@@ -532,10 +533,16 @@ class TraderLite:
             log.exception("Error iniciando supervisor (start_supervision)")
         if self._runner_task is None or self._runner_task.done():
             self._runner_task = asyncio.create_task(self._run(), name="trader_main")
+        self._ensure_connection_signal_task()
 
     async def stop(self) -> None:
         """Solicita parada ordenada y espera cierre del feed."""
         self._stop_event.set()
+        if self._connection_signal_task is not None:
+            self._connection_signal_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await self._connection_signal_task
+            self._connection_signal_task = None
         # Cierre del feed: soporta detener() sync/async/ausente
         try:
             detener = getattr(self.feed, "detener", None)
@@ -684,11 +691,20 @@ class TraderLite:
             except Exception:
                 pass
 
-    def _maybe_emit_datafeed_connected(self, symbol: str, ts: int | None) -> None:
+    def _maybe_emit_datafeed_connected(self, symbol: str | None, ts: int | None) -> None:
         if self._datafeed_connected_emitted:
             return
         bus = getattr(self, "event_bus", None) or getattr(self, "bus", None)
-        payload = {"symbol": symbol}
+        payload: Dict[str, Any] = {}
+        if symbol:
+            payload["symbol"] = symbol
+        else:
+            try:
+                symbols = [s.upper() for s in getattr(self.config, "symbols", [])]
+            except Exception:
+                symbols = []
+            if symbols:
+                payload["symbols"] = symbols
         if ts is not None:
             payload["timestamp"] = ts
         if bus is None:
@@ -708,6 +724,30 @@ class TraderLite:
                 self._datafeed_connected_emitted = True
             except Exception:
                 log.debug("No se pudo publicar evento datafeed_connected", exc_info=True)
+
+    def _ensure_connection_signal_task(self) -> None:
+        if self._connection_signal_task is not None and not self._connection_signal_task.done():
+            return
+        feed = getattr(self, "feed", None)
+        if feed is None:
+            return
+        evt = getattr(feed, "ws_connected_event", None)
+        if evt is None or not hasattr(evt, "wait"):
+            return
+
+        async def _await_ws_connected() -> None:
+            try:
+                await evt.wait()
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                log.debug("No se pudo esperar ws_connected_event", exc_info=True)
+                return
+            self._maybe_emit_datafeed_connected(None, None)
+
+        self._connection_signal_task = asyncio.create_task(
+            _await_ws_connected(), name="datafeed_connected_watch"
+        )
 
     def _descubrir_handler_default(self) -> Callable[[dict], Awaitable[None]]:
         """Intento suave de usar `core.procesar_vela.procesar_vela` si existe.
