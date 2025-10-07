@@ -2,11 +2,9 @@ import asyncio
 import random
 from typing import List
 
-from binance_api.websocket import (
-    InactividadTimeoutError,
-    escuchar_velas,
-    escuchar_velas_combinado,
-)
+from binance_api.websocket import InactividadTimeoutError
+
+from . import escuchar_velas, escuchar_velas_combinado
 
 from ._shared import COMBINED_STREAM_KEY, log
 from . import events
