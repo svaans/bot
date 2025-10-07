@@ -43,37 +43,37 @@ def export_state(self) -> dict[str, Any]:
             'conteo': conteo,
         }
 
-    def load_state(self, data: Mapping[str, Any]) -> None:
-        """Restaura el estado del snapshot previo, ignorando formatos inválidos."""
-        if not isinstance(data, Mapping):
-            return
+def load_state(self, data: Mapping[str, Any]) -> None:
+    """Restaura el estado del snapshot previo, ignorando formatos inválidos."""
+    if not isinstance(data, Mapping):
+        return
 
-        minimo = data.get('minimo')
-        if isinstance(minimo, (int, float)):
-            self.minimo = int(minimo)
+    minimo = data.get('minimo')
+    if isinstance(minimo, (int, float)):
+        self.minimo = int(minimo)
 
-        peso_extra = data.get('peso_extra')
-        if isinstance(peso_extra, (int, float)):
-            self.peso_extra = float(peso_extra)
+    peso_extra = data.get('peso_extra')
+    if isinstance(peso_extra, (int, float)):
+        self.peso_extra = float(peso_extra)
 
-        conteo_raw = data.get('conteo')
-        if not isinstance(conteo_raw, Mapping):
-            return
+    conteo_raw = data.get('conteo')
+    if not isinstance(conteo_raw, Mapping):
+        return
 
-        conteo: Dict[str, Dict[str, int]] = {}
-        for symbol, estrategias in conteo_raw.items():
-            if not isinstance(estrategias, Mapping):
+    conteo: Dict[str, Dict[str, int]] = {}
+    for symbol, estrategias in conteo_raw.items():
+        if not isinstance(estrategias, Mapping):
+            continue
+        symbol_key = str(symbol)
+        cleaned: Dict[str, int] = {}
+        for estrategia, valor in estrategias.items():
+            try:
+                cleaned[str(estrategia)] = int(valor)
+            except (TypeError, ValueError):
                 continue
-            symbol_key = str(symbol)
-            cleaned: Dict[str, int] = {}
-            for estrategia, valor in estrategias.items():
-                try:
-                    cleaned[str(estrategia)] = int(valor)
-                except (TypeError, ValueError):
-                    continue
-            conteo[symbol_key] = cleaned
+        conteo[symbol_key] = cleaned
 
-        self.conteo = conteo
+    self.conteo = conteo
 
 
 def coincidencia_parcial(historial: Sequence[dict], pesos: Dict[str, float],
