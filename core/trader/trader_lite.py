@@ -735,15 +735,60 @@ class TraderLite:
         if evt is None or not hasattr(evt, "wait"):
             return
 
+        failed_evt = getattr(feed, "ws_failed_event", None)
+
         async def _await_ws_connected() -> None:
+            waiters: list[asyncio.Task[Any]] = []
+            labels: dict[asyncio.Task[Any], str] = {}
             try:
-                await evt.wait()
+                connected_wait = evt.wait()
+                if not _is_awaitable(connected_wait):
+                    return
+                connected_task = asyncio.create_task(connected_wait)
+                waiters.append(connected_task)
+                labels[connected_task] = "connected"
+
+                if failed_evt is not None and hasattr(failed_evt, "wait"):
+                    failed_wait = failed_evt.wait()
+                    if _is_awaitable(failed_wait):
+                        failed_task = asyncio.create_task(failed_wait)
+                        waiters.append(failed_task)
+                        labels[failed_task] = "failed"
+
+                stop_wait = self._stop_event.wait()
+                if _is_awaitable(stop_wait):
+                    stop_task = asyncio.create_task(stop_wait)
+                    waiters.append(stop_task)
+                    labels[stop_task] = "stopped"
+
+                done, _ = await asyncio.wait(waiters, return_when=asyncio.FIRST_COMPLETED)
             except asyncio.CancelledError:
                 raise
             except Exception:
                 log.debug("No se pudo esperar ws_connected_event", exc_info=True)
                 return
-            self._maybe_emit_datafeed_connected(None, None)
+            finally:
+                pending = [task for task in waiters if not task.done()]
+                for task in pending:
+                    task.cancel()
+                if pending:
+                    with contextlib.suppress(Exception):
+                        await asyncio.gather(*pending, return_exceptions=True)
+
+            outcome = next((labels.get(task) for task in done if task in labels), None)
+            if outcome == "connected":
+                self._maybe_emit_datafeed_connected(None, None)
+            elif outcome == "failed":
+                reason = getattr(feed, "_ws_failure_reason", None)
+                if reason:
+                    log.debug(
+                        "datafeed_connected_watch: ws_failed_event activado (%s)",
+                        reason,
+                    )
+                else:
+                    log.debug(
+                        "datafeed_connected_watch: ws_failed_event activado"
+                    )
 
         self._connection_signal_task = asyncio.create_task(
             _await_ws_connected(), name="datafeed_connected_watch"
