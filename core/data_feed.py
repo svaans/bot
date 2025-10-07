@@ -44,6 +44,7 @@ from binance_api.websocket import (
     InactividadTimeoutError,
 )
 from binance_api.cliente import fetch_ohlcv_async
+from core.metrics import WS_CONNECTED_GAUGE
 from core.utils.logger import configurar_logger
 from core.utils.utils import (
     intervalo_a_segundos,
@@ -96,6 +97,7 @@ class DataFeed:
         backpressure: bool = os.getenv("DF_BACKPRESSURE", "true").lower() == "true",
         cancel_timeout: float = float(os.getenv("DF_CANCEL_TIMEOUT", "5")),
         on_event: Optional[Callable[[str, dict], None]] = None,
+        event_bus: Any | None = None,
         max_reconnect_attempts: int | None = None,
         max_reconnect_time: float | None = None,
     ) -> None:
@@ -126,6 +128,8 @@ class DataFeed:
         self.backpressure = bool(backpressure)
         self.cancel_timeout = max(0.5, float(cancel_timeout))
         self.on_event = on_event
+        self.event_bus = event_bus
+        self._set_ws_connection_metric(0.0)
 
         if max_reconnect_attempts is None:
             env_max_retries = _safe_int(os.getenv("DF_WS_MAX_RETRIES", "0"), 0)
@@ -347,6 +351,16 @@ class DataFeed:
 
     async def detener(self) -> None:
         """Cancela tareas y limpia estado."""
+        was_running = self._running
+        was_connected_signal = False
+        evt = getattr(self, "ws_connected_event", None)
+        if isinstance(evt, asyncio.Event):
+            was_connected_signal = evt.is_set()
+        else:
+            maybe_is_set = getattr(evt, "is_set", None)
+            if callable(maybe_is_set):
+                with contextlib.suppress(Exception):
+                    was_connected_signal = bool(maybe_is_set())
         tasks: set[asyncio.Task] = set()
         tasks.update(self._tasks.values())
         tasks.update(self._consumer_tasks.values())
@@ -409,6 +423,8 @@ class DataFeed:
         else:  # pragma: no cover - compatibilidad defensiva
             self.ws_failed_event = asyncio.Event()
         self._ws_failure_reason = None
+        if was_running or was_connected_signal:
+            self._mark_ws_state(False, {"reason": "detener"})
 
     # ─────────────────────── Producción (WS) ───────────────────────
 
@@ -422,6 +438,15 @@ class DataFeed:
                     primera_vez = False
 
                 await self._do_backfill(symbol)
+                log.info(
+                    "ws_connect:start",
+                    extra={
+                        "symbol": symbol,
+                        "intervalo": self.intervalo,
+                        "stage": "DataFeed",
+                        "mode": "single",
+                    },
+                )
                 if not self.ws_connected_event.is_set():
                     self._signal_ws_connected(symbol)
 
@@ -442,6 +467,7 @@ class DataFeed:
                         else None
                     ),
                 )
+                self._mark_ws_state(False, {"symbol": symbol, "reason": "stream_end"})
                 log.info("%s: stream finalizado; reintentando…", symbol)
                 self._emit("ws_end", {"symbol": symbol})
                 if not self._register_reconnect_attempt(symbol, "stream_end"):
@@ -449,7 +475,18 @@ class DataFeed:
                 backoff = min(60.0, backoff * 2)
                 await asyncio.sleep(backoff)
 
-            except InactividadTimeoutError:
+            except InactividadTimeoutError as exc:
+                log.warning(
+                    "ws_connect:retry",
+                    extra={
+                        "symbol": symbol,
+                        "intervalo": self.intervalo,
+                        "stage": "DataFeed",
+                        "reason": "inactividad",
+                    },
+                    exc_info=True,
+                )
+                self._mark_ws_state(False, {"symbol": symbol, "reason": "inactividad"})
                 log.warning("%s: reinicio por inactividad", symbol)
                 self._emit("ws_inactividad", {"symbol": symbol})
                 if not self.ws_connected_event.is_set():
@@ -464,6 +501,17 @@ class DataFeed:
                 raise
 
             except Exception as e:
+                log.warning(
+                    "ws_connect:retry",
+                    extra={
+                        "symbol": symbol,
+                        "intervalo": self.intervalo,
+                        "stage": "DataFeed",
+                        "reason": type(e).__name__,
+                    },
+                    exc_info=True,
+                )
+                self._mark_ws_state(False, {"symbol": symbol, "reason": type(e).__name__})
                 log.exception("%s: error en stream; reintentando", symbol)
                 self._emit("ws_error", {"symbol": symbol, "error": str(e)})
                 if not self.ws_connected_event.is_set():
@@ -484,6 +532,15 @@ class DataFeed:
                     primera_vez = False
 
                 await asyncio.gather(*(self._do_backfill(s) for s in symbols))
+                log.info(
+                    "ws_connect:start",
+                    extra={
+                        "symbols": symbols,
+                        "intervalo": self.intervalo,
+                        "stage": "DataFeed",
+                        "mode": "combined",
+                    },
+                )
                 if not self.ws_connected_event.is_set():
                     objetivo = symbols[0] if symbols else None
                     self._signal_ws_connected(objetivo)
@@ -517,6 +574,7 @@ class DataFeed:
                         for s in symbols
                     },
                 )
+                self._mark_ws_state(False, {"symbols": symbols, "reason": "stream_end"})
                 log.info("stream combinado finalizado; reintentando…")
                 self._emit("ws_end", {"symbols": symbols})
                 if not self._register_reconnect_attempt(COMBINED_STREAM_KEY, "stream_end"):
@@ -524,7 +582,18 @@ class DataFeed:
                 backoff = min(60.0, backoff * 2)
                 await asyncio.sleep(backoff)
 
-            except InactividadTimeoutError:
+            except InactividadTimeoutError as exc:
+                log.warning(
+                    "ws_connect:retry",
+                    extra={
+                        "symbols": symbols,
+                        "intervalo": self.intervalo,
+                        "stage": "DataFeed",
+                        "reason": "inactividad",
+                    },
+                    exc_info=True,
+                )
+                self._mark_ws_state(False, {"symbols": symbols, "reason": "inactividad"})
                 log.warning("stream combinado: reinicio por inactividad")
                 self._emit("ws_inactividad", {"symbols": symbols})
                 if not self.ws_connected_event.is_set():
@@ -539,6 +608,17 @@ class DataFeed:
                 raise
 
             except Exception as e:
+                log.warning(
+                    "ws_connect:retry",
+                    extra={
+                        "symbols": symbols,
+                        "intervalo": self.intervalo,
+                        "stage": "DataFeed",
+                        "reason": type(e).__name__,
+                    },
+                    exc_info=True,
+                )
+                self._mark_ws_state(False, {"symbols": symbols, "reason": type(e).__name__})
                 log.exception("stream combinado: error; reintentando")
                 self._emit("ws_error", {"symbols": symbols, "error": str(e)})
                 if not self.ws_connected_event.is_set():
@@ -986,9 +1066,21 @@ class DataFeed:
         if self.ws_connected_event.is_set():
             return
         self.ws_connected_event.set()
-        payload = {"intervalo": self.intervalo}
+        payload: dict[str, Any] = {"intervalo": self.intervalo}
         if symbol is not None:
             payload["symbol"] = symbol
+        elif self._symbols:
+            payload["symbols"] = list(self._symbols)
+        log.info(
+            "ws_connect:ok",
+            extra={
+                "intervalo": self.intervalo,
+                "stage": "DataFeed",
+                "symbol": symbol,
+                "symbols": payload.get("symbols"),
+            },
+        )
+        self._mark_ws_state(True, {k: v for k, v in payload.items() if k != "intervalo"})
         self._emit("ws_connected", payload)
 
     def _signal_ws_failure(self, error: BaseException | str | None = None) -> None:
@@ -1008,6 +1100,7 @@ class DataFeed:
         payload = {"intervalo": self.intervalo}
         if reason:
             payload["reason"] = reason
+        self._mark_ws_state(False, {k: v for k, v in payload.items() if k != "intervalo"})
         self._emit("ws_connect_failed", payload)
 
     def _register_reconnect_attempt(self, key: str, reason: str) -> bool:
@@ -1083,6 +1176,37 @@ class DataFeed:
             return
         self._consumer_state[symbol] = state
         self._emit("consumer_state", {"symbol": symbol, "state": state.name.lower()})
+
+    def _set_ws_connection_metric(self, value: float) -> None:
+        try:
+            WS_CONNECTED_GAUGE.set(value)
+        except Exception:
+            # La métrica puede estar deshabilitada; evitar ruido.
+            pass
+
+    def _emit_bus_signal(self, event: str, payload: dict[str, Any]) -> None:
+        bus = getattr(self, "event_bus", None)
+        if bus is None:
+            return
+        emit = getattr(bus, "emit", None)
+        if callable(emit):
+            try:
+                emit(event, payload)
+            except Exception:
+                log.debug("No se pudo emitir evento %s en event_bus", event, exc_info=True)
+
+    def _mark_ws_state(self, connected: bool, payload: dict[str, Any] | None = None) -> None:
+        base: dict[str, Any] = {"intervalo": self.intervalo}
+        if payload:
+            base.update(payload)
+        self._set_ws_connection_metric(1.0 if connected else 0.0)
+        event = "ws_connected" if connected else "ws_disconnected"
+        self._emit_bus_signal(event, base)
+        if not connected:
+            log.info(
+                "ws_connect:closed",
+                extra={**base, "stage": "DataFeed"},
+            )
 
     def _emit(self, evento: str, data: dict) -> None:
         if self.on_event:

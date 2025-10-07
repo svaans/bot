@@ -62,6 +62,12 @@ class Trader(TraderLite):
         else:
             self.bus = None
         self.event_bus = self.bus
+        feed = getattr(self, "feed", None)
+        if feed is not None:
+            try:
+                setattr(feed, "event_bus", self.bus)
+            except Exception:
+                log.debug("No se pudo asociar event_bus al DataFeed", exc_info=True)
 
         if getattr(self, "_OrderManager", None) and getattr(self, "bus", None) is not None:
             self.orders = self._OrderManager(self.modo_real, self.bus)

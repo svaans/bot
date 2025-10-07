@@ -125,6 +125,7 @@ class TraderLite:
             log.debug("No se pudo marcar DataFeed como gestionado por Trader")
 
         self._datafeed_connected_emitted = False
+        self._ws_started_logged = False
         self._connection_signal_task: asyncio.Task | None = None
 
         # Cliente de exchange (solo modo real)
@@ -667,6 +668,14 @@ class TraderLite:
         )
 
         # Lanzar DataFeedLite supervisado
+        log.info(
+            "trader:starting_ws",
+            extra={
+                "symbols": symbols,
+                "intervalo": getattr(self.config, "intervalo_velas", None),
+                "stage": "Trader",
+            },
+        )
         self.supervisor.supervised_task(
             lambda: self.feed.escuchar(symbols, _handler, cliente=self._cliente),
             name="data_feed",
@@ -707,6 +716,16 @@ class TraderLite:
                 payload["symbols"] = symbols
         if ts is not None:
             payload["timestamp"] = ts
+        log_payload: Dict[str, Any] = {
+            "intervalo": getattr(self.config, "intervalo_velas", None),
+        }
+        log_payload.update(payload)
+        if not self._ws_started_logged:
+            log.info(
+                "trader:ws_started",
+                extra={**log_payload, "stage": "Trader"},
+            )
+            self._ws_started_logged = True
         if bus is None:
             return
         emit = getattr(bus, "emit", None)

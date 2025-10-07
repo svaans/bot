@@ -179,6 +179,11 @@ FEEDS_MISSING_RATE = Gauge(
 )
 
 # Métricas de DataFeed
+WS_CONNECTED_GAUGE = Gauge(
+    "datafeed_ws_connected",
+    "Estado binario de la conexión WS del DataFeed (1=conectado, 0=desconectado)",
+)
+
 QUEUE_SIZE = Gauge(
     "datafeed_queue_size",
     "Tamaño de cola de DataFeed",
@@ -252,6 +257,7 @@ _METRICS_WITH_FALLBACK = [
     "FEEDS_FUNDING_MISSING",
     "FEEDS_OPEN_INTEREST_MISSING",
     "FEEDS_MISSING_RATE",
+    "WS_CONNECTED_GAUGE",
     "QUEUE_SIZE",
     "INGEST_LATENCY",
     "TRADER_QUEUE_SIZE",

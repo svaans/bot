@@ -331,14 +331,37 @@ class StartupManager:
         feed = getattr(self.trader, "data_feed", None) or getattr(self, "data_feed", None)
         managed = bool(getattr(feed, "_managed_by_trader", False)) if feed is not None else False
 
+        def _log_waiting(event_bus_flag: bool, asyncio_flag: bool, metric_flag: bool, polling_flag: bool) -> None:
+            self.log.info(
+                "waiting on: event_bus=%s, asyncio_event=%s, metric=%s, polling=%s",
+                event_bus_flag,
+                asyncio_flag,
+                metric_flag,
+                polling_flag,
+            )
+
+        def _log_missing(event_bus_flag: bool, asyncio_flag: bool, metric_flag: bool, polling_flag: bool) -> None:
+            self.log.warning(
+                "no se detectó señal event_bus=%s, asyncio_event=%s, metric=%s, polling=%s",
+                event_bus_flag,
+                asyncio_flag,
+                metric_flag,
+                polling_flag,
+            )
+
+        metric_available = False
+        polling_active = False
+
         if managed:
             bus = self.event_bus or getattr(self.trader, "event_bus", None) or getattr(self.trader, "bus", None)
             wait_fn = getattr(bus, "wait", None) if bus is not None else None
             if callable(wait_fn):
+                _log_waiting(True, False, metric_available, False)
                 try:
                     await asyncio.wait_for(wait_fn("datafeed_connected"), timeout=timeout)
                     return
                 except asyncio.TimeoutError as exc:
+                    _log_missing(True, False, metric_available, False)
                     raise RuntimeError("WS no conectado") from exc
             else:
                 self.log.debug(
@@ -384,8 +407,15 @@ class StartupManager:
         elif failure_event is not None and callable(getattr(failure_event, "wait", None)):
             thread_events["failure"] = failure_event
 
+        asyncio_available = bool(async_events or thread_events)
+        polling_active = not asyncio_available
+        _log_waiting(False, asyncio_available, metric_available, polling_active)
+
         async def _wait_async_evt(evt: asyncio.Event) -> bool:
-            await evt.wait()
+            try:
+                await asyncio.wait_for(evt.wait(), timeout=timeout)
+            except asyncio.TimeoutError:
+                return False
             return True
 
         async def _wait_thread_evt(evt: Any) -> bool | None:
@@ -415,6 +445,7 @@ class StartupManager:
                 self.log.debug("Fallo al esperar ws_connected_event; se recurre a sondeo.", exc_info=True)
             else:
                 if not done:
+                    _log_missing(False, asyncio_available, metric_available, polling_active)
                     raise RuntimeError(_failure_message())
                 degrade_to_poll = False
                 for label, task in wait_tasks.items():
@@ -423,7 +454,7 @@ class StartupManager:
                             triggered = task.result()
                         except Exception:
                             triggered = None
-                        if triggered is None:
+                        if triggered is None or triggered is False:
                             degrade_to_poll = True
                             continue
                         if label == "success" and triggered:
@@ -432,8 +463,12 @@ class StartupManager:
                             raise RuntimeError(_failure_message())
                 if degrade_to_poll:
                     self.log.debug("Eventos incompatibles con espera directa; degradando a sondeo.")
+                    asyncio_available = False
+                    polling_active = True
+                    _log_waiting(False, False, metric_available, polling_active)
                 else:
                     # Si ninguna tarea reportó éxito/fallo se considera timeout
+                    _log_missing(False, asyncio_available, metric_available, polling_active)
                     raise RuntimeError(_failure_message())
             finally:
                 for task in wait_tasks.values():
@@ -473,6 +508,7 @@ class StartupManager:
             if activo:
                 return
             await asyncio.sleep(0.1)
+        _log_missing(False, asyncio_available, metric_available, True)
         raise RuntimeError(_failure_message())
 
     async def _check_clock_drift(self) -> bool:
