@@ -200,6 +200,46 @@ def test_puede_evaluar_entradas_rechaza_por_riesgo(trader_lite: TraderLite) -> N
     assert resultado is False
 
 
+def test_trader_real_mode_inicia_sincronizacion_de_ordenes() -> None:
+    """El arranque debe disparar la sincronización inicial incluso en modo real."""
+
+    class StubOrderManager:
+        def __init__(self, modo_real: bool, bus: Any | None = None) -> None:
+            self.modo_real = modo_real
+            self.start_sync_calls = 0
+            self.called_without_loop = 0
+
+        def start_sync(self, intervalo: int | None = None) -> None:
+            try:
+                asyncio.get_running_loop()
+            except RuntimeError:
+                self.called_without_loop += 1
+                return
+            self.start_sync_calls += 1
+
+    config = DummyConfig(modo_real=True)
+    supervisor = DummySupervisor()
+
+    async def handler(_: dict) -> None:
+        return None
+
+    trader = Trader(config, candle_handler=handler, supervisor=supervisor)
+
+    ordenes_stub = StubOrderManager(modo_real=True)
+    ordenes_stub.start_sync()
+    trader.orders = ordenes_stub
+
+    async def arrancar_y_detener() -> None:
+        trader.start()
+        await asyncio.sleep(0)
+        await trader.stop()
+
+    asyncio.run(arrancar_y_detener())
+
+    assert ordenes_stub.called_without_loop == 1
+    assert ordenes_stub.start_sync_calls == 1
+
+
 @pytest.mark.asyncio
 async def test_verificar_entrada_prefiere_pipeline(trader_lite: TraderLite) -> None:
     async def pipeline(
