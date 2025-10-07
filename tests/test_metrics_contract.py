@@ -23,7 +23,7 @@ def _labels_of(metric) -> set[str]:
 
 
 def test_entradas_rechazadas_labels() -> None:
-    assert _labels_of(ENTRADAS_RECHAZADAS_V2) == {"timeframe", "reason"}
+    assert _labels_of(ENTRADAS_RECHAZADAS_V2) == {"symbol", "timeframe", "reason"}
 
 
 def test_buffer_size_v2_labels() -> None:
@@ -49,6 +49,7 @@ def test_trader_pipeline_metrics_include_timeframe() -> None:
 def test_safe_helpers_do_not_crash() -> None:
     safe_inc(
         ENTRADAS_RECHAZADAS_V2,
+        symbol="BTCUSDT",
         timeframe="5m",
         reason="x",
     )
