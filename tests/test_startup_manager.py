@@ -13,6 +13,7 @@ import pytest
 
 from core import startup_manager as startup_module
 from core.startup_manager import StartupManager
+from core.persistencia_tecnica import PersistenciaTecnica
 
 
 class _DummyTrader:
@@ -306,6 +307,60 @@ async def test_load_config_warns_on_fast_restart(
     assert payload["symbols"] == ["ETHUSDT"]
     assert payload["modo_real"] is False
     assert payload["age_seconds"] < manager._restart_alert_seconds
+
+
+def test_snapshot_includes_persistencia_state(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """El snapshot debe incluir el estado técnico cuando está disponible."""
+
+    snapshot_path = tmp_path / "startup_snapshot.json"
+    monkeypatch.setattr(startup_module, "SNAPSHOT_PATH", snapshot_path)
+
+    config = SimpleNamespace(symbols=["BTCUSDT"], modo_real=False)
+    persistencia = PersistenciaTecnica(minimo=2, peso_extra=0.75)
+    persistencia.actualizar("BTCUSDT", {"long": True})
+    trader = SimpleNamespace(config=config, persistencia=persistencia)
+
+    manager = StartupManager(trader=trader, config=config)
+    manager._snapshot()
+
+    data = json.loads(snapshot_path.read_text())
+    estado = data.get("persistencia_tecnica")
+    assert estado is not None
+    assert estado["minimo"] == 2
+    assert estado["peso_extra"] == pytest.approx(0.75)
+    assert estado["conteo"]["BTCUSDT"]["long"] == 1
+
+
+def test_restore_persistencia_state(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Debe restaurar el estado técnico previo en el trader actual."""
+
+    snapshot_path = tmp_path / "startup_snapshot.json"
+    monkeypatch.setattr(startup_module, "SNAPSHOT_PATH", snapshot_path)
+
+    persistencia_prev = PersistenciaTecnica(minimo=3, peso_extra=1.25)
+    persistencia_prev.actualizar("BTCUSDT", {"long": True})
+    persistencia_prev.actualizar("BTCUSDT", {"long": True})
+    snapshot_payload = {
+        "symbols": ["BTCUSDT"],
+        "modo_real": False,
+        "timestamp": time.time(),
+        "persistencia_tecnica": persistencia_prev.export_state(),
+    }
+    snapshot_path.write_text(json.dumps(snapshot_payload))
+
+    config = SimpleNamespace(symbols=["BTCUSDT"], modo_real=False)
+    trader = SimpleNamespace(config=config, persistencia=PersistenciaTecnica())
+
+    manager = StartupManager(trader=trader, config=config)
+    manager._inspect_previous_snapshot()
+    manager._restore_persistencia_state()
+
+    assert trader.persistencia.minimo == 3
+    assert trader.persistencia.peso_extra == pytest.approx(1.25)
+    assert trader.persistencia.conteo == {"BTCUSDT": {"long": 2}}
 
 
 @pytest.mark.asyncio
