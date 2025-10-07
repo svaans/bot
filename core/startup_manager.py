@@ -78,6 +78,7 @@ class StartupManager:
 
         self.log = configurar_logger('startup')
         self._restart_alert_seconds = self._resolve_restart_alert_threshold()
+        self._previous_snapshot: dict[str, Any] | None = None
 
     async def run(self) -> tuple[Trader, asyncio.Task, Config]:
         """Ejecuta la secuencia de arranque y devuelve (trader, tarea_trader, config)."""
@@ -132,6 +133,7 @@ class StartupManager:
     async def _load_config(self) -> None:
         if self.trader is not None and self.config is not None:
             self._inspect_previous_snapshot()
+            self._restore_persistencia_state()
             return
         if self.trader is not None and self.config is None:
             # Si viene trader, intenta tomar su config
@@ -144,6 +146,7 @@ class StartupManager:
             self.event_bus = getattr(self.trader, "event_bus", None) or getattr(self.trader, "bus", None)
 
         self._inspect_previous_snapshot()
+        self._restore_persistencia_state()
 
     async def _bootstrap(self) -> None:
         assert self.trader is not None and self.config is not None
@@ -532,9 +535,11 @@ class StartupManager:
 
     def _inspect_previous_snapshot(self) -> None:
         """Registra información diagnóstica basada en el snapshot anterior."""
+        self._previous_snapshot = None
         snapshot = self._read_snapshot()
         if not snapshot:
             return
+        self._previous_snapshot = snapshot
 
         symbols = snapshot.get('symbols')
         if not isinstance(symbols, list):
@@ -576,12 +581,51 @@ class StartupManager:
             'modo_real': getattr(self.config, 'modo_real', False),
             'timestamp': time.time(),
         }
+        trader = self.trader
+        if trader is not None:
+            persistencia = getattr(trader, 'persistencia', None)
+            export_fn = getattr(persistencia, 'export_state', None)
+            if callable(export_fn):
+                try:
+                    estado = export_fn()
+                except Exception:
+                    self.log.debug(
+                        'No se pudo exportar estado de PersistenciaTecnica para snapshot',
+                        exc_info=True,
+                    )
+                else:
+                    if estado:
+                        data['persistencia_tecnica'] = estado
         try:
             SNAPSHOT_PATH.parent.mkdir(parents=True, exist_ok=True)
             with open(SNAPSHOT_PATH, 'w', encoding='utf-8') as f:
                 json.dump(data, f, indent=2)
         except Exception as e:
             self.log.error(f'No se pudo guardar snapshot: {e}')
+
+    def _restore_persistencia_state(self) -> None:
+        """Restaura el estado técnico persistido si está disponible."""
+        trader = self.trader
+        if trader is None:
+            return
+        snapshot = self._previous_snapshot
+        if not snapshot:
+            return
+        estado = snapshot.get('persistencia_tecnica')
+        if not estado:
+            return
+        persistencia = getattr(trader, 'persistencia', None)
+        if persistencia is None:
+            return
+        load_fn = getattr(persistencia, 'load_state', None)
+        if callable(load_fn):
+            try:
+                load_fn(estado)
+            except Exception:
+                self.log.debug(
+                    'No se pudo restaurar estado de PersistenciaTecnica desde snapshot',
+                    exc_info=True,
+                )
 
     async def _stop_streams(self) -> None:
         """Detiene feed y tarea del trader respetuosamente."""
