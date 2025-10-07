@@ -324,12 +324,73 @@ class StartupManager:
 
         self._snapshot()
 
-    async def _wait_ws(self, timeout: float) -> None:
+    async def _wait_ws(self, timeout: float, *, grace_for_trader: float = 5.0) -> None:
         """Espera a que el DataFeed reporte actividad hasta `timeout` segundos."""
         assert self.trader is not None
 
         feed = getattr(self.trader, "data_feed", None) or getattr(self, "data_feed", None)
         managed = bool(getattr(feed, "_managed_by_trader", False)) if feed is not None else False
+        managed_override = self._get_config_value("ws_managed_by_trader", None)
+        if managed_override is not None:
+            managed = bool(managed_override)
+
+        grace = max(0.0, float(grace_for_trader))
+        if grace > timeout:
+            grace = float(timeout)
+        self.log.debug(
+            "wait_ws:begin",
+            extra={
+                "timeout": timeout,
+                "grace_for_trader": grace,
+                "managed_by_trader": managed,
+            },
+        )
+
+        if await self._poll_ws_connected():
+            self.log.debug(
+                "wait_ws:already_connected",
+                extra={"timeout": timeout},
+            )
+            return
+
+        trader_connected = False
+        trader_activity = False
+
+        if managed and grace > 0.0:
+            trader_connected, trader_activity = await self._wait_for_trader_grace(grace)
+            if trader_connected:
+                self.log.debug(
+                    "wait_ws:trader_ready",
+                    extra={"grace_for_trader": grace},
+                )
+                return
+            if not trader_activity:
+                self.log.warning("Trader no inició WS en la gracia; forzando ensure_running()")
+                self._set_config_value("ws_managed_by_trader", False)
+                if feed is not None:
+                    with suppress(Exception):
+                        setattr(feed, "_managed_by_trader", False)
+                managed = False
+
+        feed = getattr(self.trader, "data_feed", None) or getattr(self, "data_feed", None)
+
+        if feed is not None and hasattr(feed, "ensure_running"):
+            if not trader_activity and not await self._is_ws_attempt_in_progress():
+                self.log.debug(
+                    "wait_ws:ensure_running_fallback",
+                    extra={"grace_for_trader": grace},
+                )
+                ensure_running = getattr(feed, "ensure_running")
+                try:
+                    result = ensure_running()
+                except TypeError:
+                    result = None
+                if inspect.isawaitable(result):
+                    await result
+                else:
+                    await asyncio.sleep(0)
+
+        feed = getattr(self.trader, "data_feed", None) or getattr(self, "data_feed", None)
 
         def _log_waiting(event_bus_flag: bool, asyncio_flag: bool, metric_flag: bool, polling_flag: bool) -> None:
             self.log.info(
@@ -349,7 +410,7 @@ class StartupManager:
                 polling_flag,
             )
 
-        metric_available = False
+        metric_available = bool(getattr(self, "metrics", None))
         polling_active = False
 
         if managed:
@@ -483,6 +544,10 @@ class StartupManager:
                 await asyncio.sleep(0.1)
                 continue
 
+
+            if await self._poll_ws_connected():
+                return
+
             activo = False
             success_event = getattr(feed, "ws_connected_event", success_event)
             failure_event = getattr(feed, "ws_failed_event", failure_event)
@@ -510,6 +575,193 @@ class StartupManager:
             await asyncio.sleep(0.1)
         _log_missing(False, asyncio_available, metric_available, True)
         raise RuntimeError(_failure_message())
+    
+    def _get_config_value(self, key: str, default: Any | None = None) -> Any | None:
+        cfg = self.config or getattr(self.trader, "config", None)
+        if cfg is None:
+            return default
+        getter = getattr(cfg, "get", None)
+        if callable(getter):
+            try:
+                return getter(key, default)
+            except Exception:
+                return default
+        return getattr(cfg, key, default)
+
+    def _set_config_value(self, key: str, value: Any) -> None:
+        cfg = self.config or getattr(self.trader, "config", None)
+        if cfg is None:
+            return
+        if hasattr(cfg, "__setitem__"):
+            try:
+                cfg[key] = value
+                return
+            except Exception:
+                pass
+        with suppress(Exception):
+            setattr(cfg, key, value)
+
+    async def _wait_for_trader_grace(self, timeout: float) -> tuple[bool, bool]:
+        if timeout <= 0:
+            connected = await self._poll_ws_connected()
+            if connected:
+                return True, True
+            return False, await self._is_ws_attempt_in_progress()
+
+        bus = self.event_bus or getattr(self.trader, "event_bus", None) or getattr(self.trader, "bus", None)
+        wait_fn = getattr(bus, "wait", None) if bus is not None else None
+
+        tasks: dict[str, asyncio.Task[Any]] = {}
+        if callable(wait_fn):
+            for event_name in ("datafeed_connected", "ws_connected", "ws_connecting"):
+                try:
+                    result = wait_fn(event_name)
+                except Exception:
+                    continue
+                if not inspect.isawaitable(result):
+                    continue
+                tasks[event_name] = asyncio.create_task(result, name=f"wait_ws_grace_{event_name}")
+
+        attempt_detected = False
+        deadline = time.monotonic() + timeout
+        try:
+            while True:
+                for name, task in list(tasks.items()):
+                    if not task.done():
+                        continue
+                    try:
+                        _ = task.result()
+                    except asyncio.CancelledError:
+                        continue
+                    except Exception:
+                        tasks.pop(name, None)
+                        continue
+                    attempt_detected = True
+                    if name in {"datafeed_connected", "ws_connected"}:
+                        return True, True
+                    tasks.pop(name, None)
+
+                if await self._poll_ws_connected():
+                    return True, True
+
+                if await self._is_ws_attempt_in_progress():
+                    attempt_detected = True
+
+                now = time.monotonic()
+                remaining = deadline - now
+                if remaining <= 0:
+                    break
+                await asyncio.sleep(min(0.1, remaining))
+        finally:
+            for task in tasks.values():
+                if not task.done():
+                    task.cancel()
+            if tasks:
+                await asyncio.gather(*tasks.values(), return_exceptions=True)
+
+        return False, attempt_detected
+
+    async def _is_ws_attempt_in_progress(self) -> bool:
+        feed = getattr(self.trader, "data_feed", None) or getattr(self, "data_feed", None)
+        if feed is None:
+            return False
+
+        failure_event = getattr(feed, "ws_failed_event", None)
+        if isinstance(failure_event, asyncio.Event) and failure_event.is_set():
+            return False
+        maybe_is_set = getattr(failure_event, "is_set", None)
+        if callable(maybe_is_set):
+            with suppress(Exception):
+                if bool(maybe_is_set()):
+                    return False
+
+        if await self._poll_ws_connected():
+            return True
+
+        if bool(getattr(feed, "_running", False)):
+            return True
+
+        activos = getattr(feed, "activos", None)
+        try:
+            if isinstance(activos, bool):
+                if activos:
+                    return True
+            elif callable(activos):
+                result = activos()
+                if inspect.isawaitable(result):
+                    result = await result
+                if bool(result):
+                    return True
+        except Exception:
+            pass
+
+        is_active = getattr(feed, "is_active", None)
+        if callable(is_active):
+            try:
+                result = is_active()
+                if inspect.isawaitable(result):
+                    result = await result
+                if bool(result):
+                    return True
+            except Exception:
+                pass
+
+        tasks = getattr(feed, "_tasks", None)
+        if isinstance(tasks, dict):
+            for task in tasks.values():
+                if isinstance(task, asyncio.Task) and not task.done():
+                    return True
+
+        connecting_event = getattr(feed, "ws_connecting_event", None)
+        if isinstance(connecting_event, asyncio.Event) and connecting_event.is_set():
+            return True
+        maybe_is_set = getattr(connecting_event, "is_set", None)
+        if callable(maybe_is_set):
+            with suppress(Exception):
+                if bool(maybe_is_set()):
+                    return True
+
+        return False
+
+    async def _poll_ws_connected(self) -> bool:
+        feed = getattr(self.trader, "data_feed", None) or getattr(self, "data_feed", None)
+        if feed is None:
+            return False
+
+        connected_attr = getattr(feed, "connected", None)
+        try:
+            if isinstance(connected_attr, bool):
+                if connected_attr:
+                    return True
+            elif callable(connected_attr):
+                result = connected_attr()
+                if inspect.isawaitable(result):
+                    result = await result
+                if bool(result):
+                    return True
+        except Exception:
+            pass
+
+        evt = getattr(feed, "ws_connected_event", None)
+        if isinstance(evt, asyncio.Event):
+            if evt.is_set():
+                return True
+        else:
+            maybe_is_set = getattr(evt, "is_set", None)
+            if callable(maybe_is_set):
+                with suppress(Exception):
+                    if bool(maybe_is_set()):
+                        return True
+
+        metrics = getattr(self, "metrics", None)
+        gauge = getattr(metrics, "ws_connected_gauge", None) if metrics is not None else None
+        if gauge is not None:
+            getter = getattr(gauge, "get", None)
+            if callable(getter):
+                with suppress(Exception):
+                    return bool(getter())
+
+        return False
 
     async def _check_clock_drift(self) -> bool:
         """Comprueba desincronización respecto al server de Binance. Tolerante a fallos de red."""

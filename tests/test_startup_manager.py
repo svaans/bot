@@ -489,6 +489,76 @@ async def test_wait_ws_managed_feed_event_bus_timeout() -> None:
 
 
 @pytest.mark.asyncio
+async def test_wait_ws_grace_fallback_invokes_ensure_running() -> None:
+    """La ventana de gracia dispara ``ensure_running`` cuando no hay actividad."""
+
+    class _Feed:
+        def __init__(self) -> None:
+            self.ws_connected_event = asyncio.Event()
+            self.ws_failed_event = asyncio.Event()
+            self._managed_by_trader = True
+            self.connected = False
+            self.ensure_running_calls = 0
+
+        async def ensure_running(self) -> None:
+            self.ensure_running_calls += 1
+            await asyncio.sleep(0)
+            self.connected = True
+            self.ws_connected_event.set()
+
+    feed = _Feed()
+    manager = StartupManager(trader=_DummyTrader(feed), config={"ws_managed_by_trader": True})
+
+    await manager._wait_ws(0.4, grace_for_trader=0.05)
+
+    assert feed.ensure_running_calls == 1
+    assert feed.ws_connected_event.is_set() is True
+    assert getattr(feed, "_managed_by_trader", False) is False
+    if hasattr(manager.config, "get"):
+        assert manager.config.get("ws_managed_by_trader") is False
+    else:
+        assert getattr(manager.config, "ws_managed_by_trader", None) is False
+
+
+@pytest.mark.asyncio
+async def test_wait_ws_grace_detects_activity_without_fallback() -> None:
+    """Si el Trader muestra actividad, no se fuerza ``ensure_running``."""
+
+    class _Feed:
+        def __init__(self) -> None:
+            self.ws_connected_event = asyncio.Event()
+            self.ws_failed_event = asyncio.Event()
+            self._managed_by_trader = True
+            self.connected = False
+            self.ensure_running_calls = 0
+
+        async def ensure_running(self) -> None:
+            self.ensure_running_calls += 1
+
+        def mark_connected(self) -> None:
+            self.connected = True
+            self.ws_connected_event.set()
+
+    feed = _Feed()
+    manager = StartupManager(trader=_DummyTrader(feed), config={"ws_managed_by_trader": True})
+
+    async def _connect() -> None:
+        await asyncio.sleep(0.02)
+        feed.mark_connected()
+
+    asyncio.create_task(_connect())
+
+    await manager._wait_ws(0.5, grace_for_trader=0.1)
+
+    assert feed.ensure_running_calls == 0
+    assert feed.ws_connected_event.is_set() is True
+    if hasattr(manager.config, "get"):
+        assert manager.config.get("ws_managed_by_trader") is True
+    else:
+        assert getattr(manager.config, "ws_managed_by_trader", None) is True
+
+
+@pytest.mark.asyncio
 async def test_open_streams_runs_sync_start_on_loop_thread() -> None:
     """El trader síncrono debe ejecutarse en el mismo hilo del event loop."""
 

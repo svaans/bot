@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import inspect
 import os
 from collections import defaultdict
 from typing import Any, Awaitable, Callable, Dict, Iterable, List, Optional
@@ -122,6 +123,19 @@ class DataFeed:
         self.ws_connected_event: asyncio.Event = asyncio.Event()
         self.ws_failed_event: asyncio.Event = asyncio.Event()
         self._ws_failure_reason: str | None = None
+
+    @property
+    def connected(self) -> bool:
+        """Indica si el DataFeed reporta conexión activa al WebSocket."""
+
+        evt = getattr(self, "ws_connected_event", None)
+        if isinstance(evt, asyncio.Event):
+            return evt.is_set()
+        maybe_is_set = getattr(evt, "is_set", None)
+        if callable(maybe_is_set):
+            with contextlib.suppress(Exception):
+                return bool(maybe_is_set())
+        return False
 
     @property
     def activos(self) -> bool:
@@ -265,6 +279,29 @@ class DataFeed:
 
     async def start(self) -> None:
         await self.iniciar()
+
+    async def ensure_running(self) -> None:
+        """Arranca el feed sólo si no se encuentra en ejecución."""
+
+        if getattr(self, "_running", False):
+            return
+
+        start_fn = getattr(self, "start", None) or getattr(self, "iniciar", None)
+        if not callable(start_fn):
+            log.debug("ensure_running: sin start() disponible; se omite")
+            return
+
+        try:
+            result = start_fn()
+        except TypeError:
+            # Soporta métodos síncronos sin argumentos opcionales adicionales.
+            result = None
+
+        if inspect.isawaitable(result):
+            await result
+        else:
+            # Garantiza que las tareas internas se programen.
+            await asyncio.sleep(0)
 
     async def detener(self) -> None:
         was_running = self._running
