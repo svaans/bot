@@ -77,6 +77,7 @@ class StartupManager:
                 setattr(self.config, "ws_timeout", ws_timeout)
 
         self.log = configurar_logger('startup')
+        self._restart_alert_seconds = self._resolve_restart_alert_threshold()
 
     async def run(self) -> tuple[Trader, asyncio.Task, Config]:
         """Ejecuta la secuencia de arranque y devuelve (trader, tarea_trader, config)."""
@@ -130,6 +131,7 @@ class StartupManager:
 
     async def _load_config(self) -> None:
         if self.trader is not None and self.config is not None:
+            self._inspect_previous_snapshot()
             return
         if self.trader is not None and self.config is None:
             # Si viene trader, intenta tomar su config
@@ -140,6 +142,8 @@ class StartupManager:
             self.trader = Trader(self.config)  # type: ignore[arg-type]
         if self.trader is not None and self.event_bus is None:
             self.event_bus = getattr(self.trader, "event_bus", None) or getattr(self.trader, "bus", None)
+
+        self._inspect_previous_snapshot()
 
     async def _bootstrap(self) -> None:
         assert self.trader is not None and self.config is not None
@@ -497,6 +501,72 @@ class StartupManager:
             return True
         except Exception:
             return False
+
+    def _resolve_restart_alert_threshold(self) -> float:
+        """Obtiene desde el entorno el umbral para alertar reinicios prematuros."""
+        raw = os.getenv("STARTUP_RESTART_ALERT_SECONDS")
+        try:
+            value = float(raw) if raw else 300.0
+        except (TypeError, ValueError):
+            value = 300.0
+        return max(value, 0.0)
+
+    def _read_snapshot(self) -> dict[str, Any] | None:
+        """Lee el snapshot previo si existe y tiene formato válido."""
+        path = SNAPSHOT_PATH
+        try:
+            with path.open('r', encoding='utf-8') as fh:
+                data = json.load(fh)
+        except FileNotFoundError:
+            return None
+        except json.JSONDecodeError as exc:
+            self.log.warning("Snapshot previo ilegible: %s", exc)
+            return None
+        except Exception as exc:  # pragma: no cover - errores inesperados
+            self.log.debug("Fallo al leer snapshot previo: %s", exc, exc_info=True)
+            return None
+        if not isinstance(data, dict):
+            self.log.warning("Snapshot previo con formato inesperado: %s", type(data).__name__)
+            return None
+        return data
+
+    def _inspect_previous_snapshot(self) -> None:
+        """Registra información diagnóstica basada en el snapshot anterior."""
+        snapshot = self._read_snapshot()
+        if not snapshot:
+            return
+
+        symbols = snapshot.get('symbols')
+        if not isinstance(symbols, list):
+            symbols = [symbols] if symbols is not None else []
+        modo_real = bool(snapshot.get('modo_real', False))
+        timestamp = snapshot.get('timestamp')
+        age: float | None
+        if isinstance(timestamp, (int, float)):
+            age = max(0.0, time.time() - float(timestamp))
+        else:
+            age = None
+
+        log_payload = {
+            'symbols': symbols,
+            'modo_real': modo_real,
+            'age_seconds': age,
+        }
+        self.log.info(
+            'Snapshot previo detectado',
+            extra={'startup_snapshot': log_payload},
+        )
+
+        if (
+            age is not None
+            and self._restart_alert_seconds > 0
+            and age < self._restart_alert_seconds
+        ):
+            self.log.warning(
+                'Reinicio detectado %.1f segundos después del snapshot previo; revisar estabilidad.',
+                age,
+                extra={'startup_snapshot': log_payload},
+            )
 
     def _snapshot(self) -> None:
         """Persistencia de snapshot mínimo de estado de arranque."""
