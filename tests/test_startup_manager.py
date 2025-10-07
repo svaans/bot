@@ -2,11 +2,16 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import threading
+import time
+from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 
 import pytest
 
+from core import startup_manager as startup_module
 from core.startup_manager import StartupManager
 
 
@@ -15,6 +20,37 @@ class _DummyTrader:
 
     def __init__(self, feed: object) -> None:
         self.data_feed = feed
+
+
+class _CapturingLogger:
+    """Logger mínimo que registra las llamadas recibidas para aserciones."""
+
+    def __init__(self) -> None:
+        self.info_calls: list[dict[str, Any]] = []
+        self.warning_calls: list[dict[str, Any]] = []
+        self.debug_calls: list[dict[str, Any]] = []
+        self.error_calls: list[dict[str, Any]] = []
+
+    def _record(self, storage: list[dict[str, Any]], message: str, *args: Any, **kwargs: Any) -> None:
+        rendered = message % args if args else message
+        storage.append({
+            "message": rendered,
+            "raw": message,
+            "args": args,
+            "kwargs": kwargs,
+        })
+
+    def info(self, message: str, *args: Any, **kwargs: Any) -> None:
+        self._record(self.info_calls, message, *args, **kwargs)
+
+    def warning(self, message: str, *args: Any, **kwargs: Any) -> None:
+        self._record(self.warning_calls, message, *args, **kwargs)
+
+    def debug(self, message: str, *args: Any, **kwargs: Any) -> None:
+        self._record(self.debug_calls, message, *args, **kwargs)
+
+    def error(self, message: str, *args: Any, **kwargs: Any) -> None:  # pragma: no cover - seguridad
+        self._record(self.error_calls, message, *args, **kwargs)
 
 
 @pytest.mark.asyncio
@@ -196,6 +232,80 @@ async def test_wait_ws_polling_callable_activos() -> None:
     asyncio.create_task(_activate())
 
     await manager._wait_ws(1.0)
+
+
+@pytest.mark.asyncio
+async def test_load_config_reports_previous_snapshot(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Debe registrar la presencia de un snapshot previo durante el arranque."""
+
+    snapshot_path = tmp_path / "startup_snapshot.json"
+    monkeypatch.setattr(startup_module, "SNAPSHOT_PATH", snapshot_path)
+
+    data = {
+        "symbols": ["BTCUSDT"],
+        "modo_real": True,
+        "timestamp": time.time() - 500,
+    }
+    snapshot_path.write_text(json.dumps(data))
+
+    trader = _DummyTrader(SimpleNamespace())
+    config = SimpleNamespace(symbols=["BTCUSDT"], modo_real=True)
+    manager = StartupManager(trader=trader, config=config)
+    manager._restart_alert_seconds = 60.0
+    logger = _CapturingLogger()
+    manager.log = logger
+
+    await manager._load_config()
+
+    assert logger.info_calls, "Se esperaba al menos un log informativo del snapshot"
+    info_call = logger.info_calls[0]
+    assert info_call["message"] == "Snapshot previo detectado"
+    payload = info_call["kwargs"].get("extra", {}).get("startup_snapshot")
+    assert payload is not None
+    assert payload["symbols"] == ["BTCUSDT"]
+    assert payload["modo_real"] is True
+    assert payload["age_seconds"] and payload["age_seconds"] > 0
+
+    assert not logger.warning_calls
+
+
+@pytest.mark.asyncio
+async def test_load_config_warns_on_fast_restart(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Reinicios muy rápidos deben generar una advertencia para diagnóstico."""
+
+    snapshot_path = tmp_path / "startup_snapshot.json"
+    monkeypatch.setattr(startup_module, "SNAPSHOT_PATH", snapshot_path)
+
+    data = {
+        "symbols": ["ETHUSDT"],
+        "modo_real": False,
+        "timestamp": time.time() - 5,
+    }
+    snapshot_path.write_text(json.dumps(data))
+
+    trader = _DummyTrader(SimpleNamespace())
+    config = SimpleNamespace(symbols=["ETHUSDT"], modo_real=False)
+    manager = StartupManager(trader=trader, config=config)
+    manager._restart_alert_seconds = 60.0
+    logger = _CapturingLogger()
+    manager.log = logger
+
+    await manager._load_config()
+
+    assert logger.warning_calls, "Se esperaba advertencia por reinicio rápido"
+    warning_call = logger.warning_calls[0]
+    assert warning_call["message"].startswith("Reinicio detectado")
+    payload = warning_call["kwargs"].get("extra", {}).get("startup_snapshot")
+    assert payload is not None
+    assert payload["symbols"] == ["ETHUSDT"]
+    assert payload["modo_real"] is False
+    assert payload["age_seconds"] < manager._restart_alert_seconds
 
 
 @pytest.mark.asyncio
