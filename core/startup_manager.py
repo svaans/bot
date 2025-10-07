@@ -194,11 +194,9 @@ class StartupManager:
         async def _run_trader() -> None:
             exc: BaseException | None = None
             try:
-                if inspect.iscoroutinefunction(start_fn):
-                    await start_fn()
-                else:
-                    # Ejecuta método sync en hilo para no bloquear el loop
-                    await asyncio.to_thread(start_fn)
+                result = start_fn()
+                if inspect.isawaitable(result):
+                    await result
             except asyncio.CancelledError:
                 # Señalamos que se permite terminar
                 if self._trader_hold and not self._trader_hold.is_set():
