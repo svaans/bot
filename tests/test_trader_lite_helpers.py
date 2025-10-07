@@ -224,3 +224,52 @@ async def test_start_registra_tareas_en_supervisor() -> None:
     await asyncio.sleep(0)
 
     assert {task["name"] for task in supervisor.supervised} == {"heartbeat_loop", "data_feed"}
+
+
+@pytest.mark.asyncio
+async def test_connection_signal_task_terminates_on_ws_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    supervisor = DummySupervisor()
+    config = DummyConfig()
+
+    class _FailingFeed:
+        def __init__(self, intervalo: str, **_: Any) -> None:
+            self.intervalo = intervalo
+            self.ws_connected_event = asyncio.Event()
+            self.ws_failed_event = asyncio.Event()
+            self.detener_calls = 0
+
+        async def escuchar(
+            self,
+            symbols: list[str] | tuple[str, ...],
+            handler,
+            *,
+            cliente=None,
+        ) -> None:  # pragma: no cover - no-op stub
+            return None
+
+        async def detener(self) -> None:
+            self.detener_calls += 1
+
+    monkeypatch.setattr("core.trader_modular.DataFeed", _FailingFeed, raising=False)
+
+    async def handler(_: dict) -> None:
+        return None
+
+    trader = TraderLite(config, candle_handler=handler, supervisor=supervisor)
+    trader.start()
+    await asyncio.sleep(0)
+
+    watch = trader._connection_signal_task
+    assert watch is not None
+    assert not watch.done()
+
+    trader.feed.ws_failed_event.set()
+    await asyncio.sleep(0.05)
+
+    assert watch.done(), "La tarea de señal debe finalizar tras el fallo del feed"
+    assert watch.exception() is None
+    assert trader._datafeed_connected_emitted is False
+
+    await trader.stop()
