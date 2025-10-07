@@ -233,9 +233,15 @@ class DataFeed:
         """Inicia el stream por símbolo (o combinado si hay >1)."""
         await self.detener()
 
-        # Nueva señal por cada arranque para evitar estados residuales
-        self.ws_connected_event = asyncio.Event()
-        self.ws_failed_event = asyncio.Event()
+        # Nueva señal por cada arranque para evitar estados residuales sin perder referencias
+        if isinstance(self.ws_connected_event, asyncio.Event):
+            self.ws_connected_event.clear()
+        else:  # pragma: no cover - compatibilidad defensiva
+            self.ws_connected_event = asyncio.Event()
+        if isinstance(self.ws_failed_event, asyncio.Event):
+            self.ws_failed_event.clear()
+        else:  # pragma: no cover - compatibilidad defensiva
+            self.ws_failed_event = asyncio.Event()
         self._ws_failure_reason = None
 
         self._symbols = list({s.upper() for s in symbols})
@@ -331,9 +337,15 @@ class DataFeed:
         self._consumer_last.clear()
         self._consumer_state.clear()
 
-        # La señal se reinicia para futuros arranques
-        self.ws_connected_event = asyncio.Event()
-        self.ws_failed_event = asyncio.Event()
+        # La señal se reinicia para futuros arranques manteniendo referencias existentes
+        if isinstance(self.ws_connected_event, asyncio.Event):
+            self.ws_connected_event.clear()
+        else:  # pragma: no cover - compatibilidad defensiva
+            self.ws_connected_event = asyncio.Event()
+        if isinstance(self.ws_failed_event, asyncio.Event):
+            self.ws_failed_event.clear()
+        else:  # pragma: no cover - compatibilidad defensiva
+            self.ws_failed_event = asyncio.Event()
         self._ws_failure_reason = None
 
     # ─────────────────────── Producción (WS) ───────────────────────
