@@ -197,30 +197,59 @@ class TraderLite:
         # Se difieren hasta ahora para evitar ciclos.
         try:
             from core.risk import SpreadGuard as _SpreadGuard
-            self._SpreadGuard = _SpreadGuard
         except Exception:
             self._SpreadGuard = None
+        else:
+            self._SpreadGuard = _SpreadGuard
+
+        # Inicializar referencias lazy por defecto para que un fallo parcial
+        # no anule al resto de componentes opcionales.
+        self._EventBus = None
+        self._OrderManager = None
+        self._sync_sim = None
+        self._StrategyEngine = None
+        self._PersistenciaTecnica = None
+        self._verificar_entrada = None
         try:
             from core.event_bus import EventBus as _EventBus
-            from core.orders.order_manager import OrderManager as _OrderManager
-            from core.orders.storage_simulado import sincronizar_ordenes_simuladas as _sync_sim
-            from core.strategies import StrategyEngine as _StrategyEngine
-            from core.persistencia_tecnica import PersistenciaTecnica as _PersistenciaTecnica
-            from core.strategies.entry.verificar_entradas import verificar_entrada as _verificar_entrada
-            self._EventBus = _EventBus
-            self._OrderManager = _OrderManager
-            self._sync_sim = _sync_sim
-            self._StrategyEngine = _StrategyEngine
-            self._PersistenciaTecnica = _PersistenciaTecnica
-            self._verificar_entrada = _verificar_entrada
         except Exception:
-            # Se inicializarán a None; el wrapper Trader aplicará guardas.
-            self._EventBus = None
-            self._OrderManager = None
-            self._sync_sim = None
-            self._StrategyEngine = None
-            self._PersistenciaTecnica = None
-            self._verificar_entrada = None
+            log.debug("Fallo importando EventBus; se continúa sin bus", exc_info=True)
+        else:
+            self._EventBus = _EventBus
+        try:
+            from core.orders.order_manager import OrderManager as _OrderManager
+        except Exception:
+            log.debug("Fallo importando OrderManager; se deshabilitan órdenes reales", exc_info=True)
+        else:
+            self._OrderManager = _OrderManager
+        try:
+            from core.orders.storage_simulado import sincronizar_ordenes_simuladas as _sync_sim
+        except Exception:
+            log.debug("Fallo importando sincronizador de órdenes simuladas", exc_info=True)
+        else:
+            self._sync_sim = _sync_sim
+        try:
+            from core.strategies import StrategyEngine as _StrategyEngine
+        except Exception:
+            log.debug("Fallo importando StrategyEngine; se usará pipeline directo", exc_info=True)
+        else:
+            self._StrategyEngine = _StrategyEngine
+        try:
+            from core.persistencia_tecnica import PersistenciaTecnica as _PersistenciaTecnica
+        except Exception:
+            log.debug("Fallo importando PersistenciaTecnica; persistencia inactiva", exc_info=True)
+        else:
+            self._PersistenciaTecnica = _PersistenciaTecnica
+        try:
+            from core.strategies.entry.verificar_entradas import (
+                verificar_entrada as _verificar_entrada,
+            )
+        except Exception:
+            log.debug(
+                "Fallo importando pipeline de verificación de entradas", exc_info=True
+            )
+        else:
+            self._verificar_entrada = _verificar_entrada
 
         # Configurar guardia de spread (puede devolver None si está deshabilitado).
         self.spread_guard = self._create_spread_guard()
