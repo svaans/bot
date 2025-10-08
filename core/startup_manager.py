@@ -268,6 +268,21 @@ class StartupManager:
                 self.log.warning(
                     "DataFeed gestionado pero sin soporte de EventBus.wait(); se arranca como fallback.",
                 )
+                if feed is not None:
+                    symbols_cfg = getattr(self.config, "symbols", None)
+                    symbols_list: list[Any] = []
+                    if symbols_cfg is not None:
+                        try:
+                            symbols_list = [str(symbol).upper() for symbol in symbols_cfg]
+                        except Exception:
+                            try:
+                                symbols_list = list(symbols_cfg)  # type: ignore[arg-type]
+                            except Exception:
+                                symbols_list = []
+                    feed._symbols = symbols_list  # type: ignore[attr-defined]
+                    feed._handler = getattr(self.trader, "_handler", None)  # type: ignore[attr-defined]
+                    if hasattr(self.trader, "_cliente"):
+                        feed._cliente = getattr(self.trader, "_cliente")  # type: ignore[attr-defined]
                 await _launch_feed("fallback_autostart")
 
     def _resolve_ws_timeout(self) -> float:
