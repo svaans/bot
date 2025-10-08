@@ -63,9 +63,9 @@ class DevelopmentConfig:
     df_metrics_log_interval: float = 5.0
     trader_metrics_log_interval: float = 5.0
     trader_fastpath_enabled: bool = True
-    trader_fastpath_threshold: int = 350
+    trader_fastpath_threshold: int = 800
     trader_fastpath_recovery: int = 200
     trader_fastpath_skip_notifications: bool = True
-    trader_fastpath_skip_entries: bool = True
+    trader_fastpath_skip_entries: bool = False
     trader_fastpath_skip_trend: bool = True
     timeout_evaluar_condiciones_por_symbol: Dict[str, int] = field(default_factory=dict)
