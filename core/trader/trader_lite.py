@@ -87,6 +87,27 @@ class TraderLite:
         supervisor_cls = _supervisor_cls()
         self.supervisor = supervisor or supervisor_cls(on_event=on_event)
 
+        log.info(
+            "Fastpath trader activo",
+            extra=safe_extra(
+                {
+                    "event": "config.fastpath",
+                    "trader_fastpath_enabled": bool(getattr(config, "trader_fastpath_enabled", True)),
+                    "trader_fastpath_threshold": int(getattr(config, "trader_fastpath_threshold", 350)),
+                    "trader_fastpath_recovery": int(getattr(config, "trader_fastpath_recovery", 200)),
+                    "trader_fastpath_skip_notifications": bool(
+                        getattr(config, "trader_fastpath_skip_notifications", True)
+                    ),
+                    "trader_fastpath_skip_entries": bool(
+                        getattr(config, "trader_fastpath_skip_entries", False)
+                    ),
+                    "trader_fastpath_skip_trend": bool(
+                        getattr(config, "trader_fastpath_skip_trend", True)
+                    ),
+                }
+            ),
+        )
+
         # Estado por símbolo
         self.estado: Dict[str, EstadoSimbolo] = {s: EstadoSimbolo() for s in config.symbols}
         # Registro de tendencia por símbolo (utilizado por procesar_vela)
@@ -102,6 +123,19 @@ class TraderLite:
         self._backfill_warmup_extra = int(os.getenv("BACKFILL_WARMUP_EXTRA", "300"))
         self._backfill_headroom = int(os.getenv("BACKFILL_HEADROOM", "200"))
         self._backfill_enabled = os.getenv("BACKFILL_ENABLED", "true").lower() != "false"
+        log.info(
+            "Backfill trader configurado",
+            extra=safe_extra(
+                {
+                    "event": "config.backfill",
+                    "backfill_mode": self._backfill_mode,
+                    "backfill_min_needed": self._backfill_min_needed,
+                    "backfill_warmup_extra": self._backfill_warmup_extra,
+                    "backfill_headroom": self._backfill_headroom,
+                    "backfill_enabled": self._backfill_enabled,
+                }
+            ),
+        )
         self._init_backfill_service()
 
         # Protección dinámica ante spreads amplios (lazy import abajo).
