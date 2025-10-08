@@ -76,6 +76,41 @@ async def test_datafeed_consumer_executes_registered_handler() -> None:
 
 
 @pytest.mark.asyncio
+async def test_datafeed_consumer_registra_skip_reason() -> None:
+    symbol = "BTCUSDT"
+
+    async def handler(candle: dict) -> None:
+        candle["_df_skip_reason"] = "warmup"
+        candle["_df_skip_details"] = {"buffer_len": 5}
+
+    feed = DataFeed("1m", handler_timeout=1.0)
+    feed._symbols = [symbol]
+    feed._queues[symbol] = asyncio.Queue()
+    feed._handler = handler
+    feed._running = True
+
+    consumer = asyncio.create_task(feed._consumer(symbol))
+
+    candle = {"symbol": symbol, "timestamp": 1_700_000_000}
+    await feed._queues[symbol].put(candle)
+
+    for _ in range(100):
+        if feed._stats[symbol]["skipped"]:
+            break
+        await asyncio.sleep(0.01)
+    else:
+        raise AssertionError("El consumer no registró el skip")
+
+    assert feed._stats[symbol]["processed"] == 0
+    assert feed._stats[symbol]["skipped"] == 1
+    assert "_df_skip_reason" not in candle
+
+    feed._running = False
+    consumer.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await consumer
+        
+@pytest.mark.asyncio
 async def test_trader_procesar_vela_puentea_al_handler() -> None:
     supervisor = DummySupervisor()
     config = DummyConfig()
