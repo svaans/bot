@@ -6,6 +6,7 @@ import asyncio
 import contextlib
 import inspect
 import os
+from collections import defaultdict
 from types import SimpleNamespace
 from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple, TYPE_CHECKING
 
@@ -16,7 +17,11 @@ from core.metrics import (
     BACKFILL_GAPS_FOUND_TOTAL,
     BACKFILL_KLINES_FETCHED_TOTAL,
     BACKFILL_REQUESTS_TOTAL,
+    BARS_IN_FUTURE_TOTAL,
+    BARS_OUT_OF_RANGE_TOTAL,
     BUFFER_SIZE_V2,
+    EVAL_ATTEMPTS_TOTAL,
+    WAITING_CLOSE_STREAK,
 )
 from core.procesar_vela import get_buffer_manager
 from core.utils.timeframes import tf_to_ms
@@ -24,7 +29,14 @@ from core.utils.timeframes import tf_to_ms
 from core.utils.log_utils import safe_extra
 from core.utils.utils import configurar_logger
 
-from ._utils import EstadoSimbolo, _is_awaitable, _maybe_await
+from ._utils import (
+    EstadoSimbolo,
+    _is_awaitable,
+    _maybe_await,
+    _normalize_timestamp,
+    _reason_none,
+    tf_seconds,
+)
 
 if TYPE_CHECKING:  # pragma: no cover
     from core.supervisor import Supervisor
@@ -114,6 +126,7 @@ class TraderLite:
         self.estado_tendencia: Dict[str, Any] = {s: None for s in config.symbols}
         self._last_evaluated_bar: Dict[tuple[str, str], int] = {}
         self._eval_enabled: Dict[tuple[str, str], bool] = {}
+        self._waiting_close_streak: Dict[tuple[str, str], int] = defaultdict(int)
         self._buffer_manager: Any | None = None
         self._backfill_service: BackfillService | None = None
         self._backfill_task: Optional[asyncio.Task] = None
@@ -137,6 +150,8 @@ class TraderLite:
             ),
         )
         self._init_backfill_service()
+
+        self._skew_allow_secs = self._resolve_skew_allow()
 
         # Protección dinámica ante spreads amplios (lazy import abajo).
         self.spread_guard: Any | None = None
@@ -262,6 +277,32 @@ class TraderLite:
         if raw is None:
             return True
         return str(raw).lower() == "true"
+    
+    def _resolve_skew_allow(self) -> float:
+        """Determina la tolerancia de skew permitida para velas en segundos."""
+
+        candidatos = [
+            getattr(self.config, "df_event_skew_allow", None),
+            getattr(self.config, "df_event_skew_allow_secs", None),
+            getattr(self.config, "event_skew_allow", None),
+            getattr(self.config, "event_skew_allow_secs", None),
+            os.getenv("DF_EVENT_SKEW_ALLOW_SECS"),
+            os.getenv("TRADER_EVENT_SKEW_ALLOW_SECS"),
+        ]
+        for valor in candidatos:
+            if valor is None:
+                continue
+            try:
+                parsed = float(valor)
+            except (TypeError, ValueError):
+                log.debug(
+                    "Valor inválido para skew_allow=%r; usando fallback",
+                    valor,
+                )
+                continue
+            if parsed >= 0:
+                return parsed
+        return 1.5
     
     # --------------------------- backfill ---------------------------
     def _init_backfill_service(self) -> None:
@@ -457,6 +498,9 @@ class TraderLite:
                 {
                     "symbol": sym,
                     "timestamp": ts,
+                    "timeframe": candle.get("timeframe")
+                    or candle.get("interval")
+                    or candle.get("tf"),
                     "stage": "Trader._update_estado_con_candle",
                 }
             ),
@@ -468,6 +512,9 @@ class TraderLite:
                     {
                         "symbol": sym,
                         "timestamp": ts,
+                        "timeframe": candle.get("timeframe")
+                        or candle.get("interval")
+                        or candle.get("tf"),
                         "stage": "Trader._update_estado_con_candle",
                         "result": "passthrough",
                     }
@@ -496,6 +543,7 @@ class TraderLite:
                         {
                             "symbol": sym,
                             "timestamp": ts,
+                            "timeframe": timeframe,
                             "stage": "Trader._update_estado_con_candle",
                             "reason": "backfill_not_ready",
                         }
@@ -507,6 +555,7 @@ class TraderLite:
                         {
                             "symbol": sym,
                             "timestamp": ts,
+                            "timeframe": timeframe,
                             "stage": "Trader._update_estado_con_candle",
                             "result": "skipped",
                         }
@@ -528,6 +577,7 @@ class TraderLite:
                     {
                         "symbol": sym,
                         "timestamp": ts,
+                        "timeframe": timeframe,
                         "stage": "Trader._update_estado_con_candle",
                         "reason": "symbol_not_ready",
                     }
@@ -539,6 +589,7 @@ class TraderLite:
                     {
                         "symbol": sym,
                         "timestamp": ts,
+                        "timeframe": timeframe,
                         "stage": "Trader._update_estado_con_candle",
                         "result": "skipped",
                     }
@@ -547,6 +598,137 @@ class TraderLite:
             return False
 
         estado = self.estado[sym]
+
+        tf_label = timeframe or str(getattr(self.config, "intervalo_velas", ""))
+        if not tf_label:
+            tf_label = "unknown"
+        interval_secs = tf_seconds(tf_label)
+        min_bars = self._resolve_min_bars_requirement()
+        buffer_len_after = len(estado.buffer) + 1
+
+        def _first_not_none(*values: Any) -> Any:
+            for value in values:
+                if value is not None:
+                    return value
+            return None
+
+        bar_open_raw = _first_not_none(
+            candle.get("open_time"),
+            candle.get("openTime"),
+            candle.get("timestamp"),
+        )
+        event_raw = _first_not_none(
+            candle.get("event_time"),
+            candle.get("eventTime"),
+            candle.get("E"),
+            candle.get("close_time"),
+            candle.get("closeTime"),
+            candle.get("timestamp"),
+        )
+        bar_close_raw = _first_not_none(
+            candle.get("close_time"),
+            candle.get("closeTime"),
+            candle.get("event_time"),
+        )
+
+        bar_open_sec = _normalize_timestamp(bar_open_raw)
+        event_sec = _normalize_timestamp(event_raw)
+        bar_close_sec = _normalize_timestamp(bar_close_raw)
+
+        timing_ctx: Dict[str, Any] = {}
+        reason = _reason_none(
+            sym,
+            tf_label,
+            buffer_len_after,
+            min_bars,
+            bar_open_sec,
+            event_sec,
+            interval_secs=interval_secs or None,
+            skew_allow=self._skew_allow_secs,
+            bar_close_ts=bar_close_sec,
+            context=timing_ctx,
+        )
+        if timing_ctx.get("interval_secs") is None and interval_secs:
+            timing_ctx["interval_secs"] = interval_secs
+        timing_ctx.setdefault("skew_allow_secs", self._skew_allow_secs)
+
+        def _safe_int(value: Any) -> int | None:
+            try:
+                if value is None:
+                    return None
+                return int(float(value))
+            except (TypeError, ValueError):
+                return None
+
+        timing_log: Dict[str, Any] = {
+            "symbol": sym,
+            "timestamp": ts,
+            "timeframe": tf_label,
+            "interval_secs": timing_ctx.get("interval_secs"),
+            "bar_open_raw_ms": _safe_int(bar_open_raw),
+            "event_raw_ms": _safe_int(event_raw),
+            "bar_close_raw_ms": _safe_int(bar_close_raw),
+            "bar_open_sec": timing_ctx.get("bar_open_ts"),
+            "event_sec": timing_ctx.get("bar_event_ts"),
+            "bar_close_sec": timing_ctx.get("bar_close_ts"),
+            "elapsed_secs": timing_ctx.get("elapsed_secs"),
+            "buffer_len": buffer_len_after,
+            "min_bars": min_bars,
+            "skew_allow_secs": timing_ctx.get("skew_allow_secs"),
+            "is_closed": bool(candle.get("is_closed", False)),
+            "decision": reason,
+            "stage": "Trader._update_estado_con_candle",
+        }
+        source_stream = candle.get("stream") or candle.get("source_stream")
+        if source_stream:
+            timing_log["source_stream"] = source_stream
+        subscription = candle.get("subscription") or candle.get("channel")
+        if subscription:
+            timing_log["subscription"] = subscription
+        log.debug("update_estado.timing", extra=safe_extra(timing_log))
+
+        metric_timeframe = tf_label or "unknown"
+        metric_labels = {"symbol": sym, "timeframe": metric_timeframe}
+        streak_key = (sym, metric_timeframe.lower())
+
+        if reason in {"bar_in_future", "bar_ts_out_of_range"}:
+            metric = BARS_IN_FUTURE_TOTAL if reason == "bar_in_future" else BARS_OUT_OF_RANGE_TOTAL
+            metric.labels(**metric_labels).inc()
+            self._waiting_close_streak[streak_key] = 0
+            WAITING_CLOSE_STREAK.labels(**metric_labels).set(0)
+            details = {
+                "timing": timing_ctx,
+                "buffer_len": buffer_len_after,
+                "min_needed": min_bars,
+            }
+            self._set_skip_reason(candle, reason, details)
+            log.debug(
+                "update_estado.skip",
+                extra=safe_extra(
+                    {
+                        "symbol": sym,
+                        "timestamp": ts,
+                        "timeframe": metric_timeframe,
+                        "stage": "Trader._update_estado_con_candle",
+                        "reason": reason,
+                        "details": details,
+                    }
+                ),
+            )
+            log.debug(
+                "update_estado.exit",
+                extra=safe_extra(
+                    {
+                        "symbol": sym,
+                        "timestamp": ts,
+                        "timeframe": metric_timeframe,
+                        "stage": "Trader._update_estado_con_candle",
+                        "result": "skipped",
+                    }
+                ),
+            )
+            return False
+        
         if not estado.candle_filter.accept(candle):
             stats = dict(estado.candle_filter.estadisticas)
             self._set_skip_reason(candle, "candle_filter", {"stats": stats})
@@ -556,6 +738,7 @@ class TraderLite:
                     {
                         "symbol": sym,
                         "timestamp": ts,
+                        "timeframe": timeframe,
                         "stage": "Trader._update_estado_con_candle",
                         "reason": "candle_filter",
                         "estadisticas": stats,
@@ -568,6 +751,7 @@ class TraderLite:
                     {
                         "symbol": sym,
                         "timestamp": ts,
+                        "timeframe": timeframe,
                         "stage": "Trader._update_estado_con_candle",
                         "result": "skipped",
                     }
@@ -581,6 +765,83 @@ class TraderLite:
             self.supervisor.tick_data(sym)
         except Exception:
             log.exception("Error notificando tick_data al supervisor")
+
+        if reason == "warmup":
+            details = {
+                "buffer_len": buffer_len_after,
+                "min_needed": min_bars,
+                "timing": timing_ctx,
+            }
+            self._waiting_close_streak[streak_key] = 0
+            WAITING_CLOSE_STREAK.labels(**metric_labels).set(0)
+            self._set_skip_reason(candle, "warmup", details)
+            log.debug(
+                "update_estado.skip",
+                extra=safe_extra(
+                    {
+                        "symbol": sym,
+                        "timestamp": ts,
+                        "timeframe": metric_timeframe,
+                        "stage": "Trader._update_estado_con_candle",
+                        "reason": "warmup",
+                        "details": details,
+                    }
+                ),
+            )
+            log.debug(
+                "update_estado.exit",
+                extra=safe_extra(
+                    {
+                        "symbol": sym,
+                        "timestamp": ts,
+                        "timeframe": metric_timeframe,
+                        "stage": "Trader._update_estado_con_candle",
+                        "result": "skipped",
+                    }
+                ),
+            )
+            return False
+
+        if reason == "waiting_close":
+            details = {
+                "buffer_len": buffer_len_after,
+                "min_needed": min_bars,
+                "timing": timing_ctx,
+            }
+            streak = self._waiting_close_streak[streak_key] + 1
+            self._waiting_close_streak[streak_key] = streak
+            WAITING_CLOSE_STREAK.labels(**metric_labels).set(streak)
+            self._set_skip_reason(candle, "waiting_close", details)
+            log.debug(
+                "update_estado.skip",
+                extra=safe_extra(
+                    {
+                        "symbol": sym,
+                        "timestamp": ts,
+                        "timeframe": metric_timeframe,
+                        "stage": "Trader._update_estado_con_candle",
+                        "reason": "waiting_close",
+                        "details": details,
+                    }
+                ),
+            )
+            log.debug(
+                "update_estado.exit",
+                extra=safe_extra(
+                    {
+                        "symbol": sym,
+                        "timestamp": ts,
+                        "timeframe": metric_timeframe,
+                        "stage": "Trader._update_estado_con_candle",
+                        "result": "skipped",
+                    }
+                ),
+            )
+            return False
+
+        self._waiting_close_streak[streak_key] = 0
+        WAITING_CLOSE_STREAK.labels(**metric_labels).set(0)
+        EVAL_ATTEMPTS_TOTAL.labels(**metric_labels).inc()
         ts = self._extract_timestamp(candle)
         log.debug(
             "update_estado.exit",
@@ -588,8 +849,10 @@ class TraderLite:
                 {
                     "symbol": sym,
                     "timestamp": ts,
+                    "timeframe": metric_timeframe,
                     "stage": "Trader._update_estado_con_candle",
                     "result": "accepted",
+                    "decision": reason,
                 }
             ),
         )

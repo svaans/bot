@@ -71,17 +71,24 @@ def _normalize_candle_payload(candle: Mapping[str, Any]) -> dict[str, Any]:
 
         open_time = _to_int(kline.get("t") or kline.get("open_time"))
         close_time = _to_int(kline.get("T") or kline.get("close_time"))
-        normalized.setdefault("open_time", open_time)
-        normalized.setdefault("close_time", close_time)
+        if open_time is not None and "open_time" not in normalized:
+            normalized["open_time"] = open_time
+        if close_time is not None and "close_time" not in normalized:
+            normalized["close_time"] = close_time
 
-        if "event_time" not in normalized:
-            normalized_event_time = (
-                _to_int(normalized.get("E"))
-                or _to_int(kline.get("E"))
-                or _to_int(kline.get("event_time"))
-            )
-            if normalized_event_time is not None:
-                normalized["event_time"] = normalized_event_time
+        event_time_candidates = (
+            normalized.get("event_time"),
+            normalized.get("eventTime"),
+            normalized.get("E"),
+            kline.get("E") if kline else None,
+            kline.get("event_time") if kline else None,
+            close_time,
+        )
+        for candidate in event_time_candidates:
+            parsed = _to_int(candidate)
+            if parsed is not None:
+                normalized["event_time"] = parsed
+                break
 
         for target, source in (
             ("open", "o"),
@@ -98,10 +105,10 @@ def _normalize_candle_payload(candle: Mapping[str, Any]) -> dict[str, Any]:
         if "is_closed" not in normalized:
             normalized["is_closed"] = bool(kline.get("x"))
 
-        if "timestamp" not in normalized:
-            normalized_timestamp = close_time or open_time
-            if normalized_timestamp is not None:
-                normalized["timestamp"] = normalized_timestamp
+        if open_time is not None:
+            normalized["timestamp"] = open_time
+        elif "timestamp" not in normalized and close_time is not None:
+            normalized["timestamp"] = close_time
 
     else:
         if "timestamp" not in normalized:

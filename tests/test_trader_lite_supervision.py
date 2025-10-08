@@ -40,13 +40,14 @@ async def test_data_feed_supervised_task_creates_and_runs(caplog, monkeypatch):
 
         for idx in range(3):
             ts = start + idx * step_ms
+            close_ts = ts + step_ms - 1
             candle = {
                 "symbol": symbol,
                 "intervalo": intervalo,
                 "interval": intervalo,
                 "timeframe": intervalo,
                 "open_time": ts,
-                "close_time": ts,
+                "close_time": close_ts,
                 "timestamp": ts,
                 "open": 10.0,
                 "high": 10.1,
@@ -54,6 +55,7 @@ async def test_data_feed_supervised_task_creates_and_runs(caplog, monkeypatch):
                 "close": 10.05,
                 "volume": 1.0,
                 "is_closed": True,
+                "event_time": close_ts,
             }
             produced.append({"symbol": candle["symbol"], "timestamp": candle["timestamp"]})
             maybe = handler(candle)
@@ -68,13 +70,14 @@ async def test_data_feed_supervised_task_creates_and_runs(caplog, monkeypatch):
 
         for index, symbol in enumerate(symbols):
             ts = (index + 1) * 60_000
+            close_ts = ts + 60_000 - 1
             candle = {
                 "symbol": symbol,
                 "intervalo": intervalo,
                 "interval": intervalo,
                 "timeframe": intervalo,
                 "open_time": ts,
-                "close_time": ts,
+                "close_time": close_ts,
                 "timestamp": ts,
                 "open": 20.0,
                 "high": 20.1,
@@ -82,6 +85,7 @@ async def test_data_feed_supervised_task_creates_and_runs(caplog, monkeypatch):
                 "close": 20.05,
                 "volume": 2.0,
                 "is_closed": True,
+                "event_time": close_ts,
             }
             produced.append({"symbol": candle["symbol"], "timestamp": candle["timestamp"]})
 

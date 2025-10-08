@@ -135,7 +135,8 @@ async def test_handle_candle_normalizes_binance_payload() -> None:
     queued = feed._queues[symbol].get_nowait()
     feed._queues[symbol].task_done()
 
-    assert queued["timestamp"] == base_close
+    assert queued["timestamp"] == base_open
+    assert queued["event_time"] == base_close
     assert queued["close"] == pytest.approx(101.5)
     assert queued["is_closed"] is True
 

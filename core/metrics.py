@@ -196,6 +196,26 @@ INGEST_LATENCY = Histogram(
 )
 
 # Métricas de Trader
+BARS_IN_FUTURE_TOTAL = Counter(
+    "bars_in_future_total",
+    "Velas descartadas por llegar con timestamps adelantados",
+    ["symbol", "timeframe"],
+)
+BARS_OUT_OF_RANGE_TOTAL = Counter(
+    "bars_out_of_range_total",
+    "Velas descartadas por timestamps fuera de rango",
+    ["symbol", "timeframe"],
+)
+WAITING_CLOSE_STREAK = Gauge(
+    "waiting_close_streak",
+    "Racha actual de velas en espera de cierre",
+    ["symbol", "timeframe"],
+)
+EVAL_ATTEMPTS_TOTAL = Counter(
+    "eval_attempts_total",
+    "Intentos de evaluación de estrategia",
+    ["symbol", "timeframe"],
+)
 TRADER_QUEUE_SIZE = Gauge(
     "trader_queue_size",
     "Tamaño de la cola interna del Trader",
