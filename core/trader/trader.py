@@ -18,6 +18,7 @@ from ._utils import (
     _normalize_timestamp,
     _reason_none,
     _silence_task_result,
+tf_seconds,
 )
 from .trader_lite import TraderLite
 
@@ -331,6 +332,12 @@ class Trader(TraderLite):
             return None
 
         if reason == "waiting_close":
+            tf_secs = tf_seconds(timeframe_str)
+            diff_secs = (
+                (now_ts - last_bar_ts)
+                if (last_bar_ts is not None and now_ts is not None)
+                else None
+            )
             log.debug(
                 "[%s] Esperando cierre de vela para evaluar",
                 symbol,
@@ -341,6 +348,13 @@ class Trader(TraderLite):
                         "reason": reason,
                         "buffer_len": buf_len,
                         "min_needed": min_bars,
+                        "now_ts": now_ts,
+                        "last_bar_ts": last_bar_ts,
+                        "last_bar_ts_raw": last_bar_ts_raw,
+                        "diff_secs": diff_secs,
+                        "diff_ms": int(diff_secs * 1000) if diff_secs is not None else None,
+                        "interval_secs": tf_secs,
+                        "interval_ms": tf_secs * 1000 if tf_secs else None,
                     }
                 ),
             )
@@ -349,6 +363,13 @@ class Trader(TraderLite):
                 "timeframe": timeframe_str,
                 "buffer_len": buf_len,
                 "min_needed": min_bars,
+                "now_ts": now_ts,
+                "last_bar_ts": last_bar_ts,
+                "last_bar_ts_raw": last_bar_ts_raw,
+                "diff_secs": diff_secs,
+                "diff_ms": int(diff_secs * 1000) if diff_secs is not None else None,
+                "interval_secs": tf_secs,
+                "interval_ms": tf_secs * 1000 if tf_secs else None,
             }
             return None
 
