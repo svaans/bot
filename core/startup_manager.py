@@ -196,6 +196,7 @@ class StartupManager:
 
         async def _run_trader() -> None:
             exc: BaseException | None = None
+            closing: bool = False
             try:
                 result = start_fn()
                 if inspect.isawaitable(result):
@@ -204,10 +205,12 @@ class StartupManager:
                 # Señalamos que se permite terminar
                 if self._trader_hold and not self._trader_hold.is_set():
                     self._trader_hold.set()
+                closing = True
                 raise
             except GeneratorExit:
                 if self._trader_hold and not self._trader_hold.is_set():
                     self._trader_hold.set()
+                closing = True
                 raise
             except BaseException as err:  # pragma: no cover
                 exc = err
@@ -222,7 +225,7 @@ class StartupManager:
 
                     # Sólo await si .wait() es realmente awaitable (evita warnings en tests con mocks)
                     wait_fn = getattr(self._trader_hold, "wait", None)
-                    if callable(wait_fn):
+                    if not closing and callable(wait_fn)
                         try:
                             res = wait_fn()
                             if inspect.isawaitable(res):
