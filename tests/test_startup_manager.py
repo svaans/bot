@@ -632,6 +632,42 @@ async def test_open_streams_autostarts_managed_feed_without_wait() -> None:
 
 
 @pytest.mark.asyncio
+async def test_open_streams_fallback_disables_managed_flag() -> None:
+    """El fallback debe marcar el feed como autogestionado por el StartupManager."""
+
+    class _Feed:
+        def __init__(self) -> None:
+            self._managed_by_trader = True
+            self.start_calls = 0
+            self.ws_connected_event = asyncio.Event()
+
+        def start(self) -> None:
+            self.start_calls += 1
+            self.ws_connected_event.set()
+
+    feed = _Feed()
+
+    class _Trader:
+        def __init__(self, df: _Feed) -> None:
+            self.data_feed = df
+
+        async def ejecutar(self) -> None:
+            await asyncio.sleep(0)
+
+    manager = StartupManager(
+        trader=_Trader(feed),
+        config={"ws_managed_by_trader": True},
+    )
+
+    await manager._open_streams()
+
+    assert feed.start_calls == 1
+    assert getattr(feed, "_managed_by_trader", None) is False
+    if hasattr(manager.config, "get"):
+        assert manager.config.get("ws_managed_by_trader") is False
+    else:
+        assert getattr(manager.config, "ws_managed_by_trader", None) is Fals
+@pytest.mark.asyncio
 async def test_open_streams_fallback_emits_datafeed_connected_event() -> None:
     """El fallback debe emitir ``datafeed_connected`` cuando el WS esté activo."""
 
