@@ -10,6 +10,7 @@ from typing import Any, Awaitable, Callable, Dict, Optional, TYPE_CHECKING
 
 import pandas as pd
 
+from core.utils.log_utils import safe_extra
 from core.utils.utils import configurar_logger
 
 from ._utils import (
@@ -52,6 +53,9 @@ class Trader(TraderLite):
         self.historial_cierres: Dict[str, dict] = {s: {} for s in config.symbols}
         self.fecha_actual = datetime.now(UTC).date()
         self.estrategias_habilitadas = False
+        self._eval_enabled: Dict[tuple[str, str], bool] = {}
+        self._last_eval_skip_reason: str | None = None
+        self._last_eval_skip_details: Dict[str, Any] | None = None
         self._bg_tasks: set[asyncio.Task] = set()
         self.notificador: NotificationManager | None = None
         self._verificar_entrada_provider: str | None = None
@@ -260,11 +264,17 @@ class Trader(TraderLite):
             Diccionario con la propuesta de entrada listo para `_abrir_operacion_real`
             o ``None`` si no se cumplieron las condiciones.
         """
+        self._last_eval_skip_reason = None
+        self._last_eval_skip_details = None
         if not self.estrategias_habilitadas:
             log.debug("[%s] Estrategias deshabilitadas; entrada omitida", symbol)
+            self._last_eval_skip_reason = "strategies_disabled"
+            self._last_eval_skip_details = {"symbol": symbol}
             return None
         if not isinstance(df, pd.DataFrame) or df.empty:
             log.warning("[%s] DataFrame inválido al evaluar entrada", symbol)
+            self._last_eval_skip_reason = "invalid_df"
+            self._last_eval_skip_details = {"symbol": symbol}
             return None
         
         timeframe: Optional[str] = getattr(df, "tf", None)
@@ -295,47 +305,91 @@ class Trader(TraderLite):
         now_ts = time.time()
         reason = _reason_none(symbol, timeframe_str, buf_len, min_bars, last_bar_ts, now_ts)
 
+        eval_key = (symbol.upper(), (timeframe_str or "unknown"))
+
         if reason == "warmup":
+            self._eval_enabled[eval_key] = False
             log.debug(
                 "[%s] Warmup incompleto; omitiendo evaluación",
                 symbol,
-                extra={
-                    "symbol": symbol,
-                    "timeframe": timeframe_str,
-                    "reason": reason,
-                    "buffer_len": buf_len,
-                    "min_needed": min_bars,
-                },
+                extra=safe_extra(
+                    {
+                        "symbol": symbol,
+                        "timeframe": timeframe_str,
+                        "reason": reason,
+                        "buffer_len": buf_len,
+                        "min_needed": min_bars,
+                    }
+                ),
             )
+            self._last_eval_skip_reason = "warmup"
+            self._last_eval_skip_details = {
+                "timeframe": timeframe_str,
+                "buffer_len": buf_len,
+                "min_needed": min_bars,
+            }
             return None
 
         if reason == "waiting_close":
             log.debug(
                 "[%s] Esperando cierre de vela para evaluar",
                 symbol,
-                extra={
-                    "symbol": symbol,
-                    "timeframe": timeframe_str,
-                    "reason": reason,
-                    "buffer_len": buf_len,
-                    "min_needed": min_bars,
-                },
+                extra=safe_extra(
+                    {
+                        "symbol": symbol,
+                        "timeframe": timeframe_str,
+                        "reason": reason,
+                        "buffer_len": buf_len,
+                        "min_needed": min_bars,
+                    }
+                ),
             )
+            self._last_eval_skip_reason = "waiting_close"
+            self._last_eval_skip_details = {
+                "timeframe": timeframe_str,
+                "buffer_len": buf_len,
+                "min_needed": min_bars,
+            }
             return None
 
         if not self._should_evaluate(symbol, timeframe_str, last_bar_ts_raw):
             log.debug(
                 "[%s] Saltando evaluación (sin nueva vela cerrada)",
                 symbol,
-                extra={
-                    "symbol": symbol,
-                    "timeframe": timeframe_str,
-                    "reason": "duplicate_bar",
-                    "buffer_len": buf_len,
-                    "min_needed": min_bars,
-                },
+                extra=safe_extra(
+                    {
+                        "symbol": symbol,
+                        "timeframe": timeframe_str,
+                        "reason": "duplicate_bar",
+                        "buffer_len": buf_len,
+                        "min_needed": min_bars,
+                    }
+                ),
             )
+            self._last_eval_skip_reason = "duplicate_bar"
+            self._last_eval_skip_details = {
+                "timeframe": timeframe_str,
+                "buffer_len": buf_len,
+                "min_needed": min_bars,
+            }
             return None
+
+        previously_disabled = self._eval_enabled.get(eval_key)
+        if previously_disabled is False:
+            self._eval_enabled[eval_key] = True
+            log.info(
+                "eval.enabled",
+                extra=safe_extra(
+                    {
+                        "symbol": symbol,
+                        "timeframe": timeframe_str,
+                        "buffer_len": buf_len,
+                        "min_needed": min_bars,
+                    }
+                ),
+            )
+        else:
+            self._eval_enabled.setdefault(eval_key, True)
 
         on_event_cb: Callable[[str, dict], None] | None = None
         if hasattr(self, "_emit"):
@@ -358,20 +412,31 @@ class Trader(TraderLite):
 
         if resultado:
             log.debug("[%s] Entrada candidata generada", symbol)
+            self._last_eval_skip_reason = None
+            self._last_eval_skip_details = None
             return resultado
 
         provider = getattr(self, "_verificar_entrada_provider", None)
+        self._last_eval_skip_reason = "no_signal" if provider else "pipeline_missing"
+        self._last_eval_skip_details = {
+            "timeframe": timeframe_str,
+            "buffer_len": buf_len,
+            "min_needed": min_bars,
+            "provider": provider,
+        }
         log.debug(
             "[%s] Sin condiciones de entrada válidas",
             symbol,
-            extra={
-                "symbol": symbol,
-                "timeframe": timeframe_str,
-                "reason": "sin_senal" if provider else "pipeline_missing",
-                "buffer_len": buf_len,
-                "min_needed": min_bars,
-                "provider": provider,
-            },
+            extra=safe_extra(
+                {
+                    "symbol": symbol,
+                    "timeframe": timeframe_str,
+                    "reason": "sin_senal" if provider else "pipeline_missing",
+                    "buffer_len": buf_len,
+                    "min_needed": min_bars,
+                    "provider": provider,
+                }
+            ),
         )
         return None
 
