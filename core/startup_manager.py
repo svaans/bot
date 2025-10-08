@@ -225,7 +225,7 @@ class StartupManager:
 
                     # Sólo await si .wait() es realmente awaitable (evita warnings en tests con mocks)
                     wait_fn = getattr(self._trader_hold, "wait", None)
-                    if not closing and callable(wait_fn)
+                    if not closing and callable(wait_fn):
                         try:
                             res = wait_fn()
                             if inspect.isawaitable(res):
