@@ -629,3 +629,101 @@ async def test_open_streams_autostarts_managed_feed_without_wait() -> None:
     )
 
     await manager._stop_streams()
+
+
+@pytest.mark.asyncio
+async def test_open_streams_fallback_emits_datafeed_connected_event() -> None:
+    """El fallback debe emitir ``datafeed_connected`` cuando el WS esté activo."""
+
+    class _Feed:
+        def __init__(self) -> None:
+            self._managed_by_trader = True
+            self.ws_connected_event = asyncio.Event()
+            self.ws_failed_event = asyncio.Event()
+
+        async def start(self) -> None:
+            async def _mark_connected() -> None:
+                await asyncio.sleep(0.01)
+                self.ws_connected_event.set()
+
+            asyncio.create_task(_mark_connected())
+
+    class _Bus:
+        def __init__(self) -> None:
+            self.events: list[tuple[str, dict[str, Any]]] = []
+
+        def emit(self, name: str, payload: dict[str, Any]) -> None:
+            self.events.append((name, payload))
+
+    class _Trader:
+        def __init__(self, feed: _Feed, bus: _Bus) -> None:
+            self.data_feed = feed
+            self.event_bus = bus
+            self.started = asyncio.Event()
+
+        async def ejecutar(self) -> None:
+            self.started.set()
+            await asyncio.sleep(5)
+
+    feed = _Feed()
+    bus = _Bus()
+    trader = _Trader(feed, bus)
+    manager = StartupManager(
+        trader=trader,
+        config={"symbols": ["btcusdt"], "intervalo_velas": "1m"},
+    )
+
+    await manager._open_streams()
+    await asyncio.wait_for(trader.started.wait(), timeout=0.5)
+    await asyncio.wait_for(feed.ws_connected_event.wait(), timeout=0.5)
+
+    assert manager._fallback_ws_signal_task is not None
+    await asyncio.wait_for(manager._fallback_ws_signal_task, timeout=1.0)
+
+    assert ("datafeed_connected", {"symbols": ["BTCUSDT"]}) in bus.events
+
+    await manager._stop_streams()
+
+
+@pytest.mark.asyncio
+async def test_open_streams_fallback_logs_running_without_bus() -> None:
+    """Si no hay bus de eventos, debe registrarse ``trader:ws_started``."""
+
+    class _Feed:
+        def __init__(self) -> None:
+            self._managed_by_trader = True
+            self.ws_connected_event = asyncio.Event()
+            self.ws_failed_event = asyncio.Event()
+
+        async def start(self) -> None:
+            self.ws_connected_event.set()
+
+    class _Trader:
+        def __init__(self, feed: _Feed) -> None:
+            self.data_feed = feed
+            self.started = asyncio.Event()
+
+        async def ejecutar(self) -> None:
+            self.started.set()
+            await asyncio.sleep(5)
+
+    feed = _Feed()
+    trader = _Trader(feed)
+    manager = StartupManager(
+        trader=trader,
+        config={"symbols": ["ethusdt"], "intervalo_velas": "1m"},
+    )
+    manager.log = _CapturingLogger()
+
+    await manager._open_streams()
+    await asyncio.wait_for(trader.started.wait(), timeout=0.5)
+    await asyncio.wait_for(feed.ws_connected_event.wait(), timeout=0.5)
+
+    assert manager._fallback_ws_signal_task is not None
+    await asyncio.wait_for(manager._fallback_ws_signal_task, timeout=1.0)
+
+    assert any(call["message"] == "trader:ws_started" for call in manager.log.info_calls)
+    info_extra = [call["kwargs"].get("extra", {}) for call in manager.log.info_calls if call["message"] == "trader:ws_started"]
+    assert any(extra.get("reason") == "fallback_autostart" for extra in info_extra)
+
+    await manager._stop_streams()
