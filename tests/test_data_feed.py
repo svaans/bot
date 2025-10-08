@@ -100,6 +100,47 @@ async def test_handle_candle_ignores_non_closed() -> None:
 
 
 @pytest.mark.asyncio
+async def test_handle_candle_normalizes_binance_payload() -> None:
+    feed = make_feed()
+    symbol = "BTCUSDT"
+    feed._queues[symbol] = asyncio.Queue()
+
+    base_open = 1_650_000_000_000
+    base_close = base_open + 60_000
+    raw_payload = {
+        "e": "kline",
+        "E": base_close,
+        "s": symbol,
+        "k": {
+            "t": base_open,
+            "T": base_close,
+            "s": symbol,
+            "i": "1m",
+            "o": "100.0",
+            "c": "101.5",
+            "h": "102.0",
+            "l": "99.5",
+            "v": "12.5",
+            "x": False,
+        },
+    }
+
+    await feed._handle_candle(symbol, raw_payload)
+    assert feed._queues[symbol].empty()
+
+    raw_payload["k"]["x"] = True
+    await feed._handle_candle(symbol, raw_payload)
+
+    assert feed._queues[symbol].qsize() == 1
+    queued = feed._queues[symbol].get_nowait()
+    feed._queues[symbol].task_done()
+
+    assert queued["timestamp"] == base_close
+    assert queued["close"] == pytest.approx(101.5)
+    assert queued["is_closed"] is True
+
+
+@pytest.mark.asyncio
 async def test_handle_candle_ignores_misaligned_timestamp() -> None:
     feed = make_feed()
     symbol = "BNBUSDT"
