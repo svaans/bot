@@ -155,6 +155,18 @@ def _hash_buffer(items: Deque[dict]) -> Tuple[int, int]:
     return (len(items), int(items[-1].get("timestamp", 0)))
 
 
+def _mark_skip(target: dict, reason: str, details: Optional[dict] = None) -> None:
+    """Adjunta metadatos de skip al diccionario de la vela."""
+
+    if not isinstance(target, dict):
+        return
+    target["_df_skip_reason"] = reason
+    if details:
+        target["_df_skip_details"] = details
+    else:
+        target.pop("_df_skip_details", None)
+
+
 def _normalize_timestamp(value: Any) -> Optional[float]:
     """Normaliza timestamps en segundos (acepta ms)."""
 
@@ -414,10 +426,13 @@ async def procesar_vela(trader: Any, vela: dict) -> None:
     """
     t0 = time.perf_counter()
     try:
+        vela.pop("_df_skip_reason", None)
+        vela.pop("_df_skip_details", None)
         # 1) Validaciones mínimas y normalización
         symbol = str(vela.get("symbol") or vela.get("par") or "").upper()
         if not symbol:
             safe_inc(CANDLES_IGNORADAS, reason="no_symbol")
+            _mark_skip(vela, "no_symbol")
             return
         
         timeframe_hint = (
@@ -431,6 +446,7 @@ async def procesar_vela(trader: Any, vela: dict) -> None:
         ok, reason = _validar_candle(vela)
         if not ok:
             safe_inc(CANDLES_IGNORADAS, reason=reason)
+            _mark_skip(vela, reason)
             return
 
         # 2) Control por spread (si hay guardia y si el dato viene en la vela)
@@ -446,6 +462,7 @@ async def procesar_vela(trader: Any, vela: dict) -> None:
                             timeframe=timeframe_label,
                             reason="spread_guard",
                         )
+                        _mark_skip(vela, "spread_guard", {"ratio": float(spread_ratio)})
                         lock = _buffers.get_lock(symbol)
                         async with lock:
                             _buffers.append(symbol, vela)
@@ -458,6 +475,7 @@ async def procesar_vela(trader: Any, vela: dict) -> None:
                             timeframe=timeframe_label,
                             reason="spread_guard",
                         )
+                        _mark_skip(vela, "spread_guard")
                         lock = _buffers.get_lock(symbol)
                         async with lock:
                             _buffers.append(symbol, vela)
@@ -474,6 +492,7 @@ async def procesar_vela(trader: Any, vela: dict) -> None:
 
         if df is None or df.empty:
             safe_inc(CANDLES_IGNORADAS, reason="empty_df")
+            _mark_skip(vela, "empty_df")
             return
         
         timeframe = getattr(df, "tf", None)
@@ -488,6 +507,7 @@ async def procesar_vela(trader: Any, vela: dict) -> None:
         ready_checker = getattr(trader, "is_symbol_ready", None)
         if callable(ready_checker) and not ready_checker(symbol, timeframe_label):
             safe_inc(CANDLES_IGNORADAS, reason="backfill_pending")
+            _mark_skip(vela, "backfill_pending")
             return
 
         min_needed = _resolve_min_bars(trader)
@@ -528,6 +548,7 @@ async def procesar_vela(trader: Any, vela: dict) -> None:
                     timeframe=timeframe_label,
                     reason="fastpath_skip_entries",
                 )
+                _mark_skip(vela, "fastpath_skip_entries", {"buffer_len": len(df), "threshold": threshold})
                 return
 
         # 5) Estado por símbolo (compatible con Trader.estado)
@@ -545,7 +566,15 @@ async def procesar_vela(trader: Any, vela: dict) -> None:
             },
         )
         propuesta = await trader.evaluar_condiciones_de_entrada(symbol, df, estado_symbol)
+        skip_reason = getattr(trader, "_last_eval_skip_reason", None)
+        skip_details = getattr(trader, "_last_eval_skip_details", None)
         if not propuesta:
+            if skip_reason:
+                _mark_skip(vela, skip_reason, skip_details)
+            else:
+                provider = getattr(trader, "_verificar_entrada_provider", None)
+                details = {"provider": provider} if provider else None
+                _mark_skip(vela, "no_signal", details)
             return
 
         side = str(propuesta.get("side", "long")).lower()
@@ -560,6 +589,7 @@ async def procesar_vela(trader: Any, vela: dict) -> None:
                 timeframe=timeframe_label,
                 reason="bad_price",
             )
+            _mark_skip(vela, "bad_price")
             return
 
         # 8) Apertura de orden
@@ -571,6 +601,7 @@ async def procesar_vela(trader: Any, vela: dict) -> None:
                 timeframe=timeframe_label,
                 reason="orders_missing",
             )
+            _mark_skip(vela, "orders_missing")
             return
 
         sl = float(propuesta.get("stop_loss", 0.0))
@@ -588,6 +619,7 @@ async def procesar_vela(trader: Any, vela: dict) -> None:
                     timeframe=timeframe_label,
                     reason="ya_abierta",
                 )
+                _mark_skip(vela, "ya_abierta")
                 return
         except Exception:
             pass
