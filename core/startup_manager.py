@@ -287,6 +287,10 @@ class StartupManager:
                     feed._handler = getattr(self.trader, "_handler", None)  # type: ignore[attr-defined]
                     if hasattr(self.trader, "_cliente"):
                         feed._cliente = getattr(self.trader, "_cliente")  # type: ignore[attr-defined]
+                self._set_config_value("ws_managed_by_trader", False)
+                if feed is not None:
+                    with suppress(Exception):
+                        setattr(feed, "_managed_by_trader", False)
                 await _launch_feed("fallback_autostart")
                 schedule_ws_signal = True
 
