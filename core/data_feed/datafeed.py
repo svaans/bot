@@ -10,7 +10,7 @@ import os
 from collections import defaultdict
 from typing import Any, Awaitable, Callable, Dict, Iterable, List, Optional
 
-from core.log_utils import log_kv
+from core.utils.log_utils import log_kv
 from core.utils.utils import intervalo_a_segundos
 
 from . import backfill as backfill_module
