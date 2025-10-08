@@ -168,7 +168,7 @@ def _reason_none(
                 )
             return reason
 
-        if elapsed_secs < tf_secs
+        if elapsed_secs < tf_secs:
             if _should_log(f"waiting_close:{symbol}:{timeframe}", every=5.0):
                 log.debug(
                     "[%s] Esperando cierre de vela (elapsed < intervalo)",
