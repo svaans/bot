@@ -10,7 +10,7 @@ import os
 from collections import defaultdict
 from typing import Any, Awaitable, Callable, Dict, Iterable, List, Optional
 
-from core.utils.log_utils import log_kv
+from core.utils.log_utils import log_kv, safe_extra
 from core.utils.utils import intervalo_a_segundos
 
 from . import backfill as backfill_module
@@ -244,7 +244,9 @@ class DataFeed:
 
         log.info(
             "suscrito",
-            extra={"symbols": self._symbols, "intervalo": self.intervalo, "combined": self._combined},
+            extra=safe_extra(
+                {"symbols": self._symbols, "intervalo": self.intervalo, "combined": self._combined}
+            ),
         )
 
         self._queues = {s: asyncio.Queue(maxsize=self.queue_max) for s in self._symbols}
@@ -339,15 +341,20 @@ class DataFeed:
                 except Exception as exc:
                     log.error(
                         "tarea_finalizo_con_error",
-                        extra={"task_name": task.get_name(), "error": repr(exc)},
+                        extra=safe_extra(
+                            {"task_name": task.get_name(), "error": repr(exc)}
+                        ),
                     )
 
             if pending:
                 log.error(
                     "tareas_no_finalizaron_a_tiempo",
-                    extra={
-                        "timeout": self.cancel_timeout,
-                        "pending_tasks": [task.get_name() for task in pending],
+                    extra=safe_extra(
+                        {
+                            "timeout": self.cancel_timeout,
+                            "pending_tasks": [task.get_name() for task in pending],
+                        }
+                    ),
                     },
                 )
                 for task in pending:
