@@ -355,7 +355,6 @@ class DataFeed:
                             "pending_tasks": [task.get_name() for task in pending],
                         }
                     ),
-                    },
                 )
                 for task in pending:
                     task.cancel()
