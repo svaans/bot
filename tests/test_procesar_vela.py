@@ -79,6 +79,27 @@ class DummyTrader:
         self.notifications.append((mensaje, nivel))
 
 
+class WarmupTrader:
+    def __init__(self) -> None:
+        self.config = DummyConfig(symbols=["BTCUSDT"])
+        self.orders = DummyOrders()
+        self.estado = {"BTCUSDT": {}}
+        self._last_eval_skip_reason: str | None = None
+        self._last_eval_skip_details: Dict[str, Any] | None = None
+
+    def is_symbol_ready(self, symbol: str, timeframe: str | None = None) -> bool:
+        return True
+
+    async def evaluar_condiciones_de_entrada(self, symbol: str, df, estado_symbol: Any):
+        self._last_eval_skip_reason = "warmup"
+        self._last_eval_skip_details = {
+            "buffer_len": len(df),
+            "min_needed": 5,
+            "timeframe": getattr(df, "tf", None),
+        }
+        return None
+
+
 @pytest.fixture(autouse=True)
 
 def reset_buffers() -> Generator[Any, None, None]:
@@ -159,3 +180,17 @@ async def test_procesar_vela_omite_operacion_si_no_hay_oportunidad() -> None:
     assert estado == {"trend": "up"}
     assert float(df.iloc[-1]["close"]) == pytest.approx(candle["close"])
     assert trader.notifications == []
+
+
+@pytest.mark.asyncio
+async def test_procesar_vela_marca_skip_reason_de_trader() -> None:
+    trader = WarmupTrader()
+    candle = _build_candle(19_000.0)
+
+    await procesar_vela(trader, candle)
+
+    assert candle.get("_df_skip_reason") == "warmup"
+    details = candle.get("_df_skip_details")
+    assert isinstance(details, dict)
+    assert details.get("buffer_len", 0) >= 1
+    assert details.get("min_needed") == 5
