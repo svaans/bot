@@ -205,6 +205,10 @@ class StartupManager:
                 if self._trader_hold and not self._trader_hold.is_set():
                     self._trader_hold.set()
                 raise
+            except GeneratorExit:
+                if self._trader_hold and not self._trader_hold.is_set():
+                    self._trader_hold.set()
+                raise
             except BaseException as err:  # pragma: no cover
                 exc = err
                 if self._trader_hold and not self._trader_hold.is_set():
