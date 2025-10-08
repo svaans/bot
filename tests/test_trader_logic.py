@@ -197,6 +197,42 @@ async def test_evaluar_condiciones_waits_for_bar_close(monkeypatch: pytest.Monke
 
 
 @pytest.mark.asyncio
+async def test_evaluar_condiciones_detects_future_bar(monkeypatch: pytest.MonkeyPatch) -> None:
+    trader = _build_trader()
+    trader.estrategias_habilitadas = True
+    monkeypatch.setattr(trader, "_resolve_min_bars_requirement", lambda: 1)
+    df = _df_from_timestamps([200])
+    monkeypatch.setattr("core.trader.trader.time.time", lambda: 100.0)
+
+    resultado = await trader.evaluar_condiciones_de_entrada(
+        "BTCUSDT", df, trader.estado["BTCUSDT"]
+    )
+
+    assert resultado is None
+    assert trader._last_eval_skip_reason == "bar_in_future"
+    assert trader._last_eval_skip_details is not None
+    assert trader._last_eval_skip_details.get("elapsed_secs") == pytest.approx(-100.0)
+
+
+@pytest.mark.asyncio
+async def test_evaluar_condiciones_detects_out_of_range_bar(monkeypatch: pytest.MonkeyPatch) -> None:
+    trader = _build_trader()
+    trader.estrategias_habilitadas = True
+    monkeypatch.setattr(trader, "_resolve_min_bars_requirement", lambda: 1)
+    df = _df_from_timestamps([1000])
+    monkeypatch.setattr("core.trader.trader.time.time", lambda: 100.0)
+
+    resultado = await trader.evaluar_condiciones_de_entrada(
+        "BTCUSDT", df, trader.estado["BTCUSDT"]
+    )
+
+    assert resultado is None
+    assert trader._last_eval_skip_reason == "bar_ts_out_of_range"
+    assert trader._last_eval_skip_details is not None
+    assert trader._last_eval_skip_details.get("elapsed_secs") == pytest.approx(-900.0)
+
+
+@pytest.mark.asyncio
 async def test_evaluar_condiciones_skips_duplicate_bars(monkeypatch: pytest.MonkeyPatch) -> None:
     trader = _build_trader()
     trader.estrategias_habilitadas = True
