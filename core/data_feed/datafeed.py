@@ -5,10 +5,12 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import inspect
+import logging
 import os
 from collections import defaultdict
 from typing import Any, Awaitable, Callable, Dict, Iterable, List, Optional
 
+from core.log_utils import log_kv
 from core.utils.utils import intervalo_a_segundos
 
 from . import backfill as backfill_module
@@ -224,12 +226,13 @@ class DataFeed:
         self._handler_wrapper_calls = 0
         handler_info = self._describe_handler(handler)
         self._handler_expected_info = handler_info
-        log.debug(
+        handler_payload = {k: v for k, v in handler_info.items() if v is not None}
+        log_kv(
+            log,
+            logging.DEBUG,
             "handler.registered",
-            extra={
-                "stage": "DataFeed.escuchar",
-                **{k: v for k, v in handler_info.items() if v is not None},
-            },
+            stage="DataFeed.escuchar",
+            **handler_payload,
         )
 
         self._handler = handler
