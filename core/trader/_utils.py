@@ -140,11 +140,38 @@ def _reason_none(
         and now_ts is not None
         and last_bar_ts > 0
     ):
-        diff_secs = now_ts - last_bar_ts
-        if diff_secs < tf_secs:
+        elapsed_secs = now_ts - last_bar_ts
+        if elapsed_secs < 0:
+            reason = "bar_in_future"
+            if abs(elapsed_secs) > (tf_secs * 3):
+                reason = "bar_ts_out_of_range"
+            if _should_log(f"{reason}:{symbol}:{timeframe}", every=10.0):
+                log.warning(
+                    "[%s] Timestamp de vela fuera de rango (%s)",
+                    symbol,
+                    reason,
+                    extra=safe_extra(
+                        {
+                            "symbol": symbol,
+                            "timeframe": timeframe,
+                            "reason": reason,
+                            "buffer_len": buf_len,
+                            "min_needed": min_bars,
+                            "now_ts": now_ts,
+                            "last_bar_ts": last_bar_ts,
+                            "elapsed_secs": elapsed_secs,
+                            "elapsed_ms": int(elapsed_secs * 1000),
+                            "interval_secs": tf_secs,
+                            "interval_ms": tf_secs * 1000,
+                        }
+                    ),
+                )
+            return reason
+
+        if elapsed_secs < tf_secs
             if _should_log(f"waiting_close:{symbol}:{timeframe}", every=5.0):
                 log.debug(
-                    "[%s] Esperando cierre de vela (diff < intervalo)",
+                    "[%s] Esperando cierre de vela (elapsed < intervalo)",
                     symbol,
                     extra=safe_extra(
                         {
@@ -155,8 +182,8 @@ def _reason_none(
                             "min_needed": min_bars,
                             "now_ts": now_ts,
                             "last_bar_ts": last_bar_ts,
-                            "diff_secs": diff_secs,
-                            "diff_ms": int(diff_secs * 1000),
+                            "elapsed_secs": elapsed_secs,
+                            "elapsed_ms": int(elapsed_secs * 1000),
                             "interval_secs": tf_secs,
                             "interval_ms": tf_secs * 1000,
                         }
