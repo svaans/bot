@@ -6,7 +6,7 @@ import time
 from typing import Awaitable, Callable
 
 from core.utils.utils import timestamp_alineado, validar_integridad_velas
-
+from core.utils.log_utils import safe_extra
 from ._shared import COMBINED_STREAM_KEY, ConsumerState, log
 from . import events
 
@@ -65,7 +65,7 @@ async def handle_candle(feed: "DataFeed", symbol: str, candle: dict) -> None:
 
     log.debug(
         "recv candle",
-        extra={"symbol": symbol, "timestamp": ts, "queue_size": queue.qsize()},
+        extra=safe_extra({"symbol": symbol, "timestamp": ts, "queue_size": queue.qsize()}),
     )
 
     if feed.queue_policy == "block" or not queue.maxsize:
@@ -110,7 +110,9 @@ async def consumer_loop(feed: "DataFeed", symbol: str) -> None:
         if handler is None:
             log.error(
                 "handler.missing",
-                extra={"symbol": sym, "timestamp": ts, "stage": "DataFeed._consumer"},
+                extra=safe_extra(
+                    {"symbol": sym, "timestamp": ts, "stage": "DataFeed._consumer"}
+                ),
             )
             queue.task_done()
             continue
@@ -118,27 +120,32 @@ async def consumer_loop(feed: "DataFeed", symbol: str) -> None:
         if feed._handler_expected_info and handler_info["id"] != feed._handler_expected_info["id"]:
             log.warning(
                 "handler.mismatch",
-                extra={
-                    "symbol": sym,
-                    "timestamp": ts,
-                    "stage": "DataFeed._consumer",
-                    "expected_id": feed._handler_expected_info["id"],
-                    "expected_line": feed._handler_expected_info.get("line"),
-                    "actual_id": handler_info["id"],
-                    "actual_line": handler_info.get("line"),
-                },
+                extra=safe_extra(
+                    {
+                        "symbol": sym,
+                        "timestamp": ts,
+                        "stage": "DataFeed._consumer",
+                        "expected_id": feed._handler_expected_info["id"],
+                        "expected_line": feed._handler_expected_info.get("line"),
+                        "actual_id": handler_info["id"],
+                        "actual_line": handler_info.get("line"),
+                    }
+                ),
             )
         log.debug(
             "consumer.enter",
-            extra={
-                "symbol": sym,
-                "timestamp": ts,
-                "handler_id": handler_info["id"],
-                "stage": "DataFeed._consumer",
-            },
+            extra=safe_extra(
+                {
+                    "symbol": sym,
+                    "timestamp": ts,
+                    "handler_id": handler_info["id"],
+                    "stage": "DataFeed._consumer",
+                }
+            ),
         )
         feed._handler_expected_info = handler_info
-
+        
+        handler_completed = False
         try:
             if candle.get("_df_enqueue_time") is not None:
                 edad = time.monotonic() - candle["_df_enqueue_time"]
@@ -146,20 +153,21 @@ async def consumer_loop(feed: "DataFeed", symbol: str) -> None:
 
             events.set_consumer_state(feed, symbol, ConsumerState.HEALTHY)
             await asyncio.wait_for(handler(candle), timeout=feed.handler_timeout)
-            feed._stats[symbol]["processed"] += 1
-            note_handler_log(feed)
+            handler_completed = True
 
         except asyncio.TimeoutError:
             outcome = "timeout"
             feed._stats[symbol]["handler_timeouts"] += 1
             log.error(
                 "handler.timeout",
-                extra={
-                    "symbol": sym,
-                    "timestamp": ts,
-                    "timeout": feed.handler_timeout,
-                    "stage": "DataFeed._consumer",
-                },
+                extra=safe_extra(
+                    {
+                        "symbol": sym,
+                        "timestamp": ts,
+                        "timeout": feed.handler_timeout,
+                        "stage": "DataFeed._consumer",
+                    }
+                ),
             )
             events.emit_event(feed, "handler_timeout", {"symbol": sym, "ts": ts})
 
@@ -170,22 +178,45 @@ async def consumer_loop(feed: "DataFeed", symbol: str) -> None:
         except Exception as exc:
             outcome = "error"
             feed._stats[symbol]["consumer_errors"] += 1
-            log.exception("Error en handler", extra={"symbol": sym, "timestamp": ts})
+            log.exception(
+                "Error en handler",
+                extra=safe_extra({"symbol": sym, "timestamp": ts}),
+            )
             events.emit_event(feed, "consumer_error", {"symbol": sym, "ts": ts, "error": str(exc)})
 
         finally:
             feed._consumer_last[symbol] = time.monotonic()
             queue.task_done()
-            log.debug(
-                "consumer.exit",
-                extra={
+            skip_reason = candle.pop("_df_skip_reason", None)
+            skip_details = candle.pop("_df_skip_details", None)
+            if outcome == "ok" and skip_reason:
+                outcome = "skipped"
+                feed._stats[symbol]["skipped"] += 1
+                payload = {
                     "symbol": sym,
                     "timestamp": ts,
-                    "outcome": outcome,
                     "stage": "DataFeed._consumer",
-                    "queue_size": queue.qsize(),
-                    "handler_wrapper_calls": feed._handler_wrapper_calls,
-                },
+                    "reason": skip_reason,
+                }
+                if skip_details:
+                    payload["details"] = skip_details
+                log.debug("consumer.skip", extra=safe_extra(payload))
+            elif outcome == "ok":
+                feed._stats[symbol]["processed"] += 1
+            if handler_completed:
+                note_handler_log(feed)
+            log.debug(
+                "consumer.exit",
+                extra=safe_extra(
+                    {
+                        "symbol": sym,
+                        "timestamp": ts,
+                        "outcome": outcome,
+                        "stage": "DataFeed._consumer",
+                        "queue_size": queue.qsize(),
+                        "handler_wrapper_calls": feed._handler_wrapper_calls,
+                    }
+                ),
             )
             if (
                 outcome == "ok"
@@ -254,24 +285,28 @@ def activate_handler_debug_wrapper(feed: "DataFeed") -> None:
         call_idx = feed._handler_wrapper_calls
         log.debug(
             "handler.wrapper.enter",
-            extra={
-                "stage": "DataFeed._consumer",
-                "handler_id": handler_info["id"],
-                "handler_line": handler_info.get("line"),
-                "call": call_idx,
-            },
+            extra=safe_extra(
+                {
+                    "stage": "DataFeed._consumer",
+                    "handler_id": handler_info["id"],
+                    "handler_line": handler_info.get("line"),
+                    "call": call_idx,
+                }
+            ),
         )
         try:
             await original(candle)
         finally:
             log.debug(
                 "handler.wrapper.exit",
-                extra={
-                    "stage": "DataFeed._consumer",
-                    "handler_id": handler_info["id"],
-                    "handler_line": handler_info.get("line"),
-                    "call": call_idx,
-                },
+                extra=safe_extra(
+                    {
+                        "stage": "DataFeed._consumer",
+                        "handler_id": handler_info["id"],
+                        "handler_line": handler_info.get("line"),
+                        "call": call_idx,
+                    }
+                )
             )
 
     setattr(_wrapped, "__df_debug_wrapper__", True)
@@ -281,12 +316,14 @@ def activate_handler_debug_wrapper(feed: "DataFeed") -> None:
     feed._handler_expected_info = describe_handler(_wrapped)
     log.warning(
         "handler.wrapper.enabled",
-        extra={
-            "stage": "DataFeed._consumer",
-            "handler_id": handler_info["id"],
-            "handler_line": handler_info.get("line"),
-            "reason": "missing_trader_logs",
-        },
+        extra=safe_extra(
+            {
+                "stage": "DataFeed._consumer",
+                "handler_id": handler_info["id"],
+                "handler_line": handler_info.get("line"),
+                "reason": "missing_trader_logs",
+            }
+        ),
     )
 
 
