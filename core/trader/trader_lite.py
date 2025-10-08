@@ -21,6 +21,7 @@ from core.metrics import (
 from core.procesar_vela import get_buffer_manager
 from core.utils.timeframes import tf_to_ms
 
+from core.utils.log_utils import safe_extra
 from core.utils.utils import configurar_logger
 
 from ._utils import EstadoSimbolo, _is_awaitable, _maybe_await
@@ -91,6 +92,7 @@ class TraderLite:
         # Registro de tendencia por símbolo (utilizado por procesar_vela)
         self.estado_tendencia: Dict[str, Any] = {s: None for s in config.symbols}
         self._last_evaluated_bar: Dict[tuple[str, str], int] = {}
+        self._eval_enabled: Dict[tuple[str, str], bool] = {}
         self._buffer_manager: Any | None = None
         self._backfill_service: BackfillService | None = None
         self._backfill_task: Optional[asyncio.Task] = None
@@ -395,28 +397,47 @@ class TraderLite:
                     return value
         return None
 
+    @staticmethod
+    def _set_skip_reason(candle: dict, reason: str | None, details: Optional[dict] = None) -> None:
+        if not isinstance(candle, dict):
+            return
+        if reason:
+            candle["_df_skip_reason"] = reason
+            if details:
+                candle["_df_skip_details"] = details
+            elif "_df_skip_details" in candle:
+                candle.pop("_df_skip_details", None)
+        else:
+            candle.pop("_df_skip_reason", None)
+            candle.pop("_df_skip_details", None)
+
     def _update_estado_con_candle(self, candle: dict) -> bool:
         """Actualiza buffers/estado y decide si se procesa la vela."""
 
         sym = self._extract_symbol(candle)
         ts = self._extract_timestamp(candle)
+        self._set_skip_reason(candle, None)
         log.debug(
             "update_estado.enter",
-            extra={
-                "symbol": sym,
-                "timestamp": ts,
-                "stage": "Trader._update_estado_con_candle",
-            },
+            extra=safe_extra(
+                {
+                    "symbol": sym,
+                    "timestamp": ts,
+                    "stage": "Trader._update_estado_con_candle",
+                }
+            ),
         )
         if not sym or sym not in self.estado:
             log.debug(
                 "update_estado.exit",
-                extra={
-                    "symbol": sym,
-                    "timestamp": ts,
-                    "stage": "Trader._update_estado_con_candle",
-                    "result": "passthrough",
-                },
+                extra=safe_extra(
+                    {
+                        "symbol": sym,
+                        "timestamp": ts,
+                        "stage": "Trader._update_estado_con_candle",
+                        "result": "passthrough",
+                    }
+                ),
             )
             return True
         
@@ -434,23 +455,28 @@ class TraderLite:
         if self._backfill_service is not None:
             should_process, normalized = self._backfill_service.handle_live_candle(sym, timeframe, candle)
             if not should_process:
+                self._set_skip_reason(candle, "backfill_not_ready")
                 log.debug(
                     "update_estado.skip",
-                    extra={
-                        "symbol": sym,
-                        "timestamp": ts,
-                        "stage": "Trader._update_estado_con_candle",
-                        "reason": "backfill_not_ready",
-                    },
+                    extra=safe_extra(
+                        {
+                            "symbol": sym,
+                            "timestamp": ts,
+                            "stage": "Trader._update_estado_con_candle",
+                            "reason": "backfill_not_ready",
+                        }
+                    ),
                 )
                 log.debug(
                     "update_estado.exit",
-                    extra={
-                        "symbol": sym,
-                        "timestamp": ts,
-                        "stage": "Trader._update_estado_con_candle",
-                        "result": "skipped",
-                    },
+                    extra=safe_extra(
+                        {
+                            "symbol": sym,
+                            "timestamp": ts,
+                            "stage": "Trader._update_estado_con_candle",
+                            "result": "skipped",
+                        }
+                    ),
                 )
                 return False
             if normalized is not None:
@@ -461,46 +487,57 @@ class TraderLite:
                 ts = self._extract_timestamp(candle)
 
         if not self.is_symbol_ready(sym, timeframe):
+            self._set_skip_reason(candle, "symbol_not_ready")
             log.debug(
                 "update_estado.skip",
-                extra={
-                    "symbol": sym,
-                    "timestamp": ts,
-                    "stage": "Trader._update_estado_con_candle",
-                    "reason": "symbol_not_ready",
-                },
+                extra=safe_extra(
+                    {
+                        "symbol": sym,
+                        "timestamp": ts,
+                        "stage": "Trader._update_estado_con_candle",
+                        "reason": "symbol_not_ready",
+                    }
+                ),
             )
             log.debug(
                 "update_estado.exit",
-                extra={
-                    "symbol": sym,
-                    "timestamp": ts,
-                    "stage": "Trader._update_estado_con_candle",
-                    "result": "skipped",
-                },
+                extra=safe_extra(
+                    {
+                        "symbol": sym,
+                        "timestamp": ts,
+                        "stage": "Trader._update_estado_con_candle",
+                        "result": "skipped",
+                    }
+                ),
             )
             return False
 
         estado = self.estado[sym]
         if not estado.candle_filter.accept(candle):
+            stats = dict(estado.candle_filter.estadisticas)
+            self._set_skip_reason(candle, "candle_filter", {"stats": stats})
             log.debug(
                 "update_estado.skip",
-                extra={
-                    "symbol": sym,
-                    "timestamp": ts,
-                    "stage": "Trader._update_estado_con_candle",
-                    "reason": "candle_filter",
-                    "estadisticas": dict(estado.candle_filter.estadisticas),
-                },
+                extra=safe_extra(
+                    {
+                        "symbol": sym,
+                        "timestamp": ts,
+                        "stage": "Trader._update_estado_con_candle",
+                        "reason": "candle_filter",
+                        "estadisticas": stats,
+                    }
+                ),
             )
             log.debug(
                 "update_estado.exit",
-                extra={
-                    "symbol": sym,
-                    "timestamp": ts,
-                    "stage": "Trader._update_estado_con_candle",
-                    "result": "skipped",
-                },
+                extra=safe_extra(
+                    {
+                        "symbol": sym,
+                        "timestamp": ts,
+                        "stage": "Trader._update_estado_con_candle",
+                        "result": "skipped",
+                    }
+                ),
             )
             return False
 
@@ -513,12 +550,14 @@ class TraderLite:
         ts = self._extract_timestamp(candle)
         log.debug(
             "update_estado.exit",
-            extra={
-                "symbol": sym,
-                "timestamp": ts,
-                "stage": "Trader._update_estado_con_candle",
-                "result": "accepted",
-            },
+            extra=safe_extra(
+                {
+                    "symbol": sym,
+                    "timestamp": ts,
+                    "stage": "Trader._update_estado_con_candle",
+                    "result": "accepted",
+                }
+            ),
         )
         return True
 
@@ -628,14 +667,16 @@ class TraderLite:
                     pass
             log.debug(
                 "handler.enter",
-                extra={
-                    "symbol": sym,
-                    "timestamp": ts,
-                    "stage": "Trader._handler",
-                    "handler_id": handler_id,
-                    "handler_qualname": handler_qualname,
-                    "handler_line": handler_line,
-                },
+                extra=safe_extra(
+                    {
+                        "symbol": sym,
+                        "timestamp": ts,
+                        "stage": "Trader._handler",
+                        "handler_id": handler_id,
+                        "handler_qualname": handler_qualname,
+                        "handler_line": handler_line,
+                    }
+                ),
             )
             outcome = "accepted"
             try:
@@ -651,15 +692,17 @@ class TraderLite:
             finally:
                 log.debug(
                     "handler.exit",
-                    extra={
-                        "symbol": sym,
-                        "timestamp": ts,
-                        "stage": "Trader._handler",
-                        "result": outcome,
-                        "handler_id": handler_id,
-                        "handler_qualname": handler_qualname,
-                        "handler_line": handler_line,
-                    },
+                    extra=safe_extra(
+                        {
+                            "symbol": sym,
+                            "timestamp": ts,
+                            "stage": "Trader._handler",
+                            "result": outcome,
+                            "handler_id": handler_id,
+                            "handler_qualname": handler_qualname,
+                            "handler_line": handler_line,
+                        }
+                    ),
                 )
 
         # Registrar latidos periódicos
@@ -942,13 +985,23 @@ class TraderLite:
 
         sym = self._extract_symbol(candle)
         ts = self._extract_timestamp(candle)
+        timeframe = (
+            candle.get("timeframe")
+            or candle.get("interval")
+            or candle.get("tf")
+            or getattr(self.config, "intervalo_velas", None)
+        )
+        tf_str = str(timeframe) if timeframe else None
         log.debug(
             "procesar_vela.enter",
-            extra={
-                "symbol": sym,
-                "timestamp": ts,
-                "stage": "Trader._procesar_vela",
-            },
+            extra=safe_extra(
+                {
+                    "symbol": sym,
+                    "timestamp": ts,
+                    "timeframe": tf_str,
+                    "stage": "Trader._procesar_vela",
+                }
+            ),
         )
         outcome = "ok"
         try:
@@ -956,15 +1009,33 @@ class TraderLite:
         except Exception:
             outcome = "error"
             raise
+        else:
+            skip_reason = candle.get("_df_skip_reason")
+            if skip_reason == "warmup":
+                log.debug(
+                    "procesar_vela.skip",
+                    extra=safe_extra(
+                        {
+                            "symbol": sym,
+                            "timestamp": ts,
+                            "timeframe": tf_str,
+                            "stage": "Trader._procesar_vela",
+                            "reason": skip_reason,
+                        }
+                    ),
+                )
         finally:
             log.debug(
                 "procesar_vela.exit",
-                extra={
-                    "symbol": sym,
-                    "timestamp": ts,
-                    "stage": "Trader._procesar_vela",
-                    "result": outcome,
-                },
+                extra=safe_extra(
+                    {
+                        "symbol": sym,
+                        "timestamp": ts,
+                        "timeframe": tf_str,
+                        "stage": "Trader._procesar_vela",
+                        "result": outcome,
+                    }
+                ),
             )
     
     def _resolve_min_bars_requirement(self) -> int:
