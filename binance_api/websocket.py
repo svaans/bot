@@ -151,11 +151,14 @@ async def escuchar_velas(
         low_price = min(open_price, close_price) - random.uniform(0.0, 0.1)
         volume = max(10.0, random.uniform(25.0, 35.0))
 
+        open_time = max(0, current_close_time - paso_ms)
+        event_time = current_close_time
+
         candle = {
-            "event_time": int(time.time() * 1000),
+            "event_time": event_time,
             "symbol": symbol,
             "intervalo": intervalo,
-            "open_time": current_close_time,
+            "open_time": open_time,
             "close_time": current_close_time,
             "open": round(open_price, 6),
             "high": round(high_price, 6),
@@ -240,12 +243,14 @@ def _build_backfill_candle(
     base = max(1.0, float(last_close))
     high = round(base + 0.05, 6)
     low = round(max(0.1, base - 0.05), 6)
+    paso_ms = int(_intervalo_segundos(intervalo) * 1000)
+    open_time = max(0, close_time - paso_ms)
     return {
-        "event_time": int(time.time() * 1000),
+        "event_time": close_time,
         "symbol": symbol,
         "intervalo": intervalo,
         "open_time": close_time,
-        "close_time": close_time,
+        "open_time": open_time,
         "open": round(base, 6),
         "high": high,
         "low": low,

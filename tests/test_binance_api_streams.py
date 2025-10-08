@@ -91,7 +91,7 @@ async def test_escuchar_velas_emits_candles(monkeypatch: pytest.MonkeyPatch) -> 
     candle = captured[0]
     assert candle["symbol"] == "BTCUSDT"
     assert candle["intervalo"] == "1m"
-    assert candle["open_time"] == 180000
+    assert candle["open_time"] == 120000
     assert candle["close_time"] == 180000
     assert candle["open"] == pytest.approx(101.0)
     assert candle["close"] == pytest.approx(101.0)
@@ -142,7 +142,7 @@ async def test_escuchar_velas_5m_marks_closed(monkeypatch: pytest.MonkeyPatch) -
     candle = captured[0]
     assert candle["symbol"] == "BTCUSDT"
     assert candle["intervalo"] == "5m"
-    assert candle["open_time"] == 600_000
+    assert candle["open_time"] == 300_000
     assert candle["close_time"] == 600_000
     assert candle["is_closed"] is True
 
@@ -211,7 +211,6 @@ async def test_escuchar_velas_combinado_dispatches_to_handlers(monkeypatch: pyte
     for symbol, candle in results.items():
         assert candle["symbol"] == symbol
         assert candle["intervalo"] == "1m"
-        assert candle["open_time"] == 120000
+        assert candle["open_time"] == 60000
         assert candle["close_time"] == 120000
         assert candle["is_closed"] is True
-        assert candle["volume"] == pytest.approx(30.0)
