@@ -7,6 +7,7 @@ from pathlib import Path
 from config.development import DevelopmentConfig
 from config.production import ProductionConfig
 from core.utils.utils import configurar_logger
+from core.utils.log_utils import safe_extra
 
 log = configurar_logger('config_manager')
 
@@ -157,7 +158,7 @@ class Config:
     trader_fastpath_threshold: int = 350
     trader_fastpath_recovery: int = 200
     trader_fastpath_skip_notifications: bool = True
-    trader_fastpath_skip_entries: bool = True
+    trader_fastpath_skip_entries: bool = False
     trader_fastpath_skip_trend: bool = True
     timeout_evaluar_condiciones_por_symbol: Dict[str, int] = field(default_factory=dict)
 
@@ -271,7 +272,7 @@ class ConfigManager:
         # Timeouts por símbolo (nuevo: se toma de env si existe)
         timeout_evaluar_por_symbol = _parse_int_mapping('TIMEOUT_EVALUAR_CONDICIONES_POR_SYMBOL')
 
-        return Config(
+        config = Config(
             api_key=api_key,
             api_secret=api_secret,
             modo_real=modo_real,
@@ -341,6 +342,23 @@ class ConfigManager:
             trader_fastpath_skip_trend=trader_fastpath_skip_trend,
             timeout_evaluar_condiciones_por_symbol=timeout_evaluar_por_symbol,
         )
+
+        log.info(
+            "Fastpath trader configurado",
+            extra=safe_extra(
+                {
+                    "event": "config.fastpath",
+                    "trader_fastpath_enabled": trader_fastpath_enabled,
+                    "trader_fastpath_threshold": trader_fastpath_threshold,
+                    "trader_fastpath_recovery": trader_fastpath_recovery,
+                    "trader_fastpath_skip_notifications": trader_fastpath_skip_notifications,
+                    "trader_fastpath_skip_entries": trader_fastpath_skip_entries,
+                    "trader_fastpath_skip_trend": trader_fastpath_skip_trend,
+                }
+            ),
+        )
+
+        return config
 
 
     def reload(self) -> Config:
