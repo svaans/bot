@@ -10,6 +10,8 @@ from dataclasses import dataclass, field
 from typing import Any, Deque, Dict, Optional
 
 from core.streams.candle_filter import CandleFilter
+from core.utils import configurar_logger, _should_log
+from core.utils.log_utils import safe_extra
 
 __all__ = [
     "_is_awaitable",
@@ -22,6 +24,9 @@ __all__ = [
     "_reason_none",
     "EstadoSimbolo",
 ]
+
+
+log = configurar_logger("trader_modular", modo_silencioso=True)
 
 
 def _is_awaitable(x: Any) -> bool:
@@ -134,9 +139,30 @@ def _reason_none(
         and last_bar_ts is not None
         and now_ts is not None
         and last_bar_ts > 0
-        and (now_ts - last_bar_ts) < tf_secs
     ):
-        return "waiting_close"
+        diff_secs = now_ts - last_bar_ts
+        if diff_secs < tf_secs:
+            if _should_log(f"waiting_close:{symbol}:{timeframe}", every=5.0):
+                log.debug(
+                    "[%s] Esperando cierre de vela (diff < intervalo)",
+                    symbol,
+                    extra=safe_extra(
+                        {
+                            "symbol": symbol,
+                            "timeframe": timeframe,
+                            "reason": "waiting_close",
+                            "buffer_len": buf_len,
+                            "min_needed": min_bars,
+                            "now_ts": now_ts,
+                            "last_bar_ts": last_bar_ts,
+                            "diff_secs": diff_secs,
+                            "diff_ms": int(diff_secs * 1000),
+                            "interval_secs": tf_secs,
+                            "interval_ms": tf_secs * 1000,
+                        }
+                    ),
+                )
+            return "waiting_close"
 
     return "ready"
 
