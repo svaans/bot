@@ -1,9 +1,11 @@
 """Funciones relacionadas con el procesamiento de velas."""
 
+from __future__ import annotations
+
 import asyncio
 import contextlib
 import time
-from typing import Awaitable, Callable
+from typing import Any, Awaitable, Callable, Mapping
 
 from core.utils.utils import timestamp_alineado, validar_integridad_velas
 from core.utils.log_utils import safe_extra
@@ -11,10 +13,117 @@ from ._shared import COMBINED_STREAM_KEY, ConsumerState, log
 from . import events
 
 
+def _to_int(value: Any) -> int | None:
+    """Convierte ``value`` a ``int`` si es posible."""
+
+    if value is None:
+        return None
+    try:
+        return int(float(value))
+    except (TypeError, ValueError):
+        return None
+
+
+def _to_float(value: Any) -> float | None:
+    """Convierte ``value`` a ``float`` si es posible."""
+
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _normalize_candle_payload(candle: Mapping[str, Any]) -> dict[str, Any]:
+    """Normaliza cargas provenientes de Binance antes de procesarlas."""
+
+    normalized: dict[str, Any] = dict(candle)
+
+    # Aceptamos alias comunes para ``is_closed`` y ``symbol``.
+    if "is_closed" not in normalized:
+        if "isClosed" in normalized:
+            normalized["is_closed"] = bool(normalized["isClosed"])
+        elif "closed" in normalized and isinstance(normalized["closed"], bool):
+            normalized["is_closed"] = bool(normalized["closed"])
+        elif "x" in normalized:
+            normalized["is_closed"] = bool(normalized["x"])
+
+    symbol = normalized.get("symbol") or normalized.get("s") or normalized.get("S")
+    if symbol is not None:
+        normalized["symbol"] = str(symbol).upper()
+
+    # Desempaquetamos mensajes ``kline`` típicos de Binance.
+    kline: Mapping[str, Any] | None = None
+    for key in ("k", "kline"):
+        raw = normalized.get(key)
+        if isinstance(raw, Mapping):
+            kline = raw
+            break
+
+    if kline:
+        normalized.setdefault("symbol", str(kline.get("s") or symbol or "").upper())
+        intervalo = kline.get("i")
+        if intervalo:
+            normalized.setdefault("intervalo", intervalo)
+            normalized.setdefault("interval", intervalo)
+            normalized.setdefault("tf", intervalo)
+
+        open_time = _to_int(kline.get("t") or kline.get("open_time"))
+        close_time = _to_int(kline.get("T") or kline.get("close_time"))
+        normalized.setdefault("open_time", open_time)
+        normalized.setdefault("close_time", close_time)
+
+        if "event_time" not in normalized:
+            normalized_event_time = (
+                _to_int(normalized.get("E"))
+                or _to_int(kline.get("E"))
+                or _to_int(kline.get("event_time"))
+            )
+            if normalized_event_time is not None:
+                normalized["event_time"] = normalized_event_time
+
+        for target, source in (
+            ("open", "o"),
+            ("high", "h"),
+            ("low", "l"),
+            ("close", "c"),
+            ("volume", "v"),
+        ):
+            if target not in normalized:
+                value = _to_float(kline.get(source))
+                if value is not None:
+                    normalized[target] = value
+
+        if "is_closed" not in normalized:
+            normalized["is_closed"] = bool(kline.get("x"))
+
+        if "timestamp" not in normalized:
+            normalized_timestamp = close_time or open_time
+            if normalized_timestamp is not None:
+                normalized["timestamp"] = normalized_timestamp
+
+    else:
+        if "timestamp" not in normalized:
+            candidate_ts = (
+                normalized.get("close_time")
+                or normalized.get("open_time")
+                or normalized.get("event_time")
+            )
+            parsed = _to_int(candidate_ts)
+            if parsed is not None:
+                normalized["timestamp"] = parsed
+
+    return normalized
+
+
+
 async def handle_candle(feed: "DataFeed", symbol: str, candle: dict) -> None:
     """Normaliza y encola una vela recibida desde el stream."""
 
-    if not candle.get("is_closed", True):
+    candle = _normalize_candle_payload(candle)
+
+    if not candle.get("is_closed", False):
         return
     ts = candle.get("timestamp")
     if ts is None:
