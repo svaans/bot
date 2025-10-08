@@ -373,6 +373,53 @@ class Trader(TraderLite):
             }
             return None
 
+        if reason in {"bar_in_future", "bar_ts_out_of_range"}:
+            tf_secs = tf_seconds(timeframe_str)
+            elapsed_secs = (
+                (now_ts - last_bar_ts)
+                if (last_bar_ts is not None and now_ts is not None)
+                else None
+            )
+            log.warning(
+                "[%s] Timestamp de vela inválido (%s)",
+                symbol,
+                reason,
+                extra=safe_extra(
+                    {
+                        "symbol": symbol,
+                        "timeframe": timeframe_str,
+                        "reason": reason,
+                        "buffer_len": buf_len,
+                        "min_needed": min_bars,
+                        "now_ts": now_ts,
+                        "last_bar_ts": last_bar_ts,
+                        "last_bar_ts_raw": last_bar_ts_raw,
+                        "elapsed_secs": elapsed_secs,
+                        "elapsed_ms": int(elapsed_secs * 1000)
+                        if elapsed_secs is not None
+                        else None,
+                        "interval_secs": tf_secs,
+                        "interval_ms": tf_secs * 1000 if tf_secs else None,
+                    }
+                ),
+            )
+            self._last_eval_skip_reason = reason
+            self._last_eval_skip_details = {
+                "timeframe": timeframe_str,
+                "buffer_len": buf_len,
+                "min_needed": min_bars,
+                "now_ts": now_ts,
+                "last_bar_ts": last_bar_ts,
+                "last_bar_ts_raw": last_bar_ts_raw,
+                "elapsed_secs": elapsed_secs,
+                "elapsed_ms": int(elapsed_secs * 1000)
+                if elapsed_secs is not None
+                else None,
+                "interval_secs": tf_secs,
+                "interval_ms": tf_secs * 1000 if tf_secs else None,
+            }
+            return None
+
         if not self._should_evaluate(symbol, timeframe_str, last_bar_ts_raw):
             log.debug(
                 "[%s] Saltando evaluación (sin nueva vela cerrada)",
