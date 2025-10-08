@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import time
 from datetime import datetime, timezone
 from typing import Any, Awaitable, Callable, Dict, Optional, TYPE_CHECKING
 
@@ -18,7 +17,7 @@ from ._utils import (
     _normalize_timestamp,
     _reason_none,
     _silence_task_result,
-tf_seconds,
+    tf_seconds,
 )
 from .trader_lite import TraderLite
 
@@ -302,9 +301,69 @@ class Trader(TraderLite):
             except Exception:
                 last_bar_ts_raw = None
 
-        last_bar_ts = _normalize_timestamp(last_bar_ts_raw)
-        now_ts = time.time()
-        reason = _reason_none(symbol, timeframe_str, buf_len, min_bars, last_bar_ts, now_ts)
+        tf_secs = tf_seconds(timeframe_str)
+
+        bar_close_ts = _normalize_timestamp(last_bar_ts_raw)
+        bar_open_raw: Any = None
+        bar_close_raw: Any = None
+        bar_event_raw: Any = None
+
+        buffer_ref = getattr(estado, "buffer", None)
+        last_candle: Any = None
+        if buffer_ref:
+            try:
+                last_candle = buffer_ref[-1]
+            except (IndexError, TypeError):
+                last_candle = None
+
+        if isinstance(last_candle, dict):
+            bar_open_raw = last_candle.get("open_time")
+            bar_close_raw = last_candle.get("close_time")
+            bar_event_raw = (
+                last_candle.get("event_time")
+                or last_candle.get("close_time")
+                or last_candle.get("timestamp")
+            )
+
+        bar_close_ts = _normalize_timestamp(bar_close_raw) or bar_close_ts
+        bar_event_ts = _normalize_timestamp(
+            bar_event_raw
+            if bar_event_raw is not None
+            else bar_close_raw
+            if bar_close_raw is not None
+            else last_bar_ts_raw
+        )
+        bar_open_ts = _normalize_timestamp(bar_open_raw)
+
+        if bar_open_ts is None and bar_close_ts is not None and tf_secs > 0:
+            bar_open_ts = bar_close_ts - tf_secs
+        if bar_open_ts is None and bar_event_ts is not None and tf_secs > 0:
+            bar_open_ts = bar_event_ts - tf_secs
+
+        timing_ctx: Dict[str, Any] = {}
+        reason = _reason_none(
+            symbol,
+            timeframe_str,
+            buf_len,
+            min_bars,
+            bar_open_ts,
+            bar_event_ts,
+            interval_secs=tf_secs,
+            bar_close_ts=bar_close_ts,
+            context=timing_ctx,
+        )
+
+        interval_secs = timing_ctx.get("interval_secs") or tf_secs
+        bar_open_ts = timing_ctx.get("bar_open_ts", bar_open_ts)
+        bar_close_ts = timing_ctx.get("bar_close_ts", bar_close_ts)
+        bar_event_ts = timing_ctx.get("bar_event_ts", bar_event_ts)
+        elapsed_secs = timing_ctx.get("elapsed_secs")
+        skew_allow = timing_ctx.get("skew_allow_secs", 1.5)
+        remaining_secs = (
+            (interval_secs - elapsed_secs)
+            if (interval_secs and elapsed_secs is not None)
+            else None
+        )
 
         eval_key = (symbol.upper(), (timeframe_str or "unknown"))
 
@@ -332,12 +391,6 @@ class Trader(TraderLite):
             return None
 
         if reason == "waiting_close":
-            tf_secs = tf_seconds(timeframe_str)
-            diff_secs = (
-                (now_ts - last_bar_ts)
-                if (last_bar_ts is not None and now_ts is not None)
-                else None
-            )
             log.debug(
                 "[%s] Esperando cierre de vela para evaluar",
                 symbol,
@@ -348,13 +401,22 @@ class Trader(TraderLite):
                         "reason": reason,
                         "buffer_len": buf_len,
                         "min_needed": min_bars,
-                        "now_ts": now_ts,
-                        "last_bar_ts": last_bar_ts,
+                        "bar_open_ts": bar_open_ts,
+                        "bar_close_ts": bar_close_ts,
+                        "event_ts": bar_event_ts,
+                        "elapsed_secs": elapsed_secs,
+                        "elapsed_ms": int(elapsed_secs * 1000)
+                        if elapsed_secs is not None
+                        else None,
+                        "remaining_secs": remaining_secs,
+                        "remaining_ms": int(remaining_secs * 1000)
+                        if remaining_secs is not None
+                        else None,
+                        "interval_secs": interval_secs,
+                        "interval_ms": interval_secs * 1000 if interval_secs else None,
+                        "skew_allow_secs": skew_allow,
+                        "skew_allow_ms": int(skew_allow * 1000),
                         "last_bar_ts_raw": last_bar_ts_raw,
-                        "diff_secs": diff_secs,
-                        "diff_ms": int(diff_secs * 1000) if diff_secs is not None else None,
-                        "interval_secs": tf_secs,
-                        "interval_ms": tf_secs * 1000 if tf_secs else None,
                     }
                 ),
             )
@@ -363,23 +425,26 @@ class Trader(TraderLite):
                 "timeframe": timeframe_str,
                 "buffer_len": buf_len,
                 "min_needed": min_bars,
-                "now_ts": now_ts,
-                "last_bar_ts": last_bar_ts,
+                "bar_open_ts": bar_open_ts,
+                "bar_close_ts": bar_close_ts,
+                "event_ts": bar_event_ts,
+                "elapsed_secs": elapsed_secs,
+                "elapsed_ms": int(elapsed_secs * 1000)
+                if elapsed_secs is not None
+                else None,
+                "remaining_secs": remaining_secs,
+                "remaining_ms": int(remaining_secs * 1000)
+                if remaining_secs is not None
+                else None,
+                "interval_secs": interval_secs,
+                "interval_ms": interval_secs * 1000 if interval_secs else None,
+                "skew_allow_secs": skew_allow,
+                "skew_allow_ms": int(skew_allow * 1000),
                 "last_bar_ts_raw": last_bar_ts_raw,
-                "diff_secs": diff_secs,
-                "diff_ms": int(diff_secs * 1000) if diff_secs is not None else None,
-                "interval_secs": tf_secs,
-                "interval_ms": tf_secs * 1000 if tf_secs else None,
             }
             return None
 
         if reason in {"bar_in_future", "bar_ts_out_of_range"}:
-            tf_secs = tf_seconds(timeframe_str)
-            elapsed_secs = (
-                (now_ts - last_bar_ts)
-                if (last_bar_ts is not None and now_ts is not None)
-                else None
-            )
             log.warning(
                 "[%s] Timestamp de vela inválido (%s)",
                 symbol,
@@ -391,15 +456,18 @@ class Trader(TraderLite):
                         "reason": reason,
                         "buffer_len": buf_len,
                         "min_needed": min_bars,
-                        "now_ts": now_ts,
-                        "last_bar_ts": last_bar_ts,
-                        "last_bar_ts_raw": last_bar_ts_raw,
+                        "bar_open_ts": bar_open_ts,
+                        "bar_close_ts": bar_close_ts,
+                        "event_ts": bar_event_ts,
                         "elapsed_secs": elapsed_secs,
                         "elapsed_ms": int(elapsed_secs * 1000)
                         if elapsed_secs is not None
                         else None,
-                        "interval_secs": tf_secs,
-                        "interval_ms": tf_secs * 1000 if tf_secs else None,
+                        "interval_secs": interval_secs,
+                        "interval_ms": interval_secs * 1000 if interval_secs else None,
+                        "skew_allow_secs": skew_allow,
+                        "skew_allow_ms": int(skew_allow * 1000),
+                        "last_bar_ts_raw": last_bar_ts_raw,
                     }
                 ),
             )
@@ -408,15 +476,18 @@ class Trader(TraderLite):
                 "timeframe": timeframe_str,
                 "buffer_len": buf_len,
                 "min_needed": min_bars,
-                "now_ts": now_ts,
-                "last_bar_ts": last_bar_ts,
-                "last_bar_ts_raw": last_bar_ts_raw,
+                "bar_open_ts": bar_open_ts,
+                "bar_close_ts": bar_close_ts,
+                "event_ts": bar_event_ts,
                 "elapsed_secs": elapsed_secs,
                 "elapsed_ms": int(elapsed_secs * 1000)
                 if elapsed_secs is not None
                 else None,
-                "interval_secs": tf_secs,
-                "interval_ms": tf_secs * 1000 if tf_secs else None,
+                "interval_secs": interval_secs,
+                "interval_ms": interval_secs * 1000 if interval_secs else None,
+                "skew_allow_secs": skew_allow,
+                "skew_allow_ms": int(skew_allow * 1000),
+                "last_bar_ts_raw": last_bar_ts_raw,
             }
             return None
 

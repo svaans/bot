@@ -37,6 +37,34 @@ def _df_from_timestamps(timestamps: Iterable[int], tf: str = "1m") -> pd.DataFra
     return df
 
 
+def _set_last_candle(
+    trader: Trader,
+    *,
+    open_ts: int,
+    close_ts: int,
+    event_ts: int | None = None,
+    symbol: str = "BTCUSDT",
+) -> None:
+    """Inicializa el estado interno con una vela sintética."""
+
+    estado = trader.estado[symbol]
+    estado.buffer.clear()
+    estado.buffer.append(
+        {
+            "symbol": symbol,
+            "timestamp": close_ts,
+            "open": 1.0,
+            "high": 1.0,
+            "low": 1.0,
+            "close": 1.0,
+            "volume": 1.0,
+            "open_time": open_ts,
+            "close_time": close_ts,
+            "event_time": event_ts if event_ts is not None else close_ts,
+        }
+    )
+
+
 class _StubOrders:
     def __init__(self, existing: Any | None = None, abriendo: Iterable[str] | None = None) -> None:
         self._existing = existing
@@ -186,14 +214,17 @@ async def test_evaluar_condiciones_waits_for_bar_close(monkeypatch: pytest.Monke
     trader = _build_trader()
     trader.estrategias_habilitadas = True
     monkeypatch.setattr(trader, "_resolve_min_bars_requirement", lambda: 1)
-    df = _df_from_timestamps([90])
-    monkeypatch.setattr("core.trader.trader.time.time", lambda: 100.0)
+    df = _df_from_timestamps([120])
+    _set_last_candle(trader, open_ts=60, close_ts=120, event_ts=115)
 
     resultado = await trader.evaluar_condiciones_de_entrada(
         "BTCUSDT", df, trader.estado["BTCUSDT"]
     )
 
     assert resultado is None
+    assert trader._last_eval_skip_details is not None
+    assert trader._last_eval_skip_details.get("elapsed_secs") == pytest.approx(55.0)
+    assert trader._last_eval_skip_details.get("remaining_secs") == pytest.approx(5.0)
 
 
 @pytest.mark.asyncio
@@ -201,8 +232,8 @@ async def test_evaluar_condiciones_detects_future_bar(monkeypatch: pytest.Monkey
     trader = _build_trader()
     trader.estrategias_habilitadas = True
     monkeypatch.setattr(trader, "_resolve_min_bars_requirement", lambda: 1)
-    df = _df_from_timestamps([200])
-    monkeypatch.setattr("core.trader.trader.time.time", lambda: 100.0)
+    df = _df_from_timestamps([240])
+    _set_last_candle(trader, open_ts=180, close_ts=240, event_ts=170)
 
     resultado = await trader.evaluar_condiciones_de_entrada(
         "BTCUSDT", df, trader.estado["BTCUSDT"]
@@ -211,7 +242,7 @@ async def test_evaluar_condiciones_detects_future_bar(monkeypatch: pytest.Monkey
     assert resultado is None
     assert trader._last_eval_skip_reason == "bar_in_future"
     assert trader._last_eval_skip_details is not None
-    assert trader._last_eval_skip_details.get("elapsed_secs") == pytest.approx(-100.0)
+    assert trader._last_eval_skip_details.get("elapsed_secs") == pytest.approx(-10.0)
 
 
 @pytest.mark.asyncio
@@ -219,8 +250,8 @@ async def test_evaluar_condiciones_detects_out_of_range_bar(monkeypatch: pytest.
     trader = _build_trader()
     trader.estrategias_habilitadas = True
     monkeypatch.setattr(trader, "_resolve_min_bars_requirement", lambda: 1)
-    df = _df_from_timestamps([1000])
-    monkeypatch.setattr("core.trader.trader.time.time", lambda: 100.0)
+    df = _df_from_timestamps([1260])
+    _set_last_candle(trader, open_ts=1200, close_ts=1260, event_ts=300)
 
     resultado = await trader.evaluar_condiciones_de_entrada(
         "BTCUSDT", df, trader.estado["BTCUSDT"]
@@ -239,7 +270,6 @@ async def test_evaluar_condiciones_skips_duplicate_bars(monkeypatch: pytest.Monk
     monkeypatch.setattr(trader, "_resolve_min_bars_requirement", lambda: 1)
     df = _df_from_timestamps([100])
     trader._last_evaluated_bar[("BTCUSDT", "1m")] = 100
-    monkeypatch.setattr("core.trader.trader.time.time", lambda: 1000.0)
 
     resultado = await trader.evaluar_condiciones_de_entrada(
         "BTCUSDT", df, trader.estado["BTCUSDT"]
@@ -254,7 +284,6 @@ async def test_evaluar_condiciones_returns_pipeline_result(monkeypatch: pytest.M
     trader.estrategias_habilitadas = True
     monkeypatch.setattr(trader, "_resolve_min_bars_requirement", lambda: 1)
     monkeypatch.setattr(trader, "_should_evaluate", lambda *args, **kwargs: True)
-    monkeypatch.setattr("core.trader.trader.time.time", lambda: 500.0)
     df = _df_from_timestamps([100, 200])
 
     async def _fake_verificar_entrada(

@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import inspect
+import math
 import os
 from collections import deque
 from dataclasses import dataclass, field
@@ -122,10 +123,37 @@ def _reason_none(
     timeframe: Optional[str],
     buf_len: int,
     min_bars: int,
-    last_bar_ts: Optional[float],
-    now_ts: Optional[float],
+    bar_open_ts: Optional[float],
+    bar_event_ts: Optional[float],
+    *,
+    interval_secs: Optional[int] = None,
+    skew_allow: float = 1.5,
+    bar_close_ts: Optional[float] = None,
+    context: Optional[Dict[str, Any]] = None,
 ) -> str:
-    """Determina el motivo por el cual no se debe evaluar la estrategia aún."""
+    """Determina el motivo por el cual no se debe evaluar la estrategia aún.
+
+    Parameters
+    ----------
+    bar_open_ts:
+        Marca de tiempo (en segundos) del inicio de la vela, normalizada al
+        intervalo del timeframe.
+    bar_event_ts:
+        Marca de tiempo (en segundos) reportada por el exchange para el cierre
+        o evento de la vela. Se utiliza como referencia temporal principal para
+        evitar depender del reloj local.
+    interval_secs:
+        Duración del timeframe en segundos. Si no se especifica, se intentará
+        inferir a partir del ``timeframe`` textual.
+    skew_allow:
+        Tolerancia (en segundos) para compensar jitter en la recepción de
+        mensajes.
+    bar_close_ts:
+        Marca de tiempo de cierre reportada (si difiere del evento).
+    context:
+        Diccionario opcional que será rellenado con los valores normalizados
+        utilizados en la toma de decisión (open, close, event, elapsed, etc.).
+    """
 
     if timeframe is None:
         return "timeframe_none"
@@ -133,63 +161,112 @@ def _reason_none(
     if min_bars > 0 and buf_len < min_bars:
         return "warmup"
 
-    tf_secs = tf_seconds(timeframe)
-    if (
-        tf_secs > 0
-        and last_bar_ts is not None
-        and now_ts is not None
-        and last_bar_ts > 0
-    ):
-        elapsed_secs = now_ts - last_bar_ts
-        if elapsed_secs < 0:
-            reason = "bar_in_future"
-            if abs(elapsed_secs) > (tf_secs * 3):
-                reason = "bar_ts_out_of_range"
-            if _should_log(f"{reason}:{symbol}:{timeframe}", every=10.0):
-                log.warning(
-                    "[%s] Timestamp de vela fuera de rango (%s)",
-                    symbol,
-                    reason,
-                    extra=safe_extra(
-                        {
-                            "symbol": symbol,
-                            "timeframe": timeframe,
-                            "reason": reason,
-                            "buffer_len": buf_len,
-                            "min_needed": min_bars,
-                            "now_ts": now_ts,
-                            "last_bar_ts": last_bar_ts,
-                            "elapsed_secs": elapsed_secs,
-                            "elapsed_ms": int(elapsed_secs * 1000),
-                            "interval_secs": tf_secs,
-                            "interval_ms": tf_secs * 1000,
-                        }
-                    ),
-                )
-            return reason
+    tf_secs = int(interval_secs or tf_seconds(timeframe))
+    skew = max(0.0, float(skew_allow))
 
-        if elapsed_secs < tf_secs:
-            if _should_log(f"waiting_close:{symbol}:{timeframe}", every=5.0):
-                log.debug(
-                    "[%s] Esperando cierre de vela (elapsed < intervalo)",
-                    symbol,
-                    extra=safe_extra(
-                        {
-                            "symbol": symbol,
-                            "timeframe": timeframe,
-                            "reason": "waiting_close",
-                            "buffer_len": buf_len,
-                            "min_needed": min_bars,
-                            "now_ts": now_ts,
-                            "last_bar_ts": last_bar_ts,
-                            "elapsed_secs": elapsed_secs,
-                            "elapsed_ms": int(elapsed_secs * 1000),
-                            "interval_secs": tf_secs,
-                            "interval_ms": tf_secs * 1000,
-                        }
-                    ),
-                )
-            return "waiting_close"
+    ctx: Dict[str, Any] = {
+        "interval_secs": tf_secs,
+        "skew_allow_secs": skew,
+        "bar_open_ts": None,
+        "bar_event_ts": None,
+        "bar_close_ts": None,
+        "elapsed_secs": None,
+    }
+
+    def _safe_float(value: Optional[float]) -> Optional[float]:
+        if value is None:
+            return None
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return None
+
+    open_ts = _safe_float(bar_open_ts)
+    event_ts = _safe_float(bar_event_ts)
+    close_ts = _safe_float(bar_close_ts)
+    if close_ts is None:
+        close_ts = event_ts
+
+    if open_ts is not None and tf_secs > 0:
+        open_ts = (math.floor(open_ts / tf_secs)) * tf_secs
+
+    ctx["bar_open_ts"] = open_ts
+    ctx["bar_event_ts"] = event_ts
+    ctx["bar_close_ts"] = close_ts
+
+    if open_ts is None or event_ts is None or tf_secs <= 0:
+        if context is not None:
+            context.update(ctx)
+        return "ready"
+
+    elapsed_secs = event_ts - open_ts
+    ctx["elapsed_secs"] = elapsed_secs
+
+    if elapsed_secs < -skew:
+        reason = "bar_in_future"
+        if abs(elapsed_secs) >= tf_secs:
+            reason = "bar_ts_out_of_range"
+        if _should_log(f"{reason}:{symbol}:{timeframe}", every=10.0):
+            log.warning(
+                "[%s] Timestamp de vela fuera de rango (%s)",
+                symbol,
+                reason,
+                extra=safe_extra(
+                    {
+                        "symbol": symbol,
+                        "timeframe": timeframe,
+                        "reason": reason,
+                        "buffer_len": buf_len,
+                        "min_needed": min_bars,
+                        "bar_open_ts": open_ts,
+                        "bar_close_ts": close_ts,
+                        "event_ts": event_ts,
+                        "elapsed_secs": elapsed_secs,
+                        "elapsed_ms": int(elapsed_secs * 1000),
+                        "interval_secs": tf_secs,
+                        "interval_ms": tf_secs * 1000,
+                        "skew_allow_secs": skew,
+                        "skew_allow_ms": int(skew * 1000),
+                    }
+                ),
+            )
+        if context is not None:
+            context.update(ctx)
+        return reason
+
+    if (elapsed_secs + skew) < tf_secs:
+        if _should_log(f"waiting_close:{symbol}:{timeframe}", every=5.0):
+            remaining = tf_secs - elapsed_secs
+            log.debug(
+                "[%s] Esperando cierre de vela (elapsed < intervalo)",
+                symbol,
+                extra=safe_extra(
+                    {
+                        "symbol": symbol,
+                        "timeframe": timeframe,
+                        "reason": "waiting_close",
+                        "buffer_len": buf_len,
+                        "min_needed": min_bars,
+                        "bar_open_ts": open_ts,
+                        "bar_close_ts": close_ts,
+                        "event_ts": event_ts,
+                        "elapsed_secs": elapsed_secs,
+                        "elapsed_ms": int(elapsed_secs * 1000),
+                        "remaining_secs": remaining,
+                        "remaining_ms": int(remaining * 1000),
+                        "interval_secs": tf_secs,
+                        "interval_ms": tf_secs * 1000,
+                        "skew_allow_secs": skew,
+                        "skew_allow_ms": int(skew * 1000),
+                    }
+                ),
+            )
+        if context is not None:
+            context.update(ctx)
+        return "waiting_close"
+
+    if context is not None:
+        context.update(ctx)
 
     return "ready"
 
