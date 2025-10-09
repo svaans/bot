@@ -13,7 +13,7 @@ Cada etapa valida condiciones técnicas antes de ejecutar el cierre.
 """
 
 from __future__ import annotations
-from datetime import datetime
+from datetime import UTC, datetime
 import asyncio
 import pandas as pd
 from core.utils import configurar_logger
@@ -98,7 +98,7 @@ async def _manejar_stop_loss(trader, orden, df) -> bool:
             orden.sl_evitar_info = orden.sl_evitar_info or []
             orden.sl_evitar_info.append(
                 {
-                    'timestamp': datetime.utcnow().isoformat(),
+                    'timestamp': datetime.now(UTC).isoformat(),
                     'sl': orden.stop_loss,
                     'precio': precio_cierre,
                 }
@@ -128,7 +128,7 @@ async def _manejar_stop_loss(trader, orden, df) -> bool:
         orden.sl_evitar_info = orden.sl_evitar_info or []
         orden.sl_evitar_info.append(
             {
-                'timestamp': datetime.utcnow().isoformat(),
+                'timestamp': datetime.now(UTC).isoformat(),
                 'sl': orden.stop_loss,
                 'precio': precio_cierre,
             }
