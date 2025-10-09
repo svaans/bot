@@ -1,6 +1,7 @@
 """Utilities de logging estructurado en JSON para el bot."""
 from __future__ import annotations
 
+import io
 import json
 import logging
 import os
@@ -46,8 +47,56 @@ class _JsonFormatter(logging.Formatter):
         return json.dumps(data, ensure_ascii=False)
 
 
+class _SafeStreamHandler(logging.StreamHandler):
+    """StreamHandler tolerante al cierre del *stream* durante la ejecución de tests."""
+
+    _fallback_streams = ("__stdout__", "__stderr__")
+
+    def __init__(self) -> None:
+        super().__init__(self._resolve_stream())
+
+    @staticmethod
+    def _resolve_stream() -> io.TextIOBase:
+        """Obtiene un *stream* estable priorizando ``sys.stdout`` real."""
+
+        for candidate in ("stdout", *_SafeStreamHandler._fallback_streams):
+            stream = getattr(sys, candidate, None)
+            if isinstance(stream, io.TextIOBase) and not stream.closed:
+                return stream
+        return sys.__stdout__  # pragma: no cover - ruta de seguridad
+
+    def emit(self, record: logging.LogRecord) -> None:  # pragma: no cover - comportamiento trivial
+        stream = getattr(self, "stream", None)
+        if not stream or getattr(stream, "closed", False):
+            self.setStream(self._resolve_stream())
+        try:
+            super().emit(record)
+        except ValueError:
+            # Si el stream fue cerrado por el *test runner*, redirigimos al stdout real.
+            self.setStream(self._resolve_stream())
+            try:
+                super().emit(record)
+            except ValueError:
+                # Como último recurso escribimos mediante el stdout real sin formateo.
+                fallback = self._resolve_stream()
+                msg = self.format(record)
+                fallback.write(f"{msg}\n")
+                fallback.flush()
+
+    def setStream(self, stream: io.TextIOBase | None) -> None:  # pragma: no cover - simple
+        current = getattr(self, "stream", None)
+        if stream is current:
+            return
+        self.stream = stream
+        if current and not getattr(current, "closed", False):
+            try:
+                current.flush()
+            except ValueError:
+                pass
+
+
 def _build_handler() -> logging.Handler:
-    handler = logging.StreamHandler(sys.stdout)
+    handler = _SafeStreamHandler()
     formatter = _JsonFormatter()
     handler.setFormatter(formatter)
     return handler
