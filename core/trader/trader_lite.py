@@ -178,6 +178,7 @@ class TraderLite:
         self._datafeed_connected_emitted = False
         self._ws_started_logged = False
         self._connection_signal_task: asyncio.Task | None = None
+        self._owned_event_bus: Any | None = None
 
         # Cliente de exchange (solo modo real)
         self._cliente = None
@@ -924,6 +925,26 @@ class TraderLite:
         if self._runner_task:
             with contextlib.suppress(asyncio.CancelledError, Exception):
                 await self._runner_task
+        await self._close_owned_event_bus()
+
+    async def _close_owned_event_bus(self) -> None:
+        """Cierra el EventBus creado internamente si sigue activo."""
+
+        if self._owned_event_bus is None:
+            return
+
+        bus = self._owned_event_bus
+        self._owned_event_bus = None
+
+        try:
+            await bus.close()
+        except Exception:
+            log.exception("Error cerrando EventBus del Trader")
+
+        if getattr(self, "bus", None) is bus:
+            self.bus = None
+        if getattr(self, "event_bus", None) is bus:
+            self.event_bus = None
 
     # ------------------- utilidades internas -------------------
     def _create_spread_guard(self) -> Any | None:
