@@ -1,6 +1,6 @@
 import os
 import time
-from datetime import datetime
+from datetime import UTC, datetime
 import pandas as pd
 import threading
 from core.utils.logger import configurar_logger
@@ -25,7 +25,7 @@ class RegistroMetrico:
     def registrar(self, tipo: str, datos: dict, guardar_inmediatamente=False
         ) ->None:
         """Agrega un nuevo registro. Guarda si se supera el límite o si se indica guardar ya."""
-        registro = {'timestamp': datetime.utcnow().isoformat(), 'tipo': tipo}
+        registro = {'timestamp': datetime.now(UTC).isoformat(), 'tipo': tipo}
         registro.update(datos)
         with self.lock:
             self.buffer.append(registro)
@@ -41,7 +41,7 @@ class RegistroMetrico:
                 if not self.buffer:
                     return
                 df = pd.DataFrame(self.buffer)
-                fecha = datetime.utcnow().strftime('%Y%m%d')
+                fecha = datetime.now(UTC).strftime('%Y%m%d')
                 archivo = os.path.join(self.carpeta, f'{fecha}.csv')
                 try:
                     modo = 'a' if os.path.exists(archivo) else 'w'
