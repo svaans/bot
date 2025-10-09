@@ -85,10 +85,24 @@ class EventBus:
             espera indefinida.
         """
         self.start()
-        if event_type in self._last_payload:
-            return self._last_payload.pop(event_type)
+        sentinel = object()
+        cached = self._last_payload.pop(event_type, sentinel)
+        if cached is not sentinel:
+            # Evento emitido antes de la espera: devolver el payload cacheado sin
+            # registrar waiters innecesarios.
+            return cached
         waiter = EventBus._Waiter(event=asyncio.Event())
-        self._waiters[event_type].append(waiter)
+        waiters = self._waiters[event_type]
+        waiters.append(waiter)
+
+        # Segunda comprobación tras registrar el waiter para cubrir la carrera en
+        # la que el evento llega entre la primera comprobación y el registro.
+        cached = self._last_payload.pop(event_type, sentinel)
+        if cached is not sentinel:
+            waiters.remove(waiter)
+            if not waiters:
+                self._waiters.pop(event_type, None)
+            return cached
         try:
             await asyncio.wait_for(waiter.event.wait(), timeout)
         except Exception:
