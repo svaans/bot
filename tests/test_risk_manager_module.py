@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from typing import Any
 
@@ -42,7 +42,7 @@ def test_registrar_perdida_activa_cooldown() -> None:
 def test_permite_entrada_verifica_condiciones() -> None:
     capital = DummyCapitalManager({"BTCUSDT": 100.0}, libre=False)
     manager = RiskManager(0.05, capital_manager=capital)
-    manager._cooldown_fin = datetime.utcnow() + timedelta(seconds=10)
+    manager._cooldown_fin = datetime.now(UTC) + timedelta(seconds=10)
 
     assert manager.permite_entrada("ETHUSDT", {}, 0.5) is False
 
