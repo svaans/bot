@@ -1,5 +1,5 @@
 import json
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pandas as pd
@@ -116,7 +116,7 @@ def test_validar_integridad_velas_mapping() -> None:
 
 def test_guardar_orden_real(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     carpeta = tmp_path / "ordenes"
-    data = {"id": 1, "timestamp": datetime.utcnow().isoformat()}
+    data = {"id": 1, "timestamp": datetime.now(UTC).isoformat()}
     path = guardar_orden_real("BTCUSDT", data, carpeta=carpeta)
     assert path.exists()
     contenido = path.read_text().strip().splitlines()
