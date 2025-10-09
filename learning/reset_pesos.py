@@ -1,6 +1,6 @@
 import os
 import json
-from datetime import datetime
+from datetime import UTC, datetime
 from core.strategies.pesos import gestor_pesos
 RUTA_BASE = 'config/estrategias_pesos_base.json'
 RUTA_ACTUAL = 'config/estrategias_pesos.json'
@@ -8,7 +8,7 @@ RUTA_CONTROL = 'config/reset_pesos_fecha.txt'
 
 
 def resetear_pesos_diarios_si_corresponde():
-    hoy = datetime.utcnow().strftime('%Y-%m-%d')
+    hoy = datetime.now(UTC).strftime('%Y-%m-%d')
     if os.path.exists(RUTA_CONTROL):
         with open(RUTA_CONTROL, 'r') as f:
             ultima_fecha = f.read().strip()
