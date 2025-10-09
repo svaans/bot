@@ -1,5 +1,6 @@
 from __future__ import annotations
 import asyncio
+import contextlib
 from collections import defaultdict
 from dataclasses import dataclass
 from functools import partial
@@ -8,16 +9,14 @@ from core.utils.logger import configurar_logger
 
 log = configurar_logger('event_bus', modo_silencioso=True)
 
-_STOP_EVENT = "__EVENT_BUS_STOP__"
 
 class EventBus:
-    """Simple asynchronous event bus based on :class:`asyncio.Queue`."""
+    """Simple asynchronous event bus backed by lightweight asyncio tasks."""
 
     def __init__(self) -> None:
         self._listeners: Dict[str, List[Callable[[Any], Awaitable[None]]]] = defaultdict(list)
-        self._queue: asyncio.Queue[tuple[str, Any]] = asyncio.Queue()
         self._waiters: Dict[str, List["EventBus._Waiter"]] = defaultdict(list)
-        self._task: asyncio.Task | None = None
+        self._inflight: set[asyncio.Task] = set()
         self._loop: asyncio.AbstractEventLoop | None = None
         self._closed = False
         try:
@@ -26,7 +25,6 @@ class EventBus:
             loop = None
         if loop and loop.is_running():
             self._loop = loop
-            self._task = loop.create_task(self._dispatcher())
 
     @dataclass(slots=True)
     class _Waiter:
@@ -34,16 +32,13 @@ class EventBus:
         payload: Any | None = None
 
     def start(self) -> None:
-        """Ensure the dispatcher task is running under the current loop."""
-        if self._task is not None:
-            return
+        """Record the currently running loop so synchronous helpers can use it."""
         try:
             loop = asyncio.get_running_loop()
         except RuntimeError:
             return
         if loop.is_running():
             self._loop = loop
-            self._task = loop.create_task(self._dispatcher())
 
     def subscribe(self, event_type: str, callback: Callable[[Any], Awaitable[None]]) -> None:
         """Register ``callback`` to be invoked for ``event_type`` events."""
@@ -70,7 +65,12 @@ class EventBus:
         if self._closed:
             return
         self.start()
-        await self._queue.put((event_type, data))
+        self._resolve_waiters(event_type, data)
+        callbacks = list(self._listeners.get(event_type, []))
+        for cb in callbacks:
+            self._schedule_callback(cb, event_type, data)
+        # Yield control so scheduled callbacks can start executing.
+        await asyncio.sleep(0)
 
     async def wait(self, event_type: str, timeout: float | None = None) -> Any | None:
         """Wait until ``event_type`` is emitted and return its payload.
@@ -130,27 +130,6 @@ class EventBus:
             future.cancel()
             raise
 
-    async def _dispatcher(self) -> None:
-        while True:
-            try:
-                event_type, data = await self._queue.get()
-            except asyncio.CancelledError:
-                break
-            except RuntimeError:
-                # El *event loop* se cerró mientras esperábamos en la cola.
-                break
-
-            if event_type == _STOP_EVENT:
-                break
-            self._resolve_waiters(event_type, data)
-            for cb in list(self._listeners.get(event_type, [])):
-                try:
-                    task = asyncio.create_task(cb(data))
-                    task.add_done_callback(partial(self._log_task_error, event_type=event_type))
-                except Exception as e:
-                    log.error(f"❌ Error despachando '{event_type}': {e}")
-        self._closed = True
-
     @staticmethod
     def _log_task_error(task: asyncio.Task, event_type: str) -> None:
         """Loggear cualquier excepción producida por ``task``."""
@@ -166,20 +145,14 @@ class EventBus:
 
     async def close(self) -> None:
         self._closed = True
-        try:
-            self._queue.put_nowait((_STOP_EVENT, None))
-        except asyncio.QueueFull:  # pragma: no cover - cola sin consumir
-            pass
-        except RuntimeError:
-            # El *loop* puede estar ya cerrado; no hay nada más que hacer.
-            pass
-        if self._task:
-            self._task.cancel()
-            try:
-                await self._task
-            except asyncio.CancelledError:
-                pass
-        self._task = None
+        tasks = list(self._inflight)
+        self._inflight.clear()
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+        for task in tasks:
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
         for event_type, waiters in list(self._waiters.items()):
             for waiter in waiters:
                 if not waiter.event.is_set():
@@ -194,3 +167,21 @@ class EventBus:
             if not waiter.event.is_set():
                 waiter.payload = data
                 waiter.event.set()
+
+    def _schedule_callback(
+        self,
+        callback: Callable[[Any], Awaitable[None]],
+        event_type: str,
+        data: Any | None,
+    ) -> None:
+        try:
+            task = asyncio.create_task(callback(data))
+        except RuntimeError as exc:
+            log.error(f"❌ Error despachando '{event_type}': {exc}")
+            return
+        self._inflight.add(task)
+        task.add_done_callback(partial(self._cleanup_task, event_type=event_type))
+
+    def _cleanup_task(self, task: asyncio.Task, event_type: str) -> None:
+        self._inflight.discard(task)
+        self._log_task_error(task, event_type)
