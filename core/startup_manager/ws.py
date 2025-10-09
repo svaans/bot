@@ -451,7 +451,42 @@ class WebSocketMonitorMixin:
         return False
 
     def _set_config_value(self, key: str, value: Any) -> None:
-        raise NotImplementedError
+        """Guarda ``key`` en la configuración activa si está disponible."""
+
+        cfg = getattr(self, "config", None)
+        if cfg is None:
+            trader = getattr(self, "trader", None)
+            cfg = getattr(trader, "config", None) if trader is not None else None
+
+        if cfg is None:
+            return
+
+        if hasattr(cfg, "__setitem__"):
+            try:
+                cfg[key] = value  # type: ignore[index]
+                return
+            except Exception:
+                pass
+
+        with suppress(Exception):
+            setattr(cfg, key, value)
 
     def _get_config_value(self, key: str, default: Any | None = None) -> Any | None:
-        raise NotImplementedError
+        """Obtiene un valor de la configuración respetando un ``default`` seguro."""
+
+        cfg = getattr(self, "config", None)
+        if cfg is None:
+            trader = getattr(self, "trader", None)
+            cfg = getattr(trader, "config", None) if trader is not None else None
+
+        if cfg is None:
+            return default
+
+        getter = getattr(cfg, "get", None)
+        if callable(getter):
+            try:
+                return getter(key, default)
+            except Exception:
+                return default
+
+        return getattr(cfg, key, default)
