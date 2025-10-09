@@ -1,9 +1,17 @@
 from __future__ import annotations
 
+import datetime as dt
+import time
 from collections import deque
-from typing import Any, Callable
+from typing import Any, Callable, Sequence, Tuple
 
+import pandas as pd
 import pytest
+
+from core.procesar_vela import procesar_vela
+from core.trader_modular import Trader
+from data_feed import DataFeed
+from tests.factories import DummyConfig, DummySupervisor
 
 
 @pytest.fixture(autouse=True)
