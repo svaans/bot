@@ -63,6 +63,7 @@ class Trader(TraderLite):
         # Lazy construcciones (si los módulos existen)
         if getattr(self, "_EventBus", None):
             self.bus = self._EventBus()
+            self._owned_event_bus = self.bus
         else:
             self.bus = None
         self.event_bus = self.bus
