@@ -596,14 +596,46 @@ class Trader(TraderLite):
 
         pipeline = getattr(self, "_verificar_entrada", None)
         if callable(pipeline):
-            self._verificar_entrada_provider = "pipeline"
-            return await pipeline(
-                self,
-                symbol,
-                df,
-                estado,
-                on_event=on_event,
-            )
+            attempts: list[Callable[[], Any]] = []
+            if on_event is not None:
+                attempts.append(
+                    lambda: pipeline(
+                        self,
+                        symbol,
+                        df,
+                        estado,
+                        on_event=on_event,
+                    )
+                )
+            attempts.append(lambda: pipeline(self, symbol, df, estado))
+            if on_event is not None:
+                attempts.append(
+                    lambda: pipeline(
+                        symbol,
+                        df,
+                        estado,
+                        on_event=on_event,
+                    )
+                )
+            attempts.append(lambda: pipeline(symbol, df, estado))
+            if on_event is not None:
+                attempts.append(lambda: pipeline(self, symbol, df, on_event=on_event))
+                attempts.append(lambda: pipeline(symbol, df, on_event=on_event))
+            attempts.append(lambda: pipeline(self, symbol, df))
+            attempts.append(lambda: pipeline(symbol, df))
+
+            for attempt in attempts:
+                try:
+                    result = attempt()
+                except TypeError:
+                    continue
+
+                resolved = await _maybe_await(result)
+                if resolved is not None:
+                    self._verificar_entrada_provider = "pipeline"
+                    return resolved
+
+            self._verificar_entrada_provider = None
 
         engine = getattr(self, "engine", None)
         if engine is not None:
