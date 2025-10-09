@@ -172,11 +172,28 @@ class CodeReviewEngine:
         self, path: Path, node: ast.FunctionDef | ast.AsyncFunctionDef
     ) -> list[CodeIssue]:
         issues: list[CodeIssue] = []
-        missing_annotations = [
-            arg.arg
-            for arg in (*node.args.args, *node.args.kwonlyargs)
-            if arg.arg not in {"self", "cls"} and arg.annotation is None
-        ]
+        missing_annotations: list[str] = []
+
+        def _should_report(arg: ast.arg | None, prefix: str = "") -> None:
+            if arg is None:
+                return
+            if arg.arg in {"self", "cls"}:
+                return
+            if arg.annotation is None:
+                missing_annotations.append(f"{prefix}{arg.arg}")
+
+        for arg in getattr(node.args, "posonlyargs", []):
+            _should_report(arg)
+
+        for arg in node.args.args:
+            _should_report(arg)
+
+        for arg in node.args.kwonlyargs:
+            _should_report(arg)
+
+        _should_report(node.args.vararg, prefix="*")
+        _should_report(node.args.kwarg, prefix="**")
+
         if missing_annotations:
             issues.append(
                 CodeIssue(
