@@ -1,6 +1,6 @@
 import os
 import asyncio
-from datetime import datetime
+from datetime import UTC, datetime
 import sqlite3
 from typing import Callable
 
@@ -109,7 +109,7 @@ def monitorear_estado_bot(
             
         log.info('======= 🤖 ESTADO ACTUAL DEL BOT =======')
         log.info(
-            f"🕒 Hora actual: {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')} UTC"
+            f"🕒 Hora actual: {datetime.now(UTC).strftime('%Y-%m-%d %H:%M:%S')} UTC"
             )
         if app_config.MODO_REAL:
             log.info(f'💶 Saldo disponible (EUR): {euros:.2f}')
