@@ -27,6 +27,9 @@ def registrar_auditoria(symbol: str, evento: str, resultado: str, *,
     directorio_archivo = ruta_archivo.parent
     if directorio_archivo != Path('.'):
         directorio_archivo.mkdir(parents=True, exist_ok=True)
+    formato_normalizado = formato.strip().lower()
+    if formato_normalizado not in {'csv', 'parquet'}:
+        raise ValueError(f"Formato no soportado para auditoría: {formato}")
     registro = {'timestamp': datetime.now(UTC).isoformat(), 'symbol':
         symbol, 'evento': evento, 'resultado': resultado,
         'estrategias_activas': _serializar(estrategias_activas), 'score':
@@ -36,7 +39,7 @@ def registrar_auditoria(symbol: str, evento: str, resultado: str, *,
         config_usada), 'comentario': comentario}
     df = pd.DataFrame([registro])
     with _lock:
-        if formato == 'parquet':
+        if formato_normalizado == 'parquet':
             if os.path.exists(archivo):
                 try:
                     existente = pd.read_parquet(archivo)
