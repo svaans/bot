@@ -19,6 +19,7 @@ class EventBus:
         self._inflight: set[asyncio.Task] = set()
         self._loop: asyncio.AbstractEventLoop | None = None
         self._closed = False
+        self._last_payload: Dict[str, Any | None] = {}
         try:
             loop = asyncio.get_running_loop()
         except RuntimeError:
@@ -84,6 +85,8 @@ class EventBus:
             espera indefinida.
         """
         self.start()
+        if event_type in self._last_payload:
+            return self._last_payload.pop(event_type)
         waiter = EventBus._Waiter(event=asyncio.Event())
         self._waiters[event_type].append(waiter)
         try:
@@ -159,6 +162,7 @@ class EventBus:
                     waiter.payload = None
                     waiter.event.set()
             self._waiters.pop(event_type, None)
+        self._last_payload.clear()
         self._loop = None
 
     def _resolve_waiters(self, event_type: str, data: Any | None) -> None:
@@ -167,6 +171,10 @@ class EventBus:
             if not waiter.event.is_set():
                 waiter.payload = data
                 waiter.event.set()
+        if waiters:
+            self._last_payload.pop(event_type, None)
+        else:
+            self._last_payload[event_type] = data
 
     def _schedule_callback(
         self,
