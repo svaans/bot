@@ -74,8 +74,11 @@ class Trader(TraderLite):
             except Exception:
                 log.debug("No se pudo asociar event_bus al DataFeed", exc_info=True)
 
-        if getattr(self, "_OrderManager", None) and getattr(self, "bus", None) is not None:
-            self.orders = self._OrderManager(self.modo_real, self.bus)
+        bus = getattr(self, "bus", None)
+        order_manager_cls = getattr(self, "_OrderManager", None)
+        subscribe = getattr(bus, "subscribe", None)
+        if order_manager_cls and bus is not None and callable(subscribe):
+            self.orders = order_manager_cls(self.modo_real, bus)
             if not self.modo_real and getattr(self, "_sync_sim", None):
                 try:
                     self._sync_sim(self.orders)
