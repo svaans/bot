@@ -5,7 +5,7 @@ from core.utils.utils import configurar_logger
 from core.risk.riesgo import riesgo_superado as _riesgo_superado, actualizar_perdida
 from core.reporting import reporter_diario
 from core.event_bus import EventBus
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from typing import Any, Dict, Set, TYPE_CHECKING
 
 if TYPE_CHECKING:  # pragma: no cover - solo para tipado
@@ -33,7 +33,7 @@ class RiskManager:
         self._cooldown_fin: datetime | None = None
         self.posiciones_abiertas: Set[str] = set()
         self.correlaciones: Dict[str, Dict[str, float]] = {}
-        self._fecha_riesgo = datetime.utcnow().date()
+        self._fecha_riesgo = datetime.now(UTC).date()
         self.riesgo_diario = 0.0
         if bus:
             self.subscribe(bus)
@@ -55,7 +55,7 @@ class RiskManager:
     def registrar_perdida(self, symbol: str, perdida: float) ->None:
         """Registra una pérdida para ``symbol``."""
         if perdida < 0:
-            hoy = datetime.utcnow().date()
+            hoy = datetime.now(UTC).date()
             if hoy != self._fecha_riesgo:
                 self._fecha_riesgo = hoy
                 self.riesgo_diario = 0.0
@@ -66,7 +66,7 @@ class RiskManager:
             if self.capital_manager:
                 capital_symbol = self.capital_manager.capital_por_simbolo.get(symbol, 0.0)
             if capital_symbol > 0 and perdida_abs / capital_symbol > self.cooldown_pct:
-                self._cooldown_fin = datetime.utcnow() + timedelta(seconds=self.cooldown_duracion)
+                self._cooldown_fin = datetime.now(UTC) + timedelta(seconds=self.cooldown_duracion)
 
     # --- Gestión de correlaciones entre posiciones ---
     def abrir_posicion(self, symbol: str) -> None:
@@ -122,7 +122,7 @@ class RiskManager:
     # --- Métricas internas ---
     @property
     def cooldown_activo(self) -> bool:
-        return bool(self._cooldown_fin and datetime.utcnow() < self._cooldown_fin)
+        return bool(self._cooldown_fin and datetime.now(UTC) < self._cooldown_fin)
 
     @property
     def riesgo_consumido(self) -> float:
