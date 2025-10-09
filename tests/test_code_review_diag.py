@@ -76,3 +76,16 @@ def test_cli_entry_point_runs_event_loop(monkeypatch):
     from core.diag.code_review import main as cli_main
 
     assert cli_main(["."]) == 0
+
+
+@pytest.mark.asyncio
+async def test_ignore_patterns_do_not_match_substrings(tmp_path: Path) -> None:
+    builders = tmp_path / "builders"
+    builders.mkdir()
+    archivo = builders / "module.py"
+    archivo.write_text("def f(x):\n    return x\n", encoding="utf-8")
+
+    engine = CodeReviewEngine(CodeReviewConfig(ignore_patterns=("build",)))
+    issues = await engine.analyze_path(tmp_path)
+
+    assert any(issue.file == archivo for issue in issues)
