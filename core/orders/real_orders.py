@@ -30,7 +30,7 @@ import threading
 import asyncio
 from typing import Any, Mapping
 from concurrent.futures import ProcessPoolExecutor, as_completed
-from datetime import datetime
+from datetime import UTC, datetime
 from binance_api.cliente import obtener_cliente
 from binance_api.filters import get_symbol_filters
 from .order_model import Order, normalizar_precio_cantidad
@@ -388,7 +388,7 @@ def reconciliar_ordenes(simbolos: list[str] | None = None) -> dict[str, Order]:
         ord_ = local.get(sym)
         if not ord_:
             continue
-        ord_.fecha_cierre = datetime.utcnow().isoformat()
+        ord_.fecha_cierre = datetime.now(UTC).isoformat()
         ord_.motivo_cierre = 'closed_by_reconciliation'
         try:
             registrar_operacion(ord_)
@@ -713,7 +713,7 @@ def registrar_orden(symbol: str, precio: float, cantidad: float, sl: float,
         cantidad_abierta=cantidad,
         stop_loss=sl,
         take_profit=tp,
-        timestamp=datetime.utcnow().isoformat(),
+        timestamp=datetime.now(UTC).isoformat(),
         estrategias_activas=estrategias,
         tendencia=tendencia,
         max_price=precio,
@@ -877,7 +877,7 @@ def ejecutar_orden_market(symbol: str, cantidad: float, operation_id: str | None
                         'symbol': symbol,
                         'precio_entrada': float(trade.get('price') or 0) if trade else 0,
                         'cantidad': ejecutado,
-                        'timestamp': datetime.utcnow().isoformat(),
+                        'timestamp': datetime.now(UTC).isoformat(),
                         'stop_loss': 0.0,
                         'take_profit': 0.0,
                         'estrategias_activas': {},
