@@ -1,7 +1,7 @@
 import os
 import json
 import pandas as pd
-from datetime import datetime
+from datetime import UTC, datetime
 from .analisis_resultados import analizar_estrategias_en_ordenes
 from core.strategies.ajustador_pesos import ajustar_pesos_por_desempeno
 from core.strategies.pesos import gestor_pesos
@@ -20,7 +20,7 @@ def registrar_resultado_trade(orden: dict):
     if not symbol or 'estrategias_activas' not in orden:
         print('⚠️ Orden incompleta, no se puede registrar.')
         return
-    timestamp = orden.get('timestamp', datetime.utcnow().timestamp())
+    timestamp = orden.get('timestamp', datetime.now(UTC).timestamp())
     orden['timestamp'] = timestamp
     df_orden = pd.DataFrame([orden])
     ruta_archivo = f"{CARPETA_ORDENES}/{symbol.replace('/', '_')}.parquet"
