@@ -18,6 +18,7 @@ Notas de diseño
 from __future__ import annotations
 
 import asyncio
+import inspect
 import math
 from typing import Any, Callable, Optional
 
@@ -117,17 +118,55 @@ async def _evaluar_engine(trader: Any, symbol: str, df: pd.DataFrame, estado: An
     if engine is None:
         _emit(on_event, "entry_skip", {"symbol": symbol, "reason": "engine_missing"})
         return None
-    fn = getattr(engine, "evaluar_entrada", None)
-    if not callable(fn):
+    candidatos = (
+        "evaluar_entrada",
+        "verificar_entrada",
+        "evaluar_condiciones_de_entrada",
+    )
+
+    fn = None
+    for attr in candidatos:
+        maybe = getattr(engine, attr, None)
+        if callable(maybe):
+            fn = maybe
+            break
+
+    if fn is None:
         _emit(on_event, "entry_skip", {"symbol": symbol, "reason": "engine_no_fn"})
         return None
-    try:
-        return await fn(trader, symbol, df, estado, on_event=on_event)  # type: ignore[arg-type]
-    except asyncio.CancelledError:
-        raise
-    except Exception:
-        _emit(on_event, "entry_error", {"symbol": symbol, "reason": "engine_exception"})
-        return None
+        
+    intentos: list[Callable[[], Any]] = []
+
+    if on_event is not None:
+        intentos.append(lambda: fn(trader, symbol, df, estado, on_event=on_event))
+    intentos.append(lambda: fn(trader, symbol, df, estado))
+    if on_event is not None:
+        intentos.append(lambda: fn(symbol, df, estado, on_event=on_event))
+    intentos.append(lambda: fn(symbol, df, estado))
+    if on_event is not None:
+        intentos.append(lambda: fn(trader, symbol, df, on_event=on_event))
+        intentos.append(lambda: fn(symbol, df, on_event=on_event))
+    intentos.append(lambda: fn(trader, symbol, df))
+    intentos.append(lambda: fn(symbol, df))
+
+    for intento in intentos:
+        try:
+            resultado = intento()
+        except TypeError:
+            continue
+
+        try:
+            if inspect.isawaitable(resultado):
+                return await resultado
+            return resultado
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            _emit(on_event, "entry_error", {"symbol": symbol, "reason": "engine_exception"})
+            return None
+
+    _emit(on_event, "entry_skip", {"symbol": symbol, "reason": "engine_signature"})
+    return None
 
 
 def _aplicar_persistencia(trader: Any, symbol: str, resultado: dict, on_event=None) -> dict:
