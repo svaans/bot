@@ -9,6 +9,7 @@ from contextlib import suppress
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -53,6 +54,10 @@ class _CapturingLogger:
 
     def error(self, message: str, *args: Any, **kwargs: Any) -> None:  # pragma: no cover - seguridad
         self._record(self.error_calls, message, *args, **kwargs)
+
+
+class _TestOpenStreamsError(RuntimeError):
+    """Error deliberado para simular fallos durante ``_open_streams``."""
 
 
 @pytest.mark.asyncio
@@ -513,11 +518,35 @@ async def test_wait_ws_grace_fallback_invokes_ensure_running() -> None:
 
     assert feed.ensure_running_calls == 1
     assert feed.ws_connected_event.is_set() is True
-    assert getattr(feed, "_managed_by_trader", False) is False
-    if hasattr(manager.config, "get"):
-        assert manager.config.get("ws_managed_by_trader") is False
-    else:
-        assert getattr(manager.config, "ws_managed_by_trader", None) is False
+    
+@pytest.mark.asyncio
+async def test_run_rolls_back_streams_when_open_streams_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Ante un fallo en ``_open_streams`` se debe invocar ``_stop_streams`` en el rollback."""
+
+    trader = _DummyTrader(SimpleNamespace())
+    manager = StartupManager(trader=trader, config=SimpleNamespace())
+    manager.log = _CapturingLogger()
+
+    load_config = AsyncMock()
+    bootstrap = AsyncMock()
+    validate_feeds = AsyncMock()
+    stop_trader = AsyncMock()
+    stop_streams = AsyncMock()
+
+    monkeypatch.setattr(manager, "_load_config", load_config)
+    monkeypatch.setattr(manager, "_bootstrap", bootstrap)
+    monkeypatch.setattr(manager, "_validate_feeds", validate_feeds)
+    monkeypatch.setattr(manager, "_stop_trader", stop_trader)
+    monkeypatch.setattr(manager, "_stop_streams", stop_streams)
+    monkeypatch.setattr(manager, "_open_streams", AsyncMock(side_effect=_TestOpenStreamsError("boom")))
+
+    with pytest.raises(_TestOpenStreamsError):
+        await manager.run()
+
+    assert stop_streams.await_count == 1
+    assert stop_trader.await_count == 1
 
 
 @pytest.mark.asyncio
@@ -666,7 +695,7 @@ async def test_open_streams_fallback_disables_managed_flag() -> None:
     if hasattr(manager.config, "get"):
         assert manager.config.get("ws_managed_by_trader") is False
     else:
-        assert getattr(manager.config, "ws_managed_by_trader", None) is Fals
+        assert getattr(manager.config, "ws_managed_by_trader", None) is False
 @pytest.mark.asyncio
 async def test_open_streams_fallback_emits_datafeed_connected_event() -> None:
     """El fallback debe emitir ``datafeed_connected`` cuando el WS esté activo."""

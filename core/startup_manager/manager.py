@@ -85,7 +85,7 @@ class StartupManager(
         self._previous_snapshot: dict[str, Any] | None = None
 
     async def run(self) -> tuple[Trader, asyncio.Task, Config]:
-        executed = [self._stop_trader]
+        executed = [self._stop_trader, self._stop_streams]
         try:
             await self._load_config()
 
@@ -109,7 +109,6 @@ class StartupManager(
 
             await self._validate_feeds()
             await self._open_streams()
-            executed.append(self._stop_streams)
 
             ws_timeout = self._resolve_ws_timeout()
             with phase("_wait_ws", extra={"timeout": ws_timeout}):
