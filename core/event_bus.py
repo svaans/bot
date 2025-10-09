@@ -2,11 +2,13 @@ from __future__ import annotations
 import asyncio
 from collections import defaultdict
 from dataclasses import dataclass
+from functools import partial
 from typing import Any, Awaitable, Callable, Dict, List
 from core.utils.logger import configurar_logger
 
 log = configurar_logger('event_bus', modo_silencioso=True)
 
+_STOP_EVENT = "__EVENT_BUS_STOP__"
 
 class EventBus:
     """Simple asynchronous event bus based on :class:`asyncio.Queue`."""
@@ -50,6 +52,8 @@ class EventBus:
 
     def emit(self, event_type: str, data: Any | None = None) -> None:
         """Emit ``data`` for ``event_type`` scheduling the publish coroutine."""
+        if self._closed:
+            return
         self._resolve_waiters(event_type, data)
         try:
             loop = asyncio.get_running_loop()
@@ -63,6 +67,8 @@ class EventBus:
 
     async def publish(self, event_type: str, data: Any | None) -> None:
         """Publish ``data`` for ``event_type``."""
+        if self._closed:
+            return
         self.start()
         await self._queue.put((event_type, data))
 
@@ -125,23 +131,48 @@ class EventBus:
             raise
 
     async def _dispatcher(self) -> None:
-        while not self._closed:
-            event_type, data = await self._queue.get()
+        while True:
+            try:
+                event_type, data = await self._queue.get()
+            except asyncio.CancelledError:
+                break
+            except RuntimeError:
+                # El *event loop* se cerró mientras esperábamos en la cola.
+                break
+
+            if event_type == _STOP_EVENT:
+                break
             self._resolve_waiters(event_type, data)
             for cb in list(self._listeners.get(event_type, [])):
                 try:
                     task = asyncio.create_task(cb(data))
-                    task.add_done_callback(
-                        lambda t, evt=event_type: t.exception()
-                        and log.error(
-                            f"❌ Error en callback de '{evt}': {t.exception()}"
-                        )
-                    )
+                    task.add_done_callback(partial(self._log_task_error, event_type=event_type))
                 except Exception as e:
                     log.error(f"❌ Error despachando '{event_type}': {e}")
+        self._closed = True
+
+    @staticmethod
+    def _log_task_error(task: asyncio.Task, event_type: str) -> None:
+        """Loggear cualquier excepción producida por ``task``."""
+        if task.cancelled():
+            return
+        try:
+            exc = task.exception()
+        except Exception as err:  # pragma: no cover - seguridad adicional
+            log.error(f"❌ Error revisando tarea de '{event_type}': {err}")
+            return
+        if exc:
+            log.error(f"❌ Error en callback de '{event_type}': {exc}")
 
     async def close(self) -> None:
         self._closed = True
+        try:
+            self._queue.put_nowait((_STOP_EVENT, None))
+        except asyncio.QueueFull:  # pragma: no cover - cola sin consumir
+            pass
+        except RuntimeError:
+            # El *loop* puede estar ya cerrado; no hay nada más que hacer.
+            pass
         if self._task:
             self._task.cancel()
             try:
