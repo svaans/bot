@@ -1,7 +1,7 @@
 import os
 import glob
 import json
-from datetime import datetime
+from datetime import UTC, datetime
 import pandas as pd
 from dotenv import dotenv_values
 from core.utils.utils import configurar_logger
@@ -91,7 +91,7 @@ def procesar_simbolo(symbol: str, ruta: str) ->None:
     feedback = _cargar_feedback(symbol)
     _aplicar_feedback_pesos(symbol, feedback)
     rm = RiskManager(0.03)
-    semana = df[df['timestamp'] >= (datetime.utcnow() - pd.Timedelta(days=7
+    semana = df[df['timestamp'] >= (datetime.now(UTC) - pd.Timedelta(days=7
         )).timestamp()]
     metricas = {'ganancia_semana': semana.get('retorno_total', pd.Series())
         .sum(), 'winrate': (semana.get('retorno_total', pd.Series()) > 0).
@@ -107,7 +107,7 @@ def ejecutar_ciclo() ->None:
     for ruta in archivos:
         symbol = os.path.splitext(os.path.basename(ruta))[0].replace('_', '/')
         procesar_simbolo(symbol, ruta)
-    if datetime.utcnow().weekday() == 0:
+    if datetime.now(UTC).weekday() == 0
         recalibrar_pesos_semana()
 
 
