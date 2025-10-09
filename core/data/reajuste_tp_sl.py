@@ -1,7 +1,7 @@
 import os
 import pandas as pd
 import numpy as np
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 RUTA_RESULTADOS = 'backtesting'
 
 
@@ -21,7 +21,7 @@ def calcular_promedios_sl_tp(symbol, dias=1):
         print(f'⚠️ Datos insuficientes para {symbol}')
         return None
     df['fecha_cierre'] = pd.to_datetime(df['fecha_cierre'], errors='coerce')
-    hace_dias = datetime.utcnow() - timedelta(days=dias)
+    hace_dias = datetime.now(UTC) - timedelta(days=dias)
     df = df[df['fecha_cierre'] >= hace_dias]
     if df.empty:
         print(f'⚠️ No hay operaciones recientes para {symbol}')
