@@ -22,7 +22,10 @@ def registrar_auditoria(symbol: str, evento: str, resultado: str, *,
     str='csv') ->None:
     """Registra decisiones críticas del bot en un archivo CSV o Parquet."""
     os.makedirs('logs_auditoria', exist_ok=True)
-    os.makedirs(os.path.dirname(archivo), exist_ok=True)
+    ruta_archivo = Path(archivo)
+    directorio_archivo = ruta_archivo.parent
+    if directorio_archivo != Path('.'):
+        directorio_archivo.mkdir(parents=True, exist_ok=True)
     registro = {'timestamp': datetime.now(UTC).isoformat(), 'symbol':
         symbol, 'evento': evento, 'resultado': resultado,
         'estrategias_activas': _serializar(estrategias_activas), 'score':
