@@ -595,6 +595,12 @@ class Trader(TraderLite):
         """
 
         pipeline = getattr(self, "_verificar_entrada", None)
+        captured_events: list[tuple[str, dict]] = []
+
+        def _capture_event(evt: str, data: dict) -> None:
+            captured_events.append((evt, data))
+
+        pipeline_handler = _capture_event if on_event is not None else None
         if callable(pipeline):
             attempts: list[Callable[[], Any]] = []
             if on_event is not None:
@@ -604,7 +610,7 @@ class Trader(TraderLite):
                         symbol,
                         df,
                         estado,
-                        on_event=on_event,
+                        on_event=pipeline_handler,
                     )
                 )
             attempts.append(lambda: pipeline(self, symbol, df, estado))
@@ -614,13 +620,13 @@ class Trader(TraderLite):
                         symbol,
                         df,
                         estado,
-                        on_event=on_event,
+                        on_event=pipeline_handler,
                     )
                 )
             attempts.append(lambda: pipeline(symbol, df, estado))
             if on_event is not None:
-                attempts.append(lambda: pipeline(self, symbol, df, on_event=on_event))
-                attempts.append(lambda: pipeline(symbol, df, on_event=on_event))
+                attempts.append(lambda: pipeline(self, symbol, df, on_event=pipeline_handler))
+                attempts.append(lambda: pipeline(symbol, df, on_event=pipeline_handler))
             attempts.append(lambda: pipeline(self, symbol, df))
             attempts.append(lambda: pipeline(symbol, df))
 
@@ -633,6 +639,13 @@ class Trader(TraderLite):
                 resolved = await _maybe_await(result)
                 if resolved is not None:
                     self._verificar_entrada_provider = "pipeline"
+                    if on_event is not None and captured_events:
+                        for evt, data in captured_events:
+                            try:
+                                on_event(evt, data)
+                            except Exception:
+                                pass
+                        captured_events.clear()
                     return resolved
 
             self._verificar_entrada_provider = None
@@ -666,9 +679,24 @@ class Trader(TraderLite):
                         result = attempt()
                     except TypeError:
                         continue
-                    return await _maybe_await(result)
+                    resolved = await _maybe_await(result)
+                    if on_event is not None and captured_events:
+                        for evt, data in captured_events:
+                            try:
+                                on_event(evt, data)
+                            except Exception:
+                                pass
+                        captured_events.clear()
+                    return resolved
 
         self._verificar_entrada_provider = None
+        if on_event is not None and captured_events:
+            for evt, data in captured_events:
+                try:
+                    on_event(evt, data)
+                except Exception:
+                    pass
+            captured_events.clear()
         return None
 
     # Compat helpers -------------------------------------------------------
