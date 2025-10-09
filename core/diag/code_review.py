@@ -18,7 +18,8 @@ import asyncio
 import json
 from dataclasses import dataclass
 from itertools import islice
-from pathlib import Path
+from fnmatch import fnmatch
+from pathlib import Path, PurePosixPath
 from typing import Iterable, Sequence
 
 import ast
@@ -67,9 +68,24 @@ class CodeReviewConfig:
     def should_ignore(self, path: Path) -> bool:
         """Determina si un archivo debe excluirse del análisis."""
 
-        normalized = path.as_posix()
-        return any(pattern in normalized for pattern in self.ignore_patterns)
+        normalized = PurePosixPath(path.as_posix())
+        normalized_str = normalized.as_posix()
+        for pattern in self.ignore_patterns:
+            if not pattern:
+                continue
+            if self._has_glob(pattern) or "/" in pattern:
+                if fnmatch(normalized_str, pattern):
+                    return True
+            else:
+                if pattern in normalized.parts:
+                    return True
+        return False
 
+    @staticmethod
+    def _has_glob(pattern: str) -> bool:
+        """Indica si el patrón contiene metacaracteres estilo glob."""
+
+        return any(char in pattern for char in "*?[]")
 
 class CodeReviewEngine:
     """Ejecutor asincrónico de las reglas de revisión de código."""
