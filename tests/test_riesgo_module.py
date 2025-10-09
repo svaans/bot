@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -45,7 +45,7 @@ def test_guardar_estado(tmp_path: Path) -> None:
 
 
 def test_actualizar_perdida(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    fecha = datetime.utcnow().date().isoformat()
+    fecha = datetime.now(UTC).date().isoformat()
     riesgo.actualizar_perdida("BTCUSDT", -10.0)
     data = json.loads(Path(riesgo.RUTA_ESTADO).read_text())
     assert data["fecha"] == fecha
@@ -53,7 +53,7 @@ def test_actualizar_perdida(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> 
 
 
 def test_riesgo_superado(tmp_path: Path) -> None:
-    fecha = datetime.utcnow().date().isoformat()
+    fecha = datetime.now(UTC).date().isoformat()
     riesgo.guardar_estado_riesgo_seguro({"fecha": fecha, "perdida_acumulada": 50.0})
     assert riesgo.riesgo_superado(0.1, 100.0) is True
     assert riesgo.riesgo_superado(0.6, 100.0) is False
