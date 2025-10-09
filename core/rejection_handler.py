@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import os
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Dict, List, Optional
 
 import pandas as pd
@@ -84,7 +84,7 @@ class RejectionHandler:
         buffer = [r for r in self._buffer if r]
         if not buffer:
             return
-        fecha = datetime.utcnow().strftime('%Y%m%d')
+        fecha = datetime.now(UTC).strftime('%Y%m%d')
         archivo = os.path.join(self.log_dir, 'rechazos', f'{fecha}.csv')
         df = pd.DataFrame(buffer)
         modo = 'a' if os.path.exists(archivo) else 'w'
@@ -111,7 +111,7 @@ class RejectionHandler:
         if not self.registro_tecnico_csv:
             return
         fila = {
-            'timestamp': datetime.utcnow().isoformat(),
+            'timestamp': datetime.now(UTC).isoformat(),
             'symbol': symbol,
             'puntaje_total': score,
             'indicadores_fallidos': ','.join([k for k, v in puntos.items() if not v]),
