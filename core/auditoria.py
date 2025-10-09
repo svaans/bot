@@ -1,6 +1,6 @@
 import json
 import os
-from datetime import datetime
+from datetime import UTC, datetime
 from threading import Lock
 import pandas as pd
 _lock = Lock()
@@ -23,7 +23,7 @@ def registrar_auditoria(symbol: str, evento: str, resultado: str, *,
     """Registra decisiones críticas del bot en un archivo CSV o Parquet."""
     os.makedirs('logs_auditoria', exist_ok=True)
     os.makedirs(os.path.dirname(archivo), exist_ok=True)
-    registro = {'timestamp': datetime.utcnow().isoformat(), 'symbol':
+    registro = {'timestamp': datetime.now(UTC).isoformat(), 'symbol':
         symbol, 'evento': evento, 'resultado': resultado,
         'estrategias_activas': _serializar(estrategias_activas), 'score':
         score, 'rsi': rsi, 'volumen_relativo': volumen_relativo,
