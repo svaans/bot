@@ -74,3 +74,21 @@ async def test_event_bus_close_stops_dispatcher() -> None:
 
     assert bus._closed is True
     assert closed is True
+
+
+@pytest.mark.asyncio
+async def test_event_bus_inflight_tasks_cleanup() -> None:
+    bus = EventBus()
+    done = asyncio.Event()
+
+    async def listener(_: object) -> None:
+        await asyncio.sleep(0)
+        done.set()
+
+    bus.subscribe("tick", listener)
+    await bus.publish("tick", None)
+    await asyncio.wait_for(done.wait(), timeout=1)
+    await asyncio.sleep(0)
+
+    assert not bus._inflight
+    await bus.close()
