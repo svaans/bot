@@ -1,6 +1,6 @@
 import os
 import re
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from math import isclose
 import pandas as pd
 from core.utils.utils import configurar_logger
@@ -18,7 +18,7 @@ def calcular_fraccion_kelly(dias_historia: int=30, fallback: float=0.2
     carpeta = 'reportes_diarios'
     if not os.path.isdir(carpeta):
         return fallback
-    fecha_limite = datetime.utcnow().date() - timedelta(days=dias_historia)
+    fecha_limite = datetime.now(UTC).date() - timedelta(days=dias_historia)
     retornos: list[float] = []
     patron = re.compile('\\d{4}-\\d{2}-\\d{2}\\.csv$')
     for archivo in os.listdir(carpeta):
