@@ -8,9 +8,9 @@ from typing import Any, Iterable, Sequence
 import pytest
 
 import core.procesar_vela as procesar_vela_mod
-from tests.helpers.fake_feed import mk_candle_in_range
-from tests.helpers.log_sanitizer import has_event, parse_records
-from tests.helpers.spies import spy_trader
+from tests.fake_feed import mk_candle_in_range
+from tests.log_sanitizer import has_event, parse_records
+from tests.spies import spy_trader
 
 
 def _enable_caplog(caplog: pytest.LogCaptureFixture, *, metrics_level: int = logging.WARNING) -> None:
