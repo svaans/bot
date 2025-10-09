@@ -1,5 +1,5 @@
 import pandas as pd
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from core.utils import configurar_logger
 from core.strategies.exit.salida_utils import resultado_salida
 log = configurar_logger('salida_tiempo_maximo')
@@ -19,7 +19,7 @@ def salida_tiempo_maximo(orden: dict, df: pd.DataFrame) ->dict:
             return resultado_salida('Tecnico', False,
                 'Formato de timestamp no válido')
         tiempo_maximo = timedelta(hours=4)
-        ahora = datetime.utcnow()
+        ahora = datetime.now(UTC)
         tiempo_abierta = ahora - timestamp_dt
         if tiempo_abierta > tiempo_maximo:
             return resultado_salida('Tecnico', True,
