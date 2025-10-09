@@ -1,7 +1,7 @@
 import os
 import json
 import time
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 import pandas as pd
 from core.utils.utils import leer_csv_seguro
 from core.utils.logger import configurar_logger
@@ -79,7 +79,7 @@ def metricas_semanales(carpeta: str = "reportes_diarios") -> pd.DataFrame:
     """Calcula métricas de la última semana para cada par."""
     if not os.path.isdir(carpeta):
         return pd.DataFrame()
-    fin = datetime.utcnow().date()
+    fin = datetime.now(UTC).date()
     inicio = fin - timedelta(days=7)
     datos = []
     for archivo in os.listdir(carpeta):
