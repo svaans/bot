@@ -5,9 +5,34 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import time
+from typing import Callable
+
+from core.metrics import CONSUMER_LAG_SECONDS, PRODUCER_LAG_SECONDS, QUEUE_SIZE
 
 from ._shared import ConsumerState, log
 from . import events
+
+
+def _safe_set(metric: Callable[..., object], *labels: str, value: float) -> None:
+    """Actualiza una métrica ignorando errores de registro."""
+
+    try:
+        metric(*labels).set(value)  # type: ignore[call-arg]
+    except Exception:
+        # En entornos de prueba las métricas pueden no estar inicializadas.
+        pass
+
+
+def _set_queue_size(symbol: str, size: int) -> None:
+    _safe_set(QUEUE_SIZE.labels, symbol, value=float(size))
+
+
+def _set_producer_lag(symbol: str, lag: float) -> None:
+    _safe_set(PRODUCER_LAG_SECONDS.labels, symbol, value=lag)
+
+
+def _set_consumer_lag(symbol: str, lag: float) -> None:
+    _safe_set(CONSUMER_LAG_SECONDS.labels, symbol, value=lag)
 
 
 async def monitor_inactividad(feed: "DataFeed") -> None:
@@ -20,6 +45,10 @@ async def monitor_inactividad(feed: "DataFeed") -> None:
             for symbol, last in list(feed._last_monotonic.items()):
                 if last is None:
                     continue
+                _set_producer_lag(symbol, max(0.0, ahora - last))
+                queue = feed._queues.get(symbol)
+                if queue is not None:
+                    _set_queue_size(symbol, queue.qsize())
                 if ahora - last > feed.tiempo_inactividad:
                     log.warning("%s: stream inactivo; reiniciando…", symbol)
                     events.emit_event(feed, "ws_inactividad_watchdog", {"symbol": symbol})
@@ -41,6 +70,8 @@ async def monitor_consumers(feed: "DataFeed", timeout: float | None = None) -> N
             if current_timeout <= 0:
                 continue
             for symbol, last in list(feed._consumer_last.items()):
+                if last is not None:
+                    _set_consumer_lag(symbol, max(0.0, ahora - last))
                 tarea = feed._consumer_tasks.get(symbol)
                 if tarea is None or tarea.done():
                     events.set_consumer_state(feed, symbol, ConsumerState.STALLED)
@@ -54,6 +85,7 @@ async def monitor_consumers(feed: "DataFeed", timeout: float | None = None) -> N
                 queue = feed._queues.get(symbol)
                 if queue is None:
                     continue
+                _set_queue_size(symbol, queue.qsize())
                 if queue.empty():
                     stream_task = feed._tasks.get(symbol)
                     stream_alive = stream_task is not None and not stream_task.done()
