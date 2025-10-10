@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import threading
 import types
 from datetime import datetime, timedelta, timezone
 from typing import Any, Iterable
@@ -9,7 +10,7 @@ from typing import Any, Iterable
 import pandas as pd
 import pytest
 
-from core.trader_modular import Trader
+from core.trader_modular import Trader, TraderComponentFactories
 
 from .factories import DummyConfig, DummySupervisor
 
@@ -360,3 +361,82 @@ async def test_verificar_entrada_uses_strategy_engine_fallback() -> None:
     assert resultado == {"engine": True}
     assert trader._verificar_entrada_provider == "engine.verificar_entrada"
     assert capturas["args"][0] == "BTCUSDT"
+
+
+@pytest.mark.asyncio
+async def test_evaluar_condiciones_offloads_large_buffers() -> None:
+    config = DummyConfig(
+        trader_eval_offload=True,
+        trader_eval_offload_min_df=2,
+    )
+
+    def fake_verificar(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        symbol = kwargs.get("symbol")
+        if symbol is None and len(args) >= 2:
+            symbol = args[1]
+        thread_calls.append(threading.current_thread().name)
+        return {"symbol": symbol or "UNKNOWN"}
+
+    thread_calls: list[str] = []
+    factories = TraderComponentFactories(verificar_entrada=fake_verificar)
+
+    async def handler(_: dict) -> None:
+        return None
+
+    trader = Trader(
+        config,
+        candle_handler=handler,
+        supervisor=DummySupervisor(),
+        component_factories=factories,
+    )
+    trader.habilitar_estrategias()
+
+    timestamps = [60_000, 120_000, 180_000]
+    df = _df_from_timestamps(timestamps)
+    estado = trader.estado["BTCUSDT"]
+    _set_last_candle(
+        trader,
+        symbol="BTCUSDT",
+        open_ts=timestamps[-2],
+        close_ts=timestamps[-1],
+        event_ts=timestamps[-1],
+    )
+
+    main_thread = threading.current_thread().name
+    resultado = await trader.evaluar_condiciones_de_entrada("BTCUSDT", df, estado)
+
+    assert resultado == {"symbol": "BTCUSDT"}
+    assert thread_calls
+    assert any(name != main_thread for name in thread_calls)
+    stats = trader.get_eval_offload_stats()
+    assert stats == {"enabled": True, "threshold": 2, "count": 1}
+
+
+def test_historial_cierres_enforces_retention(monkeypatch: pytest.MonkeyPatch) -> None:
+    trader = _build_trader(
+        historial_cierres_max_per_symbol=2,
+        historial_cierres_ttl_min=1,
+    )
+    hist = trader.historial_cierres["BTCUSDT"]
+
+    clock = {"value": 1_000_000.0}
+
+    def fake_time() -> float:
+        return clock["value"]
+
+    monkeypatch.setattr("core.trader.trader.time.time", fake_time)
+
+    hist["one"] = {"id": 1}
+    clock["value"] += 50
+    hist["two"] = {"id": 2}
+    clock["value"] += 30
+    hist["three"] = {"id": 3}
+
+    keys = list(hist)
+    assert "one" not in keys
+    assert len(hist) == 2
+    stats = trader.get_historial_cierres_stats()
+    assert stats["max_por_simbolo"] == 2
+    assert stats["ttl_segundos"] == 60
+    assert stats["por_simbolo"]["BTCUSDT"] == 2
+    assert stats["total"] == 2
