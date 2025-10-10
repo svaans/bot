@@ -10,13 +10,16 @@ import core.risk.riesgo as riesgo
 
 
 @pytest.fixture(autouse=True)
-def redirigir_archivos(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def redirigir_archivos(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    riesgo.detener_persistencia()
     ruta = tmp_path / "riesgo.json"
     backup = tmp_path / "riesgo.json.bak"
     lock = tmp_path / "riesgo.json.lock"
     monkeypatch.setattr(riesgo, "RUTA_ESTADO", str(ruta))
     monkeypatch.setattr(riesgo, "RUTA_ESTADO_BAK", str(backup))
     monkeypatch.setattr(riesgo, "_LOCK_PATH", str(lock))
+    yield
+    riesgo.detener_persistencia()
 
 
 def test_cargar_estado_por_defecto(tmp_path: Path) -> None:
@@ -47,9 +50,20 @@ def test_guardar_estado(tmp_path: Path) -> None:
 def test_actualizar_perdida(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     fecha = datetime.now(UTC).date().isoformat()
     riesgo.actualizar_perdida("BTCUSDT", -10.0)
+    riesgo.esperar_persistencia()
     data = json.loads(Path(riesgo.RUTA_ESTADO).read_text())
     assert data["fecha"] == fecha
     assert data["perdida_acumulada"] == 10.0
+
+
+def test_actualizar_perdida_agrega_en_memoria(tmp_path: Path) -> None:
+    fecha = datetime.now(UTC).date().isoformat()
+    riesgo.actualizar_perdida("BTCUSDT", -5.0)
+    riesgo.actualizar_perdida("ETHUSDT", -7.5)
+    riesgo.esperar_persistencia()
+    data = json.loads(Path(riesgo.RUTA_ESTADO).read_text())
+    assert data["fecha"] == fecha
+    assert pytest.approx(data["perdida_acumulada"], rel=1e-9) == 12.5
 
 
 def test_riesgo_superado(tmp_path: Path) -> None:
