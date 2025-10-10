@@ -161,7 +161,8 @@ class Config:
     trader_fastpath_skip_entries: bool = False
     trader_fastpath_skip_trend: bool = True
     timeout_evaluar_condiciones_por_symbol: Dict[str, int] = field(default_factory=dict)
-
+    indicadores_normalize_default: bool = True
+    indicadores_cache_max_entries: int = 128
 
 class ConfigManager:
     """Carga y proporciona acceso a la configuración del bot."""
@@ -272,6 +273,16 @@ class ConfigManager:
         # Timeouts por símbolo (nuevo: se toma de env si existe)
         timeout_evaluar_por_symbol = _parse_int_mapping('TIMEOUT_EVALUAR_CONDICIONES_POR_SYMBOL')
 
+
+        indicadores_normalize_default = os.getenv(
+            'INDICADORES_NORMALIZE_DEFAULT',
+            str(getattr(defaults, 'indicadores_normalize_default', True)),
+        ).strip().lower() not in {'false', '0', 'no', 'off'}
+        indicadores_cache_max_entries = _cargar_int(
+            'INDICADORES_CACHE_MAX_ENTRIES',
+            getattr(defaults, 'indicadores_cache_max_entries', 128),
+        )
+        
         config = Config(
             api_key=api_key,
             api_secret=api_secret,
@@ -341,6 +352,8 @@ class ConfigManager:
             trader_fastpath_skip_entries=trader_fastpath_skip_entries,
             trader_fastpath_skip_trend=trader_fastpath_skip_trend,
             timeout_evaluar_condiciones_por_symbol=timeout_evaluar_por_symbol,
+            indicadores_normalize_default=indicadores_normalize_default,
+            indicadores_cache_max_entries=indicadores_cache_max_entries,
         )
 
         log.info(
