@@ -600,9 +600,20 @@ class Trader(TraderLite):
 
         pipeline = getattr(self, "_verificar_entrada", None)
         captured_events: list[tuple[str, dict]] = []
+        provider_used: str | None = None
 
         def _capture_event(evt: str, data: dict) -> None:
             captured_events.append((evt, data))
+
+        def _flush_captured() -> None:
+            if on_event is None or not captured_events:
+                return
+            while captured_events:
+                evt, data = captured_events.pop(0)
+                try:
+                    on_event(evt, data)
+                except Exception:
+                    pass
 
         pipeline_handler = _capture_event if on_event is not None else None
         if callable(pipeline):
@@ -640,19 +651,14 @@ class Trader(TraderLite):
                 except TypeError:
                     continue
 
+                provider_used = "pipeline"
                 resolved = await _maybe_await(result)
                 if resolved is not None:
-                    self._verificar_entrada_provider = "pipeline"
-                    if on_event is not None and captured_events:
-                        for evt, data in captured_events:
-                            try:
-                                on_event(evt, data)
-                            except Exception:
-                                pass
-                        captured_events.clear()
+                    self._verificar_entrada_provider = provider_used
+                    _flush_captured()
                     return resolved
 
-            self._verificar_entrada_provider = None
+            _flush_captured()
 
         engine = getattr(self, "engine", None)
         if engine is not None:
@@ -661,7 +667,7 @@ class Trader(TraderLite):
                 if not callable(fn):
                     continue
 
-                self._verificar_entrada_provider = f"engine.{attr}"
+                provider_candidate = f"engine.{attr}"
 
                 attempts = []
                 if on_event is not None:
@@ -683,24 +689,15 @@ class Trader(TraderLite):
                         result = attempt()
                     except TypeError:
                         continue
+                    provider_used = provider_candidate
                     resolved = await _maybe_await(result)
-                    if on_event is not None and captured_events:
-                        for evt, data in captured_events:
-                            try:
-                                on_event(evt, data)
-                            except Exception:
-                                pass
-                        captured_events.clear()
-                    return resolved
+                    _flush_captured()
+                    if resolved is not None:
+                        self._verificar_entrada_provider = provider_used
+                        return resolved
 
-        self._verificar_entrada_provider = None
-        if on_event is not None and captured_events:
-            for evt, data in captured_events:
-                try:
-                    on_event(evt, data)
-                except Exception:
-                    pass
-            captured_events.clear()
+        self._verificar_entrada_provider = provider_used
+        _flush_captured()
         return None
 
     # Compat helpers -------------------------------------------------------
