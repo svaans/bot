@@ -271,6 +271,8 @@ async def test_metricas_no_rompen_por_labels(
         "WARMUP_RESTANTE": _StrictMetric("WARMUP_RESTANTE", ("symbol", "timeframe")),
         "LAST_BAR_AGE": _StrictMetric("LAST_BAR_AGE", ("symbol", "timeframe")),
         "BUFFER_SIZE_V2": _StrictMetric("BUFFER_SIZE_V2", ("timeframe",)),
+        "CANDLES_PROCESSED_TOTAL": _StrictMetric("CANDLES_PROCESSED_TOTAL", ("symbol", "timeframe")),
+        "EVAL_INTENTOS_TOTAL": _StrictMetric("EVAL_INTENTOS_TOTAL", ("symbol", "timeframe", "etapa")),
     }
 
     for name, metric in replacements.items():
