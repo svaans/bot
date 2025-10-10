@@ -13,6 +13,21 @@ from ._shared import COMBINED_STREAM_KEY, ConsumerState, log
 from . import events
 
 
+_PATCH_LOGGED = False
+
+
+def _ensure_patch_logged() -> None:
+    """Emite un log informativo único para verificar el parche en ejecución."""
+
+    global _PATCH_LOGGED
+    if not _PATCH_LOGGED:
+        log.info(
+            "consumer.patch.active",
+            extra=safe_extra({"stage": "DataFeed._consumer"}),
+        )
+        _PATCH_LOGGED = True
+
+
 def _to_int(value: Any) -> int | None:
     """Convierte ``value`` a ``int`` si es posible."""
 
@@ -214,6 +229,13 @@ async def consumer_loop(feed: "DataFeed", symbol: str) -> None:
     """Consume velas de la cola y ejecuta el handler del usuario."""
 
     queue = feed._queues[symbol]
+    _ensure_patch_logged()
+    log.debug(
+        "consumer.signature",
+        extra=safe_extra(
+            {"id": id(feed), "file": __file__, "stage": "DataFeed._consumer"}
+        ),
+    )
     feed._consumer_last[symbol] = time.monotonic()
     events.set_consumer_state(feed, symbol, ConsumerState.STARTING)
 
@@ -305,6 +327,19 @@ async def consumer_loop(feed: "DataFeed", symbol: str) -> None:
             queue.task_done()
             skip_reason = candle.pop("_df_skip_reason", None)
             skip_details = candle.pop("_df_skip_details", None)
+            if skip_reason == "pipeline_missing":
+                log.debug(
+                    "consumer.pipeline_missing_ignored",
+                    extra=safe_extra(
+                        {
+                            "symbol": sym,
+                            "timestamp": ts,
+                            "stage": "DataFeed._consumer",
+                        }
+                    ),
+                )
+                skip_reason = None
+                skip_details = None
             if outcome == "ok" and skip_reason:
                 outcome = "skipped"
                 feed._stats[symbol]["skipped"] += 1
