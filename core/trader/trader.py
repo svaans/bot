@@ -600,16 +600,17 @@ class Trader(TraderLite):
 
         pipeline = getattr(self, "_verificar_entrada", None)
         captured_events: list[tuple[str, dict]] = []
+        deferred_events: list[tuple[str, dict]] = []
         provider_used: str | None = None
 
         def _capture_event(evt: str, data: dict) -> None:
             captured_events.append((evt, data))
 
-        def _flush_captured() -> None:
-            if on_event is None or not captured_events:
+        def _drain(events: list[tuple[str, dict]]) -> None:
+            if on_event is None or not events:
                 return
-            while captured_events:
-                evt, data = captured_events.pop(0)
+            while events:
+                evt, data = events.pop(0)
                 try:
                     on_event(evt, data)
                 except Exception:
@@ -655,10 +656,12 @@ class Trader(TraderLite):
                 resolved = await _maybe_await(result)
                 if resolved is not None:
                     self._verificar_entrada_provider = provider_used
-                    _flush_captured()
+                    _drain(captured_events)
                     return resolved
 
-            _flush_captured()
+            if captured_events:
+                deferred_events = list(captured_events)
+                captured_events.clear()
 
         engine = getattr(self, "engine", None)
         if engine is not None:
@@ -691,13 +694,12 @@ class Trader(TraderLite):
                         continue
                     provider_used = provider_candidate
                     resolved = await _maybe_await(result)
-                    _flush_captured()
                     if resolved is not None:
                         self._verificar_entrada_provider = provider_used
                         return resolved
 
         self._verificar_entrada_provider = provider_used
-        _flush_captured()
+        _drain(deferred_events)
         return None
 
     # Compat helpers -------------------------------------------------------
