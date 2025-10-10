@@ -1,17 +1,24 @@
 """Helpers y utilidades comunes para indicadores técnicos.
 
 Este módulo incluye funciones de normalización, filtros y un mecanismo de
-cacheo ligero para evitar recalcular indicadores sobre el mismo ``DataFrame``.
-El cache se implementa usando ``DataFrame.attrs`` pero envuelve los valores en
-una clase con una comparación segura para evitar errores como
+cacheo ligero y *thread-safe* para evitar recalcular indicadores sobre el mismo
+``DataFrame``. El cache se implementa usando ``DataFrame.attrs`` pero envuelve
+los valores en una clase con una comparación segura para evitar errores como
 ``ValueError: The truth value of a Series is ambiguous`` cuando Pandas intenta
-comparar atributos que contienen ``Series``.
+comparar atributos que contienen ``Series``. Además, el cache se limita usando
+un algoritmo LRU configurable para evitar consumo descontrolado de memoria.
 """
 
+from __future__ import annotations
+
+from collections import OrderedDict
 from dataclasses import dataclass
+from threading import RLock
 from typing import Any, Callable, Hashable
 
 import pandas as pd
+
+from .settings import get_indicator_settings
 from indicadores.momentum import calcular_momentum
 from indicadores.atr import calcular_atr
 from indicadores.slope import calcular_slope
@@ -44,7 +51,7 @@ def sanitize_series(
     fill_method: str = 'ffill',
     clip_min: float | None = None,
     clip_max: float | None = None,
-    normalize: bool = True,
+    normalize: bool | None = None,
 ) -> pd.Series:
     """Normaliza y limpia una serie numérica para garantizar determinismo.
 
@@ -52,7 +59,9 @@ def sanitize_series(
       efectos de reordenamiento.
     - Rellena huecos según ``fill_method`` (``ffill`` por defecto) para manejar
       gaps de datos.
-    - Si ``normalize`` es ``True`` aplica una normalización min-max.
+    - Si ``normalize`` es ``True`` aplica una normalización min-max. Cuando es
+      ``None`` se toma el valor por defecto desde la configuración global de
+      indicadores.
     - Opcionalmente clipea los valores entre ``clip_min`` y ``clip_max``.
     """
     serie = serie.astype(float)
@@ -62,6 +71,8 @@ def sanitize_series(
         serie = serie.ffill().bfill()
     elif fill_method == 'interpolate':
         serie = serie.interpolate().ffill().bfill()
+    if normalize is None:
+        normalize = get_indicator_settings().sanitize_normalize_default
     if normalize and not serie.empty:
         minimo = serie.min()
         maximo = serie.max()
@@ -89,24 +100,94 @@ class _CacheEntry:
         return self is other
 
 
-def _cached_value(
-    df: pd.DataFrame, key: tuple, compute: Callable[[pd.DataFrame], Any]
-) -> Any:
-    """Obtiene un valor en cache asociado al ``DataFrame``.
+class _IndicatorsCache:
+    """Cache LRU *thread-safe* para indicadores asociados a un ``DataFrame``."""
 
-    Si no existe, lo calcula usando ``compute`` y lo almacena envuelto en
-    ``_CacheEntry`` para evitar comparaciones problemáticas de Pandas."""
-    cache = df.attrs.setdefault('_indicators_cache', {})
-    entry = cache.get(key)
-    if entry is None:
-        entry = _CacheEntry(compute(df))
-        cache[key] = entry
-    return entry.value if isinstance(entry, _CacheEntry) else entry
+    __slots__ = ('max_entries', '_store', '_lock')
+
+    def __init__(self, max_entries: int) -> None:
+        self.max_entries = max_entries
+        self._store: 'OrderedDict[tuple[Hashable, ...], _CacheEntry]' = OrderedDict()
+        self._lock = RLock()
+
+    def get_or_compute(
+        self,
+        key: tuple[Hashable, ...],
+        compute: Callable[[], Any],
+    ) -> Any:
+        """Obtiene un valor del cache y mantiene la política LRU."""
+
+        with self._lock:
+            entry = self._store.get(key)
+            if entry is not None:
+                self._store.move_to_end(key)
+                return entry.value
+            if self.max_entries <= 0:
+                return compute()
+
+            value = compute()
+
+            wrapped = _CacheEntry(value)
+            self._store[key] = wrapped
+            self._store.move_to_end(key)
+            while len(self._store) > self.max_entries:
+                self._store.popitem(last=False)
+            return wrapped.value
+
+    def clear(self) -> None:
+        with self._lock:
+            self._store.clear()
+
+    def resize(self, max_entries: int) -> None:
+        with self._lock:
+            self.max_entries = max_entries
+            if max_entries <= 0:
+                self._store.clear()
+                return
+            while len(self._store) > max_entries:
+                self._store.popitem(last=False)
+
+    def __getstate__(self) -> dict[str, Any]:  # pragma: no cover - comportamiento pandas
+        """Evita copiar la estructura interna cuando Pandas duplica ``attrs``."""
+
+        return {'max_entries': self.max_entries}
+
+    def __setstate__(self, state: dict[str, Any]) -> None:  # pragma: no cover - comportamiento pandas
+        self.max_entries = int(state.get('max_entries', 0))
+        self._store = OrderedDict()
+        self._lock = RLock()
+
+
+def _ensure_cache(df: pd.DataFrame) -> _IndicatorsCache:
+    settings = get_indicator_settings()
+    cache = df.attrs.get('_indicators_cache')
+    if not isinstance(cache, _IndicatorsCache):
+        cache = _IndicatorsCache(settings.cache_max_entries)
+        df.attrs['_indicators_cache'] = cache
+    else:
+        if cache.max_entries != settings.cache_max_entries:
+            cache.resize(settings.cache_max_entries)
+    return cache
+
+
+def _cached_value(
+    df: pd.DataFrame, key: tuple[Hashable, ...], compute: Callable[[pd.DataFrame], Any]
+) -> Any:
+    """Obtiene un valor en cache asociado al ``DataFrame``."""
+
+    settings = get_indicator_settings()
+    if settings.cache_max_entries <= 0:
+        return compute(df)
+
+    cache = _ensure_cache(df)
+    return cache.get_or_compute(key, lambda: compute(df))
 
 
 def clear_cache(df: pd.DataFrame) -> None:
     """Elimina el cache de indicadores asociado al DataFrame."""
-    df.attrs.pop('_indicators_cache', None)
+    cache = df.attrs.pop('_indicators_cache', None)
+    if isinstance(cache, _IndicatorsCache):
+        cache.clear()
 
 
 def get_rsi(data, periodo: int = 14, serie_completa: bool = False):
