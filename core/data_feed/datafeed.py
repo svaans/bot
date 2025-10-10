@@ -122,6 +122,11 @@ class DataFeed:
         self._handler_wrapper_calls: int = 0
         self._handler_log_events: int = 0
 
+        # ``precargar`` modifica temporalmente el estado interno del feed; el lock
+        # asegura que no se ejecute concurrentemente con otras llamadas que
+        # mutan ``_symbols`` o ``_cliente``.
+        self._precargar_lock = asyncio.Lock()
+
         self.ws_connected_event: asyncio.Event = asyncio.Event()
         self.ws_failed_event: asyncio.Event = asyncio.Event()
         self._ws_failure_reason: str | None = None
@@ -175,28 +180,29 @@ class DataFeed:
         if not symbols_list:
             return
 
-        prev_cliente = self._cliente
-        prev_symbols = list(self._symbols)
-        prev_min = self.min_buffer_candles
+        async with self._precargar_lock:
+            prev_cliente = self._cliente
+            prev_symbols = list(self._symbols)
+            prev_min = self.min_buffer_candles
 
-        if cliente is not None:
-            self._cliente = cliente
-        if minimo is not None:
-            try:
-                self.min_buffer_candles = max(1, int(minimo))
-            except (TypeError, ValueError):
-                pass
-
-        try:
-            self._symbols = symbols_list
-            for symbol in symbols_list:
-                await self._do_backfill(symbol)
-        finally:
-            if minimo is not None:
-                self.min_buffer_candles = prev_min
-            self._symbols = prev_symbols
             if cliente is not None:
-                self._cliente = prev_cliente
+                self._cliente = cliente
+            if minimo is not None:
+                try:
+                    self.min_buffer_candles = max(1, int(minimo))
+                except (TypeError, ValueError):
+                    pass
+
+            try:
+                self._symbols = symbols_list
+                for symbol in symbols_list:
+                    await self._do_backfill(symbol)
+            finally:
+                if minimo is not None:
+                    self.min_buffer_candles = prev_min
+                self._symbols = prev_symbols
+                if cliente is not None:
+                    self._cliente = prev_cliente
 
     async def escuchar(
         self,
