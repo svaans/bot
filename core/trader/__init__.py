@@ -10,11 +10,17 @@ from ._utils import (
     tf_seconds,
 )
 from .trader import Trader
-from .trader_lite import TraderLite
+from .trader_lite import (
+    ComponentResolutionError,
+    TraderComponentFactories,
+    TraderLite,
+)
 
 __all__ = [
     "TraderLite",
     "Trader",
+    "TraderComponentFactories",
+    "ComponentResolutionError",
     "EstadoSimbolo",
     "tf_seconds",
     "_is_awaitable",
