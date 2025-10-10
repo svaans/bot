@@ -313,9 +313,46 @@ async def consumer_loop(feed: "DataFeed", symbol: str) -> None:
                     "timestamp": ts,
                     "stage": "DataFeed._consumer",
                     "reason": skip_reason,
+                    "event": "consumer.skip",
                 }
+                timeframe = candle.get("timeframe") or candle.get("interval") or candle.get("tf")
+                if timeframe:
+                    payload["timeframe"] = timeframe
                 if skip_details:
                     payload["details"] = skip_details
+                eval_ctx = candle.get("_df_eval_context") if isinstance(candle, dict) else None
+                if isinstance(eval_ctx, dict):
+                    for key in (
+                        "buffer_len",
+                        "min_needed",
+                        "bar_open_ts",
+                        "event_ts",
+                        "elapsed_secs",
+                        "interval_secs",
+                        "bar_close_ts",
+                    ):
+                        if key in eval_ctx and key not in payload:
+                            payload[key] = eval_ctx[key]
+                details_map = skip_details if isinstance(skip_details, dict) else {}
+                timing_map = (
+                    details_map.get("timing")
+                    if isinstance(details_map.get("timing"), dict)
+                    else {}
+                )
+                if isinstance(details_map, dict):
+                    for key in ("buffer_len", "min_needed"):
+                        if key not in payload and key in details_map:
+                            payload[key] = details_map[key]
+                if isinstance(timing_map, dict):
+                    for key, alias in (
+                        ("bar_open_ts", "bar_open_ts"),
+                        ("event_ts", "bar_event_ts"),
+                        ("elapsed_secs", "elapsed_secs"),
+                        ("interval_secs", "interval_secs"),
+                        ("bar_close_ts", "bar_close_ts"),
+                    ):
+                        if key not in payload and alias in timing_map:
+                            payload[key] = timing_map[alias]
                 log.debug("consumer.skip", extra=safe_extra(payload))
             elif outcome == "ok":
                 feed._stats[symbol]["processed"] += 1
