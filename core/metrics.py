@@ -206,6 +206,16 @@ BARS_OUT_OF_RANGE_TOTAL = Counter(
     "Velas descartadas por timestamps fuera de rango",
     ["symbol", "timeframe"],
 )
+CANDLES_PROCESSED_TOTAL = Counter(
+    "candles_processed_total",
+    "Velas cerradas procesadas por símbolo y timeframe",
+    ["symbol", "timeframe"],
+)
+EVAL_INTENTOS_TOTAL = Counter(
+    "eval_intentos_total",
+    "Intentos de evaluación clasificados por etapa",
+    ["symbol", "timeframe", "etapa"],
+)
 WAITING_CLOSE_STREAK = Gauge(
     "waiting_close_streak",
     "Racha actual de velas en espera de cierre",
@@ -283,6 +293,8 @@ _METRICS_WITH_FALLBACK = [
     "TRADER_QUEUE_SIZE",
     "TRADER_PIPELINE_LATENCY",
     "TRADER_PIPELINE_QUEUE_WAIT",
+    "CANDLES_PROCESSED_TOTAL",
+    "EVAL_INTENTOS_TOTAL",
     "WATCHDOG_RESTARTS",
     "WATCHDOG_RESTART_RATE",
     "BINANCE_WEIGHT_USED_1M",
