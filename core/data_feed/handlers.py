@@ -290,6 +290,11 @@ async def consumer_loop(feed: "DataFeed", symbol: str) -> None:
                 feed._stats[symbol]["latency_ms"] = int(edad * 1000)
 
             events.set_consumer_state(feed, symbol, ConsumerState.HEALTHY)
+            feed._stats[symbol]["handler_calls"] += 1
+            log.debug(
+                "handler.invoke",
+                extra=safe_extra({"symbol": sym, "stage": "DataFeed._consumer"}),
+            )
             await asyncio.wait_for(handler(candle), timeout=feed.handler_timeout)
             handler_completed = True
 
