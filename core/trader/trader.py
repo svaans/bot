@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import time
+from collections import OrderedDict
+from collections.abc import Iterable, Iterator, MutableMapping
 from datetime import datetime, timezone
 from typing import Any, Awaitable, Callable, Dict, Optional, TYPE_CHECKING
 
@@ -19,7 +22,7 @@ from ._utils import (
     _silence_task_result,
     tf_seconds,
 )
-from .trader_lite import TraderLite
+from .trader_lite import TraderComponentFactories, TraderLite
 
 if TYPE_CHECKING:  # pragma: no cover
     from core.notification_manager import NotificationManager
@@ -28,6 +31,119 @@ if TYPE_CHECKING:  # pragma: no cover
 
 UTC = timezone.utc
 log = configurar_logger("trader_modular", modo_silencioso=True)
+
+
+class HistorialPorSimbolo(MutableMapping[str, Any]):
+    """Almacén ordenado con límites de tamaño y TTL opcional por símbolo."""
+
+    __slots__ = ("_data", "_timestamps", "_max_entries", "_ttl_seconds")
+
+    def __init__(self, *, max_entries: int, ttl_seconds: int | None) -> None:
+        self._data: OrderedDict[str, Any] = OrderedDict()
+        self._timestamps: dict[str, float] = {}
+        self._max_entries = max(0, int(max_entries))
+        self._ttl_seconds = ttl_seconds if ttl_seconds and ttl_seconds > 0 else None
+
+    def __getitem__(self, key: str) -> Any:
+        self.prune()
+        return self._data[key]
+
+    def __setitem__(self, key: str, value: Any) -> None:
+        self.prune()
+        self._data[key] = value
+        self._timestamps[key] = time.time()
+        self._enforce_bounds()
+
+    def __delitem__(self, key: str) -> None:
+        self.prune()
+        del self._data[key]
+        self._timestamps.pop(key, None)
+
+    def __iter__(self) -> Iterator[str]:
+        self.prune()
+        return iter(self._data)
+
+    def __len__(self) -> int:
+        self.prune()
+        return len(self._data)
+
+    def clear(self) -> None:
+        self._data.clear()
+        self._timestamps.clear()
+
+    def prune(self) -> None:
+        """Elimina elementos expirados y aplica límites de tamaño."""
+
+        if self._ttl_seconds is not None:
+            now = time.time()
+            expired = [
+                key for key, ts in list(self._timestamps.items()) if now - ts > self._ttl_seconds
+            ]
+            for key in expired:
+                self._data.pop(key, None)
+                self._timestamps.pop(key, None)
+        self._enforce_bounds()
+
+    def _enforce_bounds(self) -> None:
+        if self._max_entries <= 0:
+            return
+        while len(self._data) > self._max_entries:
+            oldest_key, _ = self._data.popitem(last=False)
+            self._timestamps.pop(oldest_key, None)
+
+
+class HistorialCierresStore(MutableMapping[str, HistorialPorSimbolo]):
+    """Agrupa ``HistorialPorSimbolo`` y ofrece utilidades agregadas."""
+
+    __slots__ = ("_stores", "_max_entries", "_ttl_seconds")
+
+    def __init__(
+        self,
+        symbols: Iterable[str],
+        *,
+        max_entries: int,
+        ttl_seconds: int | None,
+    ) -> None:
+        self._max_entries = max_entries
+        self._ttl_seconds = ttl_seconds
+        self._stores: Dict[str, HistorialPorSimbolo] = {
+            symbol: self._new_store() for symbol in symbols
+        }
+
+    def _new_store(self) -> HistorialPorSimbolo:
+        return HistorialPorSimbolo(
+            max_entries=self._max_entries,
+            ttl_seconds=self._ttl_seconds,
+        )
+
+    def __getitem__(self, key: str) -> HistorialPorSimbolo:
+        store = self._stores.setdefault(key, self._new_store())
+        store.prune()
+        return store
+
+    def __setitem__(self, key: str, value: MutableMapping[str, Any]) -> None:
+        if not isinstance(value, MutableMapping):
+            raise TypeError("El historial por símbolo debe ser un mapeo mutable")
+        store = self._stores.setdefault(key, self._new_store())
+        store.clear()
+        for sub_key, sub_value in value.items():
+            store[sub_key] = sub_value
+
+    def __delitem__(self, key: str) -> None:
+        del self._stores[key]
+
+    def __iter__(self) -> Iterator[str]:
+        return iter(self._stores)
+
+    def __len__(self) -> int:
+        return len(self._stores)
+
+    def prune(self) -> None:
+        for store in self._stores.values():
+            store.prune()
+
+    def total_entries(self) -> int:
+        return sum(len(store) for store in self._stores.values())
 
 
 class Trader(TraderLite):
@@ -40,17 +156,34 @@ class Trader(TraderLite):
         candle_handler: Optional[Callable[[dict], Awaitable[None]]] = None,
         on_event: Optional[Callable[[str, dict], None]] = None,
         supervisor: Optional[Supervisor] = None,
+        component_factories: TraderComponentFactories | None = None,
+        strict_components: bool | None = None,
     ) -> None:
         super().__init__(
             config,
             candle_handler=candle_handler,
             on_event=on_event,
             supervisor=supervisor,
+            component_factories=component_factories,
+            strict_components=strict_components,
         )
         self.modo_real = bool(getattr(config, "modo_real", False))
         self.cliente = self._cliente
         self.data_feed = self.feed
-        self.historial_cierres: Dict[str, dict] = {s: {} for s in config.symbols}
+        max_historial = int(getattr(config, "historial_cierres_max_per_symbol", 720) or 720)
+        ttl_minutes = getattr(config, "historial_cierres_ttl_min", None)
+        ttl_seconds: int | None
+        if ttl_minutes is None:
+            ttl_seconds = None
+        else:
+            ttl_seconds = max(0, int(ttl_minutes) * 60)
+        self.historial_cierres = HistorialCierresStore(
+            config.symbols,
+            max_entries=max_historial,
+            ttl_seconds=ttl_seconds,
+        )
+        self._historial_cierres_max = max_historial
+        self._historial_cierres_ttl = ttl_seconds
         self.fecha_actual = datetime.now(UTC).date()
         self.estrategias_habilitadas = False
         self._eval_enabled: Dict[tuple[str, str], bool] = {}
@@ -59,6 +192,14 @@ class Trader(TraderLite):
         self._bg_tasks: set[asyncio.Task] = set()
         self.notificador: NotificationManager | None = None
         self._verificar_entrada_provider: str | None = None
+        offload_enabled = getattr(config, "trader_eval_offload_enabled", None)
+        if offload_enabled is None:
+            offload_enabled = getattr(config, "trader_eval_offload", False)
+        threshold_raw = getattr(config, "trader_eval_offload_min_df", None)
+        threshold = int(threshold_raw) if threshold_raw is not None else 750
+        self._eval_offload_enabled = bool(offload_enabled)
+        self._eval_offload_min_df = max(1, threshold)
+        self._eval_offload_count = 0
 
         # Lazy construcciones (si los módulos existen)
         if getattr(self, "_EventBus", None):
@@ -541,11 +682,11 @@ class Trader(TraderLite):
             on_event_cb = self.on_event
 
         try:
-            resultado = await self.verificar_entrada(
+            resultado = await self._execute_pipeline(
                 symbol,
                 df,
                 estado,
-                on_event=on_event_cb,
+                on_event_cb,
             )
         except asyncio.CancelledError:
             raise
@@ -582,6 +723,95 @@ class Trader(TraderLite):
             ),
         )
         return None
+
+    async def _execute_pipeline(
+        self,
+        symbol: str,
+        df: pd.DataFrame,
+        estado: Any,
+        on_event: Callable[[str, dict], None] | None,
+    ) -> dict[str, Any] | None:
+        """Ejecuta el pipeline de verificación respetando configuración de offload."""
+
+        if self._should_offload_evaluation(df):
+            return await self._run_eval_offloaded(symbol, df, estado, on_event)
+        return await super()._execute_pipeline(symbol, df, estado, on_event)
+
+    def _should_offload_evaluation(self, df: pd.DataFrame) -> bool:
+        if not self._eval_offload_enabled:
+            return False
+        try:
+            length = len(df)
+        except Exception:
+            return False
+        return length >= self._eval_offload_min_df
+
+    async def _run_eval_offloaded(
+        self,
+        symbol: str,
+        df: pd.DataFrame,
+        estado: Any,
+        on_event: Callable[[str, dict], None] | None,
+    ) -> dict[str, Any] | None:
+        """Delegates synchronous pipelines to a worker thread to avoid blocking."""
+
+        loop = asyncio.get_running_loop()
+        df_copy = df.copy(deep=False)
+
+        _threadsafe_event: Callable[[str, dict], None] | None
+        if on_event is not None:
+
+            def _threadsafe_event(evt: str, data: dict) -> None:
+                loop.call_soon_threadsafe(on_event, evt, data)
+
+        else:
+            _threadsafe_event = None
+
+        self._eval_offload_count += 1
+        return await asyncio.to_thread(
+            self._blocking_verificar_entrada,
+            symbol,
+            df_copy,
+            estado,
+            _threadsafe_event,
+        )
+
+    def _blocking_verificar_entrada(
+        self,
+        symbol: str,
+        df: pd.DataFrame,
+        estado: Any,
+        on_event: Callable[[str, dict], None] | None,
+    ) -> dict[str, Any] | None:
+        async def _runner() -> dict[str, Any] | None:
+            return await TraderLite._execute_pipeline(self, symbol, df, estado, on_event)
+
+        return asyncio.run(_runner())
+
+    def purge_historial_cierres(self) -> None:
+        """Fuerza la poda del historial de cierres para todos los símbolos."""
+
+        self.historial_cierres.prune()
+
+    def get_historial_cierres_stats(self) -> dict[str, Any]:
+        """Devuelve métricas agregadas del historial para monitoreo."""
+
+        self.historial_cierres.prune()
+        return {
+            "max_por_simbolo": self._historial_cierres_max,
+            "ttl_segundos": self._historial_cierres_ttl,
+            "por_simbolo": {symbol: len(store) for symbol, store in self.historial_cierres.items()},
+            "total": self.historial_cierres.total_entries(),
+        }
+
+    def get_eval_offload_stats(self) -> dict[str, Any]:
+        """Estadísticas del mecanismo de offload de evaluaciones."""
+
+        return {
+            "enabled": self._eval_offload_enabled,
+            "threshold": self._eval_offload_min_df,
+            "count": self._eval_offload_count,
+        }
 
     async def verificar_entrada(
         self,
