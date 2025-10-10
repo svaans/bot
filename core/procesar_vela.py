@@ -626,6 +626,7 @@ async def procesar_vela(trader: Any, vela: dict) -> None:
                     "pipeline_missing_info",
                     extra={"symbol": symbol, "timeframe": timeframe_label},
                 )
+                _mark_skip(vela, skip_reason, skip_details)
                 return
             if skip_reason:
                 _mark_skip(vela, skip_reason, skip_details)
