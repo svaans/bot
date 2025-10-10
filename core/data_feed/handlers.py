@@ -332,19 +332,6 @@ async def consumer_loop(feed: "DataFeed", symbol: str) -> None:
             queue.task_done()
             skip_reason = candle.pop("_df_skip_reason", None)
             skip_details = candle.pop("_df_skip_details", None)
-            if skip_reason == "pipeline_missing":
-                log.debug(
-                    "consumer.pipeline_missing_ignored",
-                    extra=safe_extra(
-                        {
-                            "symbol": sym,
-                            "timestamp": ts,
-                            "stage": "DataFeed._consumer",
-                        }
-                    ),
-                )
-                skip_reason = None
-                skip_details = None
             if outcome == "ok" and skip_reason:
                 outcome = "skipped"
                 feed._stats[symbol]["skipped"] += 1
