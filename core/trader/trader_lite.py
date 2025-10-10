@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import importlib
 import os
 from collections import defaultdict
+from dataclasses import dataclass
 from typing import Any, Awaitable, Callable, Dict, Optional, Tuple, TYPE_CHECKING
 
 from core.backfill_service import BackfillService
@@ -22,6 +24,28 @@ if TYPE_CHECKING:  # pragma: no cover
 
 
 log = configurar_logger("trader_modular", modo_silencioso=True)
+
+
+class ComponentResolutionError(RuntimeError):
+    """Señala un fallo al resolver un componente requerido del trader."""
+
+
+@dataclass(slots=True)
+class TraderComponentFactories:
+    """Permite inyectar dependencias explícitas para ``TraderLite``.
+
+    Cada atributo representa el reemplazo opcional para un componente
+    autocontenido. Si un atributo es ``None`` se intentará la importación
+    perezosa tradicional.
+    """
+
+    event_bus: type[Any] | None = None
+    order_manager: type[Any] | None = None
+    strategy_engine: type[Any] | None = None
+    persistencia_tecnica: type[Any] | None = None
+    spread_guard: type[Any] | None = None
+    verificar_entrada: Callable[..., Any] | None = None
+    sync_sim: Callable[[Any], Any] | None = None
 
 
 def _compat_module():
@@ -58,6 +82,12 @@ class TraderLite(TraderLiteBackfillMixin, TraderLiteProcessingMixin):
         - Hook opcional para métricas / notificaciones.
     supervisor: SupervisorLite | None
         - Si no se provee, se crea uno interno.
+    component_factories: TraderComponentFactories | None
+        - Inyección explícita de dependencias para facilitar tests.
+          Si es ``None`` se intentará la autodetección perezosa tradicional.
+    strict_components: bool | None
+        - Cuando es ``True`` los componentes marcados como requeridos generarán
+          ``ComponentResolutionError`` al fallar su importación.
     """
 
     def __init__(
@@ -67,6 +97,8 @@ class TraderLite(TraderLiteBackfillMixin, TraderLiteProcessingMixin):
         candle_handler: Optional[Callable[[dict], Awaitable[None]]] = None,
         on_event: Optional[Callable[[str, dict], None]] = None,
         supervisor: Optional[Supervisor] = None,
+        component_factories: TraderComponentFactories | None = None,
+        strict_components: bool | None = None,
     ) -> None:
         if not getattr(config, "symbols", None):
             raise ValueError("config.symbols vacío o no definido")
@@ -75,6 +107,18 @@ class TraderLite(TraderLiteBackfillMixin, TraderLiteProcessingMixin):
 
         self.config = config
         self.on_event = on_event
+        self._component_factories = component_factories or TraderComponentFactories()
+        self._component_errors: dict[str, Exception] = {}
+        config_requirements = getattr(config, "trader_required_components", None)
+        if config_requirements is None:
+            self._component_requirements: set[str] = set()
+        else:
+            self._component_requirements = {str(name) for name in config_requirements}
+        if strict_components is None:
+            strict_flag = bool(getattr(config, "trader_strict_components", False))
+        else:
+            strict_flag = bool(strict_components)
+        self._strict_components = strict_flag
         supervisor_cls = _supervisor_cls()
         self.supervisor = supervisor or supervisor_cls(on_event=on_event)
 
@@ -174,65 +218,135 @@ class TraderLite(TraderLiteBackfillMixin, TraderLiteProcessingMixin):
         self._runner_task: Optional[asyncio.Task] = None
 
         # --- Lazy imports de módulos pesados / acoplados ---
-        # Se difieren hasta ahora para evitar ciclos.
-        try:
-            from core.risk import SpreadGuard as _SpreadGuard
-        except Exception:
-            self._SpreadGuard = None
-        else:
-            self._SpreadGuard = _SpreadGuard
+        # Se difieren hasta ahora para evitar ciclos, con soporte para inyección
+        # explícita y fail-fast opcional.
+        self._SpreadGuard = self._resolve_component(
+            "spread_guard",
+            importer=lambda: self._import_symbol("core.risk", "SpreadGuard"),
+            optional=True,
+            log_message="Fallo importando SpreadGuard; se continúa sin guardia",
+        )
 
-        # Inicializar referencias lazy por defecto para que un fallo parcial
-        # no anule al resto de componentes opcionales.
-        self._EventBus = None
-        self._OrderManager = None
-        self._sync_sim = None
-        self._StrategyEngine = None
-        self._PersistenciaTecnica = None
-        self._verificar_entrada = None
-        try:
-            from core.event_bus import EventBus as _EventBus
-        except Exception:
-            log.debug("Fallo importando EventBus; se continúa sin bus", exc_info=True)
-        else:
-            self._EventBus = _EventBus
-        try:
-            from core.orders.order_manager import OrderManager as _OrderManager
-        except Exception:
-            log.debug("Fallo importando OrderManager; se deshabilitan órdenes reales", exc_info=True)
-        else:
-            self._OrderManager = _OrderManager
-        try:
-            from core.orders.storage_simulado import sincronizar_ordenes_simuladas as _sync_sim
-        except Exception:
-            log.debug("Fallo importando sincronizador de órdenes simuladas", exc_info=True)
-        else:
-            self._sync_sim = _sync_sim
-        try:
-            from core.strategies import StrategyEngine as _StrategyEngine
-        except Exception:
-            log.debug("Fallo importando StrategyEngine; se usará pipeline directo", exc_info=True)
-        else:
-            self._StrategyEngine = _StrategyEngine
-        try:
-            from core.persistencia_tecnica import PersistenciaTecnica as _PersistenciaTecnica
-        except Exception:
-            log.debug("Fallo importando PersistenciaTecnica; persistencia inactiva", exc_info=True)
-        else:
-            self._PersistenciaTecnica = _PersistenciaTecnica
-        try:
-            from core.strategies.entry.verificar_entradas import (
-                verificar_entrada as _verificar_entrada,
-            )
-        except Exception:
-            log.debug(
-                "Fallo importando pipeline de verificación de entradas", exc_info=True
-            )
-        else:
-            self._verificar_entrada = _verificar_entrada
+        self._EventBus = self._resolve_component(
+            "event_bus",
+            importer=lambda: self._import_symbol("core.event_bus", "EventBus"),
+            optional=True,
+            log_message="Fallo importando EventBus; se continúa sin bus",
+        )
+        self._OrderManager = self._resolve_component(
+            "order_manager",
+            importer=lambda: self._import_symbol(
+                "core.orders.order_manager", "OrderManager"
+            ),
+            optional=True,
+            log_message="Fallo importando OrderManager; se deshabilitan órdenes reales",
+        )
+        self._sync_sim = self._resolve_component(
+            "sync_sim",
+            importer=lambda: self._import_symbol(
+                "core.orders.storage_simulado", "sincronizar_ordenes_simuladas"
+            ),
+            optional=True,
+            log_message="Fallo importando sincronizador de órdenes simuladas",
+        )
+        self._StrategyEngine = self._resolve_component(
+            "strategy_engine",
+            importer=lambda: self._import_symbol("core.strategies", "StrategyEngine"),
+            optional=True,
+            log_message="Fallo importando StrategyEngine; se usará pipeline directo",
+        )
+        self._PersistenciaTecnica = self._resolve_component(
+            "persistencia_tecnica",
+            importer=lambda: self._import_symbol(
+                "core.persistencia_tecnica", "PersistenciaTecnica"
+            ),
+            optional=True,
+            log_message="Fallo importando PersistenciaTecnica; persistencia inactiva",
+        )
+        self._verificar_entrada = self._resolve_component(
+            "verificar_entrada",
+            importer=lambda: self._import_symbol(
+                "core.strategies.entry.verificar_entradas", "verificar_entrada"
+            ),
+            optional=not bool(getattr(config, "trader_require_pipeline", False)),
+            log_message="Fallo importando pipeline de verificación de entradas",
+        )
 
         # Configurar guardia de spread (puede devolver None si está deshabilitado).
         self.spread_guard = self._create_spread_guard()
+
+    async def _execute_pipeline(
+        self,
+        symbol: str,
+        df: Any,
+        estado: Any,
+        on_event: Callable[[str, dict], None] | None,
+    ) -> Any:
+        """Invoca ``verificar_entrada`` en línea (sin offload)."""
+
+        verificar = getattr(self, "verificar_entrada", None)
+        if not callable(verificar):
+            return None
+
+        try:
+            resultado = verificar(symbol, df, estado, on_event=on_event)
+        except TypeError:
+            resultado = verificar(symbol, df, estado)
+        return await _maybe_await(resultado)
+
+    def _import_symbol(self, module_name: str, attr: str) -> Any:
+        """Importa ``attr`` desde ``module_name`` propagando fallos reales."""
+
+        module = importlib.import_module(module_name)
+        try:
+            return getattr(module, attr)
+        except AttributeError as exc:  # pragma: no cover - defensivo
+            raise ImportError(f"{attr} ausente en {module_name}") from exc
+
+    def _should_require_component(self, name: str, optional: bool) -> bool:
+        if name in self._component_requirements:
+            return True
+        if optional:
+            return False
+        return True
+
+    def _resolve_component(
+        self,
+        name: str,
+        *,
+        importer: Callable[[], Any] | None,
+        optional: bool,
+        log_message: str,
+    ) -> Any:
+        factory_value = getattr(self._component_factories, name, None)
+        if factory_value is not None:
+            return factory_value
+
+        if importer is None:
+            return None
+
+        require_component = self._should_require_component(name, optional)
+        if self._strict_components:
+            require_component = require_component or not optional
+        try:
+            value = importer()
+        except Exception as exc:
+            self._component_errors[name] = exc
+            log_message = log_message or f"Fallo resolviendo componente {name}"
+            log.error(log_message, extra=safe_extra({"component": name}), exc_info=True)
+            if require_component:
+                raise ComponentResolutionError(log_message) from exc
+            return None
+
+        if value is None and require_component:
+            message = f"Componente requerido {name} no disponible"
+            raise ComponentResolutionError(message)
+        return value
+
+    def get_component_error(self, name: str) -> Exception | None:
+        """Devuelve el error registrado al cargar ``name`` (si existe)."""
+
+        return self._component_errors.get(name)
 
     def _resolve_data_feed_kwargs(self) -> Dict[str, Any]:
         """Obtiene parámetros del ``DataFeed`` combinando config y entorno."""
