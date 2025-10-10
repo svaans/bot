@@ -25,6 +25,8 @@ from core import trader as _trader
 TraderLite = _trader.TraderLite
 Trader = _trader.Trader
 EstadoSimbolo = _trader.EstadoSimbolo
+TraderComponentFactories = _trader.TraderComponentFactories
+ComponentResolutionError = _trader.ComponentResolutionError
 
 _is_awaitable = _trader._is_awaitable
 _maybe_await = _trader._maybe_await
