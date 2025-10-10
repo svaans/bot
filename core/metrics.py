@@ -189,6 +189,19 @@ QUEUE_SIZE = Gauge(
     "Tamaño de cola de DataFeed",
     ["symbol"],
 )
+
+PRODUCER_LAG_SECONDS = Gauge(
+    "datafeed_producer_lag_seconds",
+    "Segundos desde el último mensaje recibido del stream para el símbolo",
+    ["symbol"],
+)
+
+CONSUMER_LAG_SECONDS = Gauge(
+    "datafeed_consumer_lag_seconds",
+    "Segundos desde el último consumo exitoso del símbolo",
+    ["symbol"],
+)
+
 INGEST_LATENCY = Histogram(
     "datafeed_ingest_latency_seconds",
     "Latencia desde recepción hasta procesamiento",
