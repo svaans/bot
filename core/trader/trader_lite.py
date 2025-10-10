@@ -522,6 +522,7 @@ class TraderLite:
         sym = self._extract_symbol(candle)
         ts = self._extract_timestamp(candle)
         self._set_skip_reason(candle, None)
+        candle.pop("_df_eval_context", None)
         log.debug(
             "update_estado.enter",
             extra=safe_extra(
@@ -873,6 +874,25 @@ class TraderLite:
         WAITING_CLOSE_STREAK.labels(**metric_labels).set(0)
         EVAL_ATTEMPTS_TOTAL.labels(**metric_labels).inc()
         ts = self._extract_timestamp(candle)
+        eval_reason = "go_evaluate"
+        if reason and reason not in {"ready", "timeframe_none"}:
+            eval_reason = str(reason)
+        eval_context = {
+            "symbol": sym,
+            "timeframe": metric_timeframe,
+            "reason": eval_reason,
+            "raw_reason": reason,
+            "bar_open_ts": timing_ctx.get("bar_open_ts"),
+            "event_ts": timing_ctx.get("bar_event_ts"),
+            "bar_close_ts": timing_ctx.get("bar_close_ts"),
+            "elapsed_secs": timing_ctx.get("elapsed_secs"),
+            "interval_secs": timing_ctx.get("interval_secs"),
+            "skew_allow_secs": timing_ctx.get("skew_allow_secs"),
+            "buffer_len": buffer_len_after,
+            "min_needed": min_bars,
+            "buffer_ready": buffer_len_after >= min_bars,
+        }
+        candle["_df_eval_context"] = eval_context
         log.debug(
             "update_estado.exit",
             extra=safe_extra(
@@ -1339,6 +1359,45 @@ class TraderLite:
             or getattr(self.config, "intervalo_velas", None)
         )
         tf_str = str(timeframe) if timeframe else None
+        eval_context = candle.get("_df_eval_context") if isinstance(candle, dict) else None
+        attempt_payload = {
+            "symbol": sym,
+            "timestamp": ts,
+            "timeframe": tf_str,
+            "stage": "Trader._procesar_vela",
+            "event": "procesar_vela.attempt",
+            "bar_open_ts": None,
+            "event_ts": None,
+            "elapsed_secs": None,
+            "interval_secs": None,
+            "buffer_len": None,
+            "min_needed": None,
+            "bar_close_ts": None,
+            "skew_allow_secs": None,
+            "buffer_ready": None,
+        }
+        attempt_reason = "go_evaluate"
+        if isinstance(eval_context, dict):
+            context_timeframe = eval_context.get("timeframe")
+            if not tf_str and context_timeframe:
+                attempt_payload["timeframe"] = context_timeframe
+            for key in (
+                "bar_open_ts",
+                "event_ts",
+                "elapsed_secs",
+                "interval_secs",
+                "buffer_len",
+                "min_needed",
+                "bar_close_ts",
+                "skew_allow_secs",
+                "buffer_ready",
+            ):
+                if key in eval_context:
+                    attempt_payload[key] = eval_context[key]
+            attempt_payload["raw_reason"] = eval_context.get("raw_reason")
+            attempt_reason = str(eval_context.get("reason") or attempt_reason)
+        attempt_payload["reason"] = attempt_reason
+        log.info("procesar_vela.attempt", extra=safe_extra(attempt_payload))
         log.debug(
             "procesar_vela.enter",
             extra=safe_extra(
