@@ -111,6 +111,54 @@ async def test_consume_y_procesa_una_vela_cerrada(
 
 
 @pytest.mark.asyncio(mode="strict")
+async def test_registra_hitos_de_evaluacion(
+    trader_factory,
+    datafeed_instance,
+    caplog,
+) -> None:
+    trader = trader_factory(symbols=["BTCUSDT"])
+    handler = _build_handler(trader)
+
+    _enable_caplog(caplog)
+    caplog.clear()
+
+    base_ts = int(time.time()) - 600
+    candle = mk_candle_in_range(base_ts, symbol="BTCUSDT", timeframe="5m").to_dict()
+    await _run_consumer(datafeed_instance, "BTCUSDT", [candle], handler)
+
+    records = caplog.get_records("call")
+    parsed = parse_records(records)
+
+    def _find_event(message: str) -> int | None:
+        for idx, entry in enumerate(parsed):
+            if entry.get("logger") != "procesar_vela":
+                continue
+            if entry.get("message") != message:
+                continue
+            if entry.get("symbol") != "BTCUSDT":
+                continue
+            return idx
+        return None
+
+    pre_idx = _find_event("pre-eval")
+    go_idx = _find_event("go_evaluate")
+    entrada_idx = _find_event("entrada_verificada")
+    salida_idx = _find_event("salida_verificada")
+
+    assert pre_idx is not None, f"Falta pre-eval en logs: {parsed}"
+    assert go_idx is not None, f"Falta go_evaluate en logs: {parsed}"
+
+    final_idx = entrada_idx if entrada_idx is not None else salida_idx
+    assert final_idx is not None, f"Falta entrada/salida_verificada en logs: {parsed}"
+
+    assert pre_idx < go_idx < final_idx, (
+        "La secuencia de logs debe ser pre-eval → go_evaluate → entrada/salida",
+        parsed,
+    )
+    assert not has_event(records, "datafeed", "consumer.skip", symbol="BTCUSDT")
+
+
+@pytest.mark.asyncio(mode="strict")
 async def test_no_marca_bar_in_future_con_timestamp_valido(
     trader_factory,
     datafeed_instance,
