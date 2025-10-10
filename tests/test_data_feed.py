@@ -237,6 +237,7 @@ async def test_consumer_processes_and_updates_stats(capture_events: list[tuple[s
 
     assert processed == [candle]
     assert feed._stats[symbol]["processed"] == 1
+    assert feed._stats[symbol]["handler_calls"] == 1
     assert any(evt == "consumer_state" and data["state"] == "healthy" for evt, data in capture_events)
 
 
