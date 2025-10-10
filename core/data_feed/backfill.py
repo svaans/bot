@@ -129,7 +129,7 @@ async def do_backfill(feed: "DataFeed", symbol: str) -> None:
         log,
     )
     if not ok:
-        _emit(feed, "backfill_invalid", base_payload))
+        _emit(feed, "backfill_invalid", base_payload)
 
     for o in ohlcv:
         candle = {
