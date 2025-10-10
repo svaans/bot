@@ -21,7 +21,9 @@ from core.utils.metrics_compat import Counter, Histogram
 try:  # pragma: no cover - métricas opcionales
     from core.metrics import (
         BUFFER_SIZE_V2,
+        CANDLES_PROCESSED_TOTAL,
         ENTRADAS_RECHAZADAS_V2,
+        EVAL_INTENTOS_TOTAL,
         LAST_BAR_AGE,
         WARMUP_RESTANTE,
     )
@@ -40,6 +42,16 @@ except Exception:  # pragma: no cover - fallback si core.metrics no está dispon
         "procesar_vela_entradas_rechazadas_total_v2",
         "Entradas rechazadas tras validaciones finales",
         ["symbol", "timeframe", "reason"],
+    )
+    CANDLES_PROCESSED_TOTAL = Counter(
+        "candles_processed_total",
+        "Velas cerradas procesadas por símbolo y timeframe",
+        ["symbol", "timeframe"],
+    )
+    EVAL_INTENTOS_TOTAL = Counter(
+        "eval_intentos_total",
+        "Intentos de evaluación clasificados por etapa",
+        ["symbol", "timeframe", "etapa"],
     )
 
 try:  # Preferir constante compartida para coherencia con warmup
@@ -425,23 +437,32 @@ async def procesar_vela(trader: Any, vela: dict) -> None:
       - método opcional: enqueue_notification(mensaje, nivel)
     """
     t0 = time.perf_counter()
-    try:
-        vela.pop("_df_skip_reason", None)
-        vela.pop("_df_skip_details", None)
-        # 1) Validaciones mínimas y normalización
-        symbol = str(vela.get("symbol") or vela.get("par") or "").upper()
-        if not symbol:
-            safe_inc(CANDLES_IGNORADAS, reason="no_symbol")
-            _mark_skip(vela, "no_symbol")
-            return
-        
+    symbol = ""
+    timeframe_label = "unknown"
+    timeframe_hint: Optional[str] = None
+    if isinstance(vela, dict):
+        raw_symbol = vela.get("symbol") or vela.get("par") or ""
+        symbol = str(raw_symbol).upper() if raw_symbol else ""
+        config_interval = getattr(getattr(trader, "config", None), "intervalo_velas", None)
         timeframe_hint = (
             vela.get("timeframe")
             or vela.get("interval")
             or vela.get("tf")
-            or getattr(getattr(trader, "config", None), "intervalo_velas", None)
+            or config_interval
         )
-        timeframe_label = str(timeframe_hint) if timeframe_hint else "unknown"
+        if timeframe_hint:
+            timeframe_label = str(timeframe_hint)
+    try:
+        if not isinstance(vela, dict):
+            return
+            
+        vela.pop("_df_skip_reason", None)
+        vela.pop("_df_skip_details", None)
+        # 1) Validaciones mínimas y normalización
+        if not symbol:
+            safe_inc(CANDLES_IGNORADAS, reason="no_symbol")
+            _mark_skip(vela, "no_symbol")
+            return
 
         ok, reason = _validar_candle(vela)
         if not ok:
@@ -556,6 +577,8 @@ async def procesar_vela(trader: Any, vela: dict) -> None:
         estado_symbol = estado_trader.get(symbol) if isinstance(estado_trader, dict) else None
 
         # 6) Evaluar condiciones de entrada (delegado al Trader)
+        timeframe = timeframe or timeframe_label
+        timeframe_label = str(timeframe or timeframe_label or "unknown")
         log.debug(
             "pre-eval",
             extra={
@@ -565,10 +588,45 @@ async def procesar_vela(trader: Any, vela: dict) -> None:
                 "min_needed": min_needed,
             },
         )
+        log.debug(
+            "go_evaluate",
+            extra={
+                "symbol": symbol,
+                "timeframe": timeframe,
+                "reason": "closed_bar",
+            },
+        )
+        try:
+            safe_inc(
+                EVAL_INTENTOS_TOTAL,
+                symbol=symbol,
+                timeframe=timeframe,
+                etapa="entrada",
+            )
+        except Exception:
+            pass
         propuesta = await trader.evaluar_condiciones_de_entrada(symbol, df, estado_symbol)
         skip_reason = getattr(trader, "_last_eval_skip_reason", None)
         skip_details = getattr(trader, "_last_eval_skip_details", None)
+        score = None
+        if isinstance(propuesta, dict):
+            score = propuesta.get("score")
+        log.debug(
+            "entrada_verificada",
+            extra={
+                "symbol": symbol,
+                "timeframe": timeframe,
+                "permitida": bool(propuesta),
+                "score": score,
+            },
+        )
         if not propuesta:
+            if skip_reason == "pipeline_missing":
+                log.debug(
+                    "pipeline_missing_info",
+                    extra={"symbol": symbol, "timeframe": timeframe_label},
+                )
+                return
             if skip_reason:
                 _mark_skip(vela, skip_reason, skip_details)
             else:
@@ -642,6 +700,15 @@ async def procesar_vela(trader: Any, vela: dict) -> None:
         safe_inc(HANDLER_EXCEPTIONS)
         log.exception("Excepción en procesar_vela: %s", e)
     finally:
+        try:
+            if symbol:
+                safe_inc(
+                    CANDLES_PROCESSED_TOTAL,
+                    symbol=symbol,
+                    timeframe=(timeframe_label or "unknown"),
+                )
+        except Exception:
+            pass
         try:
             EVAL_LATENCY.observe(time.perf_counter() - t0)
         except Exception:
