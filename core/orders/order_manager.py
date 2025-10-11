@@ -2,9 +2,11 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Dict, Optional
-from datetime import datetime, timezone
+import math
 import os
+import random
+from datetime import datetime, timezone
+from typing import Dict, Optional
 
 from core.orders.order_model import Order
 from core.utils.logger import configurar_logger, log_decision
@@ -19,8 +21,11 @@ from core.risk.level_validators import (
 from core.utils.utils import is_valid_number
 from core.event_bus import EventBus
 from core.metrics import (
-    registrar_orden,
     registrar_buy_rejected_insufficient_funds,
+    registrar_market_retry_exhausted,
+    registrar_orden,
+    registrar_orders_sync_failure,
+    registrar_orders_sync_success,
     registrar_partial_close_collision,
     registrar_registro_error,
 )
@@ -53,6 +58,33 @@ class OrderManager:
         self._dup_warned: set[str] = set()
         self._sync_task: asyncio.Task | None = None
         self._sync_interval = 300
+        self._sync_base_interval = self._sync_interval
+        self._sync_min_interval = float(
+            os.getenv("ORDERS_SYNC_MIN_INTERVAL", "60")
+        )
+        self._sync_max_interval = float(
+            os.getenv("ORDERS_SYNC_MAX_INTERVAL", "900")
+        )
+        self._sync_backoff_factor = float(
+            os.getenv("ORDERS_SYNC_BACKOFF_FACTOR", "2.0")
+        )
+        self._sync_jitter = float(os.getenv("ORDERS_SYNC_JITTER", "0.1"))
+        self._sync_failures = 0
+        self._market_retry_max_attempts = int(
+            os.getenv("ORDERS_MARKET_MAX_RETRIES", "5")
+        )
+        self._market_retry_backoff = float(
+            os.getenv("ORDERS_MARKET_BACKOFF_SECONDS", "1.0")
+        )
+        self._market_retry_backoff_multiplier = float(
+            os.getenv("ORDERS_MARKET_BACKOFF_MULTIPLIER", "1.5")
+        )
+        self._market_retry_backoff_cap = float(
+            os.getenv("ORDERS_MARKET_BACKOFF_MAX_SECONDS", "30.0")
+        )
+        self._market_retry_no_progress_limit = int(
+            os.getenv("ORDERS_MARKET_MAX_NO_PROGRESS", "3")
+        )
         if bus:
             self.subscribe(bus)
 
@@ -72,32 +104,157 @@ class OrderManager:
         operation_id = operation_id or self._generar_operation_id(symbol)
         entrada = {'side': side, 'symbol': symbol, 'cantidad': cantidad}
         if side == 'sell':
-            resp = await asyncio.to_thread(
-                real_orders._market_sell_retry, symbol, cantidad, operation_id
+            return await self._ejecutar_market_sell(
+                symbol, cantidad, operation_id, entrada
             )
-            salida = {
-                'ejecutado': float(resp.get('ejecutado', 0.0)),
-                'fee': float(resp.get('fee', 0.0)),
-                'pnl': float(resp.get('pnl', 0.0)),
-            }
-            log_decision(log, '_market_sell', operation_id, entrada, {}, 'execute', salida)
-            return salida['ejecutado'], salida['fee'], salida['pnl']
+        return await self._ejecutar_market_buy(
+            symbol, cantidad, operation_id, entrada
+        )
+
+    async def _ejecutar_market_sell(
+        self,
+        symbol: str,
+        cantidad: float,
+        operation_id: str,
+        entrada: dict,
+    ) -> tuple[float, float, float]:
+        """Ejecuta ventas de mercado con circuit breaker configurable."""
+        intentos = 0
+        while True:
+            intentos += 1
+            try:
+                resp = await asyncio.to_thread(
+                    real_orders._market_sell_retry, symbol, cantidad, operation_id
+                )
+                salida = {
+                    'ejecutado': float(resp.get('ejecutado', 0.0)),
+                    'fee': float(resp.get('fee', 0.0)),
+                    'pnl': float(resp.get('pnl', 0.0)),
+                }
+                log_decision(
+                    log, '_market_sell', operation_id, entrada, {}, 'execute', salida
+                )
+                return salida['ejecutado'], salida['fee'], salida['pnl']
+            except Exception as exc:  # pragma: no cover - path defensivo
+                log.error(
+                    '❌ Error ejecutando venta en %s (intento %s/%s): %s',
+                    symbol,
+                    intentos,
+                    self._market_retry_max_attempts,
+                    exc,
+                    extra={'event': 'market_sell_retry_error', 'symbol': symbol},
+                )
+                if intentos >= self._market_retry_max_attempts:
+                    await self._manejar_market_retry_exhausted(
+                        side='sell', symbol=symbol, operation_id=operation_id
+                    )
+                    return 0.0, 0.0, 0.0
+                await asyncio.sleep(self._market_retry_sleep(intentos))
+
+    async def _ejecutar_market_buy(
+        self,
+        symbol: str,
+        cantidad: float,
+        operation_id: str,
+        entrada: dict,
+    ) -> tuple[float, float, float]:
+        """Ejecuta compras de mercado con límite de reintentos y backoff."""
         restante = cantidad
         total = total_fee = total_pnl = 0.0
+        intentos = 0
+        sin_progreso = 0
         while restante > 0:
-            resp = await asyncio.to_thread(
-                real_orders.ejecutar_orden_market, symbol, restante, operation_id
-            )
+            intentos += 1
+            restante_previo = restante
+            try:
+                resp = await asyncio.to_thread(
+                    real_orders.ejecutar_orden_market, symbol, restante, operation_id
+                )
+            except Exception as exc:
+                log.error(
+                    '❌ Error ejecutando compra en %s (intento %s/%s): %s',
+                    symbol,
+                    intentos,
+                    self._market_retry_max_attempts,
+                    exc,
+                    extra={'event': 'market_buy_retry_error', 'symbol': symbol},
+                )
+                sin_progreso += 1
+                if self._should_break_retry(intentos, sin_progreso):
+                    await self._manejar_market_retry_exhausted(
+                        side='buy', symbol=symbol, operation_id=operation_id
+                    )
+                    break
+                await asyncio.sleep(self._market_retry_sleep(intentos))
+                continue
+
             ejecutado = float(resp.get('ejecutado', 0.0))
             total += ejecutado
             restante = float(resp.get('restante', 0.0))
             total_fee += float(resp.get('fee', 0.0))
             total_pnl += float(resp.get('pnl', 0.0))
+
+            if math.isclose(restante, restante_previo, rel_tol=1e-09, abs_tol=1e-12):
+                sin_progreso += 1
+            else:
+                sin_progreso = 0
+
             if resp.get('status') != 'PARTIAL' or restante < resp.get('min_qty', 0):
                 break
+
+            if self._should_break_retry(intentos, sin_progreso):
+                await self._manejar_market_retry_exhausted(
+                    side='buy', symbol=symbol, operation_id=operation_id
+                )
+                break
+
+            await asyncio.sleep(self._market_retry_sleep(intentos))
         salida = {'ejecutado': total, 'fee': total_fee, 'pnl': total_pnl}
         log_decision(log, '_market_buy', operation_id, entrada, {}, 'execute', salida)
         return total, total_fee, total_pnl
+    
+    def _market_retry_sleep(self, attempt: int) -> float:
+        """Calcula la espera exponencial con límite superior."""
+        base = max(self._market_retry_backoff, 0.0)
+        if base <= 0:
+            return 0.0
+        multiplier = max(self._market_retry_backoff_multiplier, 1.0)
+        delay = base * (multiplier ** max(attempt - 1, 0))
+        return min(delay, self._market_retry_backoff_cap)
+
+    def _should_break_retry(self, attempts: int, no_progress: int) -> bool:
+        """Evalúa si deben interrumpirse los reintentos."""
+        if attempts >= self._market_retry_max_attempts:
+            return True
+        return no_progress >= self._market_retry_no_progress_limit > 0
+
+    async def _manejar_market_retry_exhausted(
+        self, *, side: str, symbol: str, operation_id: str
+    ) -> None:
+        """Gestiona agotamiento de reintentos: logging, métricas y alertas."""
+        registrar_market_retry_exhausted(side, symbol)
+        log.error(
+            '⛔ Reintentos de orden de mercado agotados',
+            extra={
+                'event': 'market_retry_exhausted',
+                'side': side,
+                'symbol': symbol,
+                'operation_id': operation_id,
+                'max_attempts': self._market_retry_max_attempts,
+            },
+        )
+        if self.bus:
+            await self.bus.publish(
+                'notify',
+                {
+                    'mensaje': (
+                        f'⛔ No se pudo ejecutar orden {side} en {symbol}: '
+                        f'{self._market_retry_max_attempts} reintentos fallidos'
+                    ),
+                    'tipo': 'CRITICAL',
+                    'operation_id': operation_id,
+                },
+            )
 
     def subscribe(self, bus: EventBus) -> None:
         bus.subscribe('abrir_orden', self._on_abrir)
@@ -134,6 +291,7 @@ class OrderManager:
     def start_sync(self, intervalo: int | None = None) -> None:
         if intervalo:
             self._sync_interval = intervalo
+            self._sync_base_interval = intervalo
         if self._sync_task is not None:
             return
         try:
@@ -144,7 +302,7 @@ class OrderManager:
             # Solo arrancamos el loop; dentro se hace un _sync_once inicial.
             self._sync_task = loop.create_task(self._sync_loop())
 
-    async def _sync_once(self) -> None:
+    async def _sync_once(self) -> bool:
         actuales = set(self.ordenes.keys())
         try:
             ordenes_reconciliadas: Dict[str, Order] = await asyncio.to_thread(
@@ -182,7 +340,7 @@ class OrderManager:
             registro_metrico.registrar(
                 'discrepancia_ordenes',
                 {'local': len(local_only), 'exchange': len(exchange_only)},
-            )
+                    )
 
         merged: Dict[str, Order] = {}
 
@@ -203,6 +361,7 @@ class OrderManager:
         self.ordenes = merged
 
         # Intenta registrar las que quedaron pendientes
+        errores_registro = False
         for sym, ord_ in list(self.ordenes.items()):
             if getattr(ord_, 'registro_pendiente', False):
                 try:
@@ -244,12 +403,38 @@ class OrderManager:
                                 'operation_id': ord_.operation_id,
                             },
                         )
+                    registrar_orders_sync_failure(type(e).__name__)
+                    errores_registro = True
+
+        if errores_registro:
+            return False
+
+        registrar_orders_sync_success()
+        return True
 
 
     async def _sync_loop(self) -> None:
         while True:
-            await self._sync_once()
-            await asyncio.sleep(self._sync_interval)
+            success = await self._sync_once()
+            delay = self._compute_next_sync_delay(success)
+            await asyncio.sleep(delay)
+
+    def _compute_next_sync_delay(self, success: bool) -> float:
+        """Calcula el próximo retardo del loop de sincronización."""
+        if success:
+            self._sync_failures = 0
+            self._sync_interval = self._sync_base_interval
+        else:
+            self._sync_failures += 1
+            next_interval = self._sync_base_interval * (
+                self._sync_backoff_factor ** self._sync_failures
+            )
+            self._sync_interval = min(self._sync_max_interval, next_interval)
+        delay = max(self._sync_min_interval, self._sync_interval)
+        if self._sync_jitter > 0:
+            jitter = random.uniform(-self._sync_jitter, self._sync_jitter)
+            delay *= 1 + jitter
+        return max(self._sync_min_interval, min(delay, self._sync_max_interval))
 
     def _schedule_registro_retry(self, symbol: str) -> None:
         """Programa un reintento rápido de registro sin esperar al sync loop."""

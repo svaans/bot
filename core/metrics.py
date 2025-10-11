@@ -282,6 +282,23 @@ CONTADOR_REGISTRO_ERRORES = Counter(
     "Errores al registrar órdenes",
 )
 
+ORDERS_SYNC_SUCCESS_TOTAL = Counter(
+    "orders_sync_success_total",
+    "Reconciliaciones de órdenes exitosas",
+)
+
+ORDERS_SYNC_FAILURE_TOTAL = Counter(
+    "orders_sync_failure_total",
+    "Reconciliaciones de órdenes fallidas",
+    ["reason"],
+)
+
+ORDERS_MARKET_RETRY_EXHAUSTED_TOTAL = Counter(
+    "orders_market_retry_exhausted_total",
+    "Órdenes de mercado que agotaron los reintentos",
+    ["side", "symbol"],
+)
+
 _METRICS_WITH_FALLBACK = [
     "VELAS_DUPLICADAS",
     "CANDLES_DUPLICADAS_RATE",
@@ -313,6 +330,9 @@ _METRICS_WITH_FALLBACK = [
     "BINANCE_WEIGHT_USED_1M",
     "PARTIAL_CLOSE_COLLISION",
     "CONTADOR_REGISTRO_ERRORES",
+    "ORDERS_SYNC_SUCCESS_TOTAL",
+    "ORDERS_SYNC_FAILURE_TOTAL",
+    "ORDERS_MARKET_RETRY_EXHAUSTED_TOTAL",
 ]
 
 for _metric_name in _METRICS_WITH_FALLBACK:
@@ -351,6 +371,27 @@ def registrar_partial_close_collision(symbol: str) -> None:
 def registrar_registro_error() -> None:
     CONTADOR_REGISTRO_ERRORES.inc()
     registro_metrico.registrar("order_register_error", {})
+
+
+def registrar_orders_sync_success() -> None:
+    ORDERS_SYNC_SUCCESS_TOTAL.inc()
+    registro_metrico.registrar("orders_sync", {"status": "success"})
+
+
+def registrar_orders_sync_failure(reason: str) -> None:
+    ORDERS_SYNC_FAILURE_TOTAL.labels(reason=reason).inc()
+    registro_metrico.registrar(
+        "orders_sync",
+        {"status": "failure", "reason": reason},
+    )
+
+
+def registrar_market_retry_exhausted(side: str, symbol: str) -> None:
+    ORDERS_MARKET_RETRY_EXHAUSTED_TOTAL.labels(side=side, symbol=symbol).inc()
+    registro_metrico.registrar(
+        "order_market_retry_exhausted",
+        {"side": side, "symbol": symbol},
+    )
 
 
 def registrar_candles_duplicadas(symbol: str, count: int, timeframe: str | None = None) -> None:
