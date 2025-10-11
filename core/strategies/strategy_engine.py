@@ -73,6 +73,7 @@ class StrategyEngine:
         self._metrics = metrics_module
         self._salida_evaluator = salida_evaluator or evaluar_salidas
     async def evaluar_entrada(
+        self,
         symbol: str,
         df: pd.DataFrame,
         tendencia: str | None = None,
@@ -281,59 +282,59 @@ def _procesar_resultado_entrada(
             "resolucion_conflicto": resolucion_conflicto,
         }
 
-    def _resolver_conflicto(
-        self,
-        symbol: str,
-        estrategias_activas: Mapping[str, Any],
-        pesos_symbol: Mapping[str, float],
-    ) -> tuple[bool, Optional[str]]:
-        bull_list = [
-            e
-            for e, act in estrategias_activas.items()
-            if act and TENDENCIA_IDEAL.get(e) == "alcista"
-        ]
-        bear_list = [
-            e
-            for e, act in estrategias_activas.items()
-            if act and TENDENCIA_IDEAL.get(e) == "bajista"
-        ]
-        peso_bull = sum(float(pesos_symbol.get(e, 1.0)) for e in bull_list)
-        peso_bear = sum(float(pesos_symbol.get(e, 1.0)) for e in bear_list)
+def _resolver_conflicto(
+    self,
+    symbol: str,
+    estrategias_activas: Mapping[str, Any],
+    pesos_symbol: Mapping[str, float],
+) -> tuple[bool, Optional[str]]:
+    bull_list = [
+        e
+        for e, act in estrategias_activas.items()
+        if act and TENDENCIA_IDEAL.get(e) == "alcista"
+    ]
+    bear_list = [
+        e
+        for e, act in estrategias_activas.items()
+        if act and TENDENCIA_IDEAL.get(e) == "bajista"
+    ]
+    peso_bull = sum(float(pesos_symbol.get(e, 1.0)) for e in bull_list)
+    peso_bear = sum(float(pesos_symbol.get(e, 1.0)) for e in bear_list)
 
-        if peso_bull > peso_bear * 1.1:
-            log.info(
-                f"[{symbol}] Conflicto BUY/SELL resuelto a favor de BUY (estrategias: {bull_list})"
-            )
-            if hasattr(self._metrics, "SIGNALS_CONFLICT_RESOLVED"):
-                self._metrics.SIGNALS_CONFLICT_RESOLVED.labels(
-                    symbol=symbol, resolution="buy"
-                ).inc()
-            return False, "buy"
-
-        if peso_bear > peso_bull * 1.1:
-            log.info(
-                f"[{symbol}] Conflicto BUY/SELL resuelto a favor de SELL (estrategias: {bear_list})"
-            )
-            if hasattr(self._metrics, "SIGNALS_CONFLICT_RESOLVED"):
-                self._metrics.SIGNALS_CONFLICT_RESOLVED.labels(
-                    symbol=symbol, resolution="sell"
-                ).inc()
-            return False, "sell"
-
-        log.warning(
-            f"[{symbol}] Señales BUY y SELL simultáneas detectadas (empate)"
+    if peso_bull > peso_bear * 1.1:
+        log.info(
+            f"[{symbol}] Conflicto BUY/SELL resuelto a favor de BUY (estrategias: {bull_list})"
         )
-        if hasattr(self._metrics, "SIGNALS_CONFLICT"):
-            self._metrics.SIGNALS_CONFLICT.labels(symbol=symbol).inc()
-        return True, None
+        if hasattr(self._metrics, "SIGNALS_CONFLICT_RESOLVED"):
+            self._metrics.SIGNALS_CONFLICT_RESOLVED.labels(
+                symbol=symbol, resolution="buy"
+            ).inc()
+        return False, "buy"
 
-    @staticmethod
-    def _normalizar_valor(valor: Any) -> Optional[float]:
-        if isinstance(valor, pd.Series):
-            valor = valor.iloc[-1]
-        try:
-            if valor is None:
-                return None
-            return float(valor)
-        except (TypeError, ValueError):
+    if peso_bear > peso_bull * 1.1:
+        log.info(
+            f"[{symbol}] Conflicto BUY/SELL resuelto a favor de SELL (estrategias: {bear_list})"
+        )
+        if hasattr(self._metrics, "SIGNALS_CONFLICT_RESOLVED"):
+            self._metrics.SIGNALS_CONFLICT_RESOLVED.labels(
+                symbol=symbol, resolution="sell"
+            ).inc()
+        return False, "sell"
+
+    log.warning(
+        f"[{symbol}] Señales BUY y SELL simultáneas detectadas (empate)"
+    )
+    if hasattr(self._metrics, "SIGNALS_CONFLICT"):
+        self._metrics.SIGNALS_CONFLICT.labels(symbol=symbol).inc()
+    return True, None
+
+@staticmethod
+def _normalizar_valor(valor: Any) -> Optional[float]:
+    if isinstance(valor, pd.Series):
+        valor = valor.iloc[-1]
+    try:
+        if valor is None:
             return None
+        return float(valor)
+    except (TypeError, ValueError):
+        return None
