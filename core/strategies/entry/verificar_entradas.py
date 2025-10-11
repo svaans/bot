@@ -134,26 +134,54 @@ async def _evaluar_engine(trader: Any, symbol: str, df: pd.DataFrame, estado: An
     if fn is None:
         _emit(on_event, "entry_skip", {"symbol": symbol, "reason": "engine_no_fn"})
         return None
+    
+    try:
+        signature = inspect.signature(fn)
+    except (TypeError, ValueError):
+        signature = None
+
+    def _call(*args: Any) -> Any:
+        if (
+            signature is not None
+            and "on_event" in signature.parameters
+            and on_event is not None
+        ):
+            return fn(*args, on_event=on_event)
+        return fn(*args)
+
+    necesita_trader = False
+    if signature is not None:
+        for param in signature.parameters.values():
+            if (
+                param.kind
+                in (
+                    inspect.Parameter.POSITIONAL_ONLY,
+                    inspect.Parameter.POSITIONAL_OR_KEYWORD,
+                )
+                and param.name == "trader"
+            ):
+                necesita_trader = True
+                break
         
     intentos: list[Callable[[], Any]] = []
+    if necesita_trader:
+        intentos.append(lambda: _call(trader, symbol, df))
+    intentos.append(lambda: _call(symbol, df))
 
-    if on_event is not None:
-        intentos.append(lambda: fn(trader, symbol, df, estado, on_event=on_event))
-    intentos.append(lambda: fn(trader, symbol, df, estado))
-    if on_event is not None:
-        intentos.append(lambda: fn(symbol, df, estado, on_event=on_event))
-    intentos.append(lambda: fn(symbol, df, estado))
-    if on_event is not None:
-        intentos.append(lambda: fn(trader, symbol, df, on_event=on_event))
-        intentos.append(lambda: fn(symbol, df, on_event=on_event))
-    intentos.append(lambda: fn(trader, symbol, df))
-    intentos.append(lambda: fn(symbol, df))
-
-    for intento in intentos:
+    for idx, intento in enumerate(intentos):
         try:
             resultado = intento()
         except TypeError:
-            continue
+            if signature is None and idx == 0:
+                # Si la firma era inaccesible y falta el trader, probamos una vez
+                # con el trader como primer argumento.
+                try:
+                    resultado = _call(trader, symbol, df)
+                except TypeError:
+                    continue
+            else:
+                continue
+
 
         try:
             if inspect.isawaitable(resultado):
