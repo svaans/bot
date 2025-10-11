@@ -29,6 +29,7 @@ yarl==1.20.0                  # URLs inmutables
 frozenlist==1.6.0             # Listas inmutables (requerido por aiohttp)
 multidict==6.4.3              # Diccionarios multivalor (requerido por yarl)
 pycares==4.8.0                # Wrapper de c-ares para DNS
+httpx==0.27.2                 # Cliente HTTP síncrono/asíncrono para notificador
 
 # ───────── CONFIGURACIÓN Y UTILIDADES ─────────
 python-dotenv==1.1.0          # Carga de variables de entorno desde .env
@@ -36,7 +37,7 @@ attrs==25.3.0                 # Validación estructural
 typing_extensions==4.13.2     # Compatibilidad de anotaciones de tipos
 packaging==25.0               # Parsing de versiones y metadatos
 regex==2024.11.6              # Expresiones regulares extendidas
-requests==2.32.3              # Cliente HTTP
+requests==2.32.3              # Cliente HTTP (legacy)
 urllib3==2.4.0                # Conexión HTTP subyacente
 idna==3.10                    # Manejo de dominios internacionales
 certifi==2025.4.26            # Certificados SSL

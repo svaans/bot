@@ -1,10 +1,12 @@
-import os
 import asyncio
-from datetime import UTC, datetime
 import sqlite3
-from typing import Callable
+import os
+from collections.abc import Awaitable, Callable
+from datetime import UTC, datetime
+from typing import Any
+import inspect
 
-from binance_api.cliente import BinanceClient
+from binance_api.cliente import BinanceClient, fetch_balance_async
 from config import config as app_config
 from ccxt.base.errors import AuthenticationError, NetworkError
 from core.utils.utils import configurar_logger
@@ -12,12 +14,26 @@ from core.orders import real_orders
 from core.reporting import reporter_diario
 from core.risk.riesgo import cargar_estado_riesgo
 from core.supervisor import beat, tick
+from observability.metrics import (
+    EMOTIONAL_RISK_GAUGE,
+    EMOTIONAL_STATE_SCORE,
+    EMOTIONAL_STATE_TRANSITIONS,
+    EMOTIONAL_STREAK_GAUGE,
+)
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 ORDENES_DB_PATH = os.getenv(
     'ORDENES_DB_PATH',
     os.path.join(BASE_DIR, 'ordenes_reales', 'ordenes.db'),
 )
 log = configurar_logger('estado_bot')
+
+_ESTADO_EMOCIONAL_ACTUAL: str | None = None
+_ESTADO_EMOCIONAL_SCORE = {
+    '😎 Determinado': 3.0,
+    '🤔 Neutro': 2.0,
+    '😐 Observador': 1.0,
+    '😰 Cauteloso': 0.0,
+}
 
 
 def obtener_orden_abierta():
@@ -50,71 +66,62 @@ def _contar_rachas(operaciones: list[dict]) -> tuple[int, int]:
     return ganancias, perdidas
 
 
-def estimar_estado_emocional(_ultima_orden=None):
-    """Determina el estado emocional actual del bot basado en el desempeño."""
+def _evaluar_estado_emocional() -> tuple[str, int, int, float]:
+    """Calcula estado emocional, rachas y riesgo consolidado."""
     operaciones: list[dict] = []
     for ops in reporter_diario.ultimas_operaciones.values():
         operaciones.extend(ops)
     operaciones.sort(key=lambda o: o.get('fecha_cierre', ''))
     ganancias, perdidas = _contar_rachas(operaciones)
-    riesgo = cargar_estado_riesgo().get('perdida_acumulada', 0.0)
+    riesgo = float(cargar_estado_riesgo().get('perdida_acumulada', 0.0))
     if ganancias >= 3:
-        return '😎 Determinado'
-    if perdidas >= 2 or riesgo > 1.5:
-        return '😰 Cauteloso'
-    if ganancias == 0 and riesgo < 0.5:
-        return '😐 Observador'
-    return '🤔 Neutro'
+        estado = '😎 Determinado'
+    elif perdidas >= 2 or riesgo > 1.5:
+        estado = '😰 Cauteloso'
+    elif ganancias == 0 and riesgo < 0.5:
+        estado = '😐 Observador'
+    else:
+        estado = '🤔 Neutro'
+    return estado, ganancias, perdidas, riesgo
+
+
+def estimar_estado_emocional(_ultima_orden=None):
+    """Determina el estado emocional actual del bot basado en el desempeño."""
+
+    estado, _, _, _ = _evaluar_estado_emocional()
+    return estado
 
 
 def resumen_emocional() ->str:
     """Genera una breve justificación del estado emocional."""
-    operaciones = []
-    for ops in reporter_diario.ultimas_operaciones.values():
-        operaciones.extend(ops)
-    operaciones.sort(key=lambda o: o.get('fecha_cierre', ''))
-    ganancias, perdidas = _contar_rachas(operaciones)
-    riesgo = cargar_estado_riesgo().get('perdida_acumulada', 0.0)
+    _, ganancias, perdidas, riesgo = _evaluar_estado_emocional()
     return (
         f'{ganancias} ganancias consecutivas, {perdidas} pérdidas consecutivas, riesgo acumulado {riesgo:.2f}%'
         )
 
 
-def monitorear_estado_bot(
+async def monitorear_estado_bot(
     ordenes_memoria: dict | None = None,
-    get_balance: Callable[[], float] | None = None,
-):
-    """Muestra el estado del bot y las órdenes activas.
-
-    ``get_balance`` permite inyectar una función para obtener el saldo en
-    pruebas. Si no se provee, se utilizará ``BinanceClient`` que devuelve un
-    balance simulado en modo no real (gracias a ``auth_guard``).
+    get_balance: Callable[[], float | Awaitable[float]] | None = None,
+    *,
+    cliente: Any | None = None,
+) -> None:
+    """Muestra el estado del bot y las órdenes activas sin bloquear el loop."""
 
 
-    Si no se encuentran órdenes en la base de datos y ``ordenes_memoria`` está
-    provisto, se utilizarán esos datos en su lugar. Esto permite monitorizar las
-    operaciones también en modo simulado.
-    """
     try:
         orden_abierta = obtener_orden_abierta()
         if not orden_abierta and ordenes_memoria:
             orden_abierta = ordenes_memoria
 
-        if get_balance is not None:
-            euros = get_balance()
-        else:
-            cliente = BinanceClient(app_config.cfg)
-            balance = asyncio.run(cliente.fetch_balance())
-            euros = balance.get('total', {}).get('EUR', 0.0)
+        euros = await _obtener_saldo_euros(get_balance=get_balance, cliente=cliente)
             
         log.info('======= 🤖 ESTADO ACTUAL DEL BOT =======')
         log.info(
             f"🕒 Hora actual: {datetime.now(UTC).strftime('%Y-%m-%d %H:%M:%S')} UTC"
             )
-        if app_config.MODO_REAL:
-            log.info(f'💶 Saldo disponible (EUR): {euros:.2f}')
-        else:
-            log.info(f'💶 Saldo simulado (EUR): {euros:.2f}')
+        etiqueta_saldo = '💶 Saldo disponible (EUR)' if app_config.MODO_REAL else '💶 Saldo simulado (EUR)'
+        log.info(f'{etiqueta_saldo}: {euros:.2f}')
         if orden_abierta:
             for symbol, orden in orden_abierta.items():
                 precio = orden.get('precio_entrada') if isinstance(orden, dict
@@ -128,8 +135,8 @@ def monitorear_estado_bot(
                     )
         else:
             log.info('📭 No hay órdenes abiertas.')
-        estado_emocional = estimar_estado_emocional(list(orden_abierta.
-            values())[-1] if orden_abierta else None)
+        estado_emocional, ganancias, perdidas, riesgo = _evaluar_estado_emocional()
+        _actualizar_metricas_emocionales(estado_emocional, ganancias, perdidas, riesgo)
         log.info(
             f'🧠 Estado emocional del bot: {estado_emocional} — {resumen_emocional()}'
             )
@@ -151,13 +158,13 @@ async def monitorear_estado_periodicamente(self, intervalo=300, heartbeat=30):
     ``heartbeat`` controla cada cuántos segundos se emite ``tick('estado')``
     durante la espera para evitar reinicios por inactividad.
     """
-    loop = asyncio.get_running_loop()
     while True:
         try:
             beat('estado', 'start')
             await asyncio.wait_for(
-                loop.run_in_executor(
-                    None, monitorear_estado_bot, dict(self.ordenes_abiertas)
+                monitorear_estado_bot(
+                    dict(self.ordenes_abiertas),
+                    cliente=getattr(self, 'cliente', None),
                 ),
                 timeout=intervalo,
             )
@@ -182,3 +189,70 @@ async def monitorear_estado_periodicamente(self, intervalo=300, heartbeat=30):
             log.exception('⚠️ Error durante el monitoreo de estado')
             beat('estado', 'error')
             await asyncio.sleep(intervalo)
+
+
+async def _obtener_saldo_euros(
+    *,
+    get_balance: Callable[[], float | Awaitable[float]] | None,
+    cliente: Any | None,
+) -> float:
+    """Obtiene el saldo en euros (o moneda base) sin bloquear el loop."""
+
+    if get_balance is not None:
+        saldo = get_balance()
+        if inspect.isawaitable(saldo):
+            return float(await saldo)
+        return float(saldo)
+
+    balance = await _fetch_balance(cliente)
+    totales = balance.get('total', {}) if isinstance(balance, dict) else {}
+    if not isinstance(totales, dict):
+        totales = {}
+    if 'EUR' in totales:
+        return float(totales['EUR'])
+    if 'USDT' in totales:
+        return float(totales['USDT'])
+    try:
+        return float(next(iter(totales.values())))
+    except StopIteration:
+        return 0.0
+
+
+async def _fetch_balance(cliente: Any | None) -> dict:
+    """Recupera el balance soportando clientes síncronos y asíncronos."""
+
+    if cliente is None:
+        cliente = BinanceClient(app_config.cfg)
+
+    fetch_balance = getattr(cliente, 'fetch_balance', None)
+    if callable(fetch_balance):
+        resultado = fetch_balance()
+        if inspect.isawaitable(resultado):
+            return await resultado
+        return resultado
+
+    fetch_balance_async_attr = getattr(cliente, 'fetch_balance_async', None)
+    if callable(fetch_balance_async_attr):
+        return await fetch_balance_async_attr()
+
+    return await fetch_balance_async(cliente if isinstance(cliente, BinanceClient) else None)
+
+
+def _actualizar_metricas_emocionales(
+    estado: str,
+    ganancias: int,
+    perdidas: int,
+    riesgo: float,
+) -> None:
+    """Actualiza métricas Prometheus relacionadas con el estado emocional."""
+
+    global _ESTADO_EMOCIONAL_ACTUAL
+
+    EMOTIONAL_STATE_SCORE.set(_ESTADO_EMOCIONAL_SCORE.get(estado, 0.0))
+    EMOTIONAL_RISK_GAUGE.set(riesgo)
+    EMOTIONAL_STREAK_GAUGE.labels(type='ganancias').set(float(ganancias))
+    EMOTIONAL_STREAK_GAUGE.labels(type='perdidas').set(float(perdidas))
+
+    if estado != _ESTADO_EMOCIONAL_ACTUAL:
+        EMOTIONAL_STATE_TRANSITIONS.labels(state=estado).inc()
+        _ESTADO_EMOCIONAL_ACTUAL = estado
