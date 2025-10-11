@@ -302,6 +302,16 @@ class TraderLite(TraderLiteBackfillMixin, TraderLiteProcessingMixin):
             return getattr(module, attr)
         except AttributeError as exc:  # pragma: no cover - defensivo
             raise ImportError(f"{attr} ausente en {module_name}") from exc
+        
+    @property
+    def verificar_entrada(self) -> Callable[..., Any] | None:
+        """Pipeline de verificación de entradas actualmente activo."""
+
+        return getattr(self, "_verificar_entrada", None)
+
+    @verificar_entrada.setter
+    def verificar_entrada(self, value: Callable[..., Any] | None) -> None:
+        self._verificar_entrada = value
 
     def _should_require_component(self, name: str, optional: bool) -> bool:
         if name in self._component_requirements:
