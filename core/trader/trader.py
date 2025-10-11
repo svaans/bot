@@ -702,12 +702,19 @@ class Trader(TraderLite):
 
         provider = getattr(self, "_verificar_entrada_provider", None)
         self._last_eval_skip_reason = "no_signal" if provider else "pipeline_missing"
-        self._last_eval_skip_details = {
+        pipeline_diagnostics: dict[str, Any] = {}
+        if provider is None:
+            pipeline_diagnostics = self._collect_pipeline_diagnostics()
+
+        details: dict[str, Any] = {
             "timeframe": timeframe_str,
             "buffer_len": buf_len,
             "min_needed": min_bars,
             "provider": provider,
         }
+        if pipeline_diagnostics:
+            details.update(pipeline_diagnostics)
+        self._last_eval_skip_details = details
         log.debug(
             "[%s] Sin condiciones de entrada válidas",
             symbol,
@@ -719,6 +726,7 @@ class Trader(TraderLite):
                     "buffer_len": buf_len,
                     "min_needed": min_bars,
                     "provider": provider,
+                    **{k: v for k, v in pipeline_diagnostics.items() if k.startswith("pipeline_")},
                 }
             ),
         )
@@ -812,6 +820,38 @@ class Trader(TraderLite):
             "threshold": self._eval_offload_min_df,
             "count": self._eval_offload_count,
         }
+    
+    def _collect_pipeline_diagnostics(self) -> dict[str, Any]:
+        """Expone información de apoyo cuando el pipeline no está disponible."""
+
+        pipeline = getattr(self, "_verificar_entrada", None)
+        present = pipeline is not None
+        callable_pipeline = callable(pipeline)
+        required_flag = bool(getattr(self.config, "trader_require_pipeline", False))
+        component_requirements = getattr(self, "_component_requirements", None)
+        if isinstance(component_requirements, set):
+            required_flag = required_flag or "verificar_entrada" in component_requirements
+
+        diagnostics: dict[str, Any] = {
+            "pipeline_present": present,
+            "pipeline_callable": callable_pipeline,
+            "pipeline_required": required_flag,
+        }
+
+        if callable_pipeline:
+            return diagnostics
+
+        error: Exception | None = None
+        try:
+            error = self.get_component_error("verificar_entrada")
+        except Exception:
+            error = None
+
+        if error is not None:
+            diagnostics["pipeline_error_type"] = type(error).__name__
+            diagnostics["pipeline_error_message"] = str(error)
+
+        return diagnostics
 
     async def verificar_entrada(
         self,

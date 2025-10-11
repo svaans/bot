@@ -315,7 +315,39 @@ async def test_flow_pipeline_missing_propagates_reason(trader_factory, caplog) -
     skip_reasons = [entry.get("reason") for entry in skips]
     assert "pipeline_missing" in skip_reasons, f"pipeline_missing ausente en logs: {_format_skip_entries(skips)}"
     pipeline_log = next(entry for entry in skips if entry.get("reason") == "pipeline_missing")
-    assert pipeline_log.get("details", {}).get("provider") is None
+    details = pipeline_log.get("details", {})
+    assert details.get("provider") is None
+    assert details.get("pipeline_present") is False
+    assert details.get("pipeline_callable") is False
+    assert details.get("pipeline_required") is False
+    if "pipeline_error_type" in details:
+        assert isinstance(details["pipeline_error_type"], str)
+        assert isinstance(details.get("pipeline_error_message"), str)
+
+
+@pytest.mark.asyncio(mode="strict")
+async def test_flow_pipeline_missing_exposes_component_error(trader_factory, caplog) -> None:
+    _enable_flow_logging(caplog)
+    caplog.clear()
+
+    trader = trader_factory(symbols=["BTCUSDT"])
+    trader._verificar_entrada = None
+    trader._verificar_entrada_provider = None
+    trader._component_errors["verificar_entrada"] = RuntimeError("pipeline exploded")
+    feed = DataFeed(TIMEFRAME)
+    harness = BotFlowHarness(trader, feed, "BTCUSDT")
+
+    base_ts = int(time.time()) - 600
+    candles = _build_series(base_ts, 1)
+    await harness.run(candles)
+
+    parsed = parse_records(caplog.get_records("call"))
+    skips = _find_events(parsed, "datafeed", "consumer.skip")
+
+    pipeline_log = next(entry for entry in skips if entry.get("reason") == "pipeline_missing")
+    details = pipeline_log.get("details", {})
+    assert details.get("pipeline_error_type") == "RuntimeError"
+    assert "pipeline exploded" in details.get("pipeline_error_message", "")
 
 
 @pytest.mark.asyncio(mode="strict")
