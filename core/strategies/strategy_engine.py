@@ -226,7 +226,7 @@ class StrategyEngine:
                 symbol, estrategias_activas, pesos_symbol
             )
 
-        score_tec, _ = self._technical_scorer(
+        score_tec, score_breakdown = self._technical_scorer(
             df,
             rsi_val,
             mom_val,
@@ -281,6 +281,10 @@ class StrategyEngine:
             "score_tecnico": score_tec,
             "conflicto_resuelto": resolucion_conflicto is not None,
             "resolucion_conflicto": resolucion_conflicto,
+            "score": score_tec,
+            "side": direccion,
+            "contradicciones": contradiccion,
+            "score_tecnico_detalle": score_breakdown,
         }
 
     def _resolver_conflicto(
