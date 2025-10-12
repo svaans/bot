@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import hashlib
 import math
 import os
 import time
@@ -172,11 +173,33 @@ def _mark_skip(target: dict, reason: str, details: Optional[dict] = None) -> Non
 
     if not isinstance(target, dict):
         return
+    
     target["_df_skip_reason"] = reason
     if details:
         target["_df_skip_details"] = details
     else:
         target.pop("_df_skip_details", None)
+
+    symbol = str(target.get("symbol") or "").upper()
+    ts_candidate = (
+        target.get("timestamp")
+        or target.get("close_time")
+        or target.get("open_time")
+        or target.get("event_time")
+    )
+    trace_id: str | None = None
+    try:
+        if symbol and ts_candidate is not None:
+            ts_int = int(float(ts_candidate))
+            base = f"{symbol}:{ts_int}".encode("utf-8")
+            trace_id = hashlib.blake2b(base, digest_size=12).hexdigest()
+    except (TypeError, ValueError):  # pragma: no cover - valores inesperados
+        trace_id = None
+
+    if trace_id:
+        target["_df_trace_id"] = trace_id
+    else:
+        target.pop("_df_trace_id", None)
 
 
 def _normalize_timestamp(value: Any) -> Optional[float]:

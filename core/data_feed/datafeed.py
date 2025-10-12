@@ -7,6 +7,7 @@ import contextlib
 import inspect
 import logging
 import os
+import time
 from collections import defaultdict
 from typing import Any, Awaitable, Callable, Dict, Iterable, List, Optional
 
@@ -121,6 +122,14 @@ class DataFeed:
         self._handler_expected_info: dict[str, int | str | None] | None = None
         self._handler_wrapper_calls: int = 0
         self._handler_log_events: int = 0
+
+        raw_backfill_threshold = _safe_float(
+            os.getenv("DF_BACKFILL_LATENCY_THRESHOLD_SEC", "0"),
+            0.0,
+        )
+        self._backfill_latency_threshold: float | None = (
+            raw_backfill_threshold if raw_backfill_threshold > 0 else None
+        )
 
         # ``precargar`` modifica temporalmente el estado interno del feed; el lock
         # asegura que no se ejecute concurrentemente con otras llamadas que
@@ -413,7 +422,22 @@ class DataFeed:
         await monitors_module.reiniciar_consumer(self, symbol)
 
     async def _do_backfill(self, symbol: str) -> None:
+        start = time.perf_counter()
         await backfill_module.do_backfill(self, symbol)
+        elapsed = max(0.0, time.perf_counter() - start)
+        self._stats[symbol]["backfill_last_elapsed_ms"] = int(elapsed * 1000)
+        threshold = self._backfill_latency_threshold
+        if threshold is not None and elapsed >= threshold:
+            stats_snapshot = {k: int(v) for k, v in self._stats[symbol].items()}
+            payload = {
+                "symbol": symbol,
+                "timeframe": self.intervalo,
+                "elapsed": elapsed,
+                "elapsed_ms": int(elapsed * 1000),
+                "threshold": threshold,
+                "stats": stats_snapshot,
+            }
+            events_module.emit_bus_signal(self, "backfill.latency", payload)
 
     def _note_handler_log(self) -> None:
         handlers_module.note_handler_log(self)

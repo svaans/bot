@@ -194,3 +194,5 @@ async def test_procesar_vela_marca_skip_reason_de_trader() -> None:
     assert isinstance(details, dict)
     assert details.get("buffer_len", 0) >= 1
     assert details.get("min_needed") == 5
+    trace_id = candle.get("_df_trace_id")
+    assert isinstance(trace_id, str) and len(trace_id) >= 8

@@ -20,6 +20,7 @@ if "indicators" not in sys.modules:
 
 from core import procesar_vela as procesar_vela_mod
 from core.data_feed import DataFeed
+from core.data_feed import handlers as df_handlers
 from core.procesar_vela import procesar_vela as procesar_vela_handler
 from core.trader.trader_lite import TraderLite
 from tests.factories import DummyConfig, DummySupervisor
@@ -73,6 +74,191 @@ async def test_datafeed_consumer_executes_registered_handler() -> None:
     consumer.cancel()
     with contextlib.suppress(asyncio.CancelledError):
         await consumer
+
+@pytest.mark.asyncio
+async def test_datafeed_consumer_skip_expected_downgrades_log_and_counts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    symbol = "BTCUSDT"
+
+    class DummyCounter:
+        def __init__(self) -> None:
+            self.calls: List[tuple[str, ...]] = []
+
+        def labels(self, *values: str, **kwargs: str) -> "DummyCounter":
+            if kwargs:
+                ordered_kwargs = tuple(f"{key}={value}" for key, value in sorted(kwargs.items()))
+                self.calls.append(("labels", *values, *ordered_kwargs))
+            else:
+                self.calls.append(("labels", *values))
+            return self
+
+        def inc(self, amount: float = 1.0) -> None:
+            self.calls.append(("inc", str(amount)))
+
+    dummy_counter = DummyCounter()
+    monkeypatch.setattr(df_handlers, "CONSUMER_SKIPPED_EXPECTED_TOTAL", dummy_counter)
+
+    class DummyLog:
+        def __init__(self) -> None:
+            self.calls: List[tuple[str, str, dict[str, Any]]] = []
+
+        def _record(self, level: str, message: str, *args: Any, **kwargs: Any) -> None:
+            extra = kwargs.get("extra")
+            if isinstance(extra, dict):
+                payload = dict(extra)
+            else:
+                payload = {"extra": extra}
+            self.calls.append((level, message, payload))
+
+        def debug(self, message: str, *args: Any, **kwargs: Any) -> None:
+            self._record("debug", message, *args, **kwargs)
+
+        def info(self, message: str, *args: Any, **kwargs: Any) -> None:
+            self._record("info", message, *args, **kwargs)
+
+        def warning(self, message: str, *args: Any, **kwargs: Any) -> None:
+            self._record("warning", message, *args, **kwargs)
+
+        def error(self, message: str, *args: Any, **kwargs: Any) -> None:
+            self._record("error", message, *args, **kwargs)
+
+        def exception(self, message: str, *args: Any, **kwargs: Any) -> None:
+            self._record("exception", message, *args, **kwargs)
+
+    dummy_log = DummyLog()
+    monkeypatch.setattr(df_handlers, "log", dummy_log)
+
+    async def handler(candle: dict) -> None:
+        candle["timeframe"] = "1m"
+        candle["_df_skip_reason"] = "no_signal"
+
+    feed = DataFeed("1m", handler_timeout=1.0)
+    feed._symbols = [symbol]
+    feed._queues[symbol] = asyncio.Queue()
+    feed._handler = handler
+    feed._running = True
+
+    consumer = asyncio.create_task(feed._consumer(symbol))
+
+    candle = {"symbol": symbol, "timestamp": 1_700_000_000}
+    await feed._queues[symbol].put(candle)
+
+    for _ in range(100):
+        if feed._stats[symbol]["skipped_expected"]:
+            break
+        await asyncio.sleep(0.01)
+    else:
+        raise AssertionError("Skip esperado no registrado")
+
+    skip_calls = [call for call in dummy_log.calls if call[1] == "consumer.skip"]
+    assert skip_calls, "Se esperaba un log de consumer.skip"
+    assert skip_calls[-1][0] == "debug"
+
+    assert feed._stats[symbol]["skipped_expected"] == 1
+    assert any(call[0] == "inc" for call in dummy_counter.calls)
+
+    feed._running = False
+    consumer.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await consumer
+
+
+@pytest.mark.asyncio
+async def test_datafeed_consumer_skip_non_expected_logs_info(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    symbol = "BTCUSDT"
+
+    class DummyLog:
+        def __init__(self) -> None:
+            self.calls: List[tuple[str, str, dict[str, Any]]] = []
+
+        def _record(self, level: str, message: str, *args: Any, **kwargs: Any) -> None:
+            extra = kwargs.get("extra")
+            if isinstance(extra, dict):
+                payload = dict(extra)
+            else:
+                payload = {"extra": extra}
+            self.calls.append((level, message, payload))
+
+        def debug(self, message: str, *args: Any, **kwargs: Any) -> None:
+            self._record("debug", message, *args, **kwargs)
+
+        def info(self, message: str, *args: Any, **kwargs: Any) -> None:
+            self._record("info", message, *args, **kwargs)
+
+        def warning(self, message: str, *args: Any, **kwargs: Any) -> None:
+            self._record("warning", message, *args, **kwargs)
+
+        def error(self, message: str, *args: Any, **kwargs: Any) -> None:
+            self._record("error", message, *args, **kwargs)
+
+        def exception(self, message: str, *args: Any, **kwargs: Any) -> None:
+            self._record("exception", message, *args, **kwargs)
+
+    dummy_log = DummyLog()
+    monkeypatch.setattr(df_handlers, "log", dummy_log)
+
+    async def handler(candle: dict) -> None:
+        candle["_df_skip_reason"] = "warmup"
+
+    feed = DataFeed("1m", handler_timeout=1.0)
+    feed._symbols = [symbol]
+    feed._queues[symbol] = asyncio.Queue()
+    feed._handler = handler
+    feed._running = True
+
+    consumer = asyncio.create_task(feed._consumer(symbol))
+
+    candle = {"symbol": symbol, "timestamp": 1_700_000_001}
+    await feed._queues[symbol].put(candle)
+
+    for _ in range(100):
+        if feed._stats[symbol]["skipped"]:
+            break
+        await asyncio.sleep(0.01)
+    else:
+        raise AssertionError("Skip no esperado no registrado")
+
+    skip_calls = [call for call in dummy_log.calls if call[1] == "consumer.skip"]
+    assert skip_calls, "Se esperaba log consumer.skip"
+    assert skip_calls[-1][0] == "info"
+
+    feed._running = False
+    consumer.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await consumer
+
+
+@pytest.mark.asyncio
+async def test_datafeed_backfill_latency_event(monkeypatch: pytest.MonkeyPatch) -> None:
+    from core.data_feed import datafeed as datafeed_mod
+
+    symbol = "ETHUSDT"
+    feed = DataFeed("1m", handler_timeout=1.0)
+    feed._backfill_latency_threshold = 0.0
+
+    async def fake_backfill(_feed: DataFeed, _symbol: str) -> None:
+        await asyncio.sleep(0)
+
+    emitted: List[Tuple[str, Dict[str, Any]]] = []
+
+    monkeypatch.setattr(datafeed_mod.backfill_module, "do_backfill", fake_backfill)
+    monkeypatch.setattr(
+        datafeed_mod.events_module,
+        "emit_bus_signal",
+        lambda df, evt, payload: emitted.append((evt, payload)),
+    )
+
+    await feed._do_backfill(symbol)
+
+    assert emitted, "Debe emitirse un evento backfill.latency"
+    event, payload = emitted[0]
+    assert event == "backfill.latency"
+    assert payload["symbol"] == symbol
+    assert payload["elapsed_ms"] == feed._stats[symbol]["backfill_last_elapsed_ms"]
+    assert "stats" in payload and isinstance(payload["stats"], dict)
 
 
 @pytest.mark.asyncio

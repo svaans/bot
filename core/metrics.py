@@ -189,6 +189,11 @@ QUEUE_SIZE = Gauge(
     "Tamaño de cola de DataFeed",
     ["symbol"],
 )
+CONSUMER_SKIPPED_EXPECTED_TOTAL = Counter(
+    "consumer_skipped_expected_total",
+    "Skips esperados del consumer del DataFeed por símbolo/timeframe",
+    ["symbol", "timeframe", "reason"],
+)
 
 PRODUCER_LAG_SECONDS = Gauge(
     "datafeed_producer_lag_seconds",
@@ -319,6 +324,7 @@ _METRICS_WITH_FALLBACK = [
     "FEEDS_MISSING_RATE",
     "WS_CONNECTED_GAUGE",
     "QUEUE_SIZE",
+    "CONSUMER_SKIPPED_EXPECTED_TOTAL",
     "INGEST_LATENCY",
     "TRADER_QUEUE_SIZE",
     "TRADER_PIPELINE_LATENCY",

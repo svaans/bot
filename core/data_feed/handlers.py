@@ -12,6 +12,17 @@ from core.utils.log_utils import safe_extra
 from ._shared import COMBINED_STREAM_KEY, ConsumerState, log
 from . import events
 
+try:  # pragma: no cover - métricas opcionales
+    from core.metrics import CONSUMER_SKIPPED_EXPECTED_TOTAL
+except Exception:  # pragma: no cover - fallback cuando Prometheus no está disponible
+    from core.utils.metrics_compat import Counter
+
+    CONSUMER_SKIPPED_EXPECTED_TOTAL = Counter(
+        "consumer_skipped_expected_total",
+        "Skips esperados del consumer de DataFeed",
+        ["symbol", "timeframe", "reason"],
+    )
+
 
 _PATCH_LOGGED = False
 
@@ -380,7 +391,20 @@ async def consumer_loop(feed: "DataFeed", symbol: str) -> None:
                     ):
                         if key not in payload and alias in timing_map:
                             payload[key] = timing_map[alias]
-                log.debug("consumer.skip", extra=safe_extra(payload))
+                trace_id = candle.get("_df_trace_id") if isinstance(candle, dict) else None
+                if trace_id:
+                    payload["trace_id"] = trace_id
+
+                log_method = log.info
+                if skip_reason == "no_signal":
+                    feed._stats[symbol]["skipped_expected"] += 1
+                    timeframe_label = payload.get("timeframe") or feed.intervalo
+                    try:
+                        CONSUMER_SKIPPED_EXPECTED_TOTAL.labels(sym, timeframe_label, skip_reason).inc()
+                    except Exception:
+                        pass
+                    log_method = log.debug
+                log_method("consumer.skip", extra=safe_extra(payload))
             elif outcome == "ok":
                 feed._stats[symbol]["processed"] += 1
             if handler_completed:
