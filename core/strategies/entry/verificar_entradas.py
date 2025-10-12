@@ -223,13 +223,22 @@ def _aplicar_persistencia(trader: Any, symbol: str, resultado: dict, on_event=No
     return resultado
 
 
-def _validar_score(cfg: Any, resultado: dict) -> bool:
+def _validar_score(cfg: Any, resultado: dict) -> tuple[bool, float, float, bool]:
+    """Valida el score técnico y devuelve contexto para logs/metricas."""
     usar_score = bool(getattr(cfg, "usar_score_tecnico", True))
-    if not usar_score:
-        return True
     umbral = float(getattr(cfg, "umbral_score_tecnico", 2.0))
-    score = float(resultado.get("score", float("nan")))
-    return not math.isnan(score) and score >= umbral
+    raw_score = resultado.get("score")
+
+    try:
+        score = float(raw_score) if raw_score is not None else float("nan")
+    except (TypeError, ValueError):
+        score = float("nan")
+
+    if not usar_score:
+        return True, umbral, score, usar_score
+
+    valido = not math.isnan(score) and score >= umbral
+    return valido, umbral, score, usar_score
 
 
 def _validar_distancias(precio: float, sl: float, tp: float, min_pct: float) -> bool:
@@ -278,6 +287,15 @@ async def verificar_entrada(
             payload.update(extra)
         log.debug("verificar_entrada.exit", extra=payload)
         return None
+    
+    def _reject_with_skip(
+        reason: str, *, extra: Optional[dict] = None
+    ) -> Optional[dict]:
+        payload = {"symbol": symbol, "reason": reason}
+        if extra:
+            payload.update(extra)
+        _emit(on_event, "entry_skip", payload)
+        return _reject(reason, extra=payload)
 
     def _approve(resultado: dict) -> dict:
         payload = {
@@ -316,8 +334,9 @@ async def verificar_entrada(
     # Respeta la puerta de entrada del Trader (capital, riesgo, cooldown, etc.)
     gate = getattr(trader, "_puede_evaluar_entradas", None)
     if callable(gate) and not gate(symbol):
-        _emit(on_event, "entry_gate_blocked", {"symbol": symbol})
-        return _reject("gate_blocked")
+        payload = {"symbol": symbol, "reason": "gate_blocked"}
+        _emit(on_event, "entry_gate_blocked", payload)
+        return _reject("gate_blocked", extra=payload)
 
     # Timeout configurable por símbolo
     timeout = _timeout_para_symbol(trader, symbol)
@@ -329,8 +348,9 @@ async def verificar_entrada(
             timeout=timeout,
         )
     except asyncio.TimeoutError:
-        _emit(on_event, "entry_timeout", {"symbol": symbol, "timeout": timeout})
-        return _reject("timeout", extra={"timeout": timeout})
+        payload = {"symbol": symbol, "timeout": timeout, "reason": "timeout"}
+        _emit(on_event, "entry_timeout", payload)
+        return _reject("timeout", extra=payload)
 
     if not resultado_engine:
         return _reject("engine_no_result")
@@ -339,37 +359,40 @@ async def verificar_entrada(
     side = str(resultado_engine.get("side", "long")).lower()
     if side not in ("long", "short"):
         side = "long"
-    score = float(resultado_engine.get("score", float("nan")))
-    contradicciones = bool(resultado_engine.get("contradicciones", False))
 
     cfg = getattr(trader, "config", None)
+    score_valid, umbral_score, score, usar_score = _validar_score(cfg, resultado_engine)
+    contradicciones = bool(resultado_engine.get("contradicciones", False))
     if cfg is None:
-        _emit(on_event, "entry_skip", {"symbol": symbol, "reason": "config_missing"})
-        return _reject("config_missing")
+        return _reject_with_skip("config_missing")
 
     # Reglas de contradicción
     bloquea_contra = bool(getattr(cfg, "contradicciones_bloquean_entrada", True))
     if bloquea_contra and contradicciones:
-        _emit(on_event, "entry_skip", {"symbol": symbol, "reason": "contradicciones"})
-        return _reject("contradicciones")
+        extra = {"contradicciones": True}
+        return _reject_with_skip("contradicciones", extra=extra)
 
     # Validación de score técnico
-    if not _validar_score(cfg, resultado_engine):
-        _emit(on_event, "entry_skip", {"symbol": symbol, "reason": "score_bajo"})
-        return _reject("score_bajo")
+    if not score_valid:
+        extra = {
+            "score": None if math.isnan(score) else score,
+            "umbral": umbral_score,
+            "usar_score": usar_score,
+        }
+        return _reject_with_skip("score_bajo", extra=extra)
 
     # Persistencia técnica (si está activada/instanciada)
     resultado_engine = _aplicar_persistencia(trader, symbol, resultado_engine, on_event=on_event)
     if not resultado_engine.get("persistencia_ok", True):
-        _emit(on_event, "entry_skip", {"symbol": symbol, "reason": "persistencia"})
-        return _reject("persistencia")
+        extra = {"persistencia_ok": False}
+        return _reject_with_skip("persistencia", extra=extra)
 
     # Distancias mínimas SL/TP
     min_pct = _min_dist_pct(trader, symbol)
     sl, tp = _build_niveles(precio, min_pct)
     if not _validar_distancias(precio, sl, tp, min_pct):
-        _emit(on_event, "entry_skip", {"symbol": symbol, "reason": "distancias"})
-        return _reject("distancias")
+        extra = {"min_dist_pct": min_pct}
+        return _reject_with_skip("distancias", extra=extra)
 
     # Enriquecimiento opcional con coincidencia parcial (histórico↔pesos)
     try:
@@ -386,7 +409,7 @@ async def verificar_entrada(
         "precio_entrada": precio,
         "stop_loss": sl,
         "take_profit": tp,
-        "score": score,
+        "score": None if math.isnan(score) else score,
         "timestamp": ts_value,
         "persistencia_ok": bool(resultado_engine.get("persistencia_ok", True)),
         "meta": {

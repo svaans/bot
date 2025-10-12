@@ -675,18 +675,29 @@ class Trader(TraderLite):
         else:
             self._eval_enabled.setdefault(eval_key, True)
 
-        on_event_cb: Callable[[str, dict], None] | None = None
+        base_on_event: Callable[[str, dict], None] | None = None
         if hasattr(self, "_emit"):
-            on_event_cb = self._emit
+            base_on_event = self._emit
         elif callable(self.on_event):
-            on_event_cb = self.on_event
+            base_on_event = self.on_event
+
+        captured_events: list[tuple[str, dict[str, Any]]] = []
+
+        def _handle_event(evt: str, data: dict) -> None:
+            captured_events.append((evt, data))
+            if base_on_event is None:
+                return
+            try:
+                base_on_event(evt, data)
+            except Exception:
+                pass
 
         try:
             resultado = await self._execute_pipeline(
                 symbol,
                 df,
                 estado,
-                on_event_cb,
+                _handle_event,
             )
         except asyncio.CancelledError:
             raise
@@ -701,6 +712,24 @@ class Trader(TraderLite):
             return resultado
 
         provider = getattr(self, "_verificar_entrada_provider", None)
+
+        skip_reason: str | None = None
+        skip_details: dict[str, Any] | None = None
+        for evt, data in reversed(captured_events):
+            if evt not in {"entry_skip", "entry_error", "entry_timeout", "entry_gate_blocked"}:
+                continue
+            reason_candidate = data.get("reason")
+            skip_reason = str(reason_candidate) if reason_candidate else evt
+            skip_details = dict(data)
+            break
+
+        if skip_reason is not None:
+            if skip_details is not None and provider and "provider" not in skip_details:
+                skip_details = {**skip_details, "provider": provider}
+            self._last_eval_skip_reason = skip_reason
+            self._last_eval_skip_details = skip_details
+            return None
+        
         self._last_eval_skip_reason = "no_signal" if provider else "pipeline_missing"
         pipeline_diagnostics: dict[str, Any] = {}
         if provider is None:

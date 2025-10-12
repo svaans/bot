@@ -363,3 +363,40 @@ async def test_evaluar_condiciones_de_entrada_con_estrategias_desactivadas(
     )
 
     assert resultado is None
+
+
+@pytest.mark.asyncio
+async def test_evaluar_condiciones_de_entrada_propagates_skip_details(
+    trader_lite: TraderLite,
+) -> None:
+    trader_lite.estrategias_habilitadas = True
+
+    async def pipeline(
+        symbol: str,
+        df: pd.DataFrame,
+        estado: Any,
+        *,
+        on_event: Callable[[str, dict], None] | None = None,
+    ) -> None:
+        if on_event:
+            on_event(
+                "entry_skip",
+                {"symbol": symbol, "reason": "score_bajo", "score": 1.5, "umbral": 2.0},
+            )
+        return None
+
+    trader_lite.verificar_entrada = pipeline  # type: ignore[assignment]
+
+    resultado = await Trader.evaluar_condiciones_de_entrada(
+        trader_lite,
+        "BTCUSDT",
+        pd.DataFrame({"close": [1.0, 2.0, 3.0]}),
+        estado={},
+    )
+
+    assert resultado is None
+    assert trader_lite._last_eval_skip_reason == "score_bajo"
+    details = trader_lite._last_eval_skip_details
+    assert isinstance(details, dict)
+    assert details.get("score") == pytest.approx(1.5)
+    assert details.get("umbral") == pytest.approx(2.0)

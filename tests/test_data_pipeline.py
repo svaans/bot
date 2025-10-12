@@ -360,7 +360,8 @@ async def test_verificar_entradas_emite_motivo_si_engine_falta() -> None:
     )
 
     assert resultado is None
-    assert ("entry_skip", {"symbol": "BTCUSDT", "reason": "engine_missing"}) in eventos
+    skip_events = [data for evt, data in eventos if evt == "entry_skip"]
+    assert any(ev.get("reason") == "engine_missing" for ev in skip_events)
 
 
 @pytest.mark.asyncio
