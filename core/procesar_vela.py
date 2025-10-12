@@ -65,10 +65,27 @@ DEFAULT_MIN_BARS = _DEFAULT_MIN_BARS
 # ──────────────────────────────────────────────────────────────────────────────
 # Métricas (compatibles aunque no haya prometheus_client)
 # ──────────────────────────────────────────────────────────────────────────────
+_DEFAULT_LATENCY_BUCKETS = (0.01, 0.05, 0.1, 0.25, 0.5, 1, 2, 5)
+
 EVAL_LATENCY = Histogram(
     "procesar_vela_eval_latency_seconds",
     "Latencia total de procesar_vela (parseo + buffers + estrategia)",
-    buckets=(0.01, 0.05, 0.1, 0.25, 0.5, 1, 2, 5),
+    buckets=_DEFAULT_LATENCY_BUCKETS,
+)
+PARSE_LATENCY = Histogram(
+    "procesar_vela_parse_latency_seconds",
+    "Latencia de normalización y sanitización de velas",
+    buckets=_DEFAULT_LATENCY_BUCKETS,
+)
+GATING_LATENCY = Histogram(
+    "procesar_vela_gating_latency_seconds",
+    "Latencia de buffers y validaciones previas a la estrategia",
+    buckets=_DEFAULT_LATENCY_BUCKETS,
+)
+STRATEGY_LATENCY = Histogram(
+    "procesar_vela_strategy_latency_seconds",
+    "Latencia de evaluación de estrategias y scoring",
+    buckets=_DEFAULT_LATENCY_BUCKETS,
 )
 HANDLER_EXCEPTIONS = Counter(
     "procesar_vela_exceptions_total",
@@ -168,15 +185,44 @@ def _hash_buffer(items: Deque[dict]) -> Tuple[int, int]:
     return (len(items), int(items[-1].get("timestamp", 0)))
 
 
-def _mark_skip(target: dict, reason: str, details: Optional[dict] = None) -> None:
+def _mark_skip(
+    target: dict,
+    reason: str,
+    details: Optional[dict] = None,
+    *,
+    gate: Optional[str] = None,
+    score: Any | None = None,
+) -> None:
     """Adjunta metadatos de skip al diccionario de la vela."""
 
     if not isinstance(target, dict):
         return
     
     target["_df_skip_reason"] = reason
-    if details:
-        target["_df_skip_details"] = details
+    payload: dict[str, Any] | None = None
+    if isinstance(details, dict):
+        payload = dict(details)
+
+    if payload is None:
+        payload = {}
+
+    gate_value = gate or payload.get("gate")
+    if gate_value is None and reason:
+        gate_value = reason
+    if gate_value is not None:
+        payload["gate"] = str(gate_value)
+
+    score_value: Any | None = score
+    if score_value is None and "score" in payload:
+        score_value = payload.get("score")
+    if score_value is not None:
+        if _is_num(score_value):
+            payload["score"] = float(score_value)
+        else:
+            payload["score"] = score_value
+
+    if payload:
+        target["_df_skip_details"] = payload
     else:
         target.pop("_df_skip_details", None)
 
@@ -340,58 +386,84 @@ class BufferManager:
 
     def __init__(self, maxlen: int = 600) -> None:
         self._maxlen = max(100, int(maxlen))
-        self._estados: Dict[str, SymbolState] = {}
-        self._locks: Dict[str, asyncio.Lock] = {}
+        self._estados: Dict[str, Dict[str, SymbolState]] = {}
+        self._locks: Dict[Tuple[str, str], asyncio.Lock] = {}
 
-    def _get_state(self, symbol: str) -> SymbolState:
-        sym = symbol.upper()
-        st = self._estados.get(sym)
-        if st is None:
-            st = self._estados[sym] = SymbolState(deque(maxlen=self._maxlen))
-        return st
+    @staticmethod
+    def _normalize_symbol(symbol: str) -> str:
+        return str(symbol or "").upper()
 
-    def get_lock(self, symbol: str) -> asyncio.Lock:
-        sym = symbol.upper()
-        lock = self._locks.get(sym)
-        if lock is None:
-            lock = self._locks[sym] = asyncio.Lock()
-        return lock
+    @staticmethod
+    def _normalize_timeframe(timeframe: Optional[str]) -> Tuple[str, Optional[str]]:
+        if timeframe is None:
+            return ("default", None)
+        tf_label = str(timeframe)
+        key = tf_label.lower() or "default"
+        return (key, tf_label)
 
-    def append(self, symbol: str, candle: dict) -> None:
-        sym = symbol.upper()
-        st = self._get_state(sym)
-        st.buffer.append(candle)
+    def _infer_timeframe(self, candle: dict, fallback: Optional[str] = None) -> Optional[str]:
+        if not isinstance(candle, dict):
+            return fallback
         tf = candle.get("timeframe") or candle.get("interval") or candle.get("tf")
         if tf:
-            st.timeframe = str(tf)
-        tf_label = st.timeframe or (str(tf) if tf else None)
+            return str(tf)
+        return fallback
+
+    def _get_state(self, symbol: str, timeframe: Optional[str]) -> Tuple[SymbolState, str, Optional[str]]:
+        sym = self._normalize_symbol(symbol)
+        tf_key, tf_label = self._normalize_timeframe(timeframe)
+        estados_symbol = self._estados.setdefault(sym, {})
+        st = estados_symbol.get(tf_key)
+        if st is None:
+            st = SymbolState(deque(maxlen=self._maxlen))
+            st.timeframe = tf_label
+            estados_symbol[tf_key] = st
+        elif tf_label:
+            st.timeframe = tf_label
+        return st, tf_key, st.timeframe or tf_label
+
+    def get_lock(self, symbol: str, timeframe: Optional[str] = None) -> asyncio.Lock:
+        sym = self._normalize_symbol(symbol)
+        tf_key, _ = self._normalize_timeframe(timeframe)
+        key = (sym, tf_key)
+        lock = self._locks.get(key)
+        if lock is None:
+            lock = self._locks[key] = asyncio.Lock()
+        return lock
+
+    def append(self, symbol: str, candle: dict, timeframe: Optional[str] = None) -> None:
+        inferred_tf = self._infer_timeframe(candle, timeframe)
+        st, _tf_key, tf_label = self._get_state(symbol, inferred_tf)
+        st.buffer.append(candle)
+        metric_tf = tf_label or (str(inferred_tf) if inferred_tf else "unknown")
         try:
             safe_set(
                 BUFFER_SIZE_V2,
                 len(st.buffer),
-                timeframe=tf_label or "unknown",
+                timeframe=metric_tf,
             )
         except Exception as exc:
             log.debug("No se pudo actualizar métrica buffer_size_v2: %s", exc)
 
-    def extend(self, symbol: str, candles: Iterable[dict]) -> None:
+    def extend(self, symbol: str, candles: Iterable[dict], timeframe: Optional[str] = None) -> None:
         for candle in candles:
-            self.append(symbol, candle)
+            tf = self._infer_timeframe(candle, timeframe)
+            self.append(symbol, candle, tf)
 
-    def snapshot(self, symbol: str) -> list[dict]:
-        st = self._get_state(symbol)
+    def snapshot(self, symbol: str, timeframe: Optional[str] = None) -> list[dict]:
+        st, _tf_key, _tf_label = self._get_state(symbol, timeframe)
         return list(st.buffer)
 
-    def size(self, symbol: str) -> int:
-        st = self._get_state(symbol)
+    def size(self, symbol: str, timeframe: Optional[str] = None) -> int:
+        st, _tf_key, _tf_label = self._get_state(symbol, timeframe)
         return len(st.buffer)
 
-    def dataframe(self, symbol: str) -> Optional[pd.DataFrame]:
-        st = self._get_state(symbol)
+    def dataframe(self, symbol: str, timeframe: Optional[str] = None) -> Optional[pd.DataFrame]:
+        st, _tf_key, tf_label = self._get_state(symbol, timeframe)
         h = _hash_buffer(st.buffer)
         if h == st.last_hash and st.last_df is not None:
-            if st.timeframe:
-                _attach_timeframe(st.last_df, st.timeframe)
+            if tf_label:
+                _attach_timeframe(st.last_df, tf_label)
             return st.last_df
 
         if not st.buffer:
@@ -430,7 +502,7 @@ class BufferManager:
         except Exception:
             pass
 
-        _attach_timeframe(df, st.timeframe)
+        _attach_timeframe(df, tf_label)
         st.last_df = df
         st.last_hash = h
         return df
@@ -475,6 +547,40 @@ async def procesar_vela(trader: Any, vela: dict) -> None:
         )
         if timeframe_hint:
             timeframe_label = str(timeframe_hint)
+    stage_durations: dict[str, float] = {}
+    stage_ends: dict[str, float] = {}
+    parse_end: float | None = None
+    gating_end: float | None = None
+    strategy_end: float | None = None
+    bus = getattr(trader, "event_bus", None) or getattr(trader, "bus", None)
+
+    def _mark_stage(stage: str, start_time: float | None) -> float:
+        existing = stage_ends.get(stage)
+        if existing is not None:
+            return existing
+        end_time = time.perf_counter()
+        base = start_time if start_time is not None else t0
+        duration = max(0.0, end_time - base)
+        stage_durations[stage] = duration
+        stage_ends[stage] = end_time
+        return end_time
+
+    def _ensure_gating_end() -> float:
+        nonlocal parse_end, gating_end
+        if parse_end is None:
+            parse_end = _mark_stage("parse", t0)
+        if gating_end is None:
+            gating_end = _mark_stage("gating", parse_end)
+        return gating_end
+
+    def _ensure_strategy_end() -> float:
+        nonlocal parse_end, gating_end, strategy_end
+        if gating_end is None:
+            _ensure_gating_end()
+        if strategy_end is None:
+            strategy_end = _mark_stage("strategy", gating_end)
+        return strategy_end
+    
     try:
         if not isinstance(vela, dict):
             return
@@ -492,6 +598,9 @@ async def procesar_vela(trader: Any, vela: dict) -> None:
             safe_inc(CANDLES_IGNORADAS, reason=reason)
             _mark_skip(vela, reason)
             return
+        
+        if parse_end is None:
+            parse_end = _mark_stage("parse", t0)
 
         # 2) Control por spread (si hay guardia y si el dato viene en la vela)
         spread_ratio = vela.get("spread_ratio") or vela.get("spread")
@@ -500,19 +609,25 @@ async def procesar_vela(trader: Any, vela: dict) -> None:
             try:
                 if hasattr(sg, "allows"):
                     if not sg.allows(symbol, float(spread_ratio)):
+                        _ensure_gating_end()
                         safe_inc(
                             ENTRADAS_RECHAZADAS_V2,
                             symbol=symbol,
                             timeframe=timeframe_label,
                             reason="spread_guard",
                         )
-                        _mark_skip(vela, "spread_guard", {"ratio": float(spread_ratio)})
-                        lock = _buffers.get_lock(symbol)
+                        _mark_skip(
+                            vela,
+                            "spread_guard",
+                            {"ratio": float(spread_ratio)},
+                        )
+                        lock = _buffers.get_lock(symbol, timeframe_hint)
                         async with lock:
-                            _buffers.append(symbol, vela)
+                            _buffers.append(symbol, vela, timeframe=timeframe_hint)
                         return
                 elif hasattr(sg, "permite_entrada"):
                     if not bool(sg.permite_entrada(symbol, {}, 0.0)):
+                        _ensure_gating_end()
                         safe_inc(
                             ENTRADAS_RECHAZADAS_V2,
                             symbol=symbol,
@@ -520,21 +635,23 @@ async def procesar_vela(trader: Any, vela: dict) -> None:
                             reason="spread_guard",
                         )
                         _mark_skip(vela, "spread_guard")
-                        lock = _buffers.get_lock(symbol)
+                        lock = _buffers.get_lock(symbol, timeframe_hint)
                         async with lock:
-                            _buffers.append(symbol, vela)
+                            _buffers.append(symbol, vela, timeframe=timeframe_hint)
                         return
             except Exception:
                 # No bloquear por fallo del guard
                 pass
 
         # 3) Append al buffer por símbolo (protegido por lock)
-        lock = _buffers.get_lock(symbol)
+        buffer_timeframe = timeframe_hint
+        lock = _buffers.get_lock(symbol, buffer_timeframe)
         async with lock:
-            _buffers.append(symbol, vela)
-            df = _buffers.dataframe(symbol)
+            _buffers.append(symbol, vela, timeframe=buffer_timeframe)
+            df = _buffers.dataframe(symbol, timeframe=buffer_timeframe)
 
         if df is None or df.empty:
+            _ensure_gating_end()
             safe_inc(CANDLES_IGNORADAS, reason="empty_df")
             _mark_skip(vela, "empty_df")
             return
@@ -550,6 +667,7 @@ async def procesar_vela(trader: Any, vela: dict) -> None:
 
         ready_checker = getattr(trader, "is_symbol_ready", None)
         if callable(ready_checker) and not ready_checker(symbol, timeframe_label):
+            _ensure_gating_end()
             safe_inc(CANDLES_IGNORADAS, reason="backfill_pending")
             _mark_skip(vela, "backfill_pending")
             return
@@ -586,6 +704,7 @@ async def procesar_vela(trader: Any, vela: dict) -> None:
         if fast_enabled:
             threshold = int(getattr(cfg, "trader_fastpath_threshold", 350))
             if len(df) >= threshold and getattr(cfg, "trader_fastpath_skip_entries", True):
+                _ensure_gating_end()
                 safe_inc(
                     ENTRADAS_RECHAZADAS_V2,
                     symbol=symbol,
@@ -628,7 +747,9 @@ async def procesar_vela(trader: Any, vela: dict) -> None:
             )
         except Exception:
             pass
+        _ensure_gating_end()
         propuesta = await trader.evaluar_condiciones_de_entrada(symbol, df, estado_symbol)
+        _ensure_gating_end()
         skip_reason = getattr(trader, "_last_eval_skip_reason", None)
         skip_details = getattr(trader, "_last_eval_skip_details", None)
         score = None
@@ -644,19 +765,34 @@ async def procesar_vela(trader: Any, vela: dict) -> None:
             },
         )
         if not propuesta:
+            derived_score: Any | None = score
+            if derived_score is None and isinstance(skip_details, dict):
+                derived_score = skip_details.get("score")
             if skip_reason == "pipeline_missing":
                 log.debug(
                     "pipeline_missing_info",
                     extra={"symbol": symbol, "timeframe": timeframe_label},
                 )
-                _mark_skip(vela, skip_reason, skip_details)
+                _mark_skip(
+                    vela,
+                    skip_reason,
+                    skip_details,
+                    gate=skip_reason,
+                    score=derived_score,
+                )
                 return
             if skip_reason:
-                _mark_skip(vela, skip_reason, skip_details)
+                _mark_skip(
+                    vela,
+                    skip_reason,
+                    skip_details,
+                    gate=skip_reason,
+                    score=derived_score,
+                )
             else:
                 provider = getattr(trader, "_verificar_entrada_provider", None)
                 details = {"provider": provider} if provider else None
-                _mark_skip(vela, "no_signal", details)
+                _mark_skip(vela, "no_signal", details, score=derived_score)
             return
 
         side = str(propuesta.get("side", "long")).lower()
@@ -671,7 +807,7 @@ async def procesar_vela(trader: Any, vela: dict) -> None:
                 timeframe=timeframe_label,
                 reason="bad_price",
             )
-            _mark_skip(vela, "bad_price")
+            _mark_skip(vela, "bad_price", score=score)
             return
 
         # 8) Apertura de orden
@@ -683,7 +819,7 @@ async def procesar_vela(trader: Any, vela: dict) -> None:
                 timeframe=timeframe_label,
                 reason="orders_missing",
             )
-            _mark_skip(vela, "orders_missing")
+            _mark_skip(vela, "orders_missing", score=score)
             return
 
         sl = float(propuesta.get("stop_loss", 0.0))
@@ -701,7 +837,7 @@ async def procesar_vela(trader: Any, vela: dict) -> None:
                     timeframe=timeframe_label,
                     reason="ya_abierta",
                 )
-                _mark_skip(vela, "ya_abierta")
+                _mark_skip(vela, "ya_abierta", score=score)
                 return
         except Exception:
             pass
@@ -731,6 +867,33 @@ async def procesar_vela(trader: Any, vela: dict) -> None:
                     symbol=symbol,
                     timeframe=(timeframe_label or "unknown"),
                 )
+        except Exception:
+            pass
+        try:
+            stage_metric_map = {
+                "parse": PARSE_LATENCY,
+                "gating": GATING_LATENCY,
+                "strategy": STRATEGY_LATENCY,
+            }
+            emit_fn = getattr(bus, "emit", None)
+            for stage in ("parse", "gating", "strategy"):
+                duration = stage_durations.get(stage)
+                if duration is None:
+                    continue
+                metric = stage_metric_map.get(stage)
+                if metric is not None:
+                    metric.observe(duration)
+                if callable(emit_fn):
+                    payload = {
+                        "stage": stage,
+                        "duration": duration,
+                        "symbol": symbol,
+                        "timeframe": timeframe_label,
+                    }
+                    try:
+                        emit_fn("procesar_vela.latency", payload)
+                    except Exception:
+                        pass
         except Exception:
             pass
         try:

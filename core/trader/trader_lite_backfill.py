@@ -124,11 +124,11 @@ class TraderLiteBackfillMixin:
 
     def _buffer_append_many(self, symbol: str, timeframe: str, candles: List[Dict[str, Any]]) -> None:
         manager = self._get_buffer_manager()
-        manager.extend(symbol, candles)
+        manager.extend(symbol, candles, timeframe=timeframe)
 
     def _buffer_get(self, symbol: str, timeframe: str) -> List[Dict[str, Any]]:
         manager = self._get_buffer_manager()
-        return manager.snapshot(symbol)
+        return manager.snapshot(symbol, timeframe=timeframe)
 
     def _get_buffer_manager(self):
         if self._buffer_manager is None:

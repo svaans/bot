@@ -437,6 +437,9 @@ async def test_procesar_vela_no_falla_si_metricas_explotan(monkeypatch: pytest.M
     monkeypatch.setattr("core.procesar_vela.LAST_BAR_AGE", ExplodingMetric())
     monkeypatch.setattr("core.procesar_vela.HANDLER_EXCEPTIONS", ExplodingMetric())
     monkeypatch.setattr("core.procesar_vela.EVAL_LATENCY", ExplodingHistogram())
+    monkeypatch.setattr("core.procesar_vela.PARSE_LATENCY", ExplodingHistogram())
+    monkeypatch.setattr("core.procesar_vela.GATING_LATENCY", ExplodingHistogram())
+    monkeypatch.setattr("core.procesar_vela.STRATEGY_LATENCY", ExplodingHistogram())
 
     await procesar_vela_handler(trader, invalid_candle)
     await procesar_vela_handler(trader, candle)

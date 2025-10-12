@@ -96,6 +96,7 @@ class WarmupTrader:
             "buffer_len": len(df),
             "min_needed": 5,
             "timeframe": getattr(df, "tf", None),
+            "score": -1.0,
         }
         return None
 
@@ -116,6 +117,9 @@ def reset_buffers() -> Generator[Any, None, None]:
             "CANDLES_IGNORADAS",
             "HANDLER_EXCEPTIONS",
             "EVAL_LATENCY",
+            "PARSE_LATENCY",
+            "GATING_LATENCY",
+            "STRATEGY_LATENCY",
             "BUFFER_SIZE_V2",
             "WARMUP_RESTANTE",
             "LAST_BAR_AGE",
@@ -194,5 +198,7 @@ async def test_procesar_vela_marca_skip_reason_de_trader() -> None:
     assert isinstance(details, dict)
     assert details.get("buffer_len", 0) >= 1
     assert details.get("min_needed") == 5
+    assert details.get("gate") == "warmup"
+    assert details.get("score") == pytest.approx(-1.0)
     trace_id = candle.get("_df_trace_id")
     assert isinstance(trace_id, str) and len(trace_id) >= 8
