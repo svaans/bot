@@ -1,5 +1,7 @@
 import pandas as pd
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta, timezone
+
+UTC = timezone.utc
 from core.utils import configurar_logger
 from core.strategies.exit.salida_utils import resultado_salida
 log = configurar_logger('salida_tiempo_maximo')

@@ -1,7 +1,9 @@
 import os
 import pandas as pd
 import numpy as np
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta, timezone
+
+UTC = timezone.utc
 RUTA_RESULTADOS = 'backtesting'
 
 

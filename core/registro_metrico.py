@@ -1,6 +1,8 @@
 import os
 import time
-from datetime import UTC, datetime
+from datetime import datetime, timezone
+
+UTC = timezone.utc
 import pandas as pd
 import threading
 from core.utils.logger import configurar_logger

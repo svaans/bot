@@ -1,7 +1,9 @@
 import os
 import glob
 import json
-from datetime import UTC, datetime
+from datetime import datetime, timezone
+
+UTC = timezone.utc
 import pandas as pd
 from dotenv import dotenv_values
 from core.utils.utils import configurar_logger
@@ -107,7 +109,7 @@ def ejecutar_ciclo() ->None:
     for ruta in archivos:
         symbol = os.path.splitext(os.path.basename(ruta))[0].replace('_', '/')
         procesar_simbolo(symbol, ruta)
-    if datetime.now(UTC).weekday() == 0
+    if datetime.now(UTC).weekday() == 0:
         recalibrar_pesos_semana()
 
 

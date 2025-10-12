@@ -2,7 +2,9 @@ import asyncio
 import sqlite3
 import os
 from collections.abc import Awaitable, Callable
-from datetime import UTC, datetime
+from datetime import datetime, timezone
+
+UTC = timezone.utc
 from typing import Any
 import inspect
 

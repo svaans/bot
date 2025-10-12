@@ -1,16 +1,33 @@
 """Gestión de riesgo del bot."""
 from __future__ import annotations
-import numpy as np
-from core.utils.utils import configurar_logger
-from core.risk.riesgo import riesgo_superado as _riesgo_superado, actualizar_perdida
-from core.reporting import reporter_diario
-from core.event_bus import EventBus
-from datetime import UTC, datetime, timedelta
+
+from datetime import datetime, timedelta, timezone
+
+UTC = timezone.utc
 from typing import Any, Dict, Set, TYPE_CHECKING
+
+import numpy as np
+
+from core.event_bus import EventBus
+from core.reporting import reporter_diario
+from core.risk.riesgo import actualizar_perdida
+from core.risk.riesgo import riesgo_superado as _riesgo_superado
+from core.registro_metrico import registro_metrico
+from core.utils.metrics_compat import Gauge
+from core.utils.utils import configurar_logger
 
 if TYPE_CHECKING:  # pragma: no cover - solo para tipado
     from core.capital_manager import CapitalManager
 log = configurar_logger('risk', modo_silencioso=True)
+
+RIESGO_CONSUMIDO_GAUGE = Gauge(
+    'risk_daily_consumed',
+    'Riesgo diario acumulado por el gestor de riesgo',
+)
+COOLDOWN_ACTIVO_GAUGE = Gauge(
+    'risk_cooldown_active',
+    'Indicador binario de cooldown global en el gestor de riesgo',
+)
 
 
 class RiskManager:
@@ -22,6 +39,7 @@ class RiskManager:
         bus: EventBus | None = None,
         capital_manager: "CapitalManager" | None = None,
         cooldown_pct: float = 0.1,
+        correlacion_ttl: int = 1800,
         cooldown_duracion: int = 300,
     ) -> None:
         self.umbral = umbral
@@ -30,11 +48,13 @@ class RiskManager:
         self.capital_manager = capital_manager
         self.cooldown_pct = cooldown_pct
         self.cooldown_duracion = cooldown_duracion
+        self.correlacion_ttl = timedelta(seconds=max(0, correlacion_ttl))
         self._cooldown_fin: datetime | None = None
         self.posiciones_abiertas: Set[str] = set()
-        self.correlaciones: Dict[str, Dict[str, float]] = {}
+        self.correlaciones: Dict[str, Dict[str, tuple[float, datetime]]] = {}
         self._fecha_riesgo = datetime.now(UTC).date()
         self.riesgo_diario = 0.0
+        self._ultimo_factor_kelly = 1.0
         if bus:
             self.subscribe(bus)
 
@@ -59,14 +79,35 @@ class RiskManager:
             if hoy != self._fecha_riesgo:
                 self._fecha_riesgo = hoy
                 self.riesgo_diario = 0.0
+                RIESGO_CONSUMIDO_GAUGE.set(self.riesgo_diario)
             perdida_abs = abs(perdida)
             self.riesgo_diario += perdida_abs
+            RIESGO_CONSUMIDO_GAUGE.set(self.riesgo_diario)
+            registro_metrico.registrar(
+                "risk_drawdown",
+                {
+                    "symbol": symbol,
+                    "loss": float(perdida_abs),
+                    "riesgo_diario": float(self.riesgo_diario),
+                },
+            )
             actualizar_perdida(symbol, perdida)
             capital_symbol = 0.0
             if self.capital_manager:
                 capital_symbol = self.capital_manager.capital_por_simbolo.get(symbol, 0.0)
             if capital_symbol > 0 and perdida_abs / capital_symbol > self.cooldown_pct:
+                estaba_activo = self.cooldown_activo
                 self._cooldown_fin = datetime.now(UTC) + timedelta(seconds=self.cooldown_duracion)
+                COOLDOWN_ACTIVO_GAUGE.set(1.0)
+                if self.bus and not estaba_activo:
+                    payload = {
+                        "symbol": symbol,
+                        "perdida": float(perdida_abs),
+                        "cooldown_fin": self._cooldown_fin.isoformat(),
+                    }
+                    self.bus.emit("risk.cooldown_activated", payload)
+            elif self._cooldown_fin is None:
+                COOLDOWN_ACTIVO_GAUGE.set(0.0)
 
     # --- Gestión de correlaciones entre posiciones ---
     def abrir_posicion(self, symbol: str) -> None:
@@ -82,21 +123,35 @@ class RiskManager:
 
     def registrar_correlaciones(self, symbol: str, correlaciones: dict[str, float]) -> None:
         """Registra correlaciones de ``symbol`` con otras posiciones abiertas."""
+        self._limpiar_correlaciones_expiradas()
         if symbol not in self.posiciones_abiertas:
             return
         self.correlaciones.setdefault(symbol, {})
+        marca = datetime.now(UTC)
         for otro, rho in correlaciones.items():
-            if otro in self.posiciones_abiertas:
-                self.correlaciones[symbol][otro] = rho
-                self.correlaciones.setdefault(otro, {})[symbol] = rho
+            if otro in self.posiciones_abiertas and otro != symbol:
+                self.correlaciones[symbol][otro] = (rho, marca)
+                self.correlaciones.setdefault(otro, {})[symbol] = (rho, marca)
 
     def correlacion_media(self, symbol: str, correlaciones: dict[str, float]) -> float:
         """Calcula la correlación media absoluta con posiciones abiertas."""
-        valores = [
-            abs(correlaciones[abierta])
-            for abierta in self.posiciones_abiertas
-            if abierta != symbol and abierta in correlaciones
-        ]
+        self._limpiar_correlaciones_expiradas()
+        valores: list[float] = []
+        correlaciones_existentes = self.correlaciones.get(symbol, {})
+        marca = datetime.now(UTC)
+        for abierta in self.posiciones_abiertas:
+            if abierta == symbol:
+                continue
+            rho = None
+            if abierta in correlaciones:
+                rho = correlaciones[abierta]
+            elif abierta in correlaciones_existentes:
+                rho, ts = correlaciones_existentes[abierta]
+                if not self._correlacion_vigente(ts, marca):
+                    self._eliminar_correlacion(symbol, abierta)
+                    rho = None
+            if rho is not None:
+                valores.append(abs(float(rho)))
         if not valores:
             return 0.0
         return float(np.mean(valores))
@@ -122,7 +177,17 @@ class RiskManager:
     # --- Métricas internas ---
     @property
     def cooldown_activo(self) -> bool:
-        return bool(self._cooldown_fin and datetime.now(UTC) < self._cooldown_fin)
+        if self._cooldown_fin is None:
+            COOLDOWN_ACTIVO_GAUGE.set(0.0)
+            return False
+        ahora = datetime.now(UTC)
+        if ahora >= self._cooldown_fin:
+            self._cooldown_fin = None
+            self._limpiar_correlaciones_expiradas(force=True)
+            COOLDOWN_ACTIVO_GAUGE.set(0.0)
+            return False
+        COOLDOWN_ACTIVO_GAUGE.set(1.0)
+        return True
 
     @property
     def riesgo_consumido(self) -> float:
@@ -130,9 +195,12 @@ class RiskManager:
 
     def metricas(self) -> dict[str, float | bool]:
         """Devuelve un resumen de métricas de riesgo."""
+        riesgo = self.riesgo_consumido
+        RIESGO_CONSUMIDO_GAUGE.set(riesgo)
+        activo = self.cooldown_activo
         return {
-            'riesgo_consumido': self.riesgo_consumido,
-            'cooldown_activo': self.cooldown_activo,
+            'riesgo_consumido': riesgo,
+            'cooldown_activo': activo,
         }
 
     def ajustar_umbral(self, segun_metricas: dict) ->None:
@@ -221,6 +289,12 @@ class RiskManager:
             self._factor_kelly_prev = factor
             factor = round(factor, 3)
             log.debug(f'🔧 Multiplicador Kelly calculado: {factor:.3f}')
+            if self.capital_manager and abs(factor - self._ultimo_factor_kelly) > 1e-3:
+                try:
+                    self.capital_manager.aplicar_multiplicador_kelly(factor)
+                except AttributeError:
+                    log.debug('CapitalManager sin soporte para multiplicador Kelly')
+            self._ultimo_factor_kelly = factor
             return factor
         except Exception as e:
             log.warning(f'⚠️ Error calculando multiplicador Kelly: {e}')
@@ -247,6 +321,38 @@ class RiskManager:
             f'🌪️ Volatilidad excesiva, aplicando factor de reducción: {factor}'
             )
         return factor
+    
+    def _correlacion_vigente(self, timestamp: datetime, ahora: datetime | None = None) -> bool:
+        if self.correlacion_ttl.total_seconds() <= 0:
+            return True
+        if ahora is None:
+            ahora = datetime.now(UTC)
+        return timestamp >= (ahora - self.correlacion_ttl)
+
+    def _eliminar_correlacion(self, symbol: str, otro: str) -> None:
+        mapa = self.correlaciones.get(symbol)
+        if mapa and otro in mapa:
+            mapa.pop(otro, None)
+            if not mapa:
+                self.correlaciones.pop(symbol, None)
+        mapa_otro = self.correlaciones.get(otro)
+        if mapa_otro and symbol in mapa_otro:
+            mapa_otro.pop(symbol, None)
+            if not mapa_otro:
+                self.correlaciones.pop(otro, None)
+
+    def _limpiar_correlaciones_expiradas(self, *, force: bool = False) -> None:
+        if not self.correlaciones:
+            return
+        if force:
+            self.correlaciones.clear()
+            return
+        ahora = datetime.now(UTC)
+        limite = ahora - self.correlacion_ttl
+        for symbol, otros in list(self.correlaciones.items()):
+            for otro, (_, timestamp) in list(otros.items()):
+                if timestamp < limite:
+                    self._eliminar_correlacion(symbol, otro)
     
     async def kill_switch(
         self,

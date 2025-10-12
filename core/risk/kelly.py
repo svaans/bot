@@ -1,6 +1,8 @@
 import os
 import re
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta, timezone
+
+UTC = timezone.utc
 from math import isclose
 import pandas as pd
 from core.utils.utils import configurar_logger

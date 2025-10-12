@@ -13,7 +13,9 @@ Cada etapa valida condiciones técnicas antes de ejecutar el cierre.
 """
 
 from __future__ import annotations
-from datetime import UTC, datetime
+from datetime import datetime, timezone
+
+UTC = timezone.utc
 import asyncio
 import pandas as pd
 from core.utils import configurar_logger

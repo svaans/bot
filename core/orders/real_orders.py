@@ -30,7 +30,9 @@ import threading
 import asyncio
 from typing import Any, Mapping
 from concurrent.futures import ProcessPoolExecutor, as_completed
-from datetime import UTC, datetime
+from datetime import datetime, timezone
+
+UTC = timezone.utc
 from binance_api.cliente import obtener_cliente
 from binance_api.filters import get_symbol_filters
 from .order_model import Order, normalizar_precio_cantidad

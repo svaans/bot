@@ -1,7 +1,9 @@
 import os
 import json
 import pandas as pd
-from datetime import UTC, datetime
+from datetime import datetime, timezone
+
+UTC = timezone.utc
 from .analisis_resultados import analizar_estrategias_en_ordenes
 from core.strategies.ajustador_pesos import ajustar_pesos_por_desempeno
 from core.strategies.pesos import gestor_pesos

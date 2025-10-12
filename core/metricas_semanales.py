@@ -1,7 +1,9 @@
 import os
 import json
 import time
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta, timezone
+
+UTC = timezone.utc
 import pandas as pd
 from core.utils.utils import leer_csv_seguro
 from core.utils.logger import configurar_logger

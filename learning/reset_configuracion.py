@@ -1,6 +1,8 @@
 import os
 import json
-from datetime import UTC, datetime
+from datetime import datetime, timezone
+
+UTC = timezone.utc
 RUTA_BASE = 'config/configuraciones_base.json'
 RUTA_ACTUAL = 'config/configuraciones_optimas.json'
 RUTA_CONTROL = 'config/reset_config_fecha.txt'

@@ -1,11 +1,14 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta, timezone
+
+UTC = timezone.utc
 from types import SimpleNamespace
 from typing import Any
 
 import pytest
 
+import core.risk.risk_manager as risk_module
 from core.risk.risk_manager import RiskManager
 
 
@@ -13,9 +16,16 @@ class DummyCapitalManager:
     def __init__(self, capital: dict[str, float], *, libre: bool = True) -> None:
         self.capital_por_simbolo = capital
         self._libre = libre
+        self.fraccion_kelly = 0.1
+        self.aplicados: list[float] = []
 
     def hay_capital_libre(self) -> bool:
         return self._libre
+    
+    def aplicar_multiplicador_kelly(self, factor: float) -> float:
+        self.aplicados.append(factor)
+        self.fraccion_kelly = 0.1 * factor
+        return self.fraccion_kelly
 
 
 @pytest.fixture(autouse=True)
@@ -27,6 +37,8 @@ def patch_dependencies(monkeypatch: pytest.MonkeyPatch) -> None:
 
     dummy_reporter = SimpleNamespace(ultimas_operaciones={})
     monkeypatch.setattr("core.risk.risk_manager.reporter_diario", dummy_reporter)
+    dummy_registro = SimpleNamespace(registrar=lambda *args, **kwargs: None)
+    monkeypatch.setattr("core.risk.risk_manager.registro_metrico", dummy_registro)
 
 
 def test_registrar_perdida_activa_cooldown() -> None:
@@ -37,6 +49,28 @@ def test_registrar_perdida_activa_cooldown() -> None:
 
     assert pytest.approx(manager.riesgo_diario, rel=1e-9) == 20.0
     assert manager.cooldown_activo is True
+
+def test_registrar_perdida_publica_evento_cooldown() -> None:
+    class DummyBus:
+        def __init__(self) -> None:
+            self.events: list[tuple[str, Any]] = []
+
+        def subscribe(self, *_: Any, **__: Any) -> None:
+            return None
+
+        def emit(self, event_type: str, data: Any | None = None) -> None:
+            self.events.append((event_type, data))
+
+    bus = DummyBus()
+    capital = DummyCapitalManager({"BTCUSDT": 100.0})
+    manager = RiskManager(0.05, bus=bus, capital_manager=capital, cooldown_pct=0.1, cooldown_duracion=30)
+
+    manager.registrar_perdida("BTCUSDT", -20.0)
+
+    assert bus.events
+    evento, payload = bus.events[0]
+    assert evento == "risk.cooldown_activated"
+    assert payload["symbol"] == "BTCUSDT"
 
 
 def test_permite_entrada_verifica_condiciones() -> None:
@@ -57,6 +91,28 @@ def test_permite_entrada_verifica_condiciones() -> None:
 
     correlaciones = {"BTCUSDT": 0.1}
     assert manager.permite_entrada("ETHUSDT", correlaciones, 0.5) is True
+
+def test_correlaciones_expiran(monkeypatch: pytest.MonkeyPatch) -> None:
+    capital = DummyCapitalManager({"BTCUSDT": 100.0, "ETHUSDT": 100.0})
+    manager = RiskManager(0.05, capital_manager=capital, correlacion_ttl=1)
+    manager.abrir_posicion("BTCUSDT")
+    manager.abrir_posicion("ETHUSDT")
+    manager.registrar_correlaciones("BTCUSDT", {"ETHUSDT": 0.8})
+
+    assert pytest.approx(manager.correlacion_media("BTCUSDT", {}), rel=1e-9) == 0.8
+
+    real_datetime = risk_module.datetime
+
+    class FutureDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):  # type: ignore[override]
+            return real_datetime.now(tz) + timedelta(seconds=5)
+
+    monkeypatch.setattr(risk_module, "datetime", FutureDateTime)
+
+    manager._limpiar_correlaciones_expiradas()
+    assert manager.correlacion_media("BTCUSDT", {}) == 0.0
+    assert not manager.correlaciones
 
 
 def test_ajustar_umbral_aplica_reglas() -> None:
@@ -98,7 +154,8 @@ def test_multiplicador_kelly_media_suavizada(monkeypatch: pytest.MonkeyPatch) ->
         }
     )
     monkeypatch.setattr("core.risk.risk_manager.reporter_diario", dummy_reporter)
-    manager = RiskManager(0.05)
+    capital = DummyCapitalManager({"BTC": 100.0, "ETH": 100.0})
+    manager = RiskManager(0.05, capital_manager=capital)
 
     factor1 = manager.multiplicador_kelly(n_trades=3)
     assert 0.5 <= factor1 <= 1.5
@@ -106,6 +163,8 @@ def test_multiplicador_kelly_media_suavizada(monkeypatch: pytest.MonkeyPatch) ->
     dummy_reporter.ultimas_operaciones["BTC"].append({"retorno_total": 0.2})
     factor2 = manager.multiplicador_kelly(n_trades=3)
     assert factor1 <= factor2 <= 1.5
+    assert capital.aplicados  # Se aplicó al menos un factor
+    assert pytest.approx(capital.aplicados[-1], rel=1e-9) == factor2
 
 
 @pytest.mark.asyncio

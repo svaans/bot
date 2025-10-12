@@ -1,6 +1,8 @@
 import os
 import json
-from datetime import UTC, datetime
+from datetime import datetime, timezone
+
+UTC = timezone.utc
 from core.strategies.pesos import gestor_pesos
 RUTA_BASE = 'config/estrategias_pesos_base.json'
 RUTA_ACTUAL = 'config/estrategias_pesos.json'

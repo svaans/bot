@@ -24,6 +24,8 @@ class CapitalManager:
         self.config = config
         self.cliente = cliente
         self.risk = risk
+        self._fraccion_kelly_base = fraccion_kelly
+        self._multiplicador_kelly = 1.0
         self.fraccion_kelly = fraccion_kelly
         self.modo_real = getattr(config, 'modo_real', False)
         self.modo_capital_bajo = config.modo_capital_bajo
@@ -43,6 +45,23 @@ class CapitalManager:
         self.fecha_actual = datetime.now(UTC).date()
         if bus:
             self.subscribe(bus)
+
+    def aplicar_multiplicador_kelly(self, factor: float) -> float:
+        """Actualiza ``fraccion_kelly`` aplicando ``factor`` controlado por riesgo."""
+        if not isinstance(factor, (int, float)) or factor <= 0:
+            log.warning('Factor Kelly inválido: %s', factor)
+            return self.fraccion_kelly
+        factor = float(max(0.1, min(2.0, factor)))
+        if abs(factor - self._multiplicador_kelly) < 1e-6:
+            return self.fraccion_kelly
+        self._multiplicador_kelly = factor
+        self.fraccion_kelly = round(self._fraccion_kelly_base * factor, 6)
+        log.debug(
+            '🎯 Multiplicador Kelly aplicado: factor=%.3f → fracción=%.6f',
+            factor,
+            self.fraccion_kelly,
+        )
+        return self.fraccion_kelly
 
     async def inicializar_capital_async(self) -> None:
         """Obtiene el capital actual de manera asíncrona."""
