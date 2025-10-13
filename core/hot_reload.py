@@ -6,6 +6,7 @@ import os
 import sys
 import time
 import threading
+import logging
 from pathlib import Path
 from typing import Iterable, Optional, Sequence, Set
 
@@ -75,6 +76,33 @@ NOISY_FILE_PATTERNS: Set[str] = {
     "**/*.swo",
     "**/*.dist-info",
 }
+
+
+_NOISY_WATCHDOG_LOGGERS: tuple[str, ...] = (
+    "watchdog.observers.inotify_buffer",
+    "watchdog.observers.inotify_c",
+    "watchdog.observers.inotify",
+    "watchdog.observers.read_buffer",
+)
+
+
+def _configure_watchdog_logging(*, min_level: int = logging.WARNING) -> None:
+    """Eleva el nivel de logging de watchdog para evitar ruido en DEBUG.
+
+    Watchdog emite eventos ``DEBUG`` por cada archivo observado. En entornos donde
+    el árbol del proyecto contiene un ``venv/`` local, esto genera una cantidad
+    masiva de mensajes (por ejemplo ``IN_ISDIR|IN_OPEN``) que saturan la salida.
+
+    Para mantener el output limpio, aumentamos el nivel mínimo de los loggers
+    ruidosos sólo si actualmente están en ``NOTSET`` o en un nivel más permisivo
+    que ``min_level``. De esta forma, respetamos cualquier configuración explícita
+    que haya hecho el usuario.
+    """
+
+    for name in _NOISY_WATCHDOG_LOGGERS:
+        logger = logging.getLogger(name)
+        if logger.level in (logging.NOTSET, 0) or logger.level < min_level:
+            logger.setLevel(min_level)
 
 
 def _path_is_excluded(path: Path, exclude: Set[str]) -> bool:
@@ -313,6 +341,8 @@ def start_hot_reload(
     watch_paths : Iterable[Path | str] | None
         Subconjunto de rutas dentro de `path` a vigilar. Si se omite, se observa todo el árbol.
     """
+    _configure_watchdog_logging()
+    
     root = Path(path).resolve()
     root.mkdir(parents=True, exist_ok=True)
 

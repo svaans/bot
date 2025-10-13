@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 import pytest
 from watchdog.events import FileModifiedEvent, FileMovedEvent
 
-from core.hot_reload import _DebouncedReloader
+from core.hot_reload import _DebouncedReloader, _configure_watchdog_logging, _NOISY_WATCHDOG_LOGGERS
 
 
 class _DummyTimer:
@@ -96,3 +97,37 @@ def test_reloader_uses_destination_path_on_moves(tmp_path, patched_timer):
     assert patched_timer == [0.5]
     assert handler._last_path is not None
     assert handler._last_path.name == "module.py"
+
+
+def test_configure_watchdog_logging_sets_warning_when_unset():
+    logger_name = _NOISY_WATCHDOG_LOGGERS[0]
+    noisy_logger = logging.getLogger(logger_name)
+    original_level = noisy_logger.level
+    root_logger = logging.getLogger()
+    original_root_level = root_logger.level
+
+    try:
+        noisy_logger.setLevel(logging.NOTSET)
+        root_logger.setLevel(logging.DEBUG)
+
+        _configure_watchdog_logging(min_level=logging.WARNING)
+
+        assert noisy_logger.level == logging.WARNING
+    finally:
+        noisy_logger.setLevel(original_level)
+        root_logger.setLevel(original_root_level)
+
+
+def test_configure_watchdog_logging_respects_manual_level():
+    logger_name = _NOISY_WATCHDOG_LOGGERS[0]
+    noisy_logger = logging.getLogger(logger_name)
+    original_level = noisy_logger.level
+
+    try:
+        noisy_logger.setLevel(logging.ERROR)
+
+        _configure_watchdog_logging(min_level=logging.WARNING)
+
+        assert noisy_logger.level == logging.ERROR
+    finally:
+        noisy_logger.setLevel(original_level)
