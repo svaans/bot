@@ -73,7 +73,7 @@ class _TelegramBackend:
         if not self.token:
             raise NotificationDeliveryError("Token de Telegram no configurado")
 
-        url = f"{self._base_url}/bot{self.token}/sendMessage
+        url = f"{self._base_url}/bot{self.token}/sendMessage"
         try:
             async with session.post(url, json=payload) as response:
                 status = response.status
