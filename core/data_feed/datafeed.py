@@ -475,6 +475,9 @@ class DataFeed:
     def _register_reconnect_attempt(self, key: str, reason: str) -> bool:
         return events_module.register_reconnect_attempt(self, key, reason)
 
+    def _verify_reconnect_limits(self, key: str, reason: str) -> bool:
+        return events_module.verify_reconnect_limits(self, key, reason)
+
     def _reset_reconnect_tracking(self, key: str) -> None:
         events_module.reset_reconnect_tracking(self, key)
 
