@@ -7,6 +7,7 @@ mantener ``trader_lite`` más legible y fácil de mantener.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 from types import SimpleNamespace
 from typing import Any, Dict, List, Optional
 
@@ -34,6 +35,7 @@ class TraderLiteBackfillMixin:
     _backfill_enabled: bool
     _backfill_mode: str
     _backfill_task: Optional[asyncio.Task]
+    _backfill_cancel_timeout: float
     _backfill_min_needed: int
     _backfill_warmup_extra: int
     _backfill_headroom: int
@@ -104,6 +106,38 @@ class TraderLiteBackfillMixin:
             task.result()
         except Exception:
             log.exception("Backfill en paralelo finalizó con error")
+        finally:
+            if task is self._backfill_task:
+                self._backfill_task = None
+
+    async def _stop_backfill(self) -> None:
+        """Cancela la tarea de backfill en modo B esperando su cierre ordenado."""
+
+        task = self._backfill_task
+        if task is None:
+            return
+
+        timeout = float(getattr(self, "_backfill_cancel_timeout", 15.0))
+
+        if not task.done():
+            task.cancel()
+            try:
+                await asyncio.wait_for(task, timeout)
+            except asyncio.TimeoutError:
+                log.warning(
+                    "Timeout esperando que termine backfill paralelo",
+                    extra={"event": "backfill.stop_timeout", "timeout": timeout},
+                )
+            except asyncio.CancelledError:
+                pass
+            except Exception:
+                log.exception("Error esperando cierre de backfill paralelo")
+        else:
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await task
+
+        if self._backfill_task is task:
+            self._backfill_task = None
 
     def _backfill_set_ready(self, symbol: str, timeframe: str, ready: bool) -> None:
         key = (symbol.upper(), timeframe.lower())
