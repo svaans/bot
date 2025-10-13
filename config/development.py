@@ -18,6 +18,10 @@ class DevelopmentConfig:
     telegram_chat_id: str | None = None
     umbral_score_tecnico: float = 2.0
     usar_score_tecnico: bool = True
+    umbral_score_overrides: Dict[str, float] = field(default_factory=dict)
+    usar_score_overrides: Dict[str, bool] = field(default_factory=dict)
+    persistencia_strict: bool = False
+    persistencia_strict_overrides: Dict[str, bool] = field(default_factory=dict)
     contradicciones_bloquean_entrada: bool = False
     registro_tecnico_csv: str = 'logs/rechazos_tecnico.csv'
     umbral_confirmacion_micro: float = 0.6
