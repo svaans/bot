@@ -9,10 +9,12 @@ try:  # pragma: no cover - dependencias opcionales
     from prometheus_client import Gauge as PromGauge
     from prometheus_client import Histogram as PromHistogram
     from prometheus_client import start_wsgi_server as prom_start_wsgi_server
+    from prometheus_client import REGISTRY as PROM_REGISTRY
 except Exception:  # pragma: no cover - fallback
     PromCounter = PromGauge = PromHistogram = None  # type: ignore[assignment]
 
     prom_start_wsgi_server = None  # type: ignore[assignment]
+    PROM_REGISTRY = None  # type: ignore[assignment]
 
 HAVE_PROM = PromCounter is not None
 
@@ -65,9 +67,7 @@ class Counter(_BaseMetric):
     def __init__(self, name: str, documentation: str, labelnames: Iterable[str] | None = None) -> None:
         super().__init__(name, documentation, tuple(labelnames or ()))
         self._value: float = 0.0
-        if PromCounter:
-            self._metric = PromCounter(name, documentation, self.labelnames)
-
+        self._metric = _reuse_or_create_metric(PromCounter, name, documentation, self.labelnames)
     def inc(self, amount: float = 1.0) -> None:
         self._value += amount
         if self._metric is not None:
@@ -78,8 +78,7 @@ class Gauge(_BaseMetric):
     def __init__(self, name: str, documentation: str, labelnames: Iterable[str] | None = None) -> None:
         super().__init__(name, documentation, tuple(labelnames or ()))
         self._value: float = 0.0
-        if PromGauge:
-            self._metric = PromGauge(name, documentation, self.labelnames)
+        self._metric = _reuse_or_create_metric(PromGauge, name, documentation, self.labelnames)
 
     def inc(self, amount: float = 1.0) -> None:
         self._value += amount
@@ -108,10 +107,8 @@ class Histogram(_BaseMetric):
     ) -> None:
         super().__init__(name, documentation, tuple(labelnames or ()))
         self._observations: list[float] = []
-        if PromHistogram:
-            kwargs = {"buckets": buckets} if buckets is not None else {}
-            self._metric = PromHistogram(name, documentation, self.labelnames, **kwargs)
-
+        kwargs = {"buckets": buckets} if buckets is not None else {}
+        self._metric = _reuse_or_create_metric(PromHistogram, name, documentation, self.labelnames, **kwargs)
     def observe(self, value: float) -> None:
         self._observations.append(value)
         if self._metric is not None:
@@ -133,3 +130,27 @@ def start_wsgi_server(port: int, addr: str = "0.0.0.0") -> Any:
             return None
 
     return _DummyServer(port, addr)
+
+
+
+def _reuse_or_create_metric(factory: Any, name: str, documentation: str, labelnames: Tuple[str, ...], **kwargs: Any) -> Any:
+    """Crea la métrica Prometheus reutilizando instancias existentes si es posible."""
+
+    if factory is None:
+        return None
+
+    try:
+        return factory(name, documentation, labelnames, **kwargs)
+    except ValueError as exc:  # pragma: no cover - depende del entorno de métricas
+        if PROM_REGISTRY is None:
+            raise exc
+        existing = PROM_REGISTRY._names_to_collectors.get(name)  # type: ignore[attr-defined]
+        if existing is None:
+            raise exc
+        # Validar que el tipo y labels coincidan antes de reutilizar
+        expected_type = getattr(factory, "_type", getattr(existing, "_type", None))
+        if getattr(existing, "_type", None) != expected_type:
+            raise exc
+        if tuple(getattr(existing, "_labelnames", ())) != labelnames:
+            raise exc
+        return existing
