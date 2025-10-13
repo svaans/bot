@@ -177,7 +177,16 @@ async def main():
         exporter_server = iniciar_exporter()
         # start_supervision puede ser sync o async en tu implementación
         await _maybe_await(start_supervision())
-        observer = start_hot_reload(path=Path.cwd(), modules=None)
+        observer = start_hot_reload(
+            path=Path.cwd(),
+            modules=None,
+            watch_paths=(
+                "core",
+                "data_feed",
+                "trader_modular.py",
+                "main.py",
+            ),
+        )
     except Exception:
         print('❌ Fallo durante la inicialización de infraestructura:')
         traceback.print_exc()
