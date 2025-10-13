@@ -90,6 +90,36 @@ def _parse_float_mapping(clave: str) -> Dict[str, float]:
     return resultado
 
 
+def _parse_bool_mapping(clave: str) -> Dict[str, bool]:
+    """Parses mappings ``SIMBOLO:valor`` en booleanos tolerantes."""
+
+    resultado: Dict[str, bool] = {}
+    raw = os.getenv(clave, "")
+    if not raw:
+        return resultado
+
+    truthy = {"true", "1", "yes", "on", "y", "t"}
+    falsy = {"false", "0", "no", "off", "n", "f"}
+
+    for fragmento in raw.split(','):
+        fragmento = fragmento.strip()
+        if not fragmento:
+            continue
+        if ':' not in fragmento:
+            log.warning(f'⚠️ Formato inválido en {clave}: {fragmento}')
+            continue
+        simbolo, valor = fragmento.split(':', 1)
+        simbolo = simbolo.strip().upper()
+        valor_norm = valor.strip().lower()
+        if valor_norm in truthy:
+            resultado[simbolo] = True
+        elif valor_norm in falsy:
+            resultado[simbolo] = False
+        else:
+            log.warning(f'⚠️ Valor inválido en {clave} para {simbolo}: {valor}')
+    return resultado
+
+
 @dataclass(frozen=True)
 class Config:
     """Configuración inmutable cargada desde el entorno."""
@@ -109,6 +139,10 @@ class Config:
     telegram_chat_id: Optional[str] = None
     umbral_score_tecnico: float = 2.0
     usar_score_tecnico: bool = True
+    umbral_score_overrides: Dict[str, float] = field(default_factory=dict)
+    usar_score_overrides: Dict[str, bool] = field(default_factory=dict)
+    persistencia_strict: bool = False
+    persistencia_strict_overrides: Dict[str, bool] = field(default_factory=dict)
     contradicciones_bloquean_entrada: bool = True
     registro_tecnico_csv: str = 'logs/rechazos_tecnico.csv'
     umbral_confirmacion_micro: float = 0.6
@@ -202,6 +236,12 @@ class ConfigManager:
         if env_name == 'production':
             defaults = ProductionConfig()
 
+        def _env_bool(clave: str, default: bool) -> bool:
+            raw = os.getenv(clave)
+            if raw is None:
+                return default
+            return raw.strip().lower() not in {'false', '0', 'no', 'off', ''}
+
         # Símbolos
         symbols_env = os.getenv('SYMBOLS', ','.join(defaults.symbols))
         symbols = [s.strip().upper() for s in symbols_env.split(',') if s.strip()]
@@ -239,6 +279,16 @@ class ConfigManager:
         min_dist_pct = _cargar_float('MIN_DIST_PCT', getattr(defaults, 'min_dist_pct', 0.0005))
         min_dist_pct_overrides = dict(getattr(defaults, 'min_dist_pct_overrides', {}))
         min_dist_pct_overrides.update(_parse_float_mapping('MIN_DIST_PCT_OVERRIDES'))
+
+        umbral_score_overrides = dict(getattr(defaults, 'umbral_score_overrides', {}))
+        umbral_score_overrides.update(_parse_float_mapping('UMBRAL_SCORE_OVERRIDES'))
+
+        usar_score_overrides = dict(getattr(defaults, 'usar_score_overrides', {}))
+        usar_score_overrides.update(_parse_bool_mapping('USAR_SCORE_FLAGS'))
+
+        persistencia_strict = _env_bool('PERSISTENCIA_STRICT', getattr(defaults, 'persistencia_strict', False))
+        persistencia_strict_overrides = dict(getattr(defaults, 'persistencia_strict_overrides', {}))
+        persistencia_strict_overrides.update(_parse_bool_mapping('PERSISTENCIA_STRICT_FLAGS'))
 
         # Queue defaults / policy
         df_queue_default_limit = _cargar_int('DF_QUEUE_DEFAULT_LIMIT', getattr(defaults, 'df_queue_default_limit', 2000))
@@ -299,7 +349,11 @@ class ConfigManager:
             telegram_token=os.getenv('TELEGRAM_TOKEN', defaults.telegram_token),
             telegram_chat_id=os.getenv('TELEGRAM_CHAT_ID', defaults.telegram_chat_id),
             umbral_score_tecnico=_cargar_float('UMBRAL_SCORE_TECNICO', defaults.umbral_score_tecnico),
-            usar_score_tecnico=os.getenv('USAR_SCORE_TECNICO', str(defaults.usar_score_tecnico)).lower() == 'true',
+            usar_score_tecnico=_env_bool('USAR_SCORE_TECNICO', defaults.usar_score_tecnico),
+            umbral_score_overrides=umbral_score_overrides,
+            usar_score_overrides=usar_score_overrides,
+            persistencia_strict=persistencia_strict,
+            persistencia_strict_overrides=persistencia_strict_overrides,
             contradicciones_bloquean_entrada=os.getenv('CONTRADICCIONES_BLOQUEAN_ENTRADA', str(defaults.contradicciones_bloquean_entrada)).lower() == 'true',
             registro_tecnico_csv=os.getenv('REGISTRO_TECNICO_CSV', os.path.join(log_dir, 'rechazos_tecnico.csv')),
             umbral_confirmacion_micro=_cargar_float('UMBRAL_CONFIRMACION_MICRO', getattr(defaults, 'umbral_confirmacion_micro', 0.6)),
