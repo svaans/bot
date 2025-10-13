@@ -69,3 +69,31 @@ def test_reset_reconnect_tracking_clears_counters() -> None:
     assert feed._register_reconnect_attempt("BTCUSDT", "fallo") is True
     feed._reset_reconnect_tracking("BTCUSDT")
     assert feed._register_reconnect_attempt("BTCUSDT", "fallo") is True
+
+
+def test_verify_reconnect_limits_guard_respects_max_downtime(monkeypatch) -> None:
+    reloj = {"valor": 0.0}
+
+    def fake_monotonic() -> float:
+        return reloj["valor"]
+
+    monkeypatch.setattr(data_feed_module.time, "monotonic", fake_monotonic)
+
+    eventos: List[Tuple[str, dict]] = []
+    feed = DataFeed(
+        "1m",
+        max_reconnect_attempts=None,
+        max_reconnect_time=1.0,
+        on_event=_collect_event_sink(eventos),
+    )
+
+    assert feed._register_reconnect_attempt("ETHUSDT", "ws drop") is True
+    reloj["valor"] = 1.5
+
+    assert feed._verify_reconnect_limits("ETHUSDT", "loop_guard") is False
+    assert feed.ws_failed_event.is_set()
+
+    downtime_events = [evt for evt in eventos if evt[0] == "ws_downtime_exceeded"]
+    assert downtime_events
+    assert downtime_events[-1][1]["reason"] == "loop_guard"
+    assert downtime_events[-1][1]["elapsed"] >= 1.5
