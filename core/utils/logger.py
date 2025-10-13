@@ -8,7 +8,11 @@ import os
 import sys
 import threading
 import time
-from datetime import datetime, timezone
+from collections.abc import Mapping, Sequence
+from dataclasses import asdict, is_dataclass
+from datetime import date, datetime, time as datetime_time, timezone
+from decimal import Decimal
+from pathlib import Path
 from typing import Any, Dict, MutableMapping, Optional
 
 __all__ = [
@@ -24,6 +28,52 @@ _LAST_EVENTS: dict[str, float] = {}
 _RESERVED_ATTRS = set(logging.makeLogRecord({}).__dict__.keys())
 
 
+def _json_safe(value: Any, *, _depth: int = 0, _max_depth: int = 5) -> Any:
+    """Transforma ``value`` en un objeto serializable en JSON."""
+
+    if _depth >= _max_depth:
+        return repr(value)
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    if isinstance(value, (datetime, date, datetime_time)):
+        return value.isoformat()
+    if isinstance(value, Decimal):
+        return str(value)
+    if isinstance(value, Path):
+        return str(value)
+    if isinstance(value, bytes):
+        return value.decode("utf-8", "replace")
+    if isinstance(value, bytearray):
+        return bytes(value).decode("utf-8", "replace")
+    if is_dataclass(value):
+        return _json_safe(asdict(value), _depth=_depth + 1, _max_depth=_max_depth)
+    if isinstance(value, Mapping):
+        return {str(key): _json_safe(val, _depth=_depth + 1, _max_depth=_max_depth) for key, val in value.items()}
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+        return [
+            _json_safe(item, _depth=_depth + 1, _max_depth=_max_depth)
+            for item in value
+        ]
+    if isinstance(value, (set, frozenset)):
+        return [
+            _json_safe(item, _depth=_depth + 1, _max_depth=_max_depth)
+            for item in value
+        ]
+    return repr(value)
+
+
+def _flatten_args(args: Any) -> Any:
+    """Normaliza los argumentos de logging para que sean serializables."""
+
+    if isinstance(args, Mapping):
+        return {str(key): _json_safe(val) for key, val in args.items()}
+    if isinstance(args, tuple):
+        return tuple(_json_safe(item) for item in args)
+    if isinstance(args, list):
+        return [_json_safe(item) for item in args]
+    return _json_safe(args)
+
+
 class _JsonFormatter(logging.Formatter):
     """Formatter que serializa cada registro como JSON compacto."""
 
@@ -31,20 +81,23 @@ class _JsonFormatter(logging.Formatter):
     default_msec_format = "%s.%03d"
 
     def format(self, record: logging.LogRecord) -> str:  # pragma: no cover - trivial
+        message = record.getMessage()
+        if record.args:
+            record.args = _flatten_args(record.args)
         data: Dict[str, Any] = {
             "timestamp": datetime.fromtimestamp(record.created, timezone.utc).isoformat(),
             "level": record.levelname,
             "logger": record.name,
-            "message": record.getMessage(),
+            "message": message,
         }
         if record.exc_info:
             data["exc_info"] = self.formatException(record.exc_info)
         if record.stack_info:
             data["stack"] = self.formatStack(record.stack_info)
-        extras = {k: v for k, v in record.__dict__.items() if k not in _RESERVED_ATTRS}
+        extras = {k: _json_safe(v) for k, v in record.__dict__.items() if k not in _RESERVED_ATTRS
         if extras:
             data.update(extras)
-        return json.dumps(data, ensure_ascii=False)
+        return json.dumps(data, ensure_ascii=False, default=_json_safe)
 
 
 class _SafeStreamHandler(logging.StreamHandler):
