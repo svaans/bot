@@ -94,11 +94,65 @@ def signal_ws_failure(feed: "DataFeed", reason: Any) -> None:
     emit_event(feed, "ws_connect_failed", payload)
 
 
+def _handle_limit_exceeded(
+    feed: "DataFeed",
+    *,
+    key: str,
+    reason: str,
+    attempts: int,
+    elapsed: float,
+    limit_type: str,
+) -> None:
+    """Emite logs/eventos comunes cuando se excede algún límite de reconexión."""
+
+    payload = {"key": key, "attempts": attempts, "elapsed": elapsed, "reason": reason}
+
+    if limit_type == "attempts":
+        payload["max_attempts"] = feed.max_reconnect_attempts
+        log.error(
+            "ws.max_retries_exceeded",
+            extra={
+                "key": key,
+                "attempts": attempts,
+                "max_attempts": feed.max_reconnect_attempts,
+                "reason": reason,
+            },
+        )
+        emit_event(feed, "ws_retries_exceeded", payload)
+        signal_ws_failure(
+            feed,
+            f"Se superó el máximo de reintentos permitidos ({feed.max_reconnect_attempts})",
+        )
+        return
+
+    payload["max_downtime"] = feed.max_reconnect_time
+    log.error(
+        "ws.downtime_exceeded",
+        extra={
+            "key": key,
+            "elapsed": elapsed,
+            "max_downtime": feed.max_reconnect_time,
+            "reason": reason,
+        },
+    )
+    emit_event(feed, "ws_downtime_exceeded", payload)
+    signal_ws_failure(
+        feed,
+        f"Se superó el máximo de tiempo sin conexión ({feed.max_reconnect_time:.1f}s)",
+    )
+
+
+def _emit_retry_event(feed: "DataFeed", payload: dict[str, Any]) -> None:
+    """Emite el evento ``ws_retry`` y evita duplicar lógica."""
+
+    emit_event(feed, "ws_retry", payload)
+
+
 def register_reconnect_attempt(feed: "DataFeed", key: str, reason: str) -> bool:
     """Valida límites de reconexión e informa métricas/eventos."""
 
     if feed.max_reconnect_attempts is None and feed.max_reconnect_time is None:
-        emit_event(feed, "ws_retry", {"key": key, "attempts": 1, "elapsed": 0.0, "reason": reason})
+        _emit_retry_event(feed, {"key": key, "attempts": 1, "elapsed": 0.0, "reason": reason})
         return True
 
     import time
@@ -115,42 +169,66 @@ def register_reconnect_attempt(feed: "DataFeed", key: str, reason: str) -> bool:
     payload = {"key": key, "attempts": attempts, "elapsed": elapsed, "reason": reason}
 
     if feed.max_reconnect_attempts is not None and attempts > feed.max_reconnect_attempts:
-        payload["max_attempts"] = feed.max_reconnect_attempts
-        log.error(
-            "ws.max_retries_exceeded",
-            extra={
-                "key": key,
-                "attempts": attempts,
-                "max_attempts": feed.max_reconnect_attempts,
-                "reason": reason,
-            },
-        )
-        emit_event(feed, "ws_retries_exceeded", payload)
-        signal_ws_failure(
+        _handle_limit_exceeded(
             feed,
             f"Se superó el máximo de reintentos permitidos ({feed.max_reconnect_attempts})",
         )
         return False
 
     if feed.max_reconnect_time is not None and elapsed >= feed.max_reconnect_time:
-        payload["max_downtime"] = feed.max_reconnect_time
-        log.error(
-            "ws.downtime_exceeded",
-            extra={
-                "key": key,
-                "elapsed": elapsed,
-                "max_downtime": feed.max_reconnect_time,
-                "reason": reason,
-            },
-        )
-        emit_event(feed, "ws_downtime_exceeded", payload)
-        signal_ws_failure(
+        _handle_limit_exceeded(
             feed,
-            f"Se superó el máximo de tiempo sin conexión ({feed.max_reconnect_time:.1f}s)",
+            key=key,
+            reason=reason,
+            attempts=attempts,
+            elapsed=elapsed,
+            limit_type="downtime",
         )
         return False
 
-    emit_event(feed, "ws_retry", payload)
+    _emit_retry_event(feed, payload)
+    return True
+
+
+def verify_reconnect_limits(feed: "DataFeed", key: str, reason: str) -> bool:
+    """Comprueba los límites sin incrementar contadores para ``key``."""
+
+    if feed.max_reconnect_attempts is None and feed.max_reconnect_time is None:
+        return True
+
+    if feed.ws_failed_event.is_set():
+        return False
+
+    import time
+
+    attempts = feed._reconnect_attempts.get(key, 0)
+    since = feed._reconnect_since.get(key)
+    elapsed = 0.0
+    if since is not None:
+        elapsed = max(0.0, time.monotonic() - since)
+
+    if feed.max_reconnect_attempts is not None and attempts > feed.max_reconnect_attempts:
+        _handle_limit_exceeded(
+            feed,
+            key=key,
+            reason=reason,
+            attempts=attempts,
+            elapsed=elapsed,
+            limit_type="attempts",
+        )
+        return False
+
+    if feed.max_reconnect_time is not None and since is not None and elapsed >= feed.max_reconnect_time:
+        _handle_limit_exceeded(
+            feed,
+            key=key,
+            reason=reason,
+            attempts=attempts,
+            elapsed=elapsed,
+            limit_type="downtime",
+        )
+        return False
+
     return True
 
 
