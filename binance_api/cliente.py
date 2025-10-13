@@ -51,6 +51,22 @@ _SPOT_TESTNET_BASE_URL = "https://testnet.binance.vision"
 _DEFAULT_TIMEOUT = aiohttp.ClientTimeout(total=15)
 
 
+def _to_binance_symbol(symbol: str) -> str:
+    """Normaliza símbolos estilo ``BTC/USDT`` a ``BTCUSDT``."""
+
+    normalized = symbol.replace("/", "").upper()
+    if "/" in symbol:
+        logger.debug(
+            "binance.symbol.normalized",
+            extra={
+                "event": "binance.symbol.normalized",
+                "original": symbol,
+                "normalized": normalized,
+            },
+        )
+    return normalized
+
+
 class BinanceAPIError(RuntimeError):
     """Error genérico asociado a respuestas inválidas de Binance."""
 
@@ -335,8 +351,9 @@ async def _fetch_ohlcv_real(
     since: int | None,
     limit: int,
 ) -> List[List[float]]:
+    sym = _to_binance_symbol(symbol)
     params: Dict[str, Any] = {
-        "symbol": symbol.upper(),
+        "symbol": sym,
         "interval": intervalo,
         "limit": min(max(limit or 500, 1), 1000),
     }
