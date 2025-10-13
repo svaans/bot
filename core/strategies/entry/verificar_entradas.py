@@ -20,6 +20,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 import math
+from dataclasses import dataclass, field
 from typing import Any, Callable, Optional
 
 import pandas as pd
@@ -33,6 +34,9 @@ except Exception:  # pragma: no cover
 
 # Logging estructurado
 from core.utils.logger import configurar_logger
+from core.utils.log_utils import safe_extra
+from core.metrics_helpers import safe_inc, safe_set
+from core.utils.metrics_compat import Counter, Gauge
 
 # Import corregido: esta función vive en persistencia_tecnica
 try:
@@ -46,6 +50,57 @@ ColumnsBase = ["timestamp", "open", "high", "low", "close", "volume"]
 
 
 log = configurar_logger("entry_verifier", modo_silencioso=True)
+
+
+@dataclass(slots=True)
+class EntryDecision:
+    symbol: str
+    timeframe: str | None
+    permitida: bool
+    score: float
+    threshold: float
+    usar_score: bool
+    reasons: list[str] = field(default_factory=list)
+    meta: dict[str, Any] = field(default_factory=dict)
+    raw: dict[str, Any] = field(default_factory=dict)
+    score_missing: bool = False
+
+    def add_reason(self, reason: str) -> None:
+        if reason and reason not in self.reasons:
+            self.reasons.append(reason)
+
+    def to_payload(self) -> dict[str, Any]:
+        payload = dict(self.raw)
+        payload["score"] = self.score
+        existing_meta = dict(payload.get("meta") or {})
+        existing_meta.update(self.meta)
+        payload["meta"] = existing_meta
+        return payload
+
+
+DECISION_TOTAL = Counter(
+    "decision_total",
+    "Decisiones finales de entrada por símbolo y timeframe",
+    ["symbol", "timeframe", "outcome"],
+)
+
+GATE_SCORE_DECISIONS_TOTAL = Counter(
+    "gate_score_decisions_total",
+    "Resultados del gate de score técnico",
+    ["symbol", "timeframe", "pass"],
+)
+
+GATE_PERSISTENCIA_DECISIONS_TOTAL = Counter(
+    "gate_persistencia_decisions_total",
+    "Resultados del gate de persistencia",
+    ["symbol", "timeframe", "pass"],
+)
+
+GATE_SCORE_LAST_VALUE = Gauge(
+    "gate_score_last_value",
+    "Último score observado en el gate de score",
+    ["symbol", "timeframe"],
+)
 
 
 def _emit(on_event: Optional[Callable[[str, dict], None]], evt: str, data: dict) -> None:
@@ -107,6 +162,227 @@ def _sanear_df(df: pd.DataFrame) -> pd.DataFrame:
     if "timestamp" in use:
         use = use.sort_values("timestamp", kind="mergesort")
     return use
+
+
+def _metric_labels(symbol: str, timeframe: str | None) -> dict[str, str]:
+    return {"symbol": str(symbol).upper(), "timeframe": str(timeframe or "unknown")}
+
+
+def _resolve_override(overrides: Any, symbol: str, timeframe: str | None) -> Any:
+    if not isinstance(overrides, dict):
+        return None
+    symbol_key = str(symbol).upper()
+    tf_key = str(timeframe or "").lower()
+    candidates: list[str] = []
+    if tf_key:
+        candidates.extend(
+            [
+                f"{symbol_key}:{tf_key}",
+                f"{symbol_key}@{tf_key}",
+                f"{symbol_key}/{tf_key}",
+            ]
+        )
+    candidates.append(symbol_key)
+    for key in candidates:
+        if key in overrides:
+            return overrides[key]
+    return None
+
+
+def _resolve_timeframe(df: pd.DataFrame, trader: Any) -> str | None:
+    timeframe = getattr(df, "tf", None)
+    if timeframe:
+        return str(timeframe)
+    attrs = getattr(df, "attrs", None)
+    if isinstance(attrs, dict):
+        tf_attr = attrs.get("tf")
+        if tf_attr:
+            return str(tf_attr)
+    cfg = getattr(trader, "config", None)
+    if cfg is not None:
+        tf_cfg = getattr(cfg, "intervalo_velas", None)
+    if tf_cfg:
+        return str(tf_cfg)
+    return None
+
+
+def _normalize_score(value: Any, default: float = -1.0) -> tuple[float, bool]:
+    try:
+        score = float(value)
+    except (TypeError, ValueError):
+        return float(default), True
+    if not math.isfinite(score):
+        return float(default), True
+    return score, False
+
+
+def _inc_score_metric(symbol: str, timeframe: str | None, pass_value: str) -> None:
+    labels = (str(symbol).upper(), str(timeframe or "unknown"), pass_value)
+    try:
+        GATE_SCORE_DECISIONS_TOTAL.labels(*labels).inc()
+    except Exception:
+        safe_inc(GATE_SCORE_DECISIONS_TOTAL)
+
+
+def _inc_persist_metric(symbol: str, timeframe: str | None, pass_value: str) -> None:
+    labels = (str(symbol).upper(), str(timeframe or "unknown"), pass_value)
+    try:
+        GATE_PERSISTENCIA_DECISIONS_TOTAL.labels(*labels).inc()
+    except Exception:
+        safe_inc(GATE_PERSISTENCIA_DECISIONS_TOTAL)
+
+
+def _resolve_score_threshold(cfg: Any, symbol: str, timeframe: str | None) -> float:
+    base = 0.0
+    if cfg is not None:
+        base = float(getattr(cfg, "umbral_score_tecnico", base) or 0.0)
+        override = _resolve_override(getattr(cfg, "umbral_score_overrides", {}), symbol, timeframe)
+        if override is not None:
+            try:
+                return float(override)
+            except (TypeError, ValueError):
+                pass
+    return float(base)
+
+
+def _resolve_usar_score(cfg: Any, symbol: str, timeframe: str | None) -> bool:
+    default = True
+    if cfg is not None:
+        default = bool(getattr(cfg, "usar_score_tecnico", default))
+        override = _resolve_override(getattr(cfg, "usar_score_overrides", {}), symbol, timeframe)
+        if override is not None:
+            return bool(override)
+    return bool(default)
+
+
+def _resolve_persistencia_strict(cfg: Any, symbol: str, timeframe: str | None) -> bool:
+    default = False
+    if cfg is not None:
+        default = bool(getattr(cfg, "persistencia_strict", default))
+        override = _resolve_override(getattr(cfg, "persistencia_strict_overrides", {}), symbol, timeframe)
+        if override is not None:
+            return bool(override)
+    return bool(default)
+
+
+def _apply_score_gate(
+    decision: EntryDecision,
+    cfg: Any,
+    *,
+    symbol: str,
+    timeframe: str | None,
+) -> tuple[bool, dict[str, Any]]:
+    threshold = _resolve_score_threshold(cfg, symbol, timeframe)
+    usar_score = _resolve_usar_score(cfg, symbol, timeframe)
+    decision.threshold = threshold
+    decision.usar_score = usar_score
+
+    gauge_labels = _metric_labels(symbol, timeframe)
+    safe_set(GATE_SCORE_LAST_VALUE, decision.score, **gauge_labels)
+
+    tf_label = str(timeframe or "unknown")
+    log_extra = {
+        "symbol": symbol,
+        "timeframe": tf_label,
+        "score": decision.score,
+        "umbral": threshold,
+        "usar_score": usar_score,
+    }
+
+    if not usar_score:
+        _inc_score_metric(symbol, timeframe, "true")
+        return True, log_extra
+
+    if decision.score_missing:
+        safe_set(GATE_SCORE_LAST_VALUE, -1.0, **gauge_labels)
+        _inc_score_metric(symbol, timeframe, "false")
+        log.warning("gate.score_missing", extra=safe_extra({**log_extra, "score": -1.0}))
+        decision.meta.setdefault("score_missing", True)
+        decision.score = -1.0
+        return False, log_extra
+
+    if not math.isfinite(decision.score):
+        safe_set(GATE_SCORE_LAST_VALUE, -1.0, **gauge_labels)
+        _inc_score_metric(symbol, timeframe, "false")
+        log.warning("gate.score_invalid", extra=safe_extra({**log_extra, "score": -1.0}))
+        decision.meta.setdefault("score_missing", True)
+        decision.score = -1.0
+        return False, log_extra
+
+    if decision.score < threshold:
+        _inc_score_metric(symbol, timeframe, "false")
+        return False, log_extra
+
+    _inc_score_metric(symbol, timeframe, "true")
+    return True, log_extra
+
+
+def _apply_persistencia_gate(
+    trader: Any,
+    decision: EntryDecision,
+    *,
+    symbol: str,
+    timeframe: str | None,
+    initial_ok: bool,
+) -> tuple[bool, bool, bool]:
+    cfg = getattr(trader, "config", None)
+    strict = _resolve_persistencia_strict(cfg, symbol, timeframe)
+    persist_ok = bool(initial_ok)
+    tf_label = str(timeframe or "unknown")
+    base_extra = {"symbol": symbol, "timeframe": tf_label}
+
+    repo = getattr(trader, "repo", None)
+    save_fn = getattr(repo, "save_evaluacion", None)
+    if callable(save_fn):
+        snapshot = decision.to_payload()
+        try:
+            save_fn(symbol=symbol, timeframe=timeframe, decision=snapshot)
+        except Exception as exc:
+            persist_ok = False
+            log.warning(
+                "persistencia.error",
+                extra=safe_extra(
+                    {
+                        **base_extra,
+                        "exc_type": type(exc).__name__,
+                        "exc_msg": str(exc),
+                    }
+                ),
+            )
+
+    log.info(
+        "persistencia.check",
+        extra=safe_extra({**base_extra, "persistencia_ok": persist_ok}),
+    )
+
+    allow = persist_ok or not strict
+    _inc_persist_metric(symbol, timeframe, "true" if allow else "false")
+
+    if not persist_ok and not strict:
+        log.warning(
+            "persistencia.degraded",
+            extra=safe_extra({**base_extra, "persistencia_ok": persist_ok, "strict": False}),
+        )
+
+    return allow, persist_ok, strict
+
+
+def _finalize_decision(decision: EntryDecision) -> None:
+    tf_label = str(decision.timeframe or "unknown")
+    outcome = "permitida" if decision.permitida else "rechazada"
+    reasons = decision.reasons or ["ok"]
+    payload = {
+        "symbol": decision.symbol,
+        "timeframe": tf_label,
+        "permitida": bool(decision.permitida),
+        "score": float(decision.score),
+        "umbral": float(decision.threshold),
+        "usar_score": bool(decision.usar_score),
+        "razones": reasons,
+        "meta": decision.meta,
+    }
+    safe_inc(DECISION_TOTAL, symbol=decision.symbol, timeframe=tf_label, outcome=outcome)
+    log.debug("decision.final", extra=safe_extra(payload))
 
 
 async def _evaluar_engine(trader: Any, symbol: str, df: pd.DataFrame, estado: Any, on_event=None) -> Optional[dict]:
@@ -223,24 +499,6 @@ def _aplicar_persistencia(trader: Any, symbol: str, resultado: dict, on_event=No
     return resultado
 
 
-def _validar_score(cfg: Any, resultado: dict) -> tuple[bool, float, float, bool]:
-    """Valida el score técnico y devuelve contexto para logs/metricas."""
-    usar_score = bool(getattr(cfg, "usar_score_tecnico", True))
-    umbral = float(getattr(cfg, "umbral_score_tecnico", 2.0))
-    raw_score = resultado.get("score")
-
-    try:
-        score = float(raw_score) if raw_score is not None else float("nan")
-    except (TypeError, ValueError):
-        score = float("nan")
-
-    if not usar_score:
-        return True, umbral, score, usar_score
-
-    valido = not math.isnan(score) and score >= umbral
-    return valido, umbral, score, usar_score
-
-
 def _validar_distancias(precio: float, sl: float, tp: float, min_pct: float) -> bool:
     if precio <= 0:
         return False
@@ -316,7 +574,8 @@ async def verificar_entrada(
     if not validar_dataframe(df, ColumnsBase):
         _emit(on_event, "entry_skip", {"symbol": symbol, "reason": "invalid_columns"})
         return _reject("invalid_columns")
-
+        
+    timeframe_value = _resolve_timeframe(df, trader)
     df = _sanear_df(df)
     if df.empty:
         _emit(on_event, "entry_skip", {"symbol": symbol, "reason": "sanitized_empty"})
@@ -361,10 +620,9 @@ async def verificar_entrada(
         side = "long"
 
     cfg = getattr(trader, "config", None)
-    score_valid, umbral_score, score, usar_score = _validar_score(cfg, resultado_engine)
-    contradicciones = bool(resultado_engine.get("contradicciones", False))
     if cfg is None:
         return _reject_with_skip("config_missing")
+    contradicciones = bool(resultado_engine.get("contradicciones", False))
 
     # Reglas de contradicción
     bloquea_contra = bool(getattr(cfg, "contradicciones_bloquean_entrada", True))
@@ -372,20 +630,10 @@ async def verificar_entrada(
         extra = {"contradicciones": True}
         return _reject_with_skip("contradicciones", extra=extra)
 
-    # Validación de score técnico
-    if not score_valid:
-        extra = {
-            "score": None if math.isnan(score) else score,
-            "umbral": umbral_score,
-            "usar_score": usar_score,
-        }
-        return _reject_with_skip("score_bajo", extra=extra)
 
     # Persistencia técnica (si está activada/instanciada)
     resultado_engine = _aplicar_persistencia(trader, symbol, resultado_engine, on_event=on_event)
-    if not resultado_engine.get("persistencia_ok", True):
-        extra = {"persistencia_ok": False}
-        return _reject_with_skip("persistencia", extra=extra)
+    persistencia_ok_inicial = bool(resultado_engine.get("persistencia_ok", True))
 
     # Distancias mínimas SL/TP
     min_pct = _min_dist_pct(trader, symbol)
@@ -403,15 +651,16 @@ async def verificar_entrada(
     except Exception:
         match = 0.0
 
+    score_value, score_missing = _normalize_score(resultado_engine.get("score"))
     propuesta = {
         "symbol": symbol,
         "side": side,
         "precio_entrada": precio,
         "stop_loss": sl,
         "take_profit": tp,
-        "score": None if math.isnan(score) else score,
+        "score": score_value,
         "timestamp": ts_value,
-        "persistencia_ok": bool(resultado_engine.get("persistencia_ok", True)),
+        "persistencia_ok": persistencia_ok_inicial,
         "meta": {
             "min_dist_pct": min_pct,
             "contradicciones": contradicciones,
@@ -419,8 +668,70 @@ async def verificar_entrada(
         },
     }
 
-    _emit(on_event, "entry_candidate", {"symbol": symbol, "side": side, "score": score})
-    return _approve(propuesta)
+    decision = EntryDecision(
+        symbol=symbol_norm,
+        timeframe=timeframe_value,
+        permitida=True,
+        score=score_value,
+        threshold=0.0,
+        usar_score=True,
+        meta=dict(propuesta["meta"]),
+        raw=dict(propuesta),
+        score_missing=score_missing,
+    )
+
+    score_pass, _ = _apply_score_gate(
+        decision,
+        cfg,
+        symbol=symbol_norm,
+        timeframe=timeframe_value,
+    )
+    decision.meta.setdefault("usar_score", decision.usar_score)
+    decision.meta.setdefault("umbral_score", decision.threshold)
+    if not score_pass:
+        decision.permitida = False
+        decision.add_reason("score_missing" if decision.meta.get("score_missing") else "score_bajo")
+        payload = {
+            "symbol": symbol,
+            "reason": "score_bajo",
+            "score": decision.score,
+            "umbral": decision.threshold,
+            "usar_score": decision.usar_score,
+        }
+        _emit(on_event, "entry_skip", payload)
+        _finalize_decision(decision)
+        return _reject("score_bajo", extra=payload)
+
+    allow_persist, persist_ok, strict_flag = _apply_persistencia_gate(
+        trader,
+        decision,
+        symbol=symbol_norm,
+        timeframe=timeframe_value,
+        initial_ok=persistencia_ok_inicial,
+    )
+    decision.meta["persistencia_ok"] = persist_ok
+    decision.raw["persistencia_ok"] = persist_ok
+    if not allow_persist:
+        decision.permitida = False
+        decision.add_reason("persistencia")
+        payload = {
+            "symbol": symbol,
+            "reason": "persistencia",
+            "persistencia_ok": persist_ok,
+            "strict": strict_flag,
+        }
+        _emit(on_event, "entry_skip", payload)
+        _finalize_decision(decision)
+        return _reject("persistencia", extra=payload)
+    if not persist_ok:
+        decision.meta.setdefault("persistencia_warning", True)
+        decision.add_reason("persistencia_warning")
+
+    _emit(on_event, "entry_candidate", {"symbol": symbol, "side": side, "score": decision.score})
+    decision.add_reason("ok")
+    final_payload = decision.to_payload()
+    _finalize_decision(decision)
+    return _approve(final_payload)
 
 
 
