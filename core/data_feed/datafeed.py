@@ -374,6 +374,21 @@ class DataFeed:
                 for task in pending:
                     task.cancel()
 
+                gathered = await asyncio.gather(*pending, return_exceptions=True)
+                for task, result in zip(pending, gathered):
+                    if isinstance(result, asyncio.CancelledError):
+                        continue
+                    if isinstance(result, Exception):
+                        log.error(
+                            "tarea_pendiente_finalizo_con_error",
+                            extra=safe_extra(
+                                {
+                                    "task_name": task.get_name(),
+                                    "error": repr(result),
+                                }
+                            ),
+                        )
+
         self._running = False
         self._tasks.clear()
         self._consumer_tasks.clear()
