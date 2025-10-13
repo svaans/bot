@@ -1,10 +1,14 @@
-"""SDK offline minimalista para interactuar con Binance.
+"""SDK asíncrono para consumir la API spot de Binance.
 
-Este paquete provee implementaciones *stub* utilizadas en entornos de desarrollo
-sin acceso a la API real de Binance. Se exponen las mismas firmas empleadas por
-el bot para que el resto del código pueda ejecutarse (p. ej. en tests) sin
-romperse por import errors. Las funciones retornan datos deterministas que
-permiten simular balances, velas históricas y streams en memoria.
+El paquete ofrece dos modos de operación intercambiables:
+
+* **Simulado**: datos deterministas en memoria, ideal para tests y desarrollo
+  offline.
+* **Real**: integración completa con la API REST y WebSocket oficial de
+  Binance (live y testnet) con firma HMAC y reconexión automática.
+
+Las funciones públicas comparten la misma interfaz en ambos escenarios, por lo
+que el resto del bot puede alternar entre ambientes sin modificar su lógica.
 """
 from __future__ import annotations
 
