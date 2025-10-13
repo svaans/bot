@@ -16,6 +16,8 @@ async def stream_simple(feed: "DataFeed", symbol: str) -> None:
     backoff = 0.5
     primera_vez = True
     while feed._running and symbol in feed._queues:
+        if not events.verify_reconnect_limits(feed, symbol, "loop_guard"):
+            return
         try:
             if primera_vez:
                 await asyncio.sleep(random.random())  # desincroniza arranques
@@ -112,6 +114,8 @@ async def stream_combinado(feed: "DataFeed", symbols: List[str]) -> None:
     backoff = 0.5
     primera_vez = True
     while feed._running and all(s in feed._queues for s in symbols):
+        if not events.verify_reconnect_limits(feed, COMBINED_STREAM_KEY, "loop_guard"):
+            return
         try:
             if primera_vez:
                 await asyncio.sleep(random.random())
