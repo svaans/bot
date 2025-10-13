@@ -32,6 +32,8 @@ from urllib.parse import urlencode
 
 import aiohttp
 
+from .utils import normalize_symbol_for_rest
+
 __all__ = [
     "BinanceClient",
     "BinanceAPIError",
@@ -54,7 +56,7 @@ _DEFAULT_TIMEOUT = aiohttp.ClientTimeout(total=15)
 def _to_binance_symbol(symbol: str) -> str:
     """Normaliza símbolos estilo ``BTC/USDT`` a ``BTCUSDT``."""
 
-    normalized = symbol.replace("/", "").upper()
+    normalized = normalize_symbol_for_rest(symbol)
     if "/" in symbol:
         logger.debug(
             "binance.symbol.normalized",

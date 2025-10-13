@@ -13,7 +13,11 @@ from ._shared import COMBINED_STREAM_KEY, ConsumerState, log
 from . import events
 
 try:  # pragma: no cover - métricas opcionales
-    from core.metrics import CONSUMER_SKIPPED_EXPECTED_TOTAL
+    from core.metrics import (
+        CONSUMER_SKIPPED_EXPECTED_TOTAL,
+        DATAFEED_CANDLES_ENQUEUED_TOTAL,
+        DATAFEED_WS_MESSAGES_TOTAL,
+    )
 except Exception:  # pragma: no cover - fallback cuando Prometheus no está disponible
     from core.utils.metrics_compat import Counter
 
@@ -21,6 +25,16 @@ except Exception:  # pragma: no cover - fallback cuando Prometheus no está disp
         "consumer_skipped_expected_total",
         "Skips esperados del consumer de DataFeed",
         ["symbol", "timeframe", "reason"],
+    )
+    DATAFEED_WS_MESSAGES_TOTAL = Counter(
+        "datafeed_ws_messages_total",
+        "Mensajes recibidos por el DataFeed desde WS",
+        ["type"],
+    )
+    DATAFEED_CANDLES_ENQUEUED_TOTAL = Counter(
+        "datafeed_candles_enqueued_total",
+        "Velas encoladas por símbolo y timeframe",
+        ["symbol", "tf"],
     )
 
 
@@ -205,10 +219,18 @@ async def handle_candle(feed: "DataFeed", symbol: str, candle: dict) -> None:
 
     candle.setdefault("_df_enqueue_time", time.monotonic())
 
+    tf_label = str(feed.intervalo).lower()
+    DATAFEED_WS_MESSAGES_TOTAL.labels(type=f"kline_{tf_label}").inc()
+
     log.debug(
         "recv candle",
         extra=safe_extra({"symbol": symbol, "timestamp": ts, "queue_size": queue.qsize()}),
     )
+
+    bar_open_ts = _to_int(candle.get("open_time")) or _to_int(candle.get("openTime"))
+    bar_close_ts = _to_int(candle.get("close_time")) or _to_int(candle.get("closeTime"))
+
+    queue_size_after: int
 
     if feed.queue_policy == "block" or not queue.maxsize:
         await queue.put(candle)
@@ -216,6 +238,7 @@ async def handle_candle(feed: "DataFeed", symbol: str, candle: dict) -> None:
         while True:
             try:
                 queue.put_nowait(candle)
+                queue_size_after = queue.qsize()
                 break
             except asyncio.QueueFull:
                 try:
@@ -226,6 +249,25 @@ async def handle_candle(feed: "DataFeed", symbol: str, candle: dict) -> None:
                 except asyncio.QueueEmpty:
                     await asyncio.sleep(0)
                     continue
+
+
+    log.info(
+        "queue.enqueue",
+        extra=safe_extra(
+            {
+                "symbol": symbol,
+                "tf": feed.intervalo,
+                "bar_open_ts": bar_open_ts,
+                "bar_close_ts": bar_close_ts,
+                "queue_size": queue_size_after,
+            }
+        ),
+    )
+
+    DATAFEED_CANDLES_ENQUEUED_TOTAL.labels(
+        symbol=str(symbol).upper(),
+        tf=tf_label,
+    ).inc()
 
     feed._stats[symbol]["received"] += 1
     feed._last_close_ts[symbol] = ts
@@ -249,11 +291,16 @@ async def consumer_loop(feed: "DataFeed", symbol: str) -> None:
     )
     feed._consumer_last[symbol] = time.monotonic()
     events.set_consumer_state(feed, symbol, ConsumerState.STARTING)
+    log.info(
+        "consumer.loop.start",
+        extra=safe_extra({"symbol": symbol, "tf": feed.intervalo, "stage": "DataFeed._consumer"}),
+    )
 
     while feed._running:
         candle = await queue.get()
         sym = str(candle.get("symbol") or symbol).upper()
         ts = candle.get("timestamp") or candle.get("close_time") or candle.get("open_time")
+        timeframe = candle.get("timeframe") or candle.get("interval") or candle.get("tf")
         outcome = "ok"
         handler = feed._handler
         if handler is None:
@@ -287,6 +334,7 @@ async def consumer_loop(feed: "DataFeed", symbol: str) -> None:
                 {
                     "symbol": sym,
                     "timestamp": ts,
+                    "tf": timeframe,
                     "handler_id": handler_info["id"],
                     "stage": "DataFeed._consumer",
                 }
@@ -415,6 +463,7 @@ async def consumer_loop(feed: "DataFeed", symbol: str) -> None:
                     {
                         "symbol": sym,
                         "timestamp": ts,
+                        "tf": timeframe,
                         "outcome": outcome,
                         "stage": "DataFeed._consumer",
                         "queue_size": queue.qsize(),

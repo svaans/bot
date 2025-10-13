@@ -5,14 +5,17 @@ import asyncio
 import json
 import logging
 import random
+import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Awaitable, Callable, Dict, Iterable, Mapping, Optional, TYPE_CHECKING
+from typing import Any, Awaitable, Callable, Dict, Iterable, Mapping, Optional, Sequence, TYPE_CHECKING
 
 import websockets
 
 if TYPE_CHECKING:  # pragma: no cover - hints opcionales
     from .cliente import BinanceClient
+
+from .utils import normalize_symbol_for_ws
 
 __all__ = [
     "InactividadTimeoutError",
@@ -24,6 +27,7 @@ logger = logging.getLogger(__name__)
 UTC = timezone.utc
 _WS_BASE_URL = "wss://stream.binance.com:9443"
 _WS_TESTNET_BASE_URL = "wss://testnet.binance.vision"
+_DEFAULT_STREAM_PATTERN = "^[a-z0-9]+@kline_{interval}$"
 
 
 class InactividadTimeoutError(RuntimeError):
@@ -309,6 +313,63 @@ async def _escuchar_velas_combinado_simulado(
             task.cancel()
 
 # ───────────────────────────────── MODO REAL ───────────────────────────────
+def _build_stream_name(symbol: str, intervalo: str) -> str:
+    symbol_ws = normalize_symbol_for_ws(symbol)
+    return f"{symbol_ws}@kline_{intervalo.lower()}"
+
+
+def _stream_pattern(intervalo: str) -> re.Pattern[str]:
+    pattern = _DEFAULT_STREAM_PATTERN.format(interval=re.escape(intervalo.lower()))
+    return re.compile(pattern)
+
+
+def _ensure_valid_streams(streams: Sequence[str], intervalo: str) -> None:
+    pattern = _stream_pattern(intervalo)
+    for stream in streams:
+        if not pattern.fullmatch(stream):
+            logger.error(
+                "ws.subscribe.invalid_stream",
+                extra={
+                    "event": "ws.subscribe.invalid_stream",
+                    "stream": stream,
+                    "reason": "format",
+                },
+            )
+            raise ValueError(f"Formato de stream inválido: {stream}")
+
+
+def _log_subscribe_streams(streams: Sequence[str]) -> None:
+    logger.info(
+        "ws.subscribe.streams",
+        extra={"event": "ws.subscribe.streams", "streams": list(streams)},
+    )
+
+
+def _log_connect_url(url: str) -> None:
+    logger.info("ws.connect.url", extra={"event": "ws.connect.url", "url": url})
+
+
+def _log_ignored(stream: str, reason: str) -> None:
+    logger.debug(
+        "ws.msg.ignored",
+        extra={"event": "ws.msg.ignored", "stream": stream, "reason": reason},
+    )
+
+
+def _log_parsed(stream: str, event_type: str | None, candle: Dict[str, Any]) -> None:
+    logger.debug(
+        "ws.msg.parsed",
+        extra={
+            "event": "ws.msg.parsed",
+            "stream": stream,
+            "event_type": event_type,
+            "kline_tf": candle.get("intervalo"),
+            "symbol": candle.get("symbol"),
+            "closed": bool(candle.get("is_closed")),
+        },
+    )
+
+
 async def _escuchar_velas_real(
     symbol: str,
     intervalo: str,
@@ -318,11 +379,14 @@ async def _escuchar_velas_real(
     mensaje_timeout: float | None,
     cliente: Any | None,
 ) -> None:
-    stream = f"{symbol.lower()}@kline_{intervalo}"
+    stream = _build_stream_name(symbol, intervalo)
+    _ensure_valid_streams([stream], intervalo)
+    _log_subscribe_streams([stream])
     url = f"{_ws_base_url(cliente)}/ws/{stream}"
+    _log_connect_url(url)
     await _consume_ws_stream(
         url,
-        lambda payload: _emit_if_closed(handler, payload),
+        lambda payload: _emit_if_closed(handler, payload, stream, intervalo),
         timeout_inactividad=timeout_inactividad,
         mensaje_timeout=mensaje_timeout,
     )
@@ -339,8 +403,11 @@ async def _escuchar_velas_combinado_real(
     mensaje_timeout: float | None,
     cliente: Any | None,
 ) -> None:
-    streams = [f"{symbol.lower()}@kline_{intervalo}" for symbol in symbols]
+    streams = [_build_stream_name(symbol, intervalo) for symbol in symbols]
+    _ensure_valid_streams(streams, intervalo)
+    _log_subscribe_streams(streams)
     url = f"{_ws_base_url(cliente)}/stream?streams={'/'.join(streams)}"
+    _log_connect_url(url)
 
     if isinstance(handler, Mapping):
         async def dispatch(symbol: str, candle: Dict[str, Any]) -> None:
@@ -358,14 +425,32 @@ async def _escuchar_velas_combinado_real(
                 await result
 
     async def process_combined(payload: Dict[str, Any]) -> None:
-        stream_name = payload.get("stream", "")
+        stream_name = str(payload.get("stream") or "")
         data = payload.get("data", {})
-        symbol = data.get("s") or stream_name.split("@", 1)[0].upper()
-        if not symbol:
+        if not stream_name or not isinstance(data, Mapping):
+            _log_ignored(stream_name or "unknown", "malformed_payload")
             return
-        candle = _convert_kline(data.get("k"))
+
+        kline = data.get("k")
+        if not isinstance(kline, Mapping):
+            _log_ignored(stream_name, "missing_kline")
+            return
+
+        interval = str(kline.get("i", "")).lower()
+        if interval != intervalo.lower():
+            _log_ignored(stream_name, "interval_mismatch")
+            return
+
+        if not bool(kline.get("x")):
+            _log_ignored(stream_name, "not_closed")
+            return
+        candle = _convert_kline(dict(kline))
         if candle is None:
+            _log_ignored(stream_name, "convert_failed")
             return
+        symbol = str(kline.get("s") or stream_name.split("@", 1)[0]).upper()
+        candle.setdefault("stream", stream_name)
+        _log_parsed(stream_name, data.get("e"), candle)
         await dispatch(symbol, candle)
 
     await _consume_ws_stream(
@@ -403,7 +488,25 @@ async def _consume_ws_stream(
                         raise InactividadTimeoutError(
                             f"Sin mensajes de Binance en {inactivity}s"
                         ) from exc
-                    data = json.loads(raw)
+                    preview: str
+                    if isinstance(raw, bytes):
+                        preview = raw[:64].decode("utf-8", "ignore")
+                        raw_text = raw.decode("utf-8", "ignore")
+                        raw_len = len(raw)
+                    else:
+                        preview = str(raw)[:64]
+                        raw_text = str(raw)
+                        raw_len = len(raw_text)
+                    logger.debug(
+                        "ws.recv.raw",
+                        extra={
+                            "event": "ws.recv.raw",
+                            "url": url,
+                            "len": raw_len,
+                            "first_bytes": preview,
+                        },
+                    )
+                    data = json.loads(raw_text)
                     result = handler(data)
                     if asyncio.iscoroutine(result):
                         await result
@@ -427,10 +530,27 @@ async def _consume_ws_stream(
 def _emit_if_closed(
     handler: Callable[[Dict[str, Any]], Awaitable[None]] | Callable[[Dict[str, Any]], None],
     payload: Dict[str, Any],
+    stream_name: str,
+    intervalo: str,
 ) -> Awaitable[None] | None:
-    candle = _convert_kline(payload.get("k"))
-    if candle is None:
+    event_type = payload.get("e")
+    kline = payload.get("k")
+    if not isinstance(kline, Mapping):
+        _log_ignored(stream_name, "missing_kline")
         return None
+    interval = str(kline.get("i", "")).lower()
+    if interval != intervalo.lower():
+        _log_ignored(stream_name, "interval_mismatch")
+        return None
+    if not bool(kline.get("x")):
+        _log_ignored(stream_name, "not_closed")
+        return None
+    candle = _convert_kline(dict(kline))
+    if candle is None:
+        _log_ignored(stream_name, "convert_failed")
+        return None
+    candle.setdefault("stream", stream_name)
+    _log_parsed(stream_name, event_type, candle)
     return _call_handler(handler, candle)
 
 

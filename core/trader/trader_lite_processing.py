@@ -9,6 +9,8 @@ from core.metrics import (
     BARS_IN_FUTURE_TOTAL,
     BARS_OUT_OF_RANGE_TOTAL,
     EVAL_ATTEMPTS_TOTAL,
+    TRADER_PROCESAR_VELA_CALLS_TOTAL,
+    TRADER_SKIPS_TOTAL,
     WAITING_CLOSE_STREAK,
 )
 from core.utils.log_utils import safe_extra
@@ -153,11 +155,14 @@ class TraderLiteProcessingMixin:
         if not isinstance(candle, dict):
             return
         if reason:
+            previous = candle.get("_df_skip_reason")
             candle["_df_skip_reason"] = reason
             if details:
                 candle["_df_skip_details"] = details
             elif "_df_skip_details" in candle:
                 candle.pop("_df_skip_details", None)
+            if previous != reason:
+                TRADER_SKIPS_TOTAL.labels(reason=reason).inc()
         else:
             candle.pop("_df_skip_reason", None)
             candle.pop("_df_skip_details", None)
@@ -280,6 +285,18 @@ class TraderLiteProcessingMixin:
         interval_secs = tf_seconds(tf_label)
         min_bars = self._resolve_min_bars_requirement()
         buffer_len_after = len(estado.buffer) + 1
+
+        log.debug(
+            "procesar_vela.pre-eval",
+            extra=safe_extra(
+                {
+                    "symbol": sym,
+                    "tf": tf_label,
+                    "buffer_len": buffer_len_after,
+                    "min_needed": min_bars,
+                }
+            ),
+        )
 
         def _first_not_none(*values: Any) -> Any:
             for value in values:
@@ -517,6 +534,16 @@ class TraderLiteProcessingMixin:
         self._waiting_close_streak[streak_key] = 0
         WAITING_CLOSE_STREAK.labels(**metric_labels).set(0)
         EVAL_ATTEMPTS_TOTAL.labels(**metric_labels).inc()
+        log.debug(
+            "procesar_vela.go_evaluate",
+            extra=safe_extra(
+                {
+                    "symbol": sym,
+                    "tf": metric_timeframe,
+                    "reason": reason,
+                }
+            ),
+        )
         ts = self._extract_timestamp(candle)
         eval_reason = "go_evaluate"
         if reason and reason not in {"ready", "timeframe_none"}:
@@ -563,6 +590,8 @@ class TraderLiteProcessingMixin:
         )
         tf_str = str(timeframe) if timeframe else None
         eval_context = candle.get("_df_eval_context") if isinstance(candle, dict) else None
+        metric_tf_label = (tf_str or "unknown").lower()
+        TRADER_PROCESAR_VELA_CALLS_TOTAL.labels(symbol=sym, tf=metric_tf_label).inc()
         attempt_payload = {
             "symbol": sym,
             "timestamp": ts,

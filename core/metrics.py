@@ -184,6 +184,18 @@ WS_CONNECTED_GAUGE = Gauge(
     "Estado binario de la conexión WS del DataFeed (1=conectado, 0=desconectado)",
 )
 
+DATAFEED_WS_MESSAGES_TOTAL = Counter(
+    "datafeed_ws_messages_total",
+    "Mensajes recibidos desde Binance WebSocket por tipo",
+    ["type"],
+)
+
+DATAFEED_CANDLES_ENQUEUED_TOTAL = Counter(
+    "datafeed_candles_enqueued_total",
+    "Velas encoladas por símbolo y timeframe",
+    ["symbol", "tf"],
+)
+
 QUEUE_SIZE = Gauge(
     "datafeed_queue_size",
     "Tamaño de cola de DataFeed",
@@ -262,6 +274,19 @@ TRADER_PIPELINE_QUEUE_WAIT = Histogram(
     buckets=(0.01, 0.05, 0.1, 0.25, 0.5, 1, 2, 5),
 )
 
+TRADER_PROCESAR_VELA_CALLS_TOTAL = Counter(
+    "trader_procesar_vela_calls_total",
+    "Invocaciones al pipeline procesar_vela por símbolo y timeframe",
+    ["symbol", "tf"],
+)
+
+TRADER_SKIPS_TOTAL = Counter(
+    "trader_skips_total",
+    "Eventos en los que se omite la evaluación de una vela",
+    ["reason"],
+)
+
+
 WATCHDOG_RESTARTS = Counter(
     "watchdog_restarts_total",
     "Reinicios de tareas provocados por el watchdog",
@@ -322,12 +347,16 @@ _METRICS_WITH_FALLBACK = [
     "FEEDS_FUNDING_MISSING",
     "FEEDS_OPEN_INTEREST_MISSING",
     "FEEDS_MISSING_RATE",
+    "DATAFEED_WS_MESSAGES_TOTAL",
+    "DATAFEED_CANDLES_ENQUEUED_TOTAL",
     "WS_CONNECTED_GAUGE",
     "QUEUE_SIZE",
     "CONSUMER_SKIPPED_EXPECTED_TOTAL",
     "INGEST_LATENCY",
     "TRADER_QUEUE_SIZE",
     "TRADER_PIPELINE_LATENCY",
+    "TRADER_PROCESAR_VELA_CALLS_TOTAL",
+    "TRADER_SKIPS_TOTAL",
     "TRADER_PIPELINE_QUEUE_WAIT",
     "CANDLES_PROCESSED_TOTAL",
     "EVAL_INTENTOS_TOTAL",
