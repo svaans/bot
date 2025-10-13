@@ -115,3 +115,44 @@ async def test_traderlite_backfill_mode_b_blocks_until_ready(monkeypatch: pytest
     estado_symbol = trader.estado["BTC/EUR"]
     assert estado_symbol.buffer[-1]["timestamp"] == live_candle["open_time"]
     assert processed == []  # handler no llamado aún; pipeline lo invoca aparte
+
+
+@pytest.mark.asyncio
+async def test_traderlite_stop_cancels_parallel_backfill() -> None:
+    trader = TraderLite.__new__(TraderLite)
+    trader._stop_event = asyncio.Event()
+    trader._connection_signal_task = None
+    trader._owned_event_bus = None
+    trader._runner_task = None
+    trader._backfill_task = None
+    trader._backfill_cancel_timeout = 0.05
+    trader._backfill_service = None
+    trader._backfill_enabled = True
+    trader._backfill_ready_flags = {}
+
+    async def dummy_detener() -> None:
+        return None
+
+    async def dummy_shutdown() -> None:
+        return None
+
+    trader.feed = SimpleNamespace(detener=dummy_detener)
+    trader.supervisor = SimpleNamespace(shutdown=dummy_shutdown)
+
+    hang_event = asyncio.Event()
+    cancelled = asyncio.Event()
+
+    async def hanging_backfill() -> None:
+        try:
+            await hang_event.wait()
+        except asyncio.CancelledError:
+            cancelled.set()
+            raise
+
+    trader._backfill_task = asyncio.create_task(hanging_backfill())
+    await asyncio.sleep(0)
+
+    await trader.stop()
+
+    assert cancelled.is_set()
+    assert trader._backfill_task is None
