@@ -1,12 +1,18 @@
-"""Streams simulados de velas para entornos offline."""
+"""Implementación de streams de velas para Binance (simulado y real)."""
 from __future__ import annotations
 
 import asyncio
+import json
+import logging
 import random
-import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Awaitable, Callable, Dict, Iterable, List, Mapping, Optional
+from typing import Any, Awaitable, Callable, Dict, Iterable, Mapping, Optional, TYPE_CHECKING
+
+import websockets
+
+if TYPE_CHECKING:  # pragma: no cover - hints opcionales
+    from .cliente import BinanceClient
 
 __all__ = [
     "InactividadTimeoutError",
@@ -14,7 +20,10 @@ __all__ = [
     "escuchar_velas_combinado",
 ]
 
+logger = logging.getLogger(__name__)
 UTC = timezone.utc
+_WS_BASE_URL = "wss://stream.binance.com:9443"
+_WS_TESTNET_BASE_URL = "wss://testnet.binance.vision"
 
 
 class InactividadTimeoutError(RuntimeError):
@@ -50,23 +59,38 @@ def _intervalo_segundos(intervalo: str) -> float:
         raise ValueError(f"Intervalo no soportado: {intervalo}") from exc
 
 
-async def _call_handler(handler: Callable[[Dict[str, Any]], Awaitable[None]] | Callable[[Dict[str, Any]], None], candle: Dict[str, Any]) -> None:
+async def _call_handler(
+    handler: Callable[[Dict[str, Any]], Awaitable[None]] | Callable[[Dict[str, Any]], None],
+    candle: Dict[str, Any],
+) -> None:
     result = handler(candle)
     if asyncio.iscoroutine(result):
         await result
 
 
-def _init_state(symbol: str, intervalo: str, ultimo_timestamp: Optional[int], ultimo_cierre: Optional[float]) -> _StreamState:
+def _init_state(
+    symbol: str,
+    intervalo: str,
+    ultimo_timestamp: Optional[int],
+    ultimo_cierre: Optional[float],
+) -> _StreamState:
     now_ms = int(datetime.now(UTC).timestamp() * 1000)
     step_ms = int(_intervalo_segundos(intervalo) * 1000)
     if ultimo_timestamp:
         base_ts = int(ultimo_timestamp)
     else:
-        # Alinea el timestamp al cierre más reciente completado para evitar
-        # discrepancias con consumidores que validan la integridad del stream.
         base_ts = max(0, ((now_ms // step_ms) - 1) * step_ms)
     close = ultimo_cierre if ultimo_cierre is not None else 100.0
     return _StreamState(symbol, intervalo, base_ts, float(close))
+
+
+def _should_simulate(cliente: Any | None) -> bool:
+    return cliente is None or getattr(cliente, "simulated", True)
+
+
+def _ws_base_url(cliente: Any | None) -> str:
+    testnet = bool(getattr(cliente, "testnet", False))
+    return _WS_TESTNET_BASE_URL if testnet else _WS_BASE_URL
 
 
 async def escuchar_velas(
@@ -83,16 +107,84 @@ async def escuchar_velas(
     ultimo_timestamp: Optional[int] = None,
     ultimo_cierre: Optional[float] = None,
 ) -> None:
-    """Genera velas artificiales y las envía al ``handler``.
+    """Escucha velas para ``symbol`` desde Binance o modo simulado."""
 
-    Reglas clave para la simulación:
+    if _should_simulate(cliente):
+        await _escuchar_velas_simulado(
+            symbol,
+            intervalo,
+            handler,
+            timeout_inactividad=timeout_inactividad,
+            ultimo_timestamp=ultimo_timestamp,
+            ultimo_cierre=ultimo_cierre,
+        )
+        return
 
-    * Si ``ultimo_timestamp`` está presente, se emite **solo** la vela
-      inmediatamente posterior a ese cierre para evitar backfills agresivos.
-    * Dos velas con el mismo ``close_time`` no se entregan más de una vez.
-    * El loop principal mantiene un ritmo constante controlado por
-      ``intervalo``.
-    """
+    await _escuchar_velas_real(
+        symbol,
+        intervalo,
+        handler,
+        timeout_inactividad=timeout_inactividad,
+        mensaje_timeout=mensaje_timeout,
+        cliente=cliente,
+    )
+
+
+async def escuchar_velas_combinado(
+    symbols: Iterable[str],
+    intervalo: str,
+    handler: Callable[[str, Dict[str, Any]], Awaitable[None]]
+    | Callable[[str, Dict[str, Any]], None]
+    | Mapping[str, Callable[[Dict[str, Any]], Awaitable[None]] | Callable[[Dict[str, Any]], None]],
+    _unused: Dict[str, Any],
+    timeout_inactividad: float,
+    _heartbeat: float,
+    *,
+    cliente: Any | None = None,
+    mensaje_timeout: float | None = None,
+    backpressure: bool = True,
+    ultimo_timestamp: Optional[int] = None,
+    ultimo_cierre: Optional[float] = None,
+    ultimos: Mapping[str, Mapping[str, Any]] | None = None,
+) -> None:
+    """Escucha velas para múltiples símbolos."""
+
+    if _should_simulate(cliente):
+        await _escuchar_velas_combinado_simulado(
+            symbols,
+            intervalo,
+            handler,
+            timeout_inactividad=timeout_inactividad,
+            cliente=cliente,
+            mensaje_timeout=mensaje_timeout,
+            backpressure=backpressure,
+            ultimo_timestamp=ultimo_timestamp,
+            ultimo_cierre=ultimo_cierre,
+            ultimos=ultimos,
+        )
+        return
+
+    await _escuchar_velas_combinado_real(
+        list(symbols),
+        intervalo,
+        handler,
+        timeout_inactividad=timeout_inactividad,
+        mensaje_timeout=mensaje_timeout,
+        cliente=cliente,
+    )
+
+
+# ──────────────────────────────── SIMULACIÓN ───────────────────────────────
+async def _escuchar_velas_simulado(
+    symbol: str,
+    intervalo: str,
+    handler: Callable[[Dict[str, Any]], Awaitable[None]] | Callable[[Dict[str, Any]], None],
+    *,
+    timeout_inactividad: float,
+    ultimo_timestamp: Optional[int],
+    ultimo_cierre: Optional[float],
+) -> None:
+    del timeout_inactividad  # El modo simulado no expira por inactividad
 
     state = _init_state(symbol, intervalo, ultimo_timestamp, ultimo_cierre)
     real_step = _intervalo_segundos(intervalo)
@@ -120,14 +212,7 @@ async def escuchar_velas(
         state.ultimo_ts = current_close_time
         state.ultimo_close = float(candle["close"])
         await emitir_candle(candle)
-        # Cede el control al event loop para permitir cancelaciones inmediatas
-        # antes de iniciar el bucle productor recurrente. Esto evita que, en
-        # entornos de test donde ``asyncio.sleep`` está parcheado a dormir 0s,
-        # se emitan velas adicionales antes de que la cancelación se procese.
         await asyncio.sleep(0)
-        # Además, esperamos un intervalo completo cancelable. Así damos margen
-        # para que un consumidor que cancele tras recibir el backfill detenga
-        # la tarea antes de que se genere una nueva vela.
         try:
             await asyncio.sleep(intervalo_segundos)
         except asyncio.CancelledError:
@@ -171,22 +256,21 @@ async def escuchar_velas(
         await emitir_candle(candle)
 
 
-async def escuchar_velas_combinado(
+async def _escuchar_velas_combinado_simulado(
     symbols: Iterable[str],
     intervalo: str,
-    handler: Callable[[str, Dict[str, Any]], Awaitable[None]] | Callable[[str, Dict[str, Any]], None] | Mapping[str, Callable[[Dict[str, Any]], Awaitable[None]] | Callable[[Dict[str, Any]], None]],
-    _unused: Dict[str, Any],
-    timeout_inactividad: float,
-    _heartbeat: float,
+    handler: Callable[[str, Dict[str, Any]], Awaitable[None]]
+    | Callable[[str, Dict[str, Any]], None]
+    | Mapping[str, Callable[[Dict[str, Any]], Awaitable[None]] | Callable[[Dict[str, Any]], None]],
     *,
-    cliente: Any | None = None,
-    mensaje_timeout: float | None = None,
-    backpressure: bool = True,
-    ultimo_timestamp: Optional[int] = None,
-    ultimo_cierre: Optional[float] = None,
-    ultimos: Mapping[str, Mapping[str, Any]] | None = None,
+    timeout_inactividad: float,
+    cliente: Any | None,
+    mensaje_timeout: float | None,
+    backpressure: bool,
+    ultimo_timestamp: Optional[int],
+    ultimo_cierre: Optional[float],
+    ultimos: Mapping[str, Mapping[str, Any]] | None,
 ) -> None:
-    """Genera streams simultáneos para múltiples símbolos."""
 
     def _resolver_handler(symbol: str):
         if isinstance(handler, Mapping):
@@ -207,10 +291,10 @@ async def escuchar_velas_combinado(
                     symbol,
                     intervalo,
                     _resolver_handler(symbol),
-                    _unused,
-                    timeout_inactividad,
-                    _heartbeat,
-                    cliente=cliente,
+                    {},
+                    timeout_inactividad=1.0,
+                    _heartbeat=1.0,
+                    cliente=None,
                     mensaje_timeout=mensaje_timeout,
                     backpressure=backpressure,
                     ultimo_timestamp=info.get("ultimo_timestamp", ultimo_timestamp),
@@ -223,6 +307,149 @@ async def escuchar_velas_combinado(
     finally:
         for task in tasks:
             task.cancel()
+
+# ───────────────────────────────── MODO REAL ───────────────────────────────
+async def _escuchar_velas_real(
+    symbol: str,
+    intervalo: str,
+    handler: Callable[[Dict[str, Any]], Awaitable[None]] | Callable[[Dict[str, Any]], None],
+    *,
+    timeout_inactividad: float,
+    mensaje_timeout: float | None,
+    cliente: Any | None,
+) -> None:
+    stream = f"{symbol.lower()}@kline_{intervalo}"
+    url = f"{_ws_base_url(cliente)}/ws/{stream}"
+    await _consume_ws_stream(
+        url,
+        lambda payload: _emit_if_closed(handler, payload),
+        timeout_inactividad=timeout_inactividad,
+        mensaje_timeout=mensaje_timeout,
+    )
+
+
+async def _escuchar_velas_combinado_real(
+    symbols: Iterable[str],
+    intervalo: str,
+    handler: Callable[[str, Dict[str, Any]], Awaitable[None]]
+    | Callable[[str, Dict[str, Any]], None]
+    | Mapping[str, Callable[[Dict[str, Any]], Awaitable[None]] | Callable[[Dict[str, Any]], None]],
+    *,
+    timeout_inactividad: float,
+    mensaje_timeout: float | None,
+    cliente: Any | None,
+) -> None:
+    streams = [f"{symbol.lower()}@kline_{intervalo}" for symbol in symbols]
+    url = f"{_ws_base_url(cliente)}/stream?streams={'/'.join(streams)}"
+
+    if isinstance(handler, Mapping):
+        async def dispatch(symbol: str, candle: Dict[str, Any]) -> None:
+            symbol_upper = symbol.upper()
+            fn = handler.get(symbol_upper) or handler.get(symbol)
+            if fn is None:
+                return
+            result = fn(candle)
+            if asyncio.iscoroutine(result):
+                await result
+    else:
+        async def dispatch(symbol: str, candle: Dict[str, Any]) -> None:
+            result = handler(symbol, candle)  # type: ignore[misc]
+            if asyncio.iscoroutine(result):
+                await result
+
+    async def process_combined(payload: Dict[str, Any]) -> None:
+        stream_name = payload.get("stream", "")
+        data = payload.get("data", {})
+        symbol = data.get("s") or stream_name.split("@", 1)[0].upper()
+        if not symbol:
+            return
+        candle = _convert_kline(data.get("k"))
+        if candle is None:
+            return
+        await dispatch(symbol, candle)
+
+    await _consume_ws_stream(
+        url,
+        process_combined,
+        timeout_inactividad=timeout_inactividad,
+        mensaje_timeout=mensaje_timeout,
+    )
+
+
+async def _consume_ws_stream(
+    url: str,
+    handler: Callable[[Dict[str, Any]], Awaitable[None] | None],
+    *,
+    timeout_inactividad: float,
+    mensaje_timeout: float | None,
+) -> None:
+    inactivity = mensaje_timeout or timeout_inactividad or 30.0
+    inactivity = max(1.0, float(inactivity))
+    backoff = 1.0
+    while True:
+        if _is_being_cancelled():
+            raise asyncio.CancelledError
+        try:
+            async with websockets.connect(url, ping_interval=20, ping_timeout=20, close_timeout=5) as ws:
+                logger.info(
+                    "binance_ws_connected",
+                    extra={"event": "binance_ws_connected", "url": url},
+                )
+                backoff = 1.0
+                while True:
+                    try:
+                        raw = await asyncio.wait_for(ws.recv(), timeout=inactivity)
+                    except asyncio.TimeoutError as exc:
+                        raise InactividadTimeoutError(
+                            f"Sin mensajes de Binance en {inactivity}s"
+                        ) from exc
+                    data = json.loads(raw)
+                    result = handler(data)
+                    if asyncio.iscoroutine(result):
+                        await result
+        except InactividadTimeoutError:
+            raise
+        except asyncio.CancelledError:
+            raise
+        except websockets.ConnectionClosedOK:  # pragma: no cover - desconexión limpia
+            await asyncio.sleep(0)
+        except (websockets.WebSocketException, OSError) as exc:
+            logger.warning(
+                "binance_ws_retry",
+                extra={"event": "binance_ws_retry", "url": url, "error": repr(exc), "backoff": round(backoff, 2)},
+            )
+            await asyncio.sleep(backoff)
+            backoff = min(backoff * 2, 30.0)
+        else:
+            break
+
+
+def _emit_if_closed(
+    handler: Callable[[Dict[str, Any]], Awaitable[None]] | Callable[[Dict[str, Any]], None],
+    payload: Dict[str, Any],
+) -> Awaitable[None] | None:
+    candle = _convert_kline(payload.get("k"))
+    if candle is None:
+        return None
+    return _call_handler(handler, candle)
+
+
+def _convert_kline(kline: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    if not kline or not kline.get("x"):
+        return None
+    return {
+        "event_time": int(kline.get("T", kline.get("t", 0))),
+        "symbol": kline.get("s", ""),
+        "intervalo": kline.get("i", ""),
+        "open_time": int(kline.get("t", 0)),
+        "close_time": int(kline.get("T", 0)),
+        "open": float(kline.get("o", 0.0)),
+        "high": float(kline.get("h", 0.0)),
+        "low": float(kline.get("l", 0.0)),
+        "close": float(kline.get("c", 0.0)),
+        "volume": float(kline.get("v", 0.0)),
+        "is_closed": bool(kline.get("x", False)),
+    }
 
 
 def _calc_next_close_time(ultimo_ts: int, intervalo: str) -> int:
@@ -270,7 +497,7 @@ def _is_being_cancelled() -> bool:
     if callable(cancelling):  # Python 3.11+
         try:
             return bool(cancelling())
-        except Exception:  # pragma: no cover - defensivo ante implementaciones futuras
+        except Exception:  # pragma: no cover - defensivo
             return False
 
     return task.cancelled()
