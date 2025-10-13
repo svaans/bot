@@ -7,7 +7,7 @@ import sys
 import time
 import threading
 from pathlib import Path
-from typing import Iterable, Optional, Set
+from typing import Iterable, Optional, Sequence, Set
 
 try:
     from watchdog.events import FileSystemEventHandler, FileSystemEvent
@@ -37,6 +37,7 @@ DEFAULT_EXCLUDES: Set[str] = {
     ".venv",
     "venv",
     "env",
+    "site-packages",
     "node_modules",
     "dist",
     "build",
@@ -52,10 +53,43 @@ STATE_EXCLUDES: Set[str] = {
 }
 
 
+NOISY_FILE_PATTERNS: Set[str] = {
+    "*.pyc",
+    "*.pyo",
+    "*.log",
+    "*.tmp",
+    "*.swp",
+    "*.swo",
+    "*.cache",
+    "*.tmp.*",
+    "*.dist-info",
+    "**/*.pyc",
+    "**/*.pyo",
+    "**/*.log",
+    "**/*.tmp",
+    "**/*.swp",
+    "**/*.swo",
+    "**/*.dist-info",
+}
+
+
 def _path_is_excluded(path: Path, exclude: Set[str]) -> bool:
     """Devuelve True si el path toca alguno de los directorios excluidos."""
     parts = set(p.name for p in path.resolve().parents) | {path.name}
     return bool(parts & exclude)
+
+
+def _path_matches_whitelist(path: Path, allowed: Path) -> bool:
+    """Devuelve True si `path` coincide exactamente o es descendiente de `allowed`."""
+    if allowed == path:
+        return True
+    if allowed.is_file() or allowed.suffix:
+        return False
+    try:
+        path.relative_to(allowed)
+        return True
+    except ValueError:
+        return False
 
 
 class _DebouncedReloader(FileSystemEventHandler):
@@ -73,12 +107,16 @@ class _DebouncedReloader(FileSystemEventHandler):
         debounce_seconds: float = 1.0,
         exclude: Optional[Iterable[str]] = None,
         verbose: bool = True,
+        watch_whitelist: Optional[Sequence[Path]] = None,
     ) -> None:
         super().__init__()
         self.root = root
         self.debounce = max(0.1, float(debounce_seconds))
         self.exclude: Set[str] = set(exclude or set())
         self.verbose = verbose
+        self._watch_whitelist: tuple[Path, ...] = tuple(
+            Path(p).resolve() for p in (watch_whitelist or ())
+        )
 
         self._timer: Optional[threading.Timer] = None
         self._lock = threading.Lock()
@@ -88,7 +126,7 @@ class _DebouncedReloader(FileSystemEventHandler):
     # ---- Watchdog callbacks ----
 
     def on_any_event(self, event: FileSystemEvent) -> None:  # type: ignore[override]
-        # Nos interesan solo creaciones/modificaciones/borrados de archivos .py
+        # Nos interesan solo modificaciones/escrituras cerradas de archivos .py
         if event.is_directory:
             return
         try:
@@ -96,10 +134,25 @@ class _DebouncedReloader(FileSystemEventHandler):
         except Exception:
             return
 
+        event_type = getattr(event, "event_type", "")
+        if event_type not in {"modified", "closed"}:
+            return
+
         if p.suffix.lower() != ".py":
             return
         if _path_is_excluded(p, self.exclude):
             return
+
+        if self._watch_whitelist:
+            try:
+                resolved = p.resolve()
+            except FileNotFoundError:
+                resolved = p.absolute()
+            if not any(
+                _path_matches_whitelist(resolved, allowed)
+                for allowed in self._watch_whitelist
+            ):
+                return
 
         with self._lock:
             self._last_event_ts = time.time()
@@ -163,7 +216,7 @@ class _DebouncedReloader(FileSystemEventHandler):
 def _schedule_observer(
     observer,
     handler: FileSystemEventHandler,
-    root: Path,
+    path: Path,
     *,
     ignore_patterns: Iterable[str] | None = None,
 ) -> None:
@@ -180,13 +233,13 @@ def _schedule_observer(
 
     if extra_kwargs:
         try:
-            observer.schedule(handler, str(root), recursive=True, **extra_kwargs)
+            observer.schedule(handler, str(path), recursive=True, **extra_kwargs)
             return
         except TypeError:
             # Backend no soporta ignore_patterns; reintenta sin filtros.
             pass
 
-    observer.schedule(handler, str(root), recursive=True)
+    observer.schedule(handler, str(path), recursive=True)
 
 
 def start_hot_reload(
@@ -198,6 +251,7 @@ def start_hot_reload(
     polling: Optional[bool] = None,
     ignore_patterns: Optional[Iterable[str]] = None,
     verbose: bool = True,
+    watch_paths: Optional[Iterable[Path | str]] = None,
 ):
     """
     Inicia el observador de hot-reload. Devuelve el observer para detenerlo luego.
@@ -219,6 +273,8 @@ def start_hot_reload(
     ignore_patterns : Iterable[str] | None
         Patrones shell-style adicionales a ignorar en watchdog (si el backend lo soporta).
         Mostrar logs en consola.
+    watch_paths : Iterable[Path | str] | None
+        Subconjunto de rutas dentro de `path` a vigilar. Si se omite, se observa todo el árbol.
     """
     root = Path(path).resolve()
     root.mkdir(parents=True, exist_ok=True)
@@ -228,7 +284,53 @@ def start_hot_reload(
     if exclude:
         excludes |= {str(x) for x in exclude}
 
-    handler = _DebouncedReloader(root, debounce_seconds=debounce_seconds, exclude=excludes, verbose=verbose)
+    watch_whitelist: list[Path] = []
+    schedule_targets: list[Path] = []
+    watch_whitelist_set: Set[Path] = set()
+    schedule_target_set: Set[Path] = set()
+    if watch_paths:
+        for raw in watch_paths:
+            target = Path(raw)
+            if not target.is_absolute():
+                target = (root / target).resolve()
+            else:
+                target = target.resolve()
+
+            try:
+                target.relative_to(root)
+            except ValueError:
+                continue
+
+            if target.is_file():
+                parent = target.parent
+                if target not in watch_whitelist_set:
+                    watch_whitelist.append(target)
+                    watch_whitelist_set.add(target)
+                if parent not in schedule_target_set:
+                    schedule_targets.append(parent)
+                    schedule_target_set.add(parent)
+            elif target.is_dir():
+                if target not in watch_whitelist_set:
+                    watch_whitelist.append(target)
+                    watch_whitelist_set.add(target)
+                if target not in schedule_target_set:
+                    schedule_targets.append(target)
+                    schedule_target_set.add(target)
+
+    if not schedule_targets:
+        schedule_targets = [root]
+        schedule_target_set = {root}
+        if not watch_whitelist:
+            watch_whitelist = [root]
+            watch_whitelist_set = {root}
+
+    handler = _DebouncedReloader(
+        root,
+        debounce_seconds=debounce_seconds,
+        exclude=excludes,
+        verbose=verbose,
+        watch_whitelist=watch_whitelist,
+    )
     ignore_patterns_set: Set[str] = set()
     for item in excludes:
         if not item:
@@ -238,6 +340,7 @@ def start_hot_reload(
         ignore_patterns_set.add(f"*/{item}/*")
     if ignore_patterns:
         ignore_patterns_set.update(str(p) for p in ignore_patterns)
+    ignore_patterns_set.update(NOISY_FILE_PATTERNS)
 
     # Heurística para elegir backend
     force_poll = polling if polling is not None else (os.getenv("WATCHDOG_POLLING", "0") == "1")
@@ -251,12 +354,19 @@ def start_hot_reload(
 
     def _start(cls):
         observer_instance = _instantiate(cls)
-        _schedule_observer(
-            observer_instance,
-            handler,
-            root,
-            ignore_patterns=ignore_patterns_set,
-        )
+        scheduled: Set[str] = set()
+        for target in schedule_targets:
+            target_path = target.resolve()
+            key = str(target_path)
+            if key in scheduled:
+                continue
+            scheduled.add(key)
+            _schedule_observer(
+                observer_instance,
+                handler,
+                target_path,
+                ignore_patterns=ignore_patterns_set,
+            )
         observer_instance.start()
         return observer_instance
 
