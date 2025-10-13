@@ -340,6 +340,15 @@ def crear_notification_manager_desde_env(on_event: Optional[Callable[[str, dict]
         workers=int(os.getenv("NOTIFY_WORKERS", "2")),
         on_event=on_event,
     )
-    nm.start()
+    try:
+        nm.start()
+    except RuntimeError as exc:
+        mensaje = str(exc)
+        if "loop activo" not in mensaje:
+            raise
+        log.debug(
+            "NotificationManager diferido: %s. Se iniciará la primera vez que se use en un loop.",
+            mensaje,
+        )
     return nm
 
