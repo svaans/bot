@@ -171,7 +171,11 @@ def register_reconnect_attempt(feed: "DataFeed", key: str, reason: str) -> bool:
     if feed.max_reconnect_attempts is not None and attempts > feed.max_reconnect_attempts:
         _handle_limit_exceeded(
             feed,
-            f"Se superó el máximo de reintentos permitidos ({feed.max_reconnect_attempts})",
+            key=key,
+            reason=reason,
+            attempts=attempts,
+            elapsed=elapsed,
+            limit_type="attempts",
         )
         return False
 
