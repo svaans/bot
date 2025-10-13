@@ -10,7 +10,11 @@ from pathlib import Path
 from typing import Iterable, Optional, Sequence, Set
 
 try:
-    from watchdog.events import FileSystemEventHandler, FileSystemEvent
+    from watchdog.events import (
+        FileSystemEventHandler,
+        FileSystemEvent,
+        PatternMatchingEventHandler,
+    )
     from watchdog.observers import Observer
     try:
         # PollingObserver existe en watchdog>=2.1
@@ -92,7 +96,7 @@ def _path_matches_whitelist(path: Path, allowed: Path) -> bool:
         return False
 
 
-class _DebouncedReloader(FileSystemEventHandler):
+class _DebouncedReloader(PatternMatchingEventHandler):
     """
     Observa cambios en *.py y reinicia el proceso tras un periodo de quietud (debounce).
 
@@ -108,8 +112,14 @@ class _DebouncedReloader(FileSystemEventHandler):
         exclude: Optional[Iterable[str]] = None,
         verbose: bool = True,
         watch_whitelist: Optional[Sequence[Path]] = None,
+        ignore_patterns: Optional[Iterable[str]] = None,
     ) -> None:
-        super().__init__()
+        super().__init__(
+            patterns=("*.py",),
+            ignore_patterns=tuple(ignore_patterns or ()),
+            ignore_directories=True,
+            case_sensitive=False,
+        )
         self.root = root
         self.debounce = max(0.1, float(debounce_seconds))
         self.exclude: Set[str] = set(exclude or set())
@@ -125,38 +135,59 @@ class _DebouncedReloader(FileSystemEventHandler):
 
     # ---- Watchdog callbacks ----
 
-    def on_any_event(self, event: FileSystemEvent) -> None:  # type: ignore[override]
-        # Nos interesan solo modificaciones/escrituras cerradas de archivos .py
-        if event.is_directory:
-            return
-        try:
-            p = Path(event.src_path)
-        except Exception:
+    def on_modified(self, event: FileSystemEvent) -> None:  # type: ignore[override]
+        self._handle_event(event)
+
+    def on_created(self, event: FileSystemEvent) -> None:  # type: ignore[override]
+        self._handle_event(event)
+
+    def on_moved(self, event: FileSystemEvent) -> None:  # type: ignore[override]
+        self._handle_event(event)
+
+    def _handle_event(self, event: FileSystemEvent) -> None:
+        if getattr(event, "is_directory", False):
             return
 
-        event_type = getattr(event, "event_type", "")
-        if event_type not in {"modified", "closed"}:
-            return
+        candidate_paths = []
+        dest_path = getattr(event, "dest_path", None)
+        if dest_path:
+            candidate_paths.append(dest_path)
+        src_path = getattr(event, "src_path", None)
+        if src_path:
+            candidate_paths.append(src_path)
 
-        if p.suffix.lower() != ".py":
-            return
-        if _path_is_excluded(p, self.exclude):
-            return
-
-        if self._watch_whitelist:
+        selected_path: Optional[Path] = None
+        for raw_path in candidate_paths:
             try:
-                resolved = p.resolve()
-            except FileNotFoundError:
-                resolved = p.absolute()
-            if not any(
-                _path_matches_whitelist(resolved, allowed)
-                for allowed in self._watch_whitelist
-            ):
-                return
+                p = Path(raw_path)
+            except Exception:
+                continue
+
+            if p.suffix.lower() != ".py":
+                continue
+            if _path_is_excluded(p, self.exclude):
+                continue
+
+            if self._watch_whitelist:
+                try:
+                    resolved = p.resolve()
+                except FileNotFoundError:
+                    resolved = p.absolute()
+                if not any(
+                    _path_matches_whitelist(resolved, allowed)
+                    for allowed in self._watch_whitelist
+                ):
+                    continue
+
+            selected_path = p
+            break
+
+        if selected_path is None:
+            return
 
         with self._lock:
             self._last_event_ts = time.time()
-            self._last_path = p
+            self._last_path = selected_path
 
             if self._timer and self._timer.is_alive():
                 # Reinicia la cuenta regresiva
@@ -168,8 +199,14 @@ class _DebouncedReloader(FileSystemEventHandler):
             self._timer.start()
 
             if self.verbose:
-                rel = p.relative_to(self.root) if str(p).startswith(str(self.root)) else p
-                print(f"👀 Cambio detectado: {rel} (reinicio en {self.debounce:.2f}s)")
+                rel = (
+                    selected_path.relative_to(self.root)
+                    if str(selected_path).startswith(str(self.root))
+                    else selected_path
+                )
+                print(
+                    f"👀 Cambio detectado: {rel} (reinicio en {self.debounce:.2f}s)"
+                )
                 sys.stdout.flush()
 
     # ---- Internals ----
@@ -324,13 +361,6 @@ def start_hot_reload(
             watch_whitelist = [root]
             watch_whitelist_set = {root}
 
-    handler = _DebouncedReloader(
-        root,
-        debounce_seconds=debounce_seconds,
-        exclude=excludes,
-        verbose=verbose,
-        watch_whitelist=watch_whitelist,
-    )
     ignore_patterns_set: Set[str] = set()
     for item in excludes:
         if not item:
@@ -341,6 +371,15 @@ def start_hot_reload(
     if ignore_patterns:
         ignore_patterns_set.update(str(p) for p in ignore_patterns)
     ignore_patterns_set.update(NOISY_FILE_PATTERNS)
+    
+    handler = _DebouncedReloader(
+        root,
+        debounce_seconds=debounce_seconds,
+        exclude=excludes,
+        verbose=verbose,
+        watch_whitelist=watch_whitelist,
+        ignore_patterns=ignore_patterns_set,
+    )
 
     # Heurística para elegir backend
     force_poll = polling if polling is not None else (os.getenv("WATCHDOG_POLLING", "0") == "1")
