@@ -7,6 +7,8 @@ import os
 from dataclasses import dataclass
 from typing import Any, Optional, Callable, Iterable, cast
 
+import aiohttp
+
 from core.utils.logger import configurar_logger
 from core.utils.metrics_compat import Counter, Gauge, Histogram
 
@@ -25,24 +27,78 @@ NOTIFY_LATENCY = Histogram(
 
 # --- Backend Telegram opcional ------------------------------------------------
 
+class NotificationDeliveryError(RuntimeError):
+    """Error específico para fallos al emitir una notificación."""
+    
 class _TelegramBackend:
-    """Backend mínimo para Telegram; ignora silenciosamente si faltan credenciales."""
-    def __init__(self, token: Optional[str], chat_id: Optional[str]) -> None:
+    """Backend asíncrono para Telegram empleando ``aiohttp``."""
+
+    def __init__(
+        self,
+        token: Optional[str],
+        chat_id: Optional[str],
+        *,
+        session: Optional[aiohttp.ClientSession] = None,
+        request_timeout: float = 10.0,
+        base_url: str = "https://api.telegram.org",
+    ) -> None:
         self.token = token
         self.chat_id = chat_id
         self._enabled = bool(token and chat_id)
+        self._session = session
+        self._request_timeout = request_timeout
+        self._base_url = base_url.rstrip("/")
 
     async def send(self, text: str) -> bool:
         if not self._enabled:
             return True  # no romper el flujo cuando no hay credenciales
-        # Evita dependencias en requests/aiohttp aquí; deja el hook para que lo inyectes si quieres.
-        # Puedes cambiar esta parte por tu cliente real de Telegram si lo tienes en el proyecto.
+        payload = {
+            "chat_id": self.chat_id,
+            "text": text,
+            "disable_web_page_preview": True,
+        }
+
+        if self._session is not None:
+            return await self._dispatch(self._session, payload)
+
+        timeout = aiohttp.ClientTimeout(total=self._request_timeout)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            return await self._dispatch(session, payload)
+
+    async def _dispatch(
+        self,
+        session: aiohttp.ClientSession,
+        payload: dict[str, Any],
+    ) -> bool:
+        if not self.token:
+            raise NotificationDeliveryError("Token de Telegram no configurado")
+
+        url = f"{self._base_url}/bot{self.token}/sendMessage
         try:
-            # Placeholder de éxito inmediato (hookéalo a tu implementacion real)
-            await asyncio.sleep(0)
-            return True
-        except Exception:
-            return False
+            async with session.post(url, json=payload) as response:
+                status = response.status
+                try:
+                    data = await response.json(content_type=None)
+                except Exception as exc:  # pragma: no cover - json inválido
+                    body = await response.text()
+                    raise NotificationDeliveryError(
+                        f"Respuesta no JSON de Telegram (HTTP {status}): {body!r}"
+                    ) from exc
+        except aiohttp.ClientError as exc:
+            raise NotificationDeliveryError(f"Error de red enviando a Telegram: {exc}") from exc
+        except asyncio.TimeoutError as exc:
+            raise NotificationDeliveryError("Timeout enviando a Telegram") from exc
+
+        if status != 200:
+            raise NotificationDeliveryError(
+                f"HTTP {status} al enviar mensaje: {data!r}"
+            )
+        if not data.get("ok", False):
+            descripcion = data.get("description", "Respuesta desconocida")
+            raise NotificationDeliveryError(
+                f"Telegram rechazó la notificación: {descripcion}"
+            )
+        return True
 
 
 @dataclass
@@ -193,14 +249,29 @@ class NotificationManager:
 
     async def _enviar_con_reintentos(self, notif: Notification) -> bool:
         lat = NOTIFY_LATENCY.time()
+        delays: list[float] = [0.0, *self._retries]
+        mensaje = self._formatear(notif)
         try:
-            if await self._backend.send(self._formatear(notif)):
-                return True
-            for delay in self._retries:
-                NOTIFY_RETRY.inc()
-                await asyncio.sleep(delay)
-                if await self._backend.send(self._formatear(notif)):
-                    return True
+            for intento, delay in enumerate(delays, start=1):
+                if delay:
+                    NOTIFY_RETRY.inc()
+                    await asyncio.sleep(delay)
+                try:
+                    if await self._backend.send(mensaje):
+                        return True
+                except NotificationDeliveryError as exc:
+                    self._log_safe(
+                        "warning",
+                        "Error enviando notificación (intento %s/%s): %s",
+                        intento,
+                        len(delays),
+                        exc,
+                    )
+                except Exception:
+                    self._log_safe(
+                        "exception",
+                        "Fallo inesperado en backend de notificaciones",
+                    )
             return False
         finally:
             try:
