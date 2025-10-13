@@ -234,6 +234,7 @@ async def handle_candle(feed: "DataFeed", symbol: str, candle: dict) -> None:
 
     if feed.queue_policy == "block" or not queue.maxsize:
         await queue.put(candle)
+        queue_size_after = queue.qsize()
     else:
         while True:
             try:
