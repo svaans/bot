@@ -52,18 +52,45 @@ ColumnsBase = ["timestamp", "open", "high", "low", "close", "volume"]
 log = configurar_logger("entry_verifier", modo_silencioso=True)
 
 
-@dataclass(slots=True)
 class EntryDecision:
-    symbol: str
-    timeframe: str | None
-    permitida: bool
-    score: float
-    threshold: float
-    usar_score: bool
-    reasons: list[str] = field(default_factory=list)
-    meta: dict[str, Any] = field(default_factory=dict)
-    raw: dict[str, Any] = field(default_factory=dict)
-    score_missing: bool = False
+    """Decisión de entrada lista para consumo por el módulo de órdenes."""
+
+    __slots__ = (
+        "symbol",
+        "timeframe",
+        "permitida",
+        "score",
+        "threshold",
+        "usar_score",
+        "reasons",
+        "meta",
+        "raw",
+        "score_missing",
+    )
+
+    def __init__(
+        self,
+        symbol: str,
+        timeframe: str | None,
+        permitida: bool,
+        score: float,
+        threshold: float,
+        usar_score: bool,
+        reasons: Optional[list[str]] = None,
+        meta: Optional[dict[str, Any]] = None,
+        raw: Optional[dict[str, Any]] = None,
+        score_missing: bool = False,
+    ) -> None:
+        self.symbol = symbol
+        self.timeframe = timeframe
+        self.permitida = permitida
+        self.score = score
+        self.threshold = threshold
+        self.usar_score = usar_score
+        self.reasons = list(reasons) if reasons else []
+        self.meta = dict(meta) if meta else {}
+        self.raw = dict(raw) if raw else {}
+        self.score_missing = score_missing
 
     def add_reason(self, reason: str) -> None:
         if reason and reason not in self.reasons:
