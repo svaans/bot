@@ -131,6 +131,37 @@ class BinanceClient:
             await self._session.close()
         self._session = None
 
+    async def fetch_open_orders(self, symbol: str | None = None) -> List[Dict[str, Any]]:
+        """Recupera las órdenes abiertas del usuario para ``symbol``.
+
+        En modo simulado devuelve siempre una lista vacía para conservar la
+        compatibilidad con los tests. En modo real delega en el endpoint
+        ``/api/v3/openOrders`` firmando la petición con las credenciales
+        configuradas.
+        """
+
+        if getattr(self, "simulated", True):
+            await asyncio.sleep(0)
+            return []
+
+        params: Dict[str, Any] = {}
+        if symbol:
+            params["symbol"] = _to_binance_symbol(symbol)
+
+        data = await self._request(
+            "GET",
+            "/api/v3/openOrders",
+            params=params,
+            signed=True,
+        )
+        if data is None:
+            return []
+        if isinstance(data, list):
+            return data
+        raise BinanceAPIError(
+            "Respuesta inesperada al consultar órdenes abiertas: se esperaba una lista"
+        )
+
     # ────────────────────────── MÉTODOS INTERNOS ─────────────────────────
     async def _ensure_session(self) -> aiohttp.ClientSession:
         if self._session is not None and not self._session.closed:

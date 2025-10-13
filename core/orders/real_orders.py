@@ -28,7 +28,8 @@ import time
 import atexit
 import threading
 import asyncio
-from typing import Any, Mapping
+import inspect
+from typing import Any, Awaitable, Mapping, TypeVar, Coroutine
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from datetime import datetime, timezone
 
@@ -66,6 +67,47 @@ _CACHE_ORDENES: dict[str, Order] | None = None
 _VENTAS_FALLIDAS: set[str] = set()
 _VENTAS_FALLIDAS_LOCK = threading.Lock()
 _BUFFER_OPERACIONES: list[dict] = []
+
+T = TypeVar("T")
+
+
+def _as_coroutine(awaitable: Awaitable[T]) -> Coroutine[Any, Any, T]:
+    if asyncio.iscoroutine(awaitable):
+        return awaitable  # type: ignore[return-value]
+
+    async def _wrapper() -> T:
+        return await awaitable
+
+    return _wrapper()
+
+
+def _run_coroutine_sync(awaitable: Awaitable[T]) -> T:
+    coro = _as_coroutine(awaitable)
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(coro)
+    if loop.is_running():
+        new_loop = asyncio.new_event_loop()
+        try:
+            return new_loop.run_until_complete(coro)
+        finally:
+            new_loop.close()
+    return loop.run_until_complete(coro)
+
+
+def _resolve_maybe_awaitable(value: Any) -> Any:
+    if inspect.isawaitable(value):
+        return _run_coroutine_sync(value)
+    return value
+
+
+def _coerce_open_orders(value: Any) -> list[dict]:
+    if not value:
+        return []
+    if isinstance(value, list):
+        return value
+    return list(value)
 
 
 def venta_fallida(symbol: str) -> bool:
@@ -355,9 +397,15 @@ def reconciliar_ordenes(simbolos: list[str] | None = None) -> dict[str, Order]:
         ordenes_api: list[dict] = []
         if simbolos:
             for s in simbolos:
-                ordenes_api.extend(cliente.fetch_open_orders(s))
+                fetched = _coerce_open_orders(
+                    _resolve_maybe_awaitable(cliente.fetch_open_orders(s))
+                )
+                if fetched:
+                    ordenes_api.extend(fetched)
         else:
-            ordenes_api = cliente.fetch_open_orders()
+            ordenes_api = _coerce_open_orders(
+                _resolve_maybe_awaitable(cliente.fetch_open_orders())
+            )
     except Exception as e:
         log.error(f'❌ Error consultando órdenes abiertas: {e}')
         return local
@@ -458,9 +506,15 @@ def sincronizar_ordenes_binance(
         ordenes_api = []
         if simbolos:
             for s in simbolos:
-                ordenes_api.extend(cliente.fetch_open_orders(s))
+                fetched = _coerce_open_orders(
+                    _resolve_maybe_awaitable(cliente.fetch_open_orders(s))
+                )
+                if fetched:
+                    ordenes_api.extend(fetched)
         else:
-            ordenes_api = cliente.fetch_open_orders()
+            ordenes_api = _coerce_open_orders(
+                _resolve_maybe_awaitable(cliente.fetch_open_orders())
+            )
     except Exception as e:
         log.error(f'❌ Error consultando órdenes abiertas: {e}')
         return cargar_ordenes()
@@ -522,7 +576,9 @@ def consultar_ordenes_abiertas(symbol: str) -> list[dict]:
     ordenes_api: list[dict] = []
     for intento in range(1, 4):
         try:
-            ordenes_api = cliente.fetch_open_orders(symbol)
+            ordenes_api = _coerce_open_orders(
+                _resolve_maybe_awaitable(cliente.fetch_open_orders(symbol))
+            )
             break
         except AuthenticationError as e:
             log.error(f'❌ Error de autenticación al consultar órdenes: {e}')
