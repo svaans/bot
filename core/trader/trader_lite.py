@@ -159,6 +159,7 @@ class TraderLite(TraderLiteBackfillMixin, TraderLiteProcessingMixin):
         self._backfill_warmup_extra = int(os.getenv("BACKFILL_WARMUP_EXTRA", "300"))
         self._backfill_headroom = int(os.getenv("BACKFILL_HEADROOM", "200"))
         self._backfill_enabled = os.getenv("BACKFILL_ENABLED", "true").lower() != "false"
+        self._backfill_cancel_timeout = float(os.getenv("BACKFILL_CANCEL_TIMEOUT", "15"))
         log.info(
             "Backfill trader configurado",
             extra=safe_extra(
@@ -169,6 +170,7 @@ class TraderLite(TraderLiteBackfillMixin, TraderLiteProcessingMixin):
                     "backfill_warmup_extra": self._backfill_warmup_extra,
                     "backfill_headroom": self._backfill_headroom,
                     "backfill_enabled": self._backfill_enabled,
+                    "backfill_cancel_timeout": self._backfill_cancel_timeout,
                 }
             ),
         )
@@ -459,6 +461,7 @@ class TraderLite(TraderLiteBackfillMixin, TraderLiteProcessingMixin):
             with contextlib.suppress(asyncio.CancelledError, Exception):
                 await self._connection_signal_task
             self._connection_signal_task = None
+            await self._stop_backfill()
         # Cierre del feed: soporta detener() sync/async/ausente
         try:
             detener = getattr(self.feed, "detener", None)
