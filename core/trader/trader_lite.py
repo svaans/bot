@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import importlib
+import inspect
 import os
 from collections import defaultdict
 from dataclasses import dataclass
@@ -44,6 +45,7 @@ class TraderComponentFactories:
     strategy_engine: type[Any] | None = None
     persistencia_tecnica: type[Any] | None = None
     spread_guard: type[Any] | None = None
+    evaluacion_repo: Any | None = None
     verificar_entrada: Callable[..., Any] | None = None
     sync_sim: Callable[[Any], Any] | None = None
 
@@ -274,6 +276,19 @@ class TraderLite(TraderLiteBackfillMixin, TraderLiteProcessingMixin):
             log_message="Fallo importando pipeline de verificación de entradas",
         )
 
+        self._EvaluacionRepo = self._resolve_component(
+            "evaluacion_repo",
+            importer=lambda: self._import_symbol(
+                "estado.evaluaciones_repo", "EvaluacionRepository"
+            ),
+            optional=True,
+            log_message=(
+                "Fallo importando EvaluacionRepository; auditoría de evaluaciones desactivada"
+            ),
+        )
+        self._repo_owned = False
+        self.repo = self._initialize_repo()
+
         # Configurar guardia de spread (puede devolver None si está deshabilitado).
         self.spread_guard = self._create_spread_guard()
 
@@ -478,6 +493,7 @@ class TraderLite(TraderLiteBackfillMixin, TraderLiteProcessingMixin):
             with contextlib.suppress(asyncio.CancelledError, Exception):
                 await self._runner_task
         await self._close_owned_event_bus()
+        self._close_repo()
 
     async def _close_owned_event_bus(self) -> None:
         """Cierra el EventBus creado internamente si sigue activo."""
@@ -541,6 +557,98 @@ class TraderLite(TraderLiteBackfillMixin, TraderLiteProcessingMixin):
             },
         )
         return guard
+    
+    def _initialize_repo(self) -> Any | None:
+        repo_factory = self._EvaluacionRepo
+        if repo_factory is None:
+            return None
+
+        try:
+            repo = self._instantiate_repo(repo_factory)
+        except ComponentResolutionError:
+            raise
+        except Exception as exc:  # pragma: no cover - defensivo
+            self._component_errors["evaluacion_repo"] = exc
+            log.error(
+                "Fallo inicializando EvaluacionRepository",
+                extra=safe_extra({"stage": "TraderLite"}),
+                exc_info=True,
+            )
+            return None
+
+        if repo is None:
+            return None
+
+        save_fn = getattr(repo, "save_evaluacion", None)
+        if not callable(save_fn):
+            log.warning(
+                "Repositorio de evaluaciones inválido: falta save_evaluacion(); se ignora",
+                extra=safe_extra({"stage": "TraderLite"}),
+            )
+            return None
+
+        return repo
+
+    def _instantiate_repo(self, factory: Any) -> Any | None:
+        if factory is None:
+            return None
+
+        if hasattr(factory, "save_evaluacion") and not isinstance(factory, type):
+            return factory
+
+        candidates: list[Any] = []
+        if isinstance(factory, type):
+            candidates.append(factory)
+        elif callable(factory):
+            candidates.append(factory)
+        else:
+            return None
+
+        for candidate in candidates:
+            try:
+                signature = inspect.signature(candidate)
+            except (TypeError, ValueError):  # pragma: no cover - callable sin introspección
+                signature = None
+
+            attempts = (
+                {"config": self.config, "trader": self},
+                {"config": self.config},
+                {},
+            )
+            for kwargs in attempts:
+                if signature is not None:
+                    try:
+                        signature.bind_partial(**kwargs)
+                    except TypeError:
+                        continue
+                try:
+                    instance = candidate(**kwargs)
+                except TypeError:
+                    continue
+                else:
+                    self._repo_owned = True
+                    return instance
+
+        instance = candidates[0]()
+        self._repo_owned = True
+        return instance
+
+    def _close_repo(self) -> None:
+        repo = getattr(self, "repo", None)
+        if repo is None:
+            return
+        if not self._repo_owned and not getattr(repo, "autoclose", True):
+            return
+        close_fn = getattr(repo, "close", None)
+        if callable(close_fn):
+            try:
+                close_fn()
+            except Exception:  # pragma: no cover - cierre defensivo
+                log.exception(
+                    "Error cerrando repositorio de evaluaciones",
+                    extra=safe_extra({"stage": "TraderLite"}),
+                )
+        self.repo = None
 
     # ------------------- ciclo principal -------------------
     async def _run(self) -> None:
