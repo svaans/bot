@@ -612,11 +612,14 @@ async def test_open_streams_runs_sync_start_on_loop_thread() -> None:
     trader = _Trader()
     manager = StartupManager(trader=trader)
 
-    await manager._open_streams()
-    await asyncio.sleep(0)
+    try:
+        await manager._open_streams()
+        await asyncio.sleep(0)
 
-    assert trader.started is True
-    assert trader.thread_id == loop_thread
+        assert trader.started is True
+        assert trader.thread_id == loop_thread
+    finally:
+        await manager._stop_streams()
 
 @pytest.mark.asyncio
 async def test_open_streams_autostarts_managed_feed_without_wait() -> None:
@@ -688,14 +691,17 @@ async def test_open_streams_fallback_disables_managed_flag() -> None:
         config={"ws_managed_by_trader": True},
     )
 
-    await manager._open_streams()
+    try:
+        await manager._open_streams()
 
-    assert feed.start_calls == 1
-    assert getattr(feed, "_managed_by_trader", None) is False
-    if hasattr(manager.config, "get"):
-        assert manager.config.get("ws_managed_by_trader") is False
-    else:
-        assert getattr(manager.config, "ws_managed_by_trader", None) is False
+        assert feed.start_calls == 1
+        assert getattr(feed, "_managed_by_trader", None) is False
+        if hasattr(manager.config, "get"):
+            assert manager.config.get("ws_managed_by_trader") is False
+        else:
+            assert getattr(manager.config, "ws_managed_by_trader", None) is False
+    finally:
+        await manager._stop_streams()
 @pytest.mark.asyncio
 async def test_open_streams_fallback_emits_datafeed_connected_event() -> None:
     """El fallback debe emitir ``datafeed_connected`` cuando el WS esté activo."""
