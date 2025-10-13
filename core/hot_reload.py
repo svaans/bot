@@ -25,8 +25,11 @@ except Exception as e:  # pragma: no cover
 
 DEFAULT_EXCLUDES: Set[str] = {
     ".git",
+    ".idea",
     ".hg",
+    ".ropeproject",
     ".svn",
+    ".vscode",
     "__pycache__",
     ".mypy_cache",
     ".pytest_cache",
