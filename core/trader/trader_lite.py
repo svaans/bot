@@ -461,7 +461,7 @@ class TraderLite(TraderLiteBackfillMixin, TraderLiteProcessingMixin):
             with contextlib.suppress(asyncio.CancelledError, Exception):
                 await self._connection_signal_task
             self._connection_signal_task = None
-            await self._stop_backfill()
+        await self._stop_backfill()
         # Cierre del feed: soporta detener() sync/async/ausente
         try:
             detener = getattr(self.feed, "detener", None)
