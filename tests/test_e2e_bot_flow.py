@@ -377,7 +377,10 @@ async def test_flow_fastpath_guard_emits_metric(trader_factory, caplog) -> None:
     assert fastpath_logs, f"No se registró fastpath_skip_entries: {_format_skip_entries(skips)}"
     await wait_for(lambda: metric._value >= baseline + len(fastpath_logs))
     for entry in fastpath_logs:
-        assert entry.get("buffer_len") >= trader.config.trader_fastpath_threshold
+        details = entry.get("details", {})
+        assert details.get("fastpath_mode") == "fastpath"
+        assert entry.get("buffer_len") >= trader.config.trader_fastpath_resume_threshold
+        assert details.get("resume_threshold") == trader.config.trader_fastpath_resume_threshold
 
 
 @pytest.mark.asyncio(mode="strict")
