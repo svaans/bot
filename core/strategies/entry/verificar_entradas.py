@@ -129,6 +129,12 @@ GATE_SCORE_LAST_VALUE = Gauge(
     ["symbol", "timeframe"],
 )
 
+ENTRY_TIMEOUT_TOTAL = Counter(
+    "entry_timeout_total",
+    "Entradas descartadas por timeout al evaluar condiciones",
+    ["symbol", "timeframe"],
+)
+
 
 def _emit(on_event: Optional[Callable[[str, dict], None]], evt: str, data: dict) -> None:
     if callable(on_event):
@@ -257,6 +263,11 @@ def _inc_persist_metric(symbol: str, timeframe: str | None, pass_value: str) -> 
         GATE_PERSISTENCIA_DECISIONS_TOTAL.labels(*labels).inc()
     except Exception:
         safe_inc(GATE_PERSISTENCIA_DECISIONS_TOTAL)
+
+
+def _inc_timeout_metric(symbol: str, timeframe: str | None) -> None:
+    safe_inc(ENTRY_TIMEOUT_TOTAL, **_metric_labels(symbol, timeframe))
+
 
 
 def _resolve_score_threshold(cfg: Any, symbol: str, timeframe: str | None) -> float:
@@ -641,7 +652,14 @@ async def verificar_entrada(
             timeout=timeout,
         )
     except asyncio.TimeoutError:
-        payload = {"symbol": symbol, "timeout": timeout, "reason": "timeout"}
+        payload = {
+            "symbol": symbol,
+            "timeout": timeout,
+            "reason": "timeout",
+            "timeframe": timeframe_value,
+        }
+        _inc_timeout_metric(symbol, timeframe_value)
+        log.warning("verificar_entrada.timeout", extra=safe_extra(payload))
         _emit(on_event, "entry_timeout", payload)
         return _reject("timeout", extra=payload)
 
