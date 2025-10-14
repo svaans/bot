@@ -43,6 +43,13 @@ except Exception:
             return False
     alert_manager = _DummyAlerts()  # type: ignore
 
+try:
+    from observability.metrics import (
+        BOT_ORDERS_RETRY_SCHEDULED_TOTAL as _GUARDRAIL_ORDERS_RETRY_TOTAL,
+    )
+except Exception:  # pragma: no cover - módulo opcional
+    _GUARDRAIL_ORDERS_RETRY_TOTAL = None
+
 from core.utils.logger import configurar_logger
 
 log = configurar_logger("metrics")
@@ -348,8 +355,8 @@ ORDERS_REGISTRO_PENDIENTE_TOTAL = Counter(
     ["symbol"],
 )
 
-ORDERS_RETRY_SCHEDULED_TOTAL = Counter(
-    "bot_orders_retry_scheduled_total",
+ORDERS_RETRY_SCHEDULED_BY_REASON_TOTAL = Counter(
+    "bot_orders_retry_scheduled_reason_total",
     "Reintentos de registro programados tras fallas de persistencia",
     ["symbol", "reason"],
 )
@@ -396,7 +403,7 @@ _METRICS_WITH_FALLBACK = [
     "ORDERS_CREATE_SKIP_QUANTITY_TOTAL",
     "ORDERS_REGISTRO_PENDIENTE",
     "ORDERS_REGISTRO_PENDIENTE_TOTAL",
-    "ORDERS_RETRY_SCHEDULED_TOTAL",
+    "ORDERS_RETRY_SCHEDULED_BY_REASON_TOTAL",
 ]
 
 for _metric_name in _METRICS_WITH_FALLBACK:
@@ -497,7 +504,9 @@ def limpiar_registro_pendiente(symbol: str) -> None:
 def registrar_orders_retry_scheduled(symbol: str, reason: str) -> None:
     """Anota un reintento programado tras una falla de persistencia."""
 
-    ORDERS_RETRY_SCHEDULED_TOTAL.labels(symbol=symbol, reason=reason).inc()
+    ORDERS_RETRY_SCHEDULED_BY_REASON_TOTAL.labels(symbol=symbol, reason=reason).inc()
+    if _GUARDRAIL_ORDERS_RETRY_TOTAL is not None:
+        _GUARDRAIL_ORDERS_RETRY_TOTAL.labels(symbol=symbol).inc()
     registro_metrico.registrar(
         "orders_retry_scheduled",
         {"symbol": symbol, "reason": reason},
