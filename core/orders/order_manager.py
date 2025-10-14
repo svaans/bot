@@ -76,7 +76,7 @@ class OrderManager:
         self._quantity_timeout = max(
             0.1, float(os.getenv("ORDERS_QUANTITY_TIMEOUT", "5.0"))
         )
-		self._market_executor = MarketRetryExecutor(log=log, bus=bus)
+    	self._market_executor = MarketRetryExecutor(log=log, bus=bus)
         self._quantity_resolver = QuantityResolver(
             log=log,
             bus=bus,
