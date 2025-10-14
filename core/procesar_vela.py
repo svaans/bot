@@ -185,6 +185,56 @@ def _hash_buffer(items: Deque[dict]) -> Tuple[int, int]:
     return (len(items), int(items[-1].get("timestamp", 0)))
 
 
+def _get_fastpath_mode(state: Any) -> str:
+    """Obtiene el modo de fastpath almacenado en el estado del trader."""
+
+    default_mode = "normal"
+    if state is None:
+        return default_mode
+
+    try:
+        if hasattr(state, "fastpath_mode"):
+            value = getattr(state, "fastpath_mode", default_mode)
+            return str(value or default_mode)
+    except Exception:
+        pass
+
+    if isinstance(state, dict):
+        value = state.get("fastpath_mode", default_mode)
+        return str(value or default_mode)
+
+    try:
+        value = getattr(state, "fastpath_mode", default_mode)
+        return str(value or default_mode)
+    except Exception:
+        return default_mode
+
+
+def _set_fastpath_mode(state: Any, mode: str) -> None:
+    """Actualiza el modo de fastpath en el estado del trader si es posible."""
+
+    if state is None:
+        return
+
+    normalized = str(mode)
+
+    try:
+        if hasattr(state, "fastpath_mode"):
+            setattr(state, "fastpath_mode", normalized)
+            return
+    except Exception:
+        pass
+
+    if isinstance(state, dict):
+        state["fastpath_mode"] = normalized
+        return
+
+    try:
+        setattr(state, "fastpath_mode", normalized)
+    except Exception:
+        return
+
+
 def _mark_skip(
     target: dict,
     reason: str,
@@ -701,12 +751,38 @@ async def procesar_vela(trader: Any, vela: dict) -> None:
         except Exception:
             pass
 
-        # 4) Fast-path si estás bajo presión
+        # 4) Estado por símbolo (compatible con Trader.estado)
+        estado_trader = getattr(trader, "estado", None)
+        estado_symbol = estado_trader.get(symbol) if isinstance(estado_trader, dict) else None
+
+        # 5) Fast-path si estás bajo presión con histéresis configurable
         cfg = getattr(trader, "config", None)
         fast_enabled = bool(getattr(cfg, "trader_fastpath_enabled", True))
-        if fast_enabled:
+        if fast_enabled and getattr(cfg, "trader_fastpath_skip_entries", True):
             threshold = int(getattr(cfg, "trader_fastpath_threshold", 350))
-            if len(df) >= threshold and getattr(cfg, "trader_fastpath_skip_entries", True):
+            resume_threshold_cfg = getattr(cfg, "trader_fastpath_resume_threshold", None)
+            if resume_threshold_cfg is None:
+                recovery = int(getattr(cfg, "trader_fastpath_recovery", 0))
+                resume_threshold = max(0, threshold - recovery) if recovery else threshold
+            else:
+                resume_threshold = int(resume_threshold_cfg)
+
+            resume_threshold = min(resume_threshold, threshold)
+            fastpath_mode = _get_fastpath_mode(estado_symbol)
+            updated_mode = fastpath_mode
+            buffer_len = len(df)
+            if buffer_len >= threshold:
+                updated_mode = "fastpath"
+            elif buffer_len <= resume_threshold:
+                updated_mode = "normal"
+
+            if updated_mode != fastpath_mode:
+                _set_fastpath_mode(estado_symbol, updated_mode)
+                fastpath_mode = updated_mode
+            else:
+                fastpath_mode = updated_mode
+
+            if fastpath_mode == "fastpath":
                 _ensure_gating_end()
                 safe_inc(
                     ENTRADAS_RECHAZADAS_V2,
@@ -714,12 +790,17 @@ async def procesar_vela(trader: Any, vela: dict) -> None:
                     timeframe=timeframe_label,
                     reason="fastpath_skip_entries",
                 )
-                _mark_skip(vela, "fastpath_skip_entries", {"buffer_len": len(df), "threshold": threshold})
+                _mark_skip(
+                    vela,
+                    "fastpath_skip_entries",
+                    {
+                        "buffer_len": buffer_len,
+                        "threshold": threshold,
+                        "resume_threshold": resume_threshold,
+                        "fastpath_mode": fastpath_mode,
+                    },
+                )
                 return
-
-        # 5) Estado por símbolo (compatible con Trader.estado)
-        estado_trader = getattr(trader, "estado", None)
-        estado_symbol = estado_trader.get(symbol) if isinstance(estado_trader, dict) else None
 
         # 6) Evaluar condiciones de entrada (delegado al Trader)
         timeframe = timeframe or timeframe_label
