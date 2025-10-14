@@ -527,7 +527,14 @@ class SymbolState:
 
 
 class BufferManager:
-    """Gestiona buffers por símbolo y genera DataFrames estables con cache por hash."""
+    """Gestiona buffers por símbolo y genera DataFrames estables con cache por hash.
+
+    El estado es compartido entre todas las estrategias y datafeeds del proceso.
+    Para tareas de backfill manual donde se reemplaza el origen de datos
+    (histórico vs. en vivo) es necesario limpiar los buffers de un símbolo o
+    timeframe específico para evitar mezclar velas incompatibles. Utiliza
+    :meth:`clear` para sincronizar el estado antes de reanudar el flujo en vivo.
+    """
 
     def __init__(self, maxlen: int = 600) -> None:
         self._maxlen = max(100, int(maxlen))
@@ -602,6 +609,59 @@ class BufferManager:
     def size(self, symbol: str, timeframe: Optional[str] = None) -> int:
         st, _tf_key, _tf_label = self._get_state(symbol, timeframe)
         return len(st.buffer)
+
+    def clear(
+        self,
+        symbol: str,
+        timeframe: Optional[str] = None,
+        *,
+        drop_state: bool = False,
+    ) -> None:
+        """Limpia el buffer de un símbolo/timeframe.
+
+        Args:
+            symbol: Par de trading cuyos datos deben limpiarse.
+            timeframe: Intervalo a limpiar. ``None`` elimina todos los intervalos
+                asociados al símbolo.
+            drop_state: Cuando es ``True`` se elimina el ``SymbolState`` completo
+                (incluyendo locks asociados) en lugar de solo vaciar el buffer.
+
+        Se expone como API pública para permitir que procesos de backfill manual
+        alineen los buffers internos con la fuente histórica antes de reanudar el
+        stream en vivo, evitando inconsistencias entre datasets.
+        """
+
+        sym = self._normalize_symbol(symbol)
+        tf_key, _ = self._normalize_timeframe(timeframe)
+        estados_symbol = self._estados.get(sym)
+        if not estados_symbol:
+            return
+
+        items: Iterable[tuple[str, SymbolState]]
+        if timeframe is None:
+            items = list(estados_symbol.items())
+        else:
+            st = estados_symbol.get(tf_key)
+            if st is None:
+                return
+            items = [(tf_key, st)]
+
+        for key, st in items:
+            st.buffer.clear()
+            st.last_df = None
+            st.last_hash = (0, 0)
+            metric_tf = st.timeframe or (key if key != "default" else "unknown")
+            try:
+                safe_set(BUFFER_SIZE_V2, 0, timeframe=metric_tf)
+            except Exception as exc:  # pragma: no cover - métricas opcionales
+                log.debug("No se pudo reiniciar métrica buffer_size_v2: %s", exc)
+
+            if drop_state:
+                estados_symbol.pop(key, None)
+                self._locks.pop((sym, key), None)
+
+        if drop_state and not estados_symbol:
+            self._estados.pop(sym, None)
 
     def dataframe(self, symbol: str, timeframe: Optional[str] = None) -> Optional[pd.DataFrame]:
         st, _tf_key, tf_label = self._get_state(symbol, timeframe)
