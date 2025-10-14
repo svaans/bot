@@ -267,7 +267,7 @@ class OrderManager:
         errores_registro = False
         for sym, ord_ in list(self.ordenes.items()):
             if getattr(ord_, 'registro_pendiente', False):
-				self._registro_pendiente_paused.add(sym)
+                self._registro_pendiente_paused.add(sym)
                 registrar_registro_pendiente(sym)
                 try:
                     await asyncio.to_thread(
