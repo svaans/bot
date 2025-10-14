@@ -529,8 +529,15 @@ def _aplicar_persistencia(trader: Any, symbol: str, resultado: dict, on_event=No
 def _validar_distancias(precio: float, sl: float, tp: float, min_pct: float) -> bool:
     if precio <= 0:
         return False
-    return (abs(precio - sl) >= precio * min_pct) and (abs(tp - precio) >= precio * min_pct)
+    delta_min = precio * min_pct
+    # Evita falsos negativos por errores de redondeo en coma flotante
+    # cuando la distancia calculada es prácticamente igual al umbral.
+    tolerancia = max(delta_min * 1e-9, 1e-12)
 
+    distancia_sl = abs(precio - sl)
+    distancia_tp = abs(tp - precio)
+
+    return (distancia_sl + tolerancia >= delta_min) and (distancia_tp + tolerancia >= delta_min)
 
 async def verificar_entrada(
     trader: Any,
