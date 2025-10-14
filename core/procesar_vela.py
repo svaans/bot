@@ -583,18 +583,21 @@ async def procesar_vela(trader: Any, vela: dict) -> None:
     
     try:
         if not isinstance(vela, dict):
+            parse_end = _mark_stage("parse", t0)
             return
             
         vela.pop("_df_skip_reason", None)
         vela.pop("_df_skip_details", None)
         # 1) Validaciones mínimas y normalización
         if not symbol:
+            parse_end = _mark_stage("parse", t0)
             safe_inc(CANDLES_IGNORADAS, reason="no_symbol")
             _mark_skip(vela, "no_symbol")
             return
 
         ok, reason = _validar_candle(vela)
         if not ok:
+            parse_end = _mark_stage("parse", t0)
             safe_inc(CANDLES_IGNORADAS, reason=reason)
             _mark_skip(vela, reason)
             return
