@@ -699,7 +699,7 @@ class OrderManager:
 
                             if registrado:
                                 orden.registro_pendiente = False
-								limpiar_registro_pendiente(symbol)
+                                limpiar_registro_pendiente(symbol)
                                 self._registro_pendiente_paused.discard(symbol)
                             else:
                                 registrar_orden('failed')  # mantenemos etiqueta por compatibilidad
