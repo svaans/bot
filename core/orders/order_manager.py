@@ -283,7 +283,7 @@ class OrderManager:
                         ord_.operation_id,
                     )
                     ord_.registro_pendiente = False
-					limpiar_registro_pendiente(sym)
+                    limpiar_registro_pendiente(sym)
                     self._registro_pendiente_paused.discard(sym)
                     registrar_orden('opened')
                     log.info(f'🟢 Orden registrada tras reintento para {sym}')
