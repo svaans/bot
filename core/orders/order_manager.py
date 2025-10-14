@@ -1253,7 +1253,7 @@ class OrderManager:
         """Elimina la orden local asociada a ``symbol`` si existe."""
 
         self.ordenes.pop(symbol, None)
-		limpiar_registro_pendiente(symbol)
+        limpiar_registro_pendiente(symbol)
         self._registro_pendiente_paused.discard(symbol)
 
     def actualizar(self, orden: Order | None, **kwargs: Any) -> None:
