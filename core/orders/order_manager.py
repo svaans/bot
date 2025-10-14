@@ -749,7 +749,7 @@ class OrderManager:
                             {'mensaje': f'❌ Error al abrir orden en {symbol}: {e}', 'tipo': 'CRITICAL'},
                         )
                     self.ordenes.pop(symbol, None)
-					limpiar_registro_pendiente(symbol)
+                    limpiar_registro_pendiente(symbol)
                     self._registro_pendiente_paused.discard(symbol)
                     registrar_orden('failed')
                     return False
