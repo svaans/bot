@@ -110,6 +110,145 @@ def _coerce_open_orders(value: Any) -> list[dict]:
     return list(value)
 
 
+def _extraer_valor(mapeo: Mapping[str, Any] | None, claves: tuple[str, ...]) -> Any | None:
+    """Obtiene el primer valor válido encontrado en ``claves`` dentro del mapeo.
+
+    También revisa el campo ``info`` (estilo CCXT) para cubrir más formatos.
+    """
+
+    if not isinstance(mapeo, Mapping):
+        return None
+    for clave in claves:
+        valor = mapeo.get(clave)
+        if valor not in (None, ""):
+            return valor
+    info = mapeo.get('info')
+    if isinstance(info, Mapping):
+        for clave in claves:
+            valor = info.get(clave)
+            if valor not in (None, ""):
+                return valor
+    return None
+
+
+def _extraer_float(mapeo: Mapping[str, Any] | None, claves: tuple[str, ...]) -> float:
+    """Convierte a ``float`` el primer valor encontrado en ``claves``."""
+
+    valor = _extraer_valor(mapeo, claves)
+    try:
+        if valor is None:
+            return 0.0
+        return float(valor)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _coincide_operation_id(
+    mapeo: Mapping[str, Any] | None,
+    operation_id: str | None,
+) -> bool:
+    """Comprueba si ``operation_id`` coincide con el identificador de cliente."""
+
+    if not operation_id or not isinstance(mapeo, Mapping):
+        return False
+    candidate = _extraer_valor(
+        mapeo,
+        (
+            'clientOrderId',
+            'origClientOrderId',
+            'clientOrderID',
+            'orderId',
+            'id',
+        ),
+    )
+    if candidate is None:
+        return False
+    try:
+        return str(candidate) == str(operation_id)
+    except Exception:
+        return False
+
+
+def _auditar_operacion_post_error(
+    cliente: Any,
+    symbol: str,
+    operation_id: str | None,
+    cantidad_esperada: float,
+) -> dict[str, Any] | None:
+    """Intenta confirmar ejecuciones usando fuentes alternativas tras un fallo REST."""
+
+    if not operation_id:
+        return None
+
+    try:
+        cerradas = cliente.fetch_closed_orders(symbol, limit=10)
+    except Exception as cerr_err:
+        log.warning(
+            f'⚠️ Auditoría: error al consultar órdenes cerradas para {symbol}: {cerr_err}'
+        )
+        cerradas = []
+    for orden in cerradas or []:
+        if not isinstance(orden, Mapping):
+            continue
+        if not _coincide_operation_id(orden, operation_id):
+            continue
+        ejecutado = max(
+            _extraer_float(orden, ('filled', 'amount', 'executedQty')),
+            0.0,
+        )
+        restante = max(
+            _extraer_float(orden, ('remaining', 'remainingQty')),
+            cantidad_esperada - ejecutado,
+            0.0,
+        )
+        precio = _extraer_float(orden, ('average', 'price', 'stopPrice'))
+        if ejecutado > 0:
+            return {
+                'ejecutado': ejecutado,
+                'restante': restante,
+                'precio': precio,
+                'source': 'closed_orders',
+                'raw': orden,
+            }
+
+    try:
+        abiertas = consultar_ordenes_abiertas(symbol)
+    except Exception as abiertas_err:
+        log.warning(
+            f'⚠️ Auditoría: error al consultar órdenes abiertas para {symbol}: {abiertas_err}'
+        )
+        abiertas = []
+    for orden in abiertas or []:
+        if not isinstance(orden, Mapping):
+            continue
+        if not _coincide_operation_id(orden, operation_id):
+            continue
+        ejecutado = max(
+            _extraer_float(orden, ('filled', 'executedQty', 'cummulativeQuoteQty')),
+            0.0,
+        )
+        total = _extraer_float(orden, ('amount', 'origQty', 'quantity'))
+        restante = max(total - ejecutado, 0.0)
+        precio = _extraer_float(orden, ('average', 'price'))
+        if ejecutado > 0:
+            return {
+                'ejecutado': ejecutado,
+                'restante': restante,
+                'precio': precio,
+                'source': 'open_orders',
+                'raw': orden,
+            }
+        return {
+            'ejecutado': 0.0,
+            'restante': restante if restante > 0 else total,
+            'precio': precio,
+            'source': 'open_orders_pending',
+            'raw': orden,
+        }
+
+    return None
+
+
 def venta_fallida(symbol: str) -> bool:
     """Indica si hubo una venta fallida previa para `symbol`."""
     with _VENTAS_FALLIDAS_LOCK:
@@ -821,6 +960,8 @@ def ejecutar_orden_market(symbol: str, cantidad: float, operation_id: str | None
         log.warning(f'⚠️ Cantidad inválida para compra en {symbol}: {cantidad}')
         log_decision(log, 'ejecutar_orden_market', operation_id, entrada, {'cantidad_valida': False}, 'reject', {'ejecutado': 0})
         return {'ejecutado': 0.0, 'restante': 0.0, 'status': 'FILLED', 'min_qty': 0.0, 'fee': 0.0, 'pnl': 0.0}
+    cliente = None
+    precio = 0.0
     try:
         cliente = obtener_cliente()
         filtros = get_symbol_filters(symbol, cliente)
@@ -915,50 +1056,157 @@ def ejecutar_orden_market(symbol: str, cantidad: float, operation_id: str | None
         return salida
     except Exception as e:
         log.error(f'❌ Error en Binance al ejecutar compra en {symbol}: {e}')
+        contexto_decision: dict[str, Any] = {'reason': str(e)}
+        ejecucion_confirmada = False
 
-        try:
-            trades = cliente.fetch_my_trades(symbol, limit=1)
-            trade = trades[-1] if trades else None
-            ejecutado = float(trade.get('amount') or trade.get('qty') or 0) if trade else 0
-            if ejecutado > 0:
-                log.warning(
-                    f'⚠️ Operación detectada tras error: {ejecutado} {symbol}'
+        if cliente is not None:
+            try:
+                trades = cliente.fetch_my_trades(symbol, limit=1)
+                trade = trades[-1] if trades else None
+            except Exception as ver_err:
+                log.error(f'❌ Error verificando trades tras fallo: {ver_err}')
+                contexto_decision['trade_history_error'] = str(ver_err)
+                trade = None
+            else:
+                ejecutado = (
+                    float(trade.get('amount') or trade.get('qty') or 0) if trade else 0.0
                 )
-                try:
-                    notificador.enviar(
-                        f'Orden ejecutada tras error en {symbol}', 'WARNING'
+                if ejecutado > 0:
+                    ejecucion_confirmada = True
+                    contexto_decision.update(
+                        {
+                            'fallback': 'trade_history',
+                            'ejecutado': ejecutado,
+                        }
                     )
-                except Exception:
-                    pass
-                try:
-                    guardar_orden_real(symbol, {
-                        'symbol': symbol,
-                        'precio_entrada': float(trade.get('price') or 0) if trade else 0,
-                        'cantidad': ejecutado,
-                        'timestamp': datetime.now(UTC).isoformat(),
-                        'stop_loss': 0.0,
-                        'take_profit': 0.0,
-                        'estrategias_activas': {},
-                        'tendencia': '',
-                        'max_price': float(trade.get('price') or 0) if trade else 0,
-                        'direccion': 'long',
-                    })
-                    registrar_orden(
-                        symbol,
-                        float(trade.get('price') or 0) if trade else 0,
-                        ejecutado,
-                        0.0,
-                        0.0,
-                        {},
-                        '',
-                        'long',
-                        None,
+                    precio_trade = (
+                        float(trade.get('price') or 0) if trade else precio
                     )
-                except Exception as e_reg:
-                    log.error(f'❌ No se pudo registrar orden tras error: {e_reg}')
-        except Exception as ver_err:
-            log.error(f'❌ Error verificando trades tras fallo: {ver_err}')
-            log_decision(log, 'ejecutar_orden_market', operation_id, entrada, {}, 'error', {'reason': str(e)})
+                    log.warning(
+                        f'⚠️ Operación detectada tras error vía trades: {ejecutado} {symbol}'
+                    )
+                    try:
+                        notificador.enviar(
+                            f'Orden ejecutada tras error en {symbol}', 'WARNING'
+                        )
+                    except Exception:
+                        pass
+                    try:
+                        guardar_orden_real(
+                            symbol,
+                            {
+                                'symbol': symbol,
+                                'precio_entrada': precio_trade,
+                                'cantidad': ejecutado,
+                                'timestamp': datetime.now(UTC).isoformat(),
+                                'stop_loss': 0.0,
+                                'take_profit': 0.0,
+                                'estrategias_activas': {},
+                                'tendencia': '',
+                                'max_price': precio_trade,
+                                'direccion': 'long',
+                            },
+                        )
+                        registrar_orden(
+                            symbol,
+                            precio_trade,
+                            ejecutado,
+                            0.0,
+                            0.0,
+                            {},
+                            '',
+                            'long',
+                            operation_id,
+                        )
+                    except Exception as e_reg:
+                        log.error(f'❌ No se pudo registrar orden tras error: {e_reg}')
+                        contexto_decision['registro_error'] = str(e_reg)
+
+        auditoria_info: dict[str, Any] | None = None
+        if not ejecucion_confirmada and cliente is not None:
+            try:
+                auditoria_info = _auditar_operacion_post_error(
+                    cliente,
+                    symbol,
+                    operation_id,
+                    cantidad,
+                )
+            except Exception as audit_err:
+                log.error(f'❌ Auditoría cruzada falló para {symbol}: {audit_err}')
+                contexto_decision['audit_error'] = str(audit_err)
+            else:
+                if auditoria_info:
+                    contexto_decision['auditoria'] = auditoria_info.get('source')
+                    contexto_decision['ejecutado'] = auditoria_info.get('ejecutado', 0.0)
+                    contexto_decision['restante'] = auditoria_info.get('restante')
+                    if auditoria_info.get('ejecutado', 0.0) > 0:
+                        ejecucion_confirmada = True
+                        precio_confirmado = auditoria_info.get('precio') or precio
+                        log.warning(
+                            '⚠️ Auditoría confirmó ejecución en %s (%s): %.6f',
+                            symbol,
+                            auditoria_info.get('source'),
+                            auditoria_info.get('ejecutado', 0.0),
+                        )
+                        try:
+                            notificador.enviar(
+                                f'Orden confirmada por auditoría en {symbol}',
+                                'WARNING',
+                            )
+                        except Exception:
+                            pass
+                        try:
+                            guardar_orden_real(
+                                symbol,
+                                {
+                                    'symbol': symbol,
+                                    'precio_entrada': precio_confirmado,
+                                    'cantidad': float(
+                                        auditoria_info.get('ejecutado', 0.0)
+                                    ),
+                                    'timestamp': datetime.now(UTC).isoformat(),
+                                    'stop_loss': 0.0,
+                                    'take_profit': 0.0,
+                                    'estrategias_activas': {},
+                                    'tendencia': '',
+                                    'max_price': precio_confirmado,
+                                    'direccion': 'long',
+                                },
+                            )
+                            registrar_orden(
+                                symbol,
+                                precio_confirmado,
+                                float(auditoria_info.get('ejecutado', 0.0)),
+                                0.0,
+                                0.0,
+                                {},
+                                '',
+                                'long',
+                                operation_id,
+                            )
+                        except Exception as audit_reg_err:
+                            log.error(
+                                f'❌ No se pudo registrar orden confirmada por auditoría: {audit_reg_err}'
+                            )
+                            contexto_decision['registro_error'] = str(audit_reg_err)
+                    elif auditoria_info.get('source') == 'open_orders_pending':
+                        log.warning(
+                            '⚠️ Auditoría detectó orden pendiente para %s tras el fallo',
+                            symbol,
+                        )
+
+        if cliente is None:
+            contexto_decision['cliente'] = 'no_disponible'
+
+        log_decision(
+            log,
+            'ejecutar_orden_market',
+            operation_id,
+            entrada,
+            {},
+            'error',
+            contexto_decision,
+        )
         raise
 
 

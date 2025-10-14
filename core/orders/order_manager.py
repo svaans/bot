@@ -491,14 +491,30 @@ class OrderManager:
                 return False
             ordenes_api = {}
             if self.modo_real:
-                try:
-                    ordenes_api = await asyncio.to_thread(
-                        real_orders.sincronizar_ordenes_binance,
-                        [symbol],
-                        modo_real=self.modo_real,
-                    )
-                except Exception as e:
-                    log.error(f'❌ Error verificando órdenes abiertas: {e}')
+                reintentos_sync = 3
+                ultimo_error_sync: Exception | None = None
+                for intento in range(1, reintentos_sync + 1):
+                    try:
+                        ordenes_api = await asyncio.to_thread(
+                            real_orders.sincronizar_ordenes_binance,
+                            [symbol],
+                            modo_real=self.modo_real,
+                        )
+                        ultimo_error_sync = None
+                        break
+                    except Exception as e:
+                        ultimo_error_sync = e
+                        log.warning(
+                            '⚠️ Error verificando órdenes abiertas (intento %s/%s) para %s: %s',
+                            intento,
+                            reintentos_sync,
+                            symbol,
+                            e,
+                        )
+                        if intento < reintentos_sync:
+                            await asyncio.sleep(0.25 * intento)
+                if ultimo_error_sync is not None:
+                    log.error(f'❌ Error verificando órdenes abiertas tras reintentos: {ultimo_error_sync}')
                     if self.bus:
                         await self.bus.publish(
                             'notify',
@@ -515,7 +531,7 @@ class OrderManager:
                         entrada_log,
                         {'verificacion': 'error'},
                         'reject',
-                        {'reason': 'sync_error'},
+                        {'reason': 'sync_error', 'intentos': reintentos_sync},
                     )
                     return False
                 
