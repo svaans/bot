@@ -330,6 +330,12 @@ ORDERS_MARKET_RETRY_EXHAUSTED_TOTAL = Counter(
     ["side", "symbol"],
 )
 
+ORDERS_CREATE_SKIP_QUANTITY_TOTAL = Counter(
+    "orders_create_skip_quantity_total",
+    "Solicitudes de creación de orden omitidas por cantidad inválida",
+    ["symbol", "side", "source"],
+)
+
 ORDERS_REGISTRO_PENDIENTE = Gauge(
     "orders_registro_pendiente_active",
     "Indicador binario de órdenes con registro pendiente por símbolo",
@@ -381,6 +387,7 @@ _METRICS_WITH_FALLBACK = [
     "ORDERS_SYNC_SUCCESS_TOTAL",
     "ORDERS_SYNC_FAILURE_TOTAL",
     "ORDERS_MARKET_RETRY_EXHAUSTED_TOTAL",
+    "ORDERS_CREATE_SKIP_QUANTITY_TOTAL",
     "ORDERS_REGISTRO_PENDIENTE",
     "ORDERS_REGISTRO_PENDIENTE_TOTAL",
 ]
@@ -421,6 +428,30 @@ def registrar_partial_close_collision(symbol: str) -> None:
 def registrar_registro_error() -> None:
     CONTADOR_REGISTRO_ERRORES.inc()
     registro_metrico.registrar("order_register_error", {})
+
+
+def registrar_crear_skip_quantity(
+    symbol: str,
+    side: str,
+    quantity_source: str | None,
+) -> None:
+    """Cuenta descartes de órdenes por cantidades inválidas."""
+
+    source_label = quantity_source or "unknown"
+    ORDERS_CREATE_SKIP_QUANTITY_TOTAL.labels(
+        symbol=symbol,
+        side=side,
+        source=source_label,
+    ).inc()
+    registro_metrico.registrar(
+        "order_create_skip",
+        {
+            "symbol": symbol,
+            "side": side,
+            "reason": "quantity",
+            "source": source_label,
+        },
+    )
 
 
 def registrar_registro_pendiente(symbol: str) -> None:

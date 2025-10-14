@@ -23,6 +23,7 @@ from core.utils.utils import is_valid_number
 from core.event_bus import EventBus
 from core.metrics import (
     registrar_buy_rejected_insufficient_funds,
+    registrar_crear_skip_quantity,
     registrar_orden,
     registrar_orders_sync_failure,
     registrar_orders_sync_success,
@@ -1148,6 +1149,7 @@ class OrderManager:
             meta_map,
         )
         if cantidad <= 0:
+            registrar_crear_skip_quantity(symbol, direccion, cantidad_source)
             log.warning(
                 "crear.skip_quantity",
                 extra=safe_extra(
@@ -1156,7 +1158,7 @@ class OrderManager:
                         "side": direccion,
                         "precio": precio,
                         "meta_keys": tuple(meta_map.keys()),
-						"quantity_source": cantidad_source,
+                        "quantity_source": cantidad_source,
                     }
                 ),
             )
