@@ -17,6 +17,7 @@ class DummyConfig:
     intervalo_velas: str = "1m"
     trader_fastpath_enabled: bool = False
     trader_fastpath_threshold: int = 400
+    trader_fastpath_resume_threshold: int = 350
     trader_fastpath_skip_entries: bool = False
 
 
