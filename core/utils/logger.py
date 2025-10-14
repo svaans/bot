@@ -172,6 +172,30 @@ def _ensure_root_logger() -> None:
 _ensure_root_logger()
 
 
+def _set_minimum_level(logger_name: str, min_level: int) -> None:
+    """Eleva ``logger_name`` hasta ``min_level`` si hoy permite DEBUG en exceso."""
+
+    logger = logging.getLogger(logger_name)
+    current_level = logger.level
+    if current_level in (logging.NOTSET, 0) or current_level < min_level:
+        logger.setLevel(min_level)
+
+
+def _configure_noisy_loggers() -> None:
+    """Ajusta loggers ruidosos de terceros para silenciar mensajes DEBUG."""
+
+    noisy_loggers: dict[str, int] = {
+        "websockets.client": logging.INFO,
+        "websockets.protocol": logging.INFO,
+        "binance_api.websocket": logging.INFO,
+    }
+    for name, min_level in noisy_loggers.items():
+        _set_minimum_level(name, min_level)
+
+
+_configure_noisy_loggers()
+
+
 def configurar_logger(nombre: str, *, modo_silencioso: bool | None = None, nivel: int | None = None) -> logging.Logger:
     """Devuelve un logger configurado con formato JSON y singleton por nombre."""
     with _LOCK:
