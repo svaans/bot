@@ -28,6 +28,8 @@ from core.metrics import (
     registrar_orders_sync_success,
     registrar_partial_close_collision,
     registrar_registro_error,
+    registrar_registro_pendiente,
+    limpiar_registro_pendiente,
 )
 from core.registro_metrico import registro_metrico
 from binance_api.cliente import obtener_cliente
@@ -60,6 +62,8 @@ class OrderManager:
         # Símbolos para los que ya se registró un mensaje de duplicado
         self._dup_warned: set[str] = set()
         self._sync_task: asyncio.Task | None = None
+		# Símbolos con registro pendiente persistente (pausa nuevas entradas)
+        self._registro_pendiente_paused: set[str] = set()
         self._sync_interval = 300
         self._sync_base_interval = self._sync_interval
         self._sync_min_interval = float(
@@ -263,6 +267,8 @@ class OrderManager:
         errores_registro = False
         for sym, ord_ in list(self.ordenes.items()):
             if getattr(ord_, 'registro_pendiente', False):
+				self._registro_pendiente_paused.add(sym)
+                registrar_registro_pendiente(sym)
                 try:
                     await asyncio.to_thread(
                         real_orders.registrar_orden,
@@ -277,6 +283,8 @@ class OrderManager:
                         ord_.operation_id,
                     )
                     ord_.registro_pendiente = False
+					limpiar_registro_pendiente(sym)
+                    self._registro_pendiente_paused.discard(sym)
                     registrar_orden('opened')
                     log.info(f'🟢 Orden registrada tras reintento para {sym}')
                     if self.bus:
@@ -454,6 +462,31 @@ class OrderManager:
                     {'duplicada': True},
                     'reject',
                     {'reason': 'duplicate'},
+                )
+                return False
+			if symbol in self._registro_pendiente_paused:
+                log.warning(
+                    '🚫 Apertura bloqueada para %s por registro pendiente persistente',
+                    symbol,
+                )
+                if self.bus:
+                    await self.bus.publish(
+                        'notify',
+                        {
+                            'mensaje': f'🚫 Apertura bloqueada en {symbol} por registro pendiente',
+                            'tipo': 'WARNING',
+                            'operation_id': operation_id,
+                        },
+                    )
+                registrar_orden('rejected')
+                log_decision(
+                    log,
+                    'abrir',
+                    operation_id,
+                    entrada_log,
+                    {'registro': 'bloqueado'},
+                    'reject',
+                    {'reason': 'registro_pendiente_bloqueado'},
                 )
                 return False
             ordenes_api = {}
@@ -666,18 +699,24 @@ class OrderManager:
 
                             if registrado:
                                 orden.registro_pendiente = False
+								limpiar_registro_pendiente(symbol)
+                                self._registro_pendiente_paused.discard(symbol)
                             else:
                                 registrar_orden('failed')  # mantenemos etiqueta por compatibilidad
                                 if self.bus:
                                     await self.bus.publish(
                                         'notify',
                                         {
-                                            'mensaje': f'⚠️ Orden {symbol} ejecutada pero registro pendiente',
-                                            'tipo': 'WARNING',
+                                            'mensaje': (
+                                                f'⚠️ Orden {symbol} ejecutada pero registro pendiente; '
+                                                'nuevas entradas pausadas hasta sincronización'
+                                            ),
+											'tipo': 'WARNING',
+											'operation_id': operation_id,
                                         },
                                     )
-                                # programa reintento rápido además del loop periódico
-                                self._schedule_registro_retry(symbol)
+                                registrar_registro_pendiente(symbol)
+                                self._registro_pendiente_paused.add(symbol)
 
                             orden.cantidad_abierta = cantidad
                             orden.entradas[0]['cantidad'] = cantidad
@@ -699,6 +738,8 @@ class OrderManager:
                                     },
                                 )
                             orden.registro_pendiente = False
+							limpiar_registro_pendiente(symbol)
+                            self._registro_pendiente_paused.discard(symbol)
 
                 except Exception as e:
                     log.error(f'❌ No se pudo abrir la orden para {symbol}: {e}')
@@ -708,6 +749,8 @@ class OrderManager:
                             {'mensaje': f'❌ Error al abrir orden en {symbol}: {e}', 'tipo': 'CRITICAL'},
                         )
                     self.ordenes.pop(symbol, None)
+					limpiar_registro_pendiente(symbol)
+                    self._registro_pendiente_paused.discard(symbol)
                     registrar_orden('failed')
                     return False
 
@@ -922,6 +965,8 @@ class OrderManager:
 
                 # Finalmente, elimina del activo
                 self.ordenes.pop(symbol, None)
+				limpiar_registro_pendiente(symbol)
+                self._registro_pendiente_paused.discard(symbol)
                 return True
 
             finally:
@@ -1027,6 +1072,8 @@ class OrderManager:
                                 },
                             )
                     self.ordenes.pop(symbol, None)
+					limpiar_registro_pendiente(symbol)
+                    self._registro_pendiente_paused.discard(symbol)
 
                     if self.modo_real:
                         try:
@@ -1206,6 +1253,8 @@ class OrderManager:
         """Elimina la orden local asociada a ``symbol`` si existe."""
 
         self.ordenes.pop(symbol, None)
+		limpiar_registro_pendiente(symbol)
+        self._registro_pendiente_paused.discard(symbol)
 
     def actualizar(self, orden: Order | None, **kwargs: Any) -> None:
         """Actualiza los atributos de ``orden`` con los ``kwargs`` provistos."""
