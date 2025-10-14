@@ -192,6 +192,44 @@ def _build_candle(close: float) -> dict[str, Any]:
     }
 
 
+def test_buffer_manager_clear_specific_timeframe() -> None:
+    manager = procesar_vela_mod.get_buffer_manager()
+    candle_1m = {**_build_candle(27_000.0), "timeframe": "1m"}
+    candle_5m = {**_build_candle(27_500.0), "timeframe": "5m"}
+
+    manager.append("BTCUSDT", candle_1m)
+    manager.append("BTCUSDT", candle_5m)
+
+    assert manager.size("BTCUSDT", "1m") == 1
+    assert manager.size("BTCUSDT", "5m") == 1
+
+    manager.clear("BTCUSDT", "1m")
+
+    assert manager.size("BTCUSDT", "1m") == 0
+    assert manager.size("BTCUSDT", "5m") == 1
+
+
+def test_buffer_manager_clear_all_drop_state() -> None:
+    manager = procesar_vela_mod.get_buffer_manager()
+    candle_1m = {**_build_candle(28_000.0), "timeframe": "1m"}
+    candle_15m = {**_build_candle(28_500.0), "timeframe": "15m"}
+
+    manager.append("ETHUSDT", candle_1m)
+    manager.append("ETHUSDT", candle_15m)
+
+    # Sanity check before limpiar
+    assert manager.size("ETHUSDT", "1m") == 1
+    assert manager.size("ETHUSDT", "15m") == 1
+
+    manager.clear("ETHUSDT", drop_state=True)
+
+    # El estado completo debe desaparecer
+    assert procesar_vela_mod._buffers._estados.get("ETHUSDT") is None
+    # Reutilizar la API no debería fallar tras limpiar
+    manager.append("ETHUSDT", candle_1m)
+    assert manager.size("ETHUSDT", "1m") == 1
+
+
 @pytest.mark.parametrize("side", ["long", "short"])
 @pytest.mark.asyncio
 async def test_procesar_vela_abre_operacion_para_oportunidad(side: str) -> None:
