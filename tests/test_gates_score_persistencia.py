@@ -266,3 +266,38 @@ async def test_final_decision_log_contains_meta(
     payload_record = final_logs[-1]
     assert getattr(payload_record, "permitida") is True
     assert getattr(payload_record, "meta").get("persistencia_ok") is True
+
+
+@pytest.mark.asyncio
+async def test_distancias_gate_tolerates_float_rounding(monkeypatch: pytest.MonkeyPatch) -> None:
+    config = _config(min_dist_pct=0.0005)
+    trader = _trader(config)
+
+    df = pd.DataFrame(
+        [
+            {
+                "timestamp": 1_700_000_100,
+                "open": 120.4,
+                "high": 121.0,
+                "low": 120.3,
+                "close": 120.5,
+                "volume": 50.0,
+            }
+        ]
+    )
+    df.attrs["tf"] = "1m"
+
+    result = await _run_verificar(
+        monkeypatch,
+        trader,
+        {"side": "long", "score": 80.0, "persistencia_ok": True},
+        df=df,
+    )
+
+    assert isinstance(result, dict)
+    assert result["score"] == 80.0
+    min_pct = config.min_dist_pct
+    expected_sl = df.iloc[-1]["close"] * (1 - min_pct)
+    expected_tp = df.iloc[-1]["close"] * (1 + 2 * min_pct)
+    assert result["stop_loss"] == pytest.approx(expected_sl)
+    assert result["take_profit"] == pytest.approx(expected_tp)
