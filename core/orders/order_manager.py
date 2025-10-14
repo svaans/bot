@@ -138,7 +138,7 @@ class OrderManager:
 
 
     def subscribe(self, bus: EventBus) -> None:
-		self.bus = bus
+        self.bus = bus
         self._market_executor.update_bus(bus)
         self._quantity_resolver.update_bus(bus)
         bus.subscribe('abrir_orden', self._on_abrir)
