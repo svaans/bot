@@ -1,8 +1,11 @@
 """Compatibilidad ligera para métricas Prometheus opcionales."""
 from __future__ import annotations
 
+import time
+
 from dataclasses import dataclass, field
-from typing import Any, Dict, Iterable, Tuple
+from functools import wraps
+from typing import Any, Dict, Iterable, Tuple, Callable, TypeVar, cast
 
 try:  # pragma: no cover - dependencias opcionales
     from prometheus_client import Counter as PromCounter
@@ -95,6 +98,51 @@ class Gauge(_BaseMetric):
         if self._metric is not None:
             self._metric.set(value)
 
+_F = TypeVar("_F", bound=Callable[..., Any])
+
+
+class _HistogramTimer:
+    """Pequeño temporizador compatible con ``Histogram.time()`` de Prometheus."""
+
+    def __init__(self, histogram: "Histogram") -> None:
+        self._histogram = histogram
+        self._start: float | None = time.perf_counter()
+
+    def _restart(self) -> None:
+        self._start = time.perf_counter()
+
+    def _duration(self) -> float:
+        if self._start is None:
+            return 0.0
+        return max(time.perf_counter() - self._start, 0.0)
+
+    def __enter__(self) -> "_HistogramTimer":
+        self._restart()
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb) -> None:  # pragma: no cover - trivial
+        self.observe_duration()
+
+    def observe_duration(self) -> float:
+        """Registra la duración transcurrida desde la creación del temporizador."""
+
+        duration = self._duration()
+        self._histogram.observe(duration)
+        self._start = None
+        return duration
+
+    def labels(self, *values: str, **kwargs: str) -> "_HistogramTimer":
+        hist = self._histogram.labels(*values, **kwargs)
+        return hist.time()
+
+    def __call__(self, func: _F) -> _F:
+        @wraps(func)
+        def wrapped(*args: Any, **kwargs: Any):
+            with self._histogram.time():
+                return func(*args, **kwargs)
+
+        return cast(_F, wrapped)
+
 
 class Histogram(_BaseMetric):
     def __init__(
@@ -113,6 +161,9 @@ class Histogram(_BaseMetric):
         self._observations.append(value)
         if self._metric is not None:
             self._metric.observe(value)
+
+    def time(self) -> _HistogramTimer:
+        return _HistogramTimer(self)
 
 
 def start_wsgi_server(port: int, addr: str = "0.0.0.0") -> Any:
