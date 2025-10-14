@@ -68,6 +68,7 @@ class DevelopmentConfig:
     trader_metrics_log_interval: float = 5.0
     trader_fastpath_enabled: bool = True
     trader_fastpath_threshold: int = 800
+    trader_fastpath_resume_threshold: int = 600
     trader_fastpath_recovery: int = 200
     trader_fastpath_skip_notifications: bool = True
     trader_fastpath_skip_entries: bool = False
