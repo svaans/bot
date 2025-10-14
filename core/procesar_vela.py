@@ -107,6 +107,11 @@ ENTRADAS_ABIERTAS = Counter(
     "Entradas abiertas (OrderManager)",
     ["symbol", "side"],
 )
+SPREAD_GUARD_MISSING = Counter(
+    "procesar_vela_spread_guard_missing_total",
+    "Velas sin spread_ratio cuando la guardia de spread está activa",
+    ["symbol", "timeframe"],
+)
 
 log = configurar_logger("procesar_vela")
 
@@ -748,6 +753,19 @@ async def procesar_vela(trader: Any, vela: dict) -> None:
         # 2) Control por spread (si hay guardia y si el dato viene en la vela)
         spread_ratio = vela.get("spread_ratio") or vela.get("spread")
         sg = getattr(trader, "spread_guard", None)
+        if sg is not None and spread_ratio is None:
+            safe_inc(
+                SPREAD_GUARD_MISSING,
+                symbol=symbol or "unknown",
+                timeframe=(timeframe_label or "unknown"),
+            )
+            log.warning(
+                "spread_guard_missing",
+                extra={
+                    "symbol": symbol or "unknown",
+                    "timeframe": timeframe_label or "unknown",
+                },
+            )
         if spread_ratio is not None and sg is not None:
             try:
                 if hasattr(sg, "allows"):
