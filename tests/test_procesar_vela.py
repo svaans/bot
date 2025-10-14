@@ -50,6 +50,32 @@ class DummyOrders:
         self.created.append(dict(payload))
 
 
+class FlakyOrders(DummyOrders):
+    def __init__(self, failures_before_success: int) -> None:
+        super().__init__()
+        self.failures_before_success = failures_before_success
+        self.trace_ids: list[str | None] = []
+
+    async def crear(self, **payload: Any) -> None:  # type: ignore[override]
+        self.trace_ids.append(payload.get("meta", {}).get("trace_id"))
+        if self.failures_before_success > 0:
+            self.failures_before_success -= 1
+            raise RuntimeError("transient_failure")
+        await super().crear(**payload)
+
+
+class AlwaysFailOrders(DummyOrders):
+    def __init__(self) -> None:
+        super().__init__()
+        self.attempts = 0
+        self.trace_ids: list[str | None] = []
+
+    async def crear(self, **payload: Any) -> None:  # type: ignore[override]
+        self.attempts += 1
+        self.trace_ids.append(payload.get("meta", {}).get("trace_id"))
+        raise RuntimeError("exchange_down")
+
+
 class DummyTrader:
     def __init__(self, *, side: str, generar_propuesta: bool = True) -> None:
         self.config = DummyConfig(symbols=["BTCUSDT"])
@@ -107,6 +133,7 @@ class WarmupTrader:
 def reset_buffers() -> Generator[Any, None, None]:
     procesar_vela_mod._buffers._estados.clear()
     procesar_vela_mod._buffers._locks.clear()
+    procesar_vela_mod._ORDER_CIRCUITS.clear()
 
     metric = DummyMetric()
     originals = {
@@ -133,6 +160,7 @@ def reset_buffers() -> Generator[Any, None, None]:
 
     procesar_vela_mod._buffers._estados.clear()
     procesar_vela_mod._buffers._locks.clear()
+    procesar_vela_mod._ORDER_CIRCUITS.clear()
     for name, value in originals.items():
         setattr(procesar_vela_mod, name, value)
 
@@ -165,6 +193,8 @@ async def test_procesar_vela_abre_operacion_para_oportunidad(side: str) -> None:
     assert created["precio"] == pytest.approx(candle["close"])
     assert created["meta"]["score"] == pytest.approx(3.5)
     assert created["meta"]["fuente"] == "unit-test"
+    assert isinstance(created["meta"].get("trace_id"), str)
+    assert len(created["meta"]["trace_id"]) >= 8
     assert trader.notifications == [
         (f"Abrir {side} BTCUSDT @ {candle['close']:.6f}", "INFO")
     ]
@@ -203,3 +233,44 @@ async def test_procesar_vela_marca_skip_reason_de_trader() -> None:
     assert details.get("score") == pytest.approx(-1.0)
     trace_id = candle.get("_df_trace_id")
     assert isinstance(trace_id, str) and len(trace_id) >= 8
+
+
+@pytest.mark.asyncio
+async def test_procesar_vela_reintenta_apertura_preservando_trace_id() -> None:
+    trader = DummyTrader(side="long")
+    flaky = FlakyOrders(failures_before_success=2)
+    trader.orders = flaky
+    candle = _build_candle(21_000.0)
+
+    await procesar_vela(trader, candle)
+
+    assert len(trader.orders.created) == 1
+    assert len(flaky.trace_ids) == procesar_vela_mod._ORDER_CREATION_MAX_ATTEMPTS
+    assert all(isinstance(t, str) and len(t) >= 8 for t in flaky.trace_ids)
+    assert len(set(flaky.trace_ids)) == 1
+    meta = trader.orders.created[0]["meta"]
+    assert meta.get("trace_id") == flaky.trace_ids[0]
+
+
+@pytest.mark.asyncio
+async def test_procesar_vela_circuit_breaker_abre_y_evita_reintentos() -> None:
+    trader = DummyTrader(side="long")
+    always_fail = AlwaysFailOrders()
+    trader.orders = always_fail
+    candle = _build_candle(19_500.0)
+
+    await procesar_vela(trader, candle)
+
+    assert candle.get("_df_skip_reason") == "orders_circuit_open"
+    details = candle.get("_df_skip_details") or {}
+    assert details.get("retry_after", 0.0) > 0.0
+    assert details.get("failures", 0) >= procesar_vela_mod._ORDER_CIRCUIT_MAX_FAILURES
+    assert always_fail.attempts == procesar_vela_mod._ORDER_CREATION_MAX_ATTEMPTS
+    assert always_fail.trace_ids
+    assert len(set(t for t in always_fail.trace_ids if t)) <= 1
+
+    candle2 = _build_candle(19_510.0)
+    await procesar_vela(trader, candle2)
+
+    assert always_fail.attempts == procesar_vela_mod._ORDER_CREATION_MAX_ATTEMPTS
+    assert candle2.get("_df_skip_reason") == "orders_circuit_open"
