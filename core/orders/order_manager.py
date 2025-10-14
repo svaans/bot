@@ -738,7 +738,7 @@ class OrderManager:
                                     },
                                 )
                             orden.registro_pendiente = False
-							limpiar_registro_pendiente(symbol)
+                            limpiar_registro_pendiente(symbol)
                             self._registro_pendiente_paused.discard(symbol)
 
                 except Exception as e:
