@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import time
+import os
 from collections import defaultdict, deque
 from typing import Dict, Tuple, DefaultDict
 
@@ -77,10 +78,15 @@ class RateAlertManager:
 
 
 # Umbrales por segundo (~1/min) ajustables via variables de entorno
+_REGISTRO_PENDIENTE_ALERT_INTERVAL = max(
+    1.0,
+    float(os.getenv("ORDERS_REGISTRO_PENDING_ALERT_INTERVAL", "300")),
+)
 DEFAULT_THRESHOLDS = {
     "candles_duplicates": 1 / 60,
     "feeds_missing": 1 / 60,
     "watchdog_restart": 1 / 60,
+    "registro_pendiente": 1 / _REGISTRO_PENDIENTE_ALERT_INTERVAL,
 }
 
 alert_manager = RateAlertManager(thresholds=DEFAULT_THRESHOLDS)
