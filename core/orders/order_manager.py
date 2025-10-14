@@ -464,7 +464,7 @@ class OrderManager:
                     {'reason': 'duplicate'},
                 )
                 return False
-			if symbol in self._registro_pendiente_paused:
+            if symbol in self._registro_pendiente_paused:
                 log.warning(
                     '🚫 Apertura bloqueada para %s por registro pendiente persistente',
                     symbol,
