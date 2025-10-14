@@ -41,6 +41,20 @@ MAX_HISTORIAL_ORDENES = 1000
 
 
 _META_NESTED_KEYS = ("orden", "order", "position", "trade", "entrada", "payload")
+_EXPOSICION_KEYS = (
+    "exposicion_total",
+    "exposicion",
+    "exposure_total",
+    "total_exposure",
+    "exposure",
+)
+_STOP_LOSS_META_KEYS = (
+    "stop_loss",
+    "sl",
+    "precio_sl",
+    "stop_loss_price",
+    "stop",
+)
 
 
 def _coerce_float(value: Any) -> float | None:
@@ -124,6 +138,32 @@ def _resolve_quantity(meta: Mapping[str, Any], precio: float) -> float:
     return 0.0
 
 
+def _extract_quantity(result: Any) -> float:
+    """Normaliza distintos formatos de respuesta en una cantidad positiva."""
+
+    if isinstance(result, (list, tuple)):
+        candidate: Any | None = None
+        if len(result) >= 2:
+            candidate = result[1]
+        elif result:
+            candidate = result[0]
+        value = _coerce_float(candidate)
+        return float(value) if value and value > 0 else 0.0
+
+    if isinstance(result, Mapping):
+        candidate = (
+            result.get("cantidad")
+            or result.get("quantity")
+            or result.get("qty")
+            or result.get("size")
+        )
+        candidate_value = _coerce_float(candidate)
+        return float(candidate_value) if candidate_value and candidate_value > 0 else 0.0
+
+    value = _coerce_float(result)
+    return float(value) if value and value > 0 else 0.0
+
+
 class OrderManager:
     """Abstrae la creación y cierre de órdenes."""
 
@@ -171,6 +211,10 @@ class OrderManager:
         self._market_retry_no_progress_limit = int(
             os.getenv("ORDERS_MARKET_MAX_NO_PROGRESS", "3")
         )
+		self._quantity_timeout = max(
+            0.1, float(os.getenv("ORDERS_QUANTITY_TIMEOUT", "5.0"))
+        )
+        self.capital_manager: Any | None = None
         if bus:
             self.subscribe(bus)
 
@@ -373,6 +417,157 @@ class OrderManager:
         result = await self.agregar_parcial_async(**data)
         if fut:
             fut.set_result(result)
+
+	async def _resolve_quantity_with_fallback(
+        self,
+        symbol: str,
+        precio: float,
+        sl: float,
+        meta: Mapping[str, Any],
+    ) -> tuple[float, str]:
+        base_quantity = _resolve_quantity(meta, precio)
+        if base_quantity > 0:
+            return float(base_quantity), "meta"
+
+        exposicion_val = _lookup_meta(meta, _EXPOSICION_KEYS)
+        exposicion = _coerce_float(exposicion_val) or 0.0
+        stop_loss_val = _lookup_meta(meta, _STOP_LOSS_META_KEYS)
+        stop_loss = _coerce_float(stop_loss_val)
+        if stop_loss is None and sl > 0:
+            stop_loss = float(sl)
+
+        quantity = await self._solicitar_cantidad_capital_manager(
+            symbol,
+            precio,
+            exposicion,
+            stop_loss,
+        )
+        if quantity > 0:
+            return quantity, "capital_manager"
+
+        quantity = await self._solicitar_cantidad_bus(
+            symbol,
+            precio,
+            exposicion,
+            stop_loss,
+        )
+        if quantity > 0:
+            return quantity, "event_bus"
+
+        return 0.0, "none"
+
+    async def _solicitar_cantidad_capital_manager(
+        self,
+        symbol: str,
+        precio: float,
+        exposicion: float,
+        stop_loss: float | None,
+    ) -> float:
+        manager = getattr(self, "capital_manager", None)
+        if manager is None:
+            return 0.0
+
+        resolver = getattr(manager, "calcular_cantidad_async", None)
+        if not callable(resolver):
+            return 0.0
+
+        try:
+            resultado = resolver(
+                symbol,
+                precio,
+                exposicion_total=exposicion,
+                stop_loss=stop_loss,
+            )
+            if asyncio.iscoroutine(resultado):
+                resultado = await resultado
+            cantidad = _extract_quantity(resultado)
+            return cantidad if cantidad > 0 else 0.0
+        except Exception:
+            log.warning(
+                "crear.quantity_fallback_capital_error",
+                exc_info=True,
+                extra=safe_extra(
+                    {
+                        "symbol": symbol,
+                        "precio": precio,
+                        "exposicion_total": exposicion,
+                    }
+                ),
+            )
+            return 0.0
+
+    async def _solicitar_cantidad_bus(
+        self,
+        symbol: str,
+        precio: float,
+        exposicion: float,
+        stop_loss: float | None,
+    ) -> float:
+        if not self.bus:
+            return 0.0
+
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return 0.0
+
+        future: asyncio.Future[Any] = loop.create_future()
+        payload = {
+            "symbol": symbol,
+            "precio": precio,
+            "exposicion_total": exposicion,
+            "stop_loss": stop_loss,
+            "future": future,
+        }
+
+        try:
+            await self.bus.publish("calcular_cantidad", payload)
+        except Exception:
+            log.warning(
+                "crear.quantity_fallback_bus_error",
+                exc_info=True,
+                extra=safe_extra(
+                    {
+                        "symbol": symbol,
+                        "precio": precio,
+                        "exposicion_total": exposicion,
+                    }
+                ),
+            )
+            future.cancel()
+            return 0.0
+
+        try:
+            resultado = await asyncio.wait_for(future, timeout=self._quantity_timeout)
+        except asyncio.TimeoutError:
+            future.cancel()
+            log.warning(
+                "crear.quantity_fallback_bus_timeout",
+                extra=safe_extra(
+                    {
+                        "symbol": symbol,
+                        "precio": precio,
+                        "timeout": self._quantity_timeout,
+                    }
+                ),
+            )
+            return 0.0
+        except Exception:
+            future.cancel()
+            log.warning(
+                "crear.quantity_fallback_bus_result_error",
+                exc_info=True,
+                extra=safe_extra(
+                    {
+                        "symbol": symbol,
+                        "precio": precio,
+                    }
+                ),
+            )
+            return 0.0
+
+        cantidad = _extract_quantity(resultado)
+        return cantidad if cantidad > 0 else 0.0
 
     def start_sync(self, intervalo: int | None = None) -> None:
         if intervalo:
@@ -1241,7 +1436,12 @@ class OrderManager:
         tendencia_value = _lookup_meta(meta_map, ("tendencia", "trend", "market_trend"))
         tendencia = str(tendencia_value) if tendencia_value is not None else ""
 
-        cantidad = _resolve_quantity(meta_map, precio)
+        cantidad, cantidad_source = await self._resolve_quantity_with_fallback(
+            symbol,
+            precio,
+            sl,
+            meta_map,
+        )
         if cantidad <= 0:
             log.warning(
                 "crear.skip_quantity",
@@ -1251,10 +1451,22 @@ class OrderManager:
                         "side": direccion,
                         "precio": precio,
                         "meta_keys": tuple(meta_map.keys()),
+						"quantity_source": cantidad_source,
                     }
                 ),
             )
             return False
+		if cantidad_source and cantidad_source != "meta":
+            log.debug(
+                "crear.quantity_fallback",
+                extra=safe_extra(
+                    {
+                        "symbol": symbol,
+                        "side": direccion,
+                        "source": cantidad_source,
+                    }
+                ),
+            )
 
         puntaje_val = _lookup_meta(meta_map, ("score", "puntaje", "score_tecnico"))
         puntaje = _coerce_float(puntaje_val) or 0.0
