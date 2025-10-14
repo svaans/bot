@@ -131,6 +131,9 @@ class TraderLite(TraderLiteBackfillMixin, TraderLiteProcessingMixin):
                     "event": "config.fastpath",
                     "trader_fastpath_enabled": bool(getattr(config, "trader_fastpath_enabled", True)),
                     "trader_fastpath_threshold": int(getattr(config, "trader_fastpath_threshold", 350)),
+                    "trader_fastpath_resume_threshold": int(
+                        getattr(config, "trader_fastpath_resume_threshold", 300)
+                    ),
                     "trader_fastpath_recovery": int(getattr(config, "trader_fastpath_recovery", 200)),
                     "trader_fastpath_skip_notifications": bool(
                         getattr(config, "trader_fastpath_skip_notifications", True)
