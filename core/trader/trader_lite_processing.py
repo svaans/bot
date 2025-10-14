@@ -25,6 +25,11 @@ log = configurar_logger("trader_modular", modo_silencioso=True)
 class TraderLiteProcessingMixin:
     """Mezcla con utilidades de procesamiento de velas."""
 
+    def _after_procesar_vela(self, symbol: str) -> None:
+        """Hook que permite a subclases ejecutar lógica adicional."""
+
+        return None
+
     def _build_handler_invoker(
         self, handler: Callable[..., Awaitable[None]]
     ) -> Callable[[dict], Awaitable[None]]:
@@ -675,6 +680,14 @@ class TraderLiteProcessingMixin:
                     }
                 ),
             )
+            try:
+                self._after_procesar_vela(sym)
+            except Exception:
+                log.debug(
+                    "post_procesar_vela.error",
+                    extra=safe_extra({"symbol": sym, "stage": "Trader._procesar_vela"}),
+                    exc_info=True,
+                )
 
     def _resolve_min_bars_requirement(self) -> int:
         candidatos: List[Any] = [getattr(self, "min_bars", None)]

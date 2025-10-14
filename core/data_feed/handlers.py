@@ -7,6 +7,7 @@ import contextlib
 import time
 from typing import Any, Awaitable, Callable, Mapping
 
+from core.utils.feature_flags import is_flag_enabled
 from core.utils.utils import timestamp_alineado, validar_integridad_velas
 from core.utils.log_utils import safe_extra
 from ._shared import COMBINED_STREAM_KEY, ConsumerState, log
@@ -17,6 +18,8 @@ try:  # pragma: no cover - métricas opcionales
         CONSUMER_SKIPPED_EXPECTED_TOTAL,
         DATAFEED_CANDLES_ENQUEUED_TOTAL,
         DATAFEED_WS_MESSAGES_TOTAL,
+        registrar_vela_recibida,
+        registrar_vela_rechazada,
     )
 except Exception:  # pragma: no cover - fallback cuando Prometheus no está disponible
     from core.utils.metrics_compat import Counter
@@ -37,8 +40,18 @@ except Exception:  # pragma: no cover - fallback cuando Prometheus no está disp
         ["symbol", "tf"],
     )
 
+    def registrar_vela_recibida(*_args: Any, **_kwargs: Any) -> None:
+        return None
+
+    def registrar_vela_rechazada(*_args: Any, **_kwargs: Any) -> None:
+        return None
+
 
 _PATCH_LOGGED = False
+
+
+def _metrics_extended_enabled() -> bool:
+    return is_flag_enabled("metrics.extended.enabled")
 
 
 def _ensure_patch_logged() -> None:
@@ -170,7 +183,13 @@ async def handle_candle(feed: "DataFeed", symbol: str, candle: dict) -> None:
 
     candle = _normalize_candle_payload(candle)
 
+    metrics_enabled = _metrics_extended_enabled()
+    timeframe_label = str(feed.intervalo or "unknown")
+    symbol_label = str(symbol).upper()
+
     if not candle.get("is_closed", False):
+        if metrics_enabled:
+            registrar_vela_rechazada(symbol_label, "not_closed", timeframe_label)
         return
     ts = candle.get("timestamp")
     if ts is None:
@@ -191,7 +210,13 @@ async def handle_candle(feed: "DataFeed", symbol: str, candle: dict) -> None:
         ts = int(float(ts)) if ts is not None else None
     except (TypeError, ValueError):
         ts = None
-    if ts is None or not timestamp_alineado(ts, feed.intervalo):
+    if ts is None:
+        if metrics_enabled:
+            registrar_vela_rechazada(symbol_label, "timestamp_invalid", timeframe_label)
+        return
+    if not timestamp_alineado(ts, feed.intervalo):
+        if metrics_enabled:
+            registrar_vela_rechazada(symbol_label, "timestamp_unaligned", timeframe_label)
         return
 
     candle["timestamp"] = ts
@@ -200,6 +225,8 @@ async def handle_candle(feed: "DataFeed", symbol: str, candle: dict) -> None:
     candle.setdefault("tf", feed.intervalo)
     last = feed._last_close_ts.get(symbol)
     if last is not None and ts <= last:
+        if metrics_enabled:
+            registrar_vela_rechazada(symbol_label, "stale", timeframe_label)
         return
 
     events.reset_reconnect_tracking(feed, symbol)
@@ -208,6 +235,8 @@ async def handle_candle(feed: "DataFeed", symbol: str, candle: dict) -> None:
 
     if not validar_integridad_velas(symbol, feed.intervalo, [candle], log):
         events.emit_event(feed, "candle_invalid", {"symbol": symbol, "ts": ts})
+        if metrics_enabled:
+            registrar_vela_rechazada(symbol_label, "integrity_failed", timeframe_label)
         return
 
     if not feed.ws_connected_event.is_set():
@@ -215,6 +244,8 @@ async def handle_candle(feed: "DataFeed", symbol: str, candle: dict) -> None:
 
     queue = feed._queues.get(symbol)
     if queue is None:
+        if metrics_enabled:
+            registrar_vela_rechazada(symbol_label, "queue_missing", timeframe_label)
         return
 
     candle.setdefault("_df_enqueue_time", time.monotonic())
@@ -269,6 +300,9 @@ async def handle_candle(feed: "DataFeed", symbol: str, candle: dict) -> None:
         symbol=str(symbol).upper(),
         tf=tf_label,
     ).inc()
+
+    if metrics_enabled:
+        registrar_vela_recibida(symbol_label, timeframe_label)
 
     feed._stats[symbol]["received"] += 1
     feed._last_close_ts[symbol] = ts

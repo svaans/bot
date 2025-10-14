@@ -4,11 +4,13 @@ from __future__ import annotations
 import asyncio
 import os
 import random
+import sqlite3
 from collections.abc import Mapping
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
 from core.orders.order_model import Order
+from core.utils.feature_flags import is_flag_enabled
 from core.utils.logger import configurar_logger, log_decision
 from core.utils.log_utils import safe_extra
 from core.orders import real_orders
@@ -27,6 +29,7 @@ from core.metrics import (
     registrar_orden,
     registrar_orders_sync_failure,
     registrar_orders_sync_success,
+    registrar_orders_retry_scheduled,
     registrar_partial_close_collision,
     registrar_registro_error,
     registrar_registro_pendiente,
@@ -42,6 +45,20 @@ log = configurar_logger('orders', modo_silencioso=True)
 UTC = timezone.utc
 
 MAX_HISTORIAL_ORDENES = 1000
+
+
+_PERSISTENCE_ERRORS: tuple[type[BaseException], ...] = (OSError,)
+if sqlite3 is not None:  # pragma: no cover - sqlite siempre disponible pero defensivo
+    _PERSISTENCE_ERRORS = _PERSISTENCE_ERRORS + (sqlite3.Error,)
+
+_PERSISTENCE_ERROR_KEYWORDS = (
+    "database",
+    "sqlite",
+    "disk",
+    "io",
+    "locked",
+    "write",
+)
 
 
 class OrderManager:
@@ -87,6 +104,23 @@ class OrderManager:
             bus=bus,
             quantity_timeout=self._quantity_timeout,
         )
+        self._registro_retry_enabled = is_flag_enabled("orders.retry_persistencia.enabled")
+        self._registro_retry_base_delay = max(
+            0.1, float(os.getenv("ORDERS_RETRY_PERSISTENCIA_BASE_DELAY", "5.0"))
+        )
+        self._registro_retry_backoff = max(
+            1.0, float(os.getenv("ORDERS_RETRY_PERSISTENCIA_BACKOFF", "2.0"))
+        )
+        self._registro_retry_max_delay = max(
+            self._registro_retry_base_delay,
+            float(os.getenv("ORDERS_RETRY_PERSISTENCIA_MAX_DELAY", "60.0")),
+        )
+        self._registro_retry_jitter = max(
+            0.0, float(os.getenv("ORDERS_RETRY_PERSISTENCIA_JITTER", "0.0"))
+        )
+        self._registro_retry_attempts: Dict[str, int] = {}
+        self._registro_retry_tasks: Dict[str, asyncio.Task] = {}
+        self._registro_retry_error_keywords = _PERSISTENCE_ERROR_KEYWORDS
         self.capital_manager: Any | None = None
         if bus:
             self.subscribe(bus)
@@ -344,35 +378,115 @@ class OrderManager:
             delay *= 1 + jitter
         return max(self._sync_min_interval, min(delay, self._sync_max_interval))
 
-    def _schedule_registro_retry(self, symbol: str) -> None:
-        """Programa un reintento rápido de registro sin esperar al sync loop."""
+    def _should_schedule_persistence_retry(self, exc: Exception | None) -> bool:
+        if not self._registro_retry_enabled or exc is None:
+            return False
+        if isinstance(exc, _PERSISTENCE_ERRORS):
+            return True
+        message = str(exc).lower()
+        return any(keyword in message for keyword in self._registro_retry_error_keywords)
+
+    def _schedule_registro_retry(self, symbol: str, *, reason: str | None = None) -> None:
+        """Programa un reintento con backoff controlado tras fallas de persistencia."""
+
+        if not self._registro_retry_enabled:
+            return
         try:
             loop = asyncio.get_running_loop()
         except RuntimeError:
             return
-        async def _retry():
+        orden = self.ordenes.get(symbol)
+        if not orden or not getattr(orden, "registro_pendiente", False):
+            self._registro_retry_attempts.pop(symbol, None)
+            return
+
+        existing = self._registro_retry_tasks.get(symbol)
+        if existing and not existing.done():
+            return
+
+        attempt = self._registro_retry_attempts.get(symbol, 0) + 1
+        self._registro_retry_attempts[symbol] = attempt
+
+        delay = self._registro_retry_base_delay * (self._registro_retry_backoff ** (attempt - 1))
+        delay = min(delay, self._registro_retry_max_delay)
+        if self._registro_retry_jitter:
+            jitter = random.uniform(-self._registro_retry_jitter, self._registro_retry_jitter)
+            delay = max(0.0, delay * (1.0 + jitter))
+
+        reason_label = (reason or "unknown").strip() or "unknown"
+        registrar_orders_retry_scheduled(symbol, reason_label)
+        log.info(
+            "orders.retry_schedule",
+            extra=safe_extra(
+                {
+                    "symbol": symbol,
+                    "attempt": attempt,
+                    "delay": round(delay, 3),
+                    "retry_reason": reason_label,
+                }
+            ),
+        )
+
+        async def _retry() -> None:
+            next_reason: str | None = None
             try:
-                orden = self.ordenes.get(symbol)
-                if not orden or not getattr(orden, 'registro_pendiente', False):
+                await asyncio.sleep(delay)
+                current = self.ordenes.get(symbol)
+                if not current or not getattr(current, "registro_pendiente", False):
+                    self._registro_retry_attempts.pop(symbol, None)
                     return
-                await asyncio.to_thread(
-                    real_orders.registrar_orden,
-                    symbol,
-                    orden.precio_entrada,
-                    orden.cantidad_abierta or orden.cantidad,
-                    orden.stop_loss,
-                    orden.take_profit,
-                    orden.estrategias_activas,
-                    orden.tendencia,
-                    orden.direccion,
-                    orden.operation_id,
+                try:
+                    await asyncio.to_thread(
+                        real_orders.registrar_orden,
+                        symbol,
+                        current.precio_entrada,
+                        current.cantidad_abierta or current.cantidad,
+                        current.stop_loss,
+                        current.take_profit,
+                        current.estrategias_activas,
+                        current.tendencia,
+                        current.direccion,
+                        current.operation_id,
+                    )
+                except Exception as exc:  # pragma: no cover - se prueba vía tests específicos
+                    registrar_registro_error()
+                    log.error(
+                        "orders.retry_failed",
+                        extra=safe_extra(
+                            {
+                                "symbol": symbol,
+                                "attempt": attempt,
+                                "reason": type(exc).__name__,
+                            }
+                        ),
+                    )
+                    if self._should_schedule_persistence_retry(exc):
+                        next_reason = type(exc).__name__ or "Exception"
+                    else:
+                        self._registro_retry_attempts.pop(symbol, None)
+                    return
+
+                current.registro_pendiente = False
+                limpiar_registro_pendiente(symbol)
+                self._registro_pendiente_paused.discard(symbol)
+                self._registro_retry_attempts.pop(symbol, None)
+                registrar_orden("opened")
+                log.info(
+                    "orders.retry_success",
+                    extra=safe_extra({"symbol": symbol, "attempt": attempt}),
                 )
-                orden.registro_pendiente = False
-                registrar_orden('opened')
-                log.info(f'🟢 Orden registrada tras reintento rápido para {symbol}')
-            except Exception as e:
-                log.error(f'❌ Reintento rápido de registro falló para {symbol}: {e}')
-        loop.create_task(_retry())
+            except asyncio.CancelledError:  # pragma: no cover - cancelado en shutdown
+                raise
+            finally:
+                self._registro_retry_tasks.pop(symbol, None)
+                if next_reason:
+                    self._schedule_registro_retry(symbol, reason=next_reason)
+
+        task = loop.create_task(
+            _retry(),
+            name=f"registro_retry_{symbol.replace('/', '')}",
+        )
+        self._registro_retry_tasks[symbol] = task
 
     async def abrir_async(
         self,
@@ -712,6 +826,9 @@ class OrderManager:
                                             'operation_id': operation_id,
                                         },
                                     )
+                                if self._should_schedule_persistence_retry(last_error):
+                                    reason_label = type(last_error).__name__ if last_error else 'unknown'
+                                    self._schedule_registro_retry(symbol, reason=reason_label)
                             await asyncio.sleep(1)
 
                             if registrado:

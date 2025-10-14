@@ -12,6 +12,7 @@ from typing import Any, Awaitable, Callable, Dict, Optional, TYPE_CHECKING
 
 import pandas as pd
 
+from core.utils.feature_flags import is_flag_enabled
 from core.utils.log_utils import safe_extra
 from core.utils.utils import configurar_logger
 
@@ -142,6 +143,12 @@ class HistorialCierresStore(MutableMapping[str, HistorialPorSimbolo]):
         for store in self._stores.values():
             store.prune()
 
+    def prune_symbol(self, symbol: str) -> None:
+        store = self._stores.get(symbol)
+        if store is None:
+            return
+        store.prune()
+
     def total_entries(self) -> int:
         return sum(len(store) for store in self._stores.values())
 
@@ -184,6 +191,7 @@ class Trader(TraderLite):
         )
         self._historial_cierres_max = max_historial
         self._historial_cierres_ttl = ttl_seconds
+        self._historial_purge_enabled = is_flag_enabled("trader.purge_historial.enabled")
         self.fecha_actual = datetime.now(UTC).date()
         self.estrategias_habilitadas = False
         self._eval_enabled: Dict[tuple[str, str], bool] = {}
@@ -825,10 +833,18 @@ class Trader(TraderLite):
 
         return asyncio.run(_runner())
 
-    def purge_historial_cierres(self) -> None:
-        """Fuerza la poda del historial de cierres para todos los símbolos."""
+    def purge_historial_cierres(self, symbol: str | None = None) -> None:
+        """Fuerza la poda del historial de cierres.
 
-        self.historial_cierres.prune()
+        Cuando ``symbol`` es ``None`` limpia todos los símbolos; en caso
+        contrario solo aplica la poda al símbolo indicado para minimizar el
+        impacto en ciclos críticos.
+        """
+
+        if symbol:
+            self.historial_cierres.prune_symbol(symbol)
+        else:
+            self.historial_cierres.prune()
 
     def get_historial_cierres_stats(self) -> dict[str, Any]:
         """Devuelve métricas agregadas del historial para monitoreo."""
@@ -840,6 +856,26 @@ class Trader(TraderLite):
             "por_simbolo": {symbol: len(store) for symbol, store in self.historial_cierres.items()},
             "total": self.historial_cierres.total_entries(),
         }
+    
+    def _after_procesar_vela(self, symbol: str) -> None:
+        super_hook = getattr(super(), "_after_procesar_vela", None)
+        if callable(super_hook):
+            try:
+                super_hook(symbol)
+            except Exception:
+                log.debug("No se pudo ejecutar hook base tras procesar vela", exc_info=True)
+
+        if not self._historial_purge_enabled:
+            return
+
+        try:
+            self.purge_historial_cierres(symbol=symbol)
+        except Exception:
+            log.debug(
+                "No se pudo purgar historial de cierres tras procesar vela",
+                extra={"symbol": symbol},
+                exc_info=True,
+            )
 
     def get_eval_offload_stats(self) -> dict[str, Any]:
         """Estadísticas del mecanismo de offload de evaluaciones."""

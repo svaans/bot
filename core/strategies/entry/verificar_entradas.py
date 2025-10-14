@@ -37,6 +37,13 @@ from core.utils.logger import configurar_logger
 from core.utils.log_utils import safe_extra
 from core.metrics_helpers import safe_inc, safe_set
 from core.utils.metrics_compat import Counter, Gauge
+from core.utils.feature_flags import is_flag_enabled
+
+try:  # pragma: no cover - fallback cuando las métricas no están disponibles
+    from core.metrics import registrar_decision
+except Exception:  # pragma: no cover
+    def registrar_decision(*_args: Any, **_kwargs: Any) -> None:
+        return None
 
 # Import corregido: esta función vive en persistencia_tecnica
 try:
@@ -50,6 +57,10 @@ ColumnsBase = ["timestamp", "open", "high", "low", "close", "volume"]
 
 
 log = configurar_logger("entry_verifier", modo_silencioso=True)
+
+
+def _metrics_extended_enabled() -> bool:
+    return is_flag_enabled("metrics.extended.enabled")
 
 
 class EntryDecision:
@@ -420,6 +431,9 @@ def _finalize_decision(decision: EntryDecision) -> None:
         "meta": decision.meta,
     }
     safe_inc(DECISION_TOTAL, symbol=decision.symbol, timeframe=tf_label, outcome=outcome)
+    if _metrics_extended_enabled():
+        action_label = "entry_permitida" if decision.permitida else "entry_rechazada"
+        registrar_decision(decision.symbol, action_label)
     log.debug("decision.final", extra=safe_extra(payload))
 
 

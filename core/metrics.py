@@ -348,6 +348,12 @@ ORDERS_REGISTRO_PENDIENTE_TOTAL = Counter(
     ["symbol"],
 )
 
+ORDERS_RETRY_SCHEDULED_TOTAL = Counter(
+    "bot_orders_retry_scheduled_total",
+    "Reintentos de registro programados tras fallas de persistencia",
+    ["symbol", "reason"],
+)
+
 _METRICS_WITH_FALLBACK = [
     "VELAS_DUPLICADAS",
     "CANDLES_DUPLICADAS_RATE",
@@ -390,6 +396,7 @@ _METRICS_WITH_FALLBACK = [
     "ORDERS_CREATE_SKIP_QUANTITY_TOTAL",
     "ORDERS_REGISTRO_PENDIENTE",
     "ORDERS_REGISTRO_PENDIENTE_TOTAL",
+    "ORDERS_RETRY_SCHEDULED_TOTAL",
 ]
 
 for _metric_name in _METRICS_WITH_FALLBACK:
@@ -485,6 +492,16 @@ def limpiar_registro_pendiente(symbol: str) -> None:
             "order_register_pending",
             {"symbol": symbol, "status": "resolved"},
         )
+
+
+def registrar_orders_retry_scheduled(symbol: str, reason: str) -> None:
+    """Anota un reintento programado tras una falla de persistencia."""
+
+    ORDERS_RETRY_SCHEDULED_TOTAL.labels(symbol=symbol, reason=reason).inc()
+    registro_metrico.registrar(
+        "orders_retry_scheduled",
+        {"symbol": symbol, "reason": reason},
+    )
 
 
 def registrar_orders_sync_success() -> None:

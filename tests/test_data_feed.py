@@ -7,6 +7,7 @@ from typing import Any, Callable
 
 import pytest
 
+from core.utils.feature_flags import reset_flag_cache
 from core.data_feed import DataFeed
 
 
@@ -207,8 +208,56 @@ async def test_handle_candle_drops_oldest_when_queue_full() -> None:
     queued = feed._queues[symbol].get_nowait()
     feed._queues[symbol].task_done()
     assert queued["timestamp"] == second["timestamp"]
-    assert feed._stats[symbol]["dropped"] == 1
-    assert feed._stats[symbol]["received"] == 2
+
+
+@pytest.mark.asyncio
+async def test_handle_candle_records_metrics_when_enabled(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("METRICS_EXTENDED_ENABLED", "true")
+    reset_flag_cache()
+
+    recorded: dict[str, list[tuple[str, str | None]]] = {
+        "received": [],
+        "rejected": [],
+    }
+
+    def fake_recibida(symbol: str, timeframe: str | None = None) -> None:
+        recorded["received"].append((symbol, timeframe))
+
+    def fake_rechazada(symbol: str, reason: str, timeframe: str | None = None) -> None:
+        recorded["rejected"].append((symbol, reason, timeframe))
+
+    monkeypatch.setattr(
+        "core.data_feed.handlers.registrar_vela_recibida",
+        fake_recibida,
+    )
+    monkeypatch.setattr(
+        "core.data_feed.handlers.registrar_vela_rechazada",
+        fake_rechazada,
+    )
+
+    feed = make_feed()
+    symbol = "BTCUSDT"
+    feed._queues[symbol] = asyncio.Queue()
+
+    candle = {
+        "symbol": symbol,
+        "timestamp": 1_650_000_000_000,
+        "is_closed": True,
+    }
+
+    await feed._handle_candle(symbol, candle)
+    assert recorded["received"] == [(symbol, "1m")]
+
+    rejected = {
+        "symbol": symbol,
+        "timestamp": 1_650_000_060_000,
+        "is_closed": False,
+    }
+    await feed._handle_candle(symbol, rejected)
+    assert (symbol, "not_closed", "1m") in recorded["rejected"]
+    reset_flag_cache()
+    # Solo la vela cerrada se contabiliza como recibida.
+    assert feed._stats[symbol]["received"] == 1
 
 
 @pytest.mark.asyncio

@@ -14,6 +14,7 @@ Cada etapa valida condiciones técnicas antes de ejecutar el cierre.
 
 from __future__ import annotations
 from datetime import datetime, timezone
+from typing import Any
 
 UTC = timezone.utc
 import asyncio
@@ -34,8 +35,19 @@ from core.adaptador_umbral import calcular_umbral_adaptativo
 from core.metricas_semanales import metricas_tracker
 from config.exit_defaults import load_exit_config
 import time
+from core.utils.feature_flags import is_flag_enabled
+
+try:  # pragma: no cover - permite tests sin módulo de métricas
+    from core.metrics import registrar_decision
+except Exception:  # pragma: no cover
+    def registrar_decision(*_args: Any, **_kwargs: Any) -> None:
+        return None
 
 log = configurar_logger('verificar_salidas')
+
+
+def _metrics_extended_enabled() -> bool:
+    return is_flag_enabled("metrics.extended.enabled")
 
 
 async def _chequear_contexto_macro(trader, orden, df) -> bool:
@@ -330,65 +342,80 @@ async def _aplicar_salidas_adicionales(trader, orden, df) -> bool:
 
 async def verificar_salidas(trader, symbol: str, df: pd.DataFrame) -> None:
     """Evalúa si la orden abierta debe cerrarse."""
-    
-    inicio_total = time.time()
-    trader.config_por_simbolo[symbol] = load_exit_config(symbol)
-    orden = trader.orders.obtener(symbol)
-    if not orden:
-        log.warning(f'⚠️ Se intentó verificar TP/SL sin orden activa en {symbol}')
-        return
 
-    orden.duracion_en_velas = getattr(orden, 'duracion_en_velas', 0) + 1
-    await trader._piramidar(symbol, orden, df)
-
-    timeout = trader.config_por_simbolo[symbol].get('timeout_validaciones', 5)
-
-    tareas_principales = [
-        _chequear_contexto_macro(trader, orden, df),
-        _manejar_stop_loss(trader, orden, df),
-        _procesar_take_profit(trader, orden, df),
-    ]
-
+    decision_action = "exit_skip"
     try:
-        resultados = await asyncio.wait_for(
-            asyncio.gather(*tareas_principales, return_exceptions=True),
-            timeout=timeout,
-        )
-    except asyncio.TimeoutError:
-        log.warning(f'Timeout en verificaciones principales para {symbol}')
-        return
-    
-    for resultado in resultados:
-        if isinstance(resultado, Exception):
-            log.error(f'Error en verificación principal para {symbol}: {resultado}')
-        elif resultado:
-            log.debug(f'Validación principal activó cierre para {symbol}')
+        inicio_total = time.time()
+        trader.config_por_simbolo[symbol] = load_exit_config(symbol)
+        orden = trader.orders.obtener(symbol)
+        if not orden:
+            log.warning(f'⚠️ Se intentó verificar TP/SL sin orden activa en {symbol}')
+            return
+
+        decision_action = "exit_hold"
+        orden.duracion_en_velas = getattr(orden, 'duracion_en_velas', 0) + 1
+        await trader._piramidar(symbol, orden, df)
+
+        timeout = trader.config_por_simbolo[symbol].get('timeout_validaciones', 5)
+
+        tareas_principales = [
+            _chequear_contexto_macro(trader, orden, df),
+            _manejar_stop_loss(trader, orden, df),
+            _procesar_take_profit(trader, orden, df),
+        ]
+
+        try:
+            resultados = await asyncio.wait_for(
+                asyncio.gather(*tareas_principales, return_exceptions=True),
+                timeout=timeout,
+            )
+        except asyncio.TimeoutError:
+            log.warning(f'Timeout en verificaciones principales para {symbol}')
+            decision_action = "exit_timeout"
+            return
+
+        for resultado in resultados:
+            if isinstance(resultado, Exception):
+                log.error(f'Error en verificación principal para {symbol}: {resultado}')
+                if decision_action != "exit_closed":
+                    decision_action = "exit_error"
+            elif resultado:
+                log.debug(f'Validación principal activó cierre para {symbol}')
+                decision_action = "exit_closed"
+                return
+
+        if orden.cantidad_abierta <= 0:
+            log.debug(
+                f'Posición cerrada tras verificaciones principales en {symbol} en {time.time() - inicio_total:.2f}s'
+            )
+            decision_action = "exit_closed"
+            return
+        tareas_secundarias = [
+            _manejar_trailing_stop(trader, orden, df),
+            _manejar_cambio_tendencia(trader, orden, df),
+            _aplicar_salidas_adicionales(trader, orden, df),
+        ]
+
+        try:
+            resultados = await asyncio.wait_for(
+                asyncio.gather(*tareas_secundarias, return_exceptions=True),
+                timeout=timeout,
+            )
+        except asyncio.TimeoutError:
+            log.warning(f'Timeout en verificaciones secundarias para {symbol}')
+            decision_action = "exit_timeout"
             return
         
-    if orden.cantidad_abierta <= 0:
-        log.debug(
-            f'Posición cerrada tras verificaciones principales en {symbol} en {time.time() - inicio_total:.2f}s'
-        )
-        return
-    tareas_secundarias = [
-        _manejar_trailing_stop(trader, orden, df),
-        _manejar_cambio_tendencia(trader, orden, df),
-        _aplicar_salidas_adicionales(trader, orden, df),
-    ]
-
-    try:
-        resultados = await asyncio.wait_for(
-            asyncio.gather(*tareas_secundarias, return_exceptions=True),
-            timeout=timeout,
-        )
-    except asyncio.TimeoutError:
-        log.warning(f'Timeout en verificaciones secundarias para {symbol}')
-        return
-    
-    for resultado in resultados:
-        if isinstance(resultado, Exception):
-            log.error(f'Error en verificación secundaria para {symbol}: {resultado}')
-        elif resultado:
-            log.debug(f'Validación secundaria activó cierre para {symbol}')
-            return
-    log.debug(f'verificar_salidas total {time.time() - inicio_total:.2f}s para {symbol}')
+        for resultado in resultados:
+            if isinstance(resultado, Exception):
+                log.error(f'Error en verificación secundaria para {symbol}: {resultado}')
+                if decision_action != "exit_closed":
+                    decision_action = "exit_error"
+            elif resultado:
+                log.debug(f'Validación secundaria activó cierre para {symbol}')
+                decision_action = "exit_closed"
+                return
+        log.debug(f'verificar_salidas total {time.time() - inicio_total:.2f}s para {symbol}')
+    finally:
+        if _metrics_extended_enabled():
+            registrar_decision(symbol, decision_action)

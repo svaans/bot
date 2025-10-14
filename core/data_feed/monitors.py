@@ -7,7 +7,13 @@ import contextlib
 import time
 from typing import Callable
 
-from core.metrics import CONSUMER_LAG_SECONDS, PRODUCER_LAG_SECONDS, QUEUE_SIZE
+from core.metrics import (
+    CONSUMER_LAG_SECONDS,
+    PRODUCER_LAG_SECONDS,
+    QUEUE_SIZE,
+    registrar_watchdog_restart,
+)
+from core.utils.feature_flags import is_flag_enabled
 
 from ._shared import ConsumerState, log
 from . import events
@@ -33,6 +39,11 @@ def _set_producer_lag(symbol: str, lag: float) -> None:
 
 def _set_consumer_lag(symbol: str, lag: float) -> None:
     _safe_set(CONSUMER_LAG_SECONDS.labels, symbol, value=lag)
+
+
+def _record_watchdog_restart(task: str) -> None:
+    if is_flag_enabled("metrics.extended.enabled"):
+        registrar_watchdog_restart(task)
 
 
 async def monitor_inactividad(feed: "DataFeed") -> None:
@@ -115,6 +126,9 @@ async def monitor_consumers(feed: "DataFeed", timeout: float | None = None) -> N
 async def reiniciar_stream(feed: "DataFeed", symbol: str) -> None:
     """Recrea la tarea del stream correspondiente al símbolo."""
 
+    task_label = "stream:combined" if feed._combined else f"stream:{symbol}"
+    _record_watchdog_restart(task_label)
+
     if feed._combined:
         task = next(iter(feed._tasks.values()), None)
         if task and not task.done():
@@ -137,6 +151,8 @@ async def reiniciar_stream(feed: "DataFeed", symbol: str) -> None:
 
 async def reiniciar_consumer(feed: "DataFeed", symbol: str) -> None:
     """Proxy hacia :func:`handlers.reiniciar_consumer` para evitar ciclos."""
+
+    _record_watchdog_restart(f"consumer:{symbol}")
 
     from .handlers import reiniciar_consumer as _reiniciar_consumer
 

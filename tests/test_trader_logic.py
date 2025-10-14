@@ -10,6 +10,7 @@ from typing import Any, Iterable
 import pandas as pd
 import pytest
 
+from core.utils.feature_flags import reset_flag_cache
 from core.trader_modular import Trader, TraderComponentFactories
 
 from .factories import DummyConfig, DummySupervisor
@@ -440,3 +441,24 @@ def test_historial_cierres_enforces_retention(monkeypatch: pytest.MonkeyPatch) -
     assert stats["ttl_segundos"] == 60
     assert stats["por_simbolo"]["BTCUSDT"] == 2
     assert stats["total"] == 2
+
+
+def test_purge_historial_cierres_respects_symbol_limit(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("TRADER_PURGE_HISTORIAL_ENABLED", "true")
+    reset_flag_cache()
+    trader = _build_trader(historial_cierres_max_per_symbol=5)
+
+    hist = trader.historial_cierres["BTCUSDT"]
+    hist._max_entries = 10  # type: ignore[attr-defined]
+    for idx, key in enumerate(["one", "two", "three", "four"], start=1):
+        hist[key] = {"id": idx}
+
+    other = trader.historial_cierres["ETHUSDT"]
+    other["keep"] = {"id": 99}
+
+    hist._max_entries = 2  # type: ignore[attr-defined]
+    trader.purge_historial_cierres(symbol="BTCUSDT")
+
+    assert list(hist.keys()) == ["three", "four"]
+    assert list(other.keys()) == ["keep"]
+    reset_flag_cache()
