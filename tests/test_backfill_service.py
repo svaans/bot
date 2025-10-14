@@ -104,6 +104,7 @@ def _make_candle(open_time: int, value: float) -> Dict[str, Any]:
 
 
 @pytest.mark.asyncio
+@pytest.mark.flags("backfill.ventana.enabled")
 async def test_backfill_run_loads_expected_candles() -> None:
     metrics = DummyMetrics()
     buffer = BufferStub()
@@ -142,6 +143,7 @@ async def test_backfill_run_loads_expected_candles() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.flags("backfill.ventana.enabled")
 async def test_backfill_deduplicates_and_orders() -> None:
     metrics = DummyMetrics()
     buffer = BufferStub()

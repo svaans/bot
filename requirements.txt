@@ -73,3 +73,6 @@ typing_extensions>=4.7
 
 # ───────── COMPLEMENTOS Y DEPENDENCIAS ESPECIALES ─────────
 propcache==0.3.1              # Caché de propiedades
+
+# ───────── CI Y ESTÁTICO ─────────
+vulture==2.11

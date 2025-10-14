@@ -62,5 +62,13 @@ class DummyConfig:
         self.df_queue_policy = "drop_oldest"
         self.monitor_interval = 5.0
         self.df_backpressure = True
+        self.orders_retry_persistencia_enabled = False
+        self.trader_purge_historial_enabled = False
+        self.metrics_extended_enabled = False
+        self.datafeed_debug_wrapper_enabled = False
+        self.orders_flush_periodico_enabled = False
+        self.orders_limit_enabled = False
+        self.funding_enabled = False
+        self.backfill_ventana_enabled = False
         for key, value in overrides.items():
             setattr(self, key, value)

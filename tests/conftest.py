@@ -14,6 +14,56 @@ from data_feed import DataFeed
 from tests.factories import DummyConfig, DummySupervisor
 
 
+def pytest_addoption(parser: pytest.Parser) -> None:
+    parser.addoption(
+        "--flags",
+        action="append",
+        dest="feature_flags",
+        default=None,
+        help=(
+            "Ejecuta únicamente las pruebas marcadas con los feature flags dados. "
+            "Separar múltiples flags con comas."
+        ),
+    )
+
+
+def pytest_configure(config: pytest.Config) -> None:
+    config.addinivalue_line(
+        "markers",
+        "flags(*names): marca pruebas canarias asociadas a uno o más feature flags.",
+    )
+
+
+def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
+    raw_requested = config.getoption("feature_flags")
+    if not raw_requested:
+        return
+
+    requested: set[str] = set()
+    for chunk in raw_requested:
+        if not chunk:
+            continue
+        for flag in chunk.split(","):
+            normalized = flag.strip().lower()
+            if normalized:
+                requested.add(normalized)
+
+    if not requested:
+        return
+
+    skip_marker = pytest.mark.skip(reason="no incluido en los feature flags solicitados")
+
+    for item in items:
+        item_flags: set[str] = set()
+        for marker in item.iter_markers(name="flags"):
+            for value in marker.args:
+                if isinstance(value, str):
+                    item_flags.add(value.lower())
+
+        if not item_flags.intersection(requested):
+            item.add_marker(skip_marker)
+
+
 @pytest.fixture(autouse=True)
 def stub_data_feed(monkeypatch: pytest.MonkeyPatch) -> list[Any]:
     """Reemplaza ``DataFeed`` por un stub liviano durante los tests."""

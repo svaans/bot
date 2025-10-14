@@ -163,6 +163,12 @@ class BotFlowHarness:
 
 
 @pytest.mark.asyncio(mode="strict")
+@pytest.mark.flags(
+    "orders.retry_persistencia.enabled",
+    "orders.flush_periodico.enabled",
+    "orders.limit.enabled",
+    "metrics.extended.enabled",
+)
 async def test_flow_happy_path_emits_attempts_and_metrics(trader_factory, caplog) -> None:
     _enable_flow_logging(caplog)
     caplog.clear()
@@ -208,6 +214,7 @@ async def test_flow_happy_path_emits_attempts_and_metrics(trader_factory, caplog
 
 
 @pytest.mark.asyncio(mode="strict")
+@pytest.mark.flags("datafeed.debug_wrapper.enabled")
 async def test_flow_bar_in_future_skips_with_reason(trader_factory, caplog) -> None:
     _enable_flow_logging(caplog)
     caplog.clear()
@@ -238,6 +245,7 @@ async def test_flow_bar_in_future_skips_with_reason(trader_factory, caplog) -> N
 
 
 @pytest.mark.asyncio(mode="strict")
+@pytest.mark.flags("datafeed.debug_wrapper.enabled")
 async def test_flow_out_of_range_skips_with_reason(trader_factory, caplog) -> None:
     _enable_flow_logging(caplog)
     caplog.clear()
@@ -265,6 +273,7 @@ async def test_flow_out_of_range_skips_with_reason(trader_factory, caplog) -> No
 
 
 @pytest.mark.asyncio(mode="strict")
+@pytest.mark.flags("trader.purge_historial.enabled")
 async def test_flow_warmup_not_met_reports_reason(trader_factory, caplog) -> None:
     _enable_flow_logging(caplog)
     caplog.clear()
@@ -293,6 +302,7 @@ async def test_flow_warmup_not_met_reports_reason(trader_factory, caplog) -> Non
 
 
 @pytest.mark.asyncio(mode="strict")
+@pytest.mark.flags("orders.retry_persistencia.enabled")
 async def test_flow_pipeline_missing_propagates_reason(trader_factory, caplog) -> None:
     _enable_flow_logging(caplog)
     caplog.clear()
@@ -326,6 +336,7 @@ async def test_flow_pipeline_missing_propagates_reason(trader_factory, caplog) -
 
 
 @pytest.mark.asyncio(mode="strict")
+@pytest.mark.flags("orders.retry_persistencia.enabled")
 async def test_flow_pipeline_missing_exposes_component_error(trader_factory, caplog) -> None:
     _enable_flow_logging(caplog)
     caplog.clear()
@@ -351,6 +362,7 @@ async def test_flow_pipeline_missing_exposes_component_error(trader_factory, cap
 
 
 @pytest.mark.asyncio(mode="strict")
+@pytest.mark.flags("metrics.extended.enabled")
 async def test_flow_fastpath_guard_emits_metric(trader_factory, caplog) -> None:
     _enable_flow_logging(caplog)
     caplog.clear()
@@ -384,6 +396,10 @@ async def test_flow_fastpath_guard_emits_metric(trader_factory, caplog) -> None:
 
 
 @pytest.mark.asyncio(mode="strict")
+@pytest.mark.flags(
+    "datafeed.debug_wrapper.enabled",
+    "backfill.ventana.enabled",
+)
 async def test_flow_backpressure_does_not_block_attempt(trader_factory, caplog) -> None:
     _enable_flow_logging(caplog)
     caplog.clear()
@@ -406,6 +422,10 @@ async def test_flow_backpressure_does_not_block_attempt(trader_factory, caplog) 
 
 
 @pytest.mark.asyncio(mode="strict")
+@pytest.mark.flags(
+    "funding.enabled",
+    "datafeed.debug_wrapper.enabled",
+)
 async def test_flow_reconnect_continues_after_reset(trader_factory, caplog) -> None:
     _enable_flow_logging(caplog)
     caplog.clear()

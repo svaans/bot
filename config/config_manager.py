@@ -198,6 +198,14 @@ class Config:
     timeout_evaluar_condiciones_por_symbol: Dict[str, int] = field(default_factory=dict)
     indicadores_normalize_default: bool = True
     indicadores_cache_max_entries: int = 128
+    orders_retry_persistencia_enabled: bool = False
+    trader_purge_historial_enabled: bool = False
+    metrics_extended_enabled: bool = False
+    datafeed_debug_wrapper_enabled: bool = False
+    orders_flush_periodico_enabled: bool = False
+    orders_limit_enabled: bool = False
+    funding_enabled: bool = False
+    backfill_ventana_enabled: bool = False
 
 class ConfigManager:
     """Carga y proporciona acceso a la configuración del bot."""
@@ -337,6 +345,39 @@ class ConfigManager:
             'INDICADORES_CACHE_MAX_ENTRIES',
             getattr(defaults, 'indicadores_cache_max_entries', 128),
         )
+
+        orders_retry_persistencia_enabled = _env_bool(
+            'ORDERS_RETRY_PERSISTENCIA_ENABLED',
+            getattr(defaults, 'orders_retry_persistencia_enabled', False),
+        )
+        trader_purge_historial_enabled = _env_bool(
+            'TRADER_PURGE_HISTORIAL_ENABLED',
+            getattr(defaults, 'trader_purge_historial_enabled', False),
+        )
+        metrics_extended_enabled = _env_bool(
+            'METRICS_EXTENDED_ENABLED',
+            getattr(defaults, 'metrics_extended_enabled', False),
+        )
+        datafeed_debug_wrapper_enabled = _env_bool(
+            'DATAFEED_DEBUG_WRAPPER_ENABLED',
+            getattr(defaults, 'datafeed_debug_wrapper_enabled', False),
+        )
+        orders_flush_periodico_enabled = _env_bool(
+            'ORDERS_FLUSH_PERIODICO_ENABLED',
+            getattr(defaults, 'orders_flush_periodico_enabled', False),
+        )
+        orders_limit_enabled = _env_bool(
+            'ORDERS_LIMIT_ENABLED',
+            getattr(defaults, 'orders_limit_enabled', False),
+        )
+        funding_enabled = _env_bool(
+            'FUNDING_ENABLED',
+            getattr(defaults, 'funding_enabled', False),
+        )
+        backfill_ventana_enabled = _env_bool(
+            'BACKFILL_VENTANA_ENABLED',
+            getattr(defaults, 'backfill_ventana_enabled', False),
+        )
         
         config = Config(
             api_key=api_key,
@@ -414,6 +455,14 @@ class ConfigManager:
             timeout_evaluar_condiciones_por_symbol=timeout_evaluar_por_symbol,
             indicadores_normalize_default=indicadores_normalize_default,
             indicadores_cache_max_entries=indicadores_cache_max_entries,
+            orders_retry_persistencia_enabled=orders_retry_persistencia_enabled,
+            trader_purge_historial_enabled=trader_purge_historial_enabled,
+            metrics_extended_enabled=metrics_extended_enabled,
+            datafeed_debug_wrapper_enabled=datafeed_debug_wrapper_enabled,
+            orders_flush_periodico_enabled=orders_flush_periodico_enabled,
+            orders_limit_enabled=orders_limit_enabled,
+            funding_enabled=funding_enabled,
+            backfill_ventana_enabled=backfill_ventana_enabled,
         )
 
         log.info(

@@ -12,6 +12,11 @@ __all__ = [
     "EMOTIONAL_STATE_TRANSITIONS",
     "EMOTIONAL_RISK_GAUGE",
     "EMOTIONAL_STREAK_GAUGE",
+    "BOT_ORDERS_RETRY_SCHEDULED_TOTAL",
+    "BOT_TRADER_PURGE_RUNS_TOTAL",
+    "BOT_DATAFEED_WS_FAILURES_TOTAL",
+    "BOT_LIMIT_ORDERS_SUBMITTED_TOTAL",
+    "BOT_BACKFILL_WINDOW_RUNS_TOTAL",
 ]
 
 SIGNALS_CONFLICT = Counter(
@@ -59,4 +64,34 @@ EMOTIONAL_STREAK_GAUGE = Gauge(
     "bot_emotional_streak",
     "Rachas consecutivas de ganancias y pérdidas registradas",
     ["type"],
+)
+
+BOT_ORDERS_RETRY_SCHEDULED_TOTAL = Counter(
+    "bot_orders_retry_scheduled_total",
+    "Reintentos de persistencia de órdenes programados por símbolo",
+    ["symbol"],
+)
+
+BOT_TRADER_PURGE_RUNS_TOTAL = Counter(
+    "bot_trader_purge_runs_total",
+    "Ejecuciones del purgado de historial del trader por símbolo",
+    ["symbol"],
+)
+
+BOT_DATAFEED_WS_FAILURES_TOTAL = Counter(
+    "bot_datafeed_ws_failures_total",
+    "Reinicios del DataFeed por fallos en el WebSocket",
+    ["reason"],
+)
+
+BOT_LIMIT_ORDERS_SUBMITTED_TOTAL = Counter(
+    "bot_limit_orders_submitted_total",
+    "Órdenes limit registradas por símbolo y lado",
+    ["symbol", "side"],
+)
+
+BOT_BACKFILL_WINDOW_RUNS_TOTAL = Counter(
+    "bot_backfill_window_runs_total",
+    "Backfills ejecutados para recalentar ventanas de historial",
+    ["symbol", "timeframe"],
 )

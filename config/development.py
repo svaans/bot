@@ -76,3 +76,11 @@ class DevelopmentConfig:
     timeout_evaluar_condiciones_por_symbol: Dict[str, int] = field(default_factory=dict)
     indicadores_normalize_default: bool = True
     indicadores_cache_max_entries: int = 128
+    orders_retry_persistencia_enabled: bool = False
+    trader_purge_historial_enabled: bool = False
+    metrics_extended_enabled: bool = False
+    datafeed_debug_wrapper_enabled: bool = False
+    orders_flush_periodico_enabled: bool = False
+    orders_limit_enabled: bool = False
+    funding_enabled: bool = False
+    backfill_ventana_enabled: bool = False

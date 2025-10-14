@@ -13,6 +13,13 @@ from core.metrics import (
     VELAS_TOTAL,
 )
 from core.metrics_helpers import safe_inc, safe_set
+from observability.metrics import (
+    BOT_BACKFILL_WINDOW_RUNS_TOTAL,
+    BOT_DATAFEED_WS_FAILURES_TOTAL,
+    BOT_LIMIT_ORDERS_SUBMITTED_TOTAL,
+    BOT_ORDERS_RETRY_SCHEDULED_TOTAL,
+    BOT_TRADER_PURGE_RUNS_TOTAL,
+)
 
 
 def _labels_of(metric) -> set[str]:
@@ -58,3 +65,11 @@ def test_safe_helpers_do_not_crash() -> None:
         123,
         timeframe="5m",
     )
+
+
+def test_bot_guardrail_metrics_labels() -> None:
+    assert _labels_of(BOT_ORDERS_RETRY_SCHEDULED_TOTAL) == {"symbol"}
+    assert _labels_of(BOT_TRADER_PURGE_RUNS_TOTAL) == {"symbol"}
+    assert _labels_of(BOT_DATAFEED_WS_FAILURES_TOTAL) == {"reason"}
+    assert _labels_of(BOT_LIMIT_ORDERS_SUBMITTED_TOTAL) == {"symbol", "side"}
+    assert _labels_of(BOT_BACKFILL_WINDOW_RUNS_TOTAL) == {"symbol", "timeframe"}
