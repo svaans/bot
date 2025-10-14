@@ -5,11 +5,13 @@ import asyncio
 import math
 import os
 import random
+from collections.abc import Mapping
 from datetime import datetime, timezone
-from typing import Dict, Optional
+from typing import Any, Dict, Iterable, Optional
 
 from core.orders.order_model import Order
 from core.utils.logger import configurar_logger, log_decision
+from core.utils.log_utils import safe_extra
 from core.orders import real_orders
 # Importamos validadores con nombres más descriptivos.  El módulo
 # ``validators_binance`` centraliza las restricciones de Binance.
@@ -36,6 +38,90 @@ log = configurar_logger('orders', modo_silencioso=True)
 UTC = timezone.utc
 
 MAX_HISTORIAL_ORDENES = 1000
+
+
+_META_NESTED_KEYS = ("orden", "order", "position", "trade", "entrada", "payload")
+
+
+def _coerce_float(value: Any) -> float | None:
+    """Convierte ``value`` en ``float`` si es posible."""
+
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return float(value)
+    if isinstance(value, (int, float)):
+        if isinstance(value, float) and math.isnan(value):  # pragma: no cover - defensivo
+            return None
+        return float(value)
+    try:
+        return float(str(value))
+    except (TypeError, ValueError):
+        return None
+
+
+def _coerce_int(value: Any) -> int | None:
+    """Convierte ``value`` en ``int`` si es posible."""
+
+    float_value = _coerce_float(value)
+    if float_value is None:
+        return None
+    try:
+        return int(float_value)
+    except (TypeError, ValueError):  # pragma: no cover - defensivo
+        return None
+
+
+def _lookup_meta(meta: Mapping[str, Any], keys: Iterable[str]) -> Any:
+    """Busca la primera coincidencia de ``keys`` en ``meta`` o sub-mappings conocidos."""
+
+    for key in keys:
+        if key in meta:
+            return meta[key]
+    for nested_key in _META_NESTED_KEYS:
+        nested = meta.get(nested_key)
+        if isinstance(nested, Mapping):
+            for key in keys:
+                if key in nested:
+                    return nested[key]
+    return None
+
+
+def _resolve_quantity(meta: Mapping[str, Any], precio: float) -> float:
+    """Obtiene la cantidad a operar a partir de distintos campos del ``meta``."""
+
+    quantity_value = _lookup_meta(
+        meta,
+        (
+            "cantidad",
+            "cantidad_operar",
+            "quantity",
+            "qty",
+            "size",
+            "amount",
+            "position_size",
+        ),
+    )
+    quantity = _coerce_float(quantity_value)
+    if quantity is not None and quantity > 0:
+        return float(quantity)
+
+    capital_value = _lookup_meta(
+        meta,
+        (
+            "capital",
+            "capital_operar",
+            "capital_disponible",
+            "risk_capital",
+            "notional",
+            "capital_usd",
+        ),
+    )
+    capital = _coerce_float(capital_value)
+    if capital is not None and capital > 0 and precio > 0:
+        return float(capital / precio)
+
+    return 0.0
 
 
 class OrderManager:
@@ -1121,3 +1207,159 @@ class OrderManager:
 
     def obtener(self, symbol: str) -> Optional[Order]:
         return self.ordenes.get(symbol)
+
+	async def crear(
+        self,
+        *,
+        symbol: str,
+        side: str,
+        precio: float,
+        sl: float,
+        tp: float,
+        meta: Mapping[str, Any] | None = None,
+    ) -> bool:
+        """Crea y envía una orden utilizando la interfaz moderna del Trader."""
+
+        meta_map: Mapping[str, Any]
+        if isinstance(meta, Mapping):
+            meta_map = meta
+        else:
+            meta_map = {}
+
+        direccion = str(side or "long").lower()
+        if direccion in {"sell", "venta"}:
+            direccion = "short"
+        elif direccion not in {"long", "short"}:
+            direccion = "long"
+
+        estrategias_value = _lookup_meta(
+            meta_map,
+            ("estrategias", "estrategias_activas", "strategies", "estrategias_detalle"),
+        )
+        estrategias = estrategias_value if isinstance(estrategias_value, dict) else {}
+
+        tendencia_value = _lookup_meta(meta_map, ("tendencia", "trend", "market_trend"))
+        tendencia = str(tendencia_value) if tendencia_value is not None else ""
+
+        cantidad = _resolve_quantity(meta_map, precio)
+        if cantidad <= 0:
+            log.warning(
+                "crear.skip_quantity",
+                extra=safe_extra(
+                    {
+                        "symbol": symbol,
+                        "side": direccion,
+                        "precio": precio,
+                        "meta_keys": tuple(meta_map.keys()),
+                    }
+                ),
+            )
+            return False
+
+        puntaje_val = _lookup_meta(meta_map, ("score", "puntaje", "score_tecnico"))
+        puntaje = _coerce_float(puntaje_val) or 0.0
+
+        umbral_val = _lookup_meta(meta_map, ("umbral_score", "umbral", "threshold"))
+        umbral = _coerce_float(umbral_val) or 0.0
+
+        score_tecnico_val = _lookup_meta(
+            meta_map,
+            ("score_tecnico", "score_tecnico_final", "score_ajustado"),
+        )
+        score_tecnico = _coerce_float(score_tecnico_val) or puntaje
+
+        objetivo_val = _lookup_meta(meta_map, ("objetivo", "cantidad_objetivo", "target_amount"))
+        objetivo = _coerce_float(objetivo_val)
+
+        fracciones_val = _lookup_meta(meta_map, ("fracciones", "fracciones_totales", "chunks"))
+        fracciones_int = _coerce_int(fracciones_val)
+        fracciones = fracciones_int if fracciones_int and fracciones_int > 0 else 1
+
+        detalles_value = _lookup_meta(
+            meta_map,
+            ("detalles_tecnicos", "detalles", "technical_details"),
+        )
+        detalles_tecnicos = detalles_value if isinstance(detalles_value, dict) else None
+
+        tick_size_val = _lookup_meta(
+            meta_map,
+            ("tick_size", "precio_tick", "tick"),
+        )
+        step_size_val = _lookup_meta(
+            meta_map,
+            ("step_size", "cantidad_step", "lot_step", "step"),
+        )
+        min_dist_val = _lookup_meta(
+            meta_map,
+            ("min_dist_pct", "min_dist", "min_distance_pct"),
+        )
+
+        tick_size = _coerce_float(tick_size_val)
+        step_size = _coerce_float(step_size_val)
+        min_dist_pct = _coerce_float(min_dist_val)
+
+        filters_value = _lookup_meta(meta_map, ("market_filters", "filtros", "filters"))
+        if isinstance(filters_value, Mapping):
+            if tick_size is None:
+                tick_size = _coerce_float(filters_value.get("tick_size"))
+            if step_size is None:
+                step_size = _coerce_float(filters_value.get("step_size"))
+            if min_dist_pct is None:
+                min_dist_pct = _coerce_float(filters_value.get("min_dist_pct"))
+
+        candle_close_val = _lookup_meta(
+            meta_map,
+            ("candle_close_ts", "timestamp", "bar_close_ts", "close_ts"),
+        )
+        candle_close_ts = _coerce_int(candle_close_val)
+
+        strategy_version_val = _lookup_meta(
+            meta_map,
+            ("strategy_version", "version", "pipeline_version", "engine_version"),
+        )
+        strategy_version = str(strategy_version_val) if strategy_version_val is not None else None
+
+        try:
+            return await self.abrir_async(
+                symbol,
+                precio,
+                sl,
+                tp,
+                estrategias,
+                tendencia or "",
+                direccion=direccion,
+                cantidad=cantidad,
+                puntaje=puntaje,
+                umbral=umbral,
+                score_tecnico=score_tecnico,
+                objetivo=objetivo,
+                fracciones=fracciones,
+                detalles_tecnicos=detalles_tecnicos,
+                tick_size=tick_size,
+                step_size=step_size,
+                min_dist_pct=min_dist_pct,
+                candle_close_ts=candle_close_ts,
+                strategy_version=strategy_version,
+            )
+        except Exception as exc:  # pragma: no cover - defensivo
+            log.exception(
+                "crear.exception",
+                extra=safe_extra({"symbol": symbol, "side": direccion, "error": str(exc)}),
+            )
+            return False
+
+    def eliminar(self, symbol: str) -> None:
+        """Elimina la orden local asociada a ``symbol`` si existe."""
+
+        self.ordenes.pop(symbol, None)
+
+    def actualizar(self, orden: Order | None, **kwargs: Any) -> None:
+        """Actualiza los atributos de ``orden`` con los ``kwargs`` provistos."""
+
+        if orden is None:
+            return
+        for key, value in kwargs.items():
+            try:
+                setattr(orden, key, value)
+            except Exception:  # pragma: no cover - defensivo
+                continue
