@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from dataclasses import dataclass
 from typing import Generator
 from typing import Any, Dict
@@ -33,6 +34,19 @@ class DummyMetric:
 
     def observe(self, *_args: Any, **_kwargs: Any) -> None:
         return None
+
+
+class RecordingMetric(DummyMetric):
+    def __init__(self) -> None:
+        self.calls: list[dict[str, Any]] = []
+        self.inc_calls = 0
+
+    def labels(self, *_args: Any, **labels: Any) -> "RecordingMetric":  # type: ignore[override]
+        self.calls.append(labels)
+        return self
+
+    def inc(self, *_args: Any, **_kwargs: Any) -> None:  # type: ignore[override]
+        self.inc_calls += 1
 
 
 class DummyOrders:
@@ -151,6 +165,7 @@ def reset_buffers() -> Generator[Any, None, None]:
             "BUFFER_SIZE_V2",
             "WARMUP_RESTANTE",
             "LAST_BAR_AGE",
+            "SPREAD_GUARD_MISSING",
         )
     }
     for name in originals:
@@ -198,6 +213,37 @@ async def test_procesar_vela_abre_operacion_para_oportunidad(side: str) -> None:
     assert trader.notifications == [
         (f"Abrir {side} BTCUSDT @ {candle['close']:.6f}", "INFO")
     ]
+
+
+@pytest.mark.asyncio
+async def test_procesar_vela_registra_metricas_spread_guard_missing() -> None:
+    trader = DummyTrader(side="long", generar_propuesta=False)
+    trader.spread_guard = object()
+    candle = _build_candle(30_000.0)
+
+    metric = RecordingMetric()
+    original_metric = procesar_vela_mod.SPREAD_GUARD_MISSING
+    procesar_vela_mod.SPREAD_GUARD_MISSING = metric
+
+    logger = logging.getLogger("procesar_vela")
+    records: list[logging.LogRecord] = []
+
+    class _ListHandler(logging.Handler):
+        def emit(self, record: logging.LogRecord) -> None:
+            records.append(record)
+
+    handler = _ListHandler()
+    logger.addHandler(handler)
+
+    try:
+        await procesar_vela(trader, candle)
+    finally:
+        procesar_vela_mod.SPREAD_GUARD_MISSING = original_metric
+        logger.removeHandler(handler)
+
+    assert metric.calls == [{"symbol": "BTCUSDT", "timeframe": "1m"}]
+    assert metric.inc_calls == 1
+    assert any(record.getMessage() == "spread_guard_missing" for record in records)
 
 
 @pytest.mark.asyncio
