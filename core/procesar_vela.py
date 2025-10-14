@@ -6,10 +6,11 @@ import contextlib
 import hashlib
 import math
 import os
+import random
 import time
 from collections import deque
 from dataclasses import dataclass, field
-from typing import Any, Deque, Dict, Iterable, Optional, Tuple, Union
+from typing import Any, Deque, Dict, Iterable, Mapping, Optional, Tuple, Union
 
 import pandas as pd
 
@@ -112,6 +113,74 @@ log = configurar_logger("procesar_vela")
 # ──────────────────────────────────────────────────────────────────────────────
 # Utilidades y estructuras internas
 # ──────────────────────────────────────────────────────────────────────────────
+
+_ORDER_CREATION_MAX_ATTEMPTS = 3
+_ORDER_CREATION_INITIAL_BACKOFF = 0.5
+_ORDER_CREATION_BACKOFF_FACTOR = 2.0
+_ORDER_CREATION_BACKOFF_CAP = 5.0
+_ORDER_CREATION_JITTER = 0.2
+_ORDER_CIRCUIT_MAX_FAILURES = 3
+_ORDER_CIRCUIT_OPEN_SECONDS = 30.0
+_ORDER_CIRCUIT_RESET_AFTER = 120.0
+
+
+@dataclass
+class _CircuitBreakerState:
+    """Estado interno del circuit breaker por símbolo/dirección."""
+
+    failures: int = 0
+    opened_until: float = 0.0
+    last_failure: float = 0.0
+
+    def reset_if_idle(self, now: float, reset_after: float) -> None:
+        """Reinicia contadores si no hubo fallas recientes."""
+
+        if self.failures and now - self.last_failure >= reset_after:
+            self.failures = 0
+            self.opened_until = 0.0
+
+    def record_success(self) -> None:
+        """Resetea el estado tras un intento exitoso."""
+
+        self.failures = 0
+        self.opened_until = 0.0
+
+    def record_failure(self, now: float) -> bool:
+        """Registra una falla y devuelve si el circuito debe abrirse."""
+
+        if now - self.last_failure >= _ORDER_CIRCUIT_RESET_AFTER:
+            self.failures = 0
+        self.last_failure = now
+        self.failures += 1
+        if self.failures >= _ORDER_CIRCUIT_MAX_FAILURES:
+            self.opened_until = now + _ORDER_CIRCUIT_OPEN_SECONDS
+            return True
+        return False
+
+
+class OrderCircuitBreakerOpen(RuntimeError):
+    """Excepción específica cuando el circuit breaker impide abrir órdenes."""
+
+    def __init__(self, retry_after: float, state: _CircuitBreakerState) -> None:
+        super().__init__("order circuit breaker open")
+        self.retry_after = retry_after
+        self.state = state
+
+
+_ORDER_CIRCUITS: Dict[str, _CircuitBreakerState] = {}
+
+
+def _circuit_key(symbol: str, side: str) -> str:
+    return f"{symbol.upper()}:{side.lower()}"
+
+
+def _get_circuit_state(symbol: str, side: str) -> _CircuitBreakerState:
+    key = _circuit_key(symbol, side)
+    state = _ORDER_CIRCUITS.get(key)
+    if state is None:
+        state = _CircuitBreakerState()
+        _ORDER_CIRCUITS[key] = state
+    return state
 
 COLUMNS = ("timestamp", "open", "high", "low", "close", "volume")
 
@@ -235,6 +304,41 @@ def _set_fastpath_mode(state: Any, mode: str) -> None:
         return
 
 
+def _resolve_trace_id(payload: Mapping[str, Any] | None) -> Optional[str]:
+    """Genera un identificador determinístico para la vela recibida."""
+
+    if not isinstance(payload, Mapping):
+        return None
+
+    symbol = str(payload.get("symbol") or "").upper()
+    if not symbol:
+        return None
+
+    ts_candidate = (
+        payload.get("timestamp")
+        or payload.get("close_time")
+        or payload.get("open_time")
+        or payload.get("event_time")
+    )
+
+    if ts_candidate is None:
+        return None
+
+    try:
+        ts_int = int(float(ts_candidate))
+    except (TypeError, ValueError):
+        return None
+
+    if ts_int <= 0:
+        return None
+
+    base = f"{symbol}:{ts_int}".encode("utf-8")
+    try:
+        return hashlib.blake2b(base, digest_size=12).hexdigest()
+    except Exception:  # pragma: no cover - errores improbables de hashlib
+        return None
+
+
 def _mark_skip(
     target: dict,
     reason: str,
@@ -276,21 +380,7 @@ def _mark_skip(
     else:
         target.pop("_df_skip_details", None)
 
-    symbol = str(target.get("symbol") or "").upper()
-    ts_candidate = (
-        target.get("timestamp")
-        or target.get("close_time")
-        or target.get("open_time")
-        or target.get("event_time")
-    )
-    trace_id: str | None = None
-    try:
-        if symbol and ts_candidate is not None:
-            ts_int = int(float(ts_candidate))
-            base = f"{symbol}:{ts_int}".encode("utf-8")
-            trace_id = hashlib.blake2b(base, digest_size=12).hexdigest()
-    except (TypeError, ValueError):  # pragma: no cover - valores inesperados
-        trace_id = None
+    trace_id = _resolve_trace_id(target)
 
     if trace_id:
         target["_df_trace_id"] = trace_id
@@ -911,6 +1001,16 @@ async def procesar_vela(trader: Any, vela: dict) -> None:
         meta = dict(propuesta.get("meta", {}))
         meta.update({"score": propuesta.get("score")})
 
+        trace_id: Optional[str] = None
+        if isinstance(vela, dict):
+            trace_id = vela.get("_df_trace_id")
+            if not trace_id:
+                trace_id = _resolve_trace_id(vela)
+                if trace_id:
+                    vela["_df_trace_id"] = trace_id
+        if trace_id:
+            meta.setdefault("trace_id", trace_id)
+
         try:
             obtener = getattr(orders, "obtener", None)
             ya = obtener(symbol) if callable(obtener) else None
@@ -927,11 +1027,50 @@ async def procesar_vela(trader: Any, vela: dict) -> None:
             pass
 
         try:
-            await _abrir_orden(orders, symbol, side, precio, sl, tp, meta)
+            await _abrir_orden(
+                orders,
+                symbol,
+                side,
+                precio,
+                sl,
+                tp,
+                meta,
+                trace_id=trace_id,
+            )
             safe_inc(ENTRADAS_ABIERTAS, symbol=symbol, side=side)
             notify = getattr(trader, "enqueue_notification", None)
             if callable(notify):
                 notify(f"Abrir {side} {symbol} @ {precio:.6f}", "INFO")
+        except OrderCircuitBreakerOpen as exc:
+            safe_inc(
+                ENTRADAS_RECHAZADAS_V2,
+                symbol=symbol,
+                timeframe=timeframe_label,
+                reason="orders_circuit_open",
+            )
+            retry_after = max(0.0, float(exc.retry_after))
+            details = {
+                "retry_after": retry_after,
+                "failures": exc.state.failures,
+                "side": side,
+            }
+            _mark_skip(
+                vela,
+                "orders_circuit_open",
+                details,
+                gate="orders_circuit_open",
+                score=score,
+            )
+            log.warning(
+                "orders_circuit_open",
+                extra={
+                    "symbol": symbol,
+                    "side": side,
+                    "retry_after": retry_after,
+                    "failures": exc.state.failures,
+                },
+            )
+            return
         except asyncio.CancelledError:
             raise
         except Exception as e:
@@ -998,8 +1137,11 @@ async def _abrir_orden(
     sl: float,
     tp: float,
     meta: Dict[str, Any],
+    *,
+    trace_id: str | None = None,
+    max_attempts: Optional[int] = None,
 ) -> None:
-    """Wrapper robusto sobre OrderManager.crear(...)."""
+    """Wrapper robusto sobre OrderManager.crear(...) con reintentos controlados."""
     crear = getattr(orders, "crear", None)
     if not callable(crear):
         raise RuntimeError("OrderManager no implementa crear(...)")
@@ -1009,9 +1151,71 @@ async def _abrir_orden(
     if sl <= 0 or tp <= 0:
         log.debug("[%s] SL/TP no establecidos al abrir (sl=%.6f, tp=%.6f)", symbol, sl, tp)
 
-    res = crear(symbol=symbol, side=side, precio=precio, sl=sl, tp=tp, meta=meta)
-    if asyncio.iscoroutine(res):
-        await res
+    state = _get_circuit_state(symbol, side)
+    now = time.monotonic()
+    state.reset_if_idle(now, _ORDER_CIRCUIT_RESET_AFTER)
+    if state.opened_until and state.opened_until <= now:
+        state.opened_until = 0.0
+    if state.opened_until > now:
+        raise OrderCircuitBreakerOpen(state.opened_until - now, state)
+
+    attempts = max_attempts if max_attempts and max_attempts > 0 else _ORDER_CREATION_MAX_ATTEMPTS
+    if attempts <= 0:
+        attempts = 1
+
+    base_meta: Dict[str, Any] = dict(meta or {})
+    if trace_id:
+        base_meta.setdefault("trace_id", trace_id)
+
+    last_exc: Exception | None = None
+    for attempt in range(1, attempts + 1):
+        payload_meta = dict(base_meta)
+        try:
+            res = crear(
+                symbol=symbol,
+                side=side,
+                precio=precio,
+                sl=sl,
+                tp=tp,
+                meta=payload_meta,
+            )
+            if asyncio.iscoroutine(res):
+                await res
+            state.record_success()
+            return
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            last_exc = exc
+            failure_now = time.monotonic()
+            opened = state.record_failure(failure_now)
+            log.warning(
+                "orders_crear_retry",
+                extra={
+                    "symbol": symbol,
+                    "side": side,
+                    "attempt": attempt,
+                    "max_attempts": attempts,
+                    "error": str(exc),
+                },
+            )
+            if opened:
+                retry_after = max(0.0, state.opened_until - failure_now)
+                raise OrderCircuitBreakerOpen(retry_after, state) from exc
+            if attempt >= attempts:
+                break
+
+            delay = _ORDER_CREATION_INITIAL_BACKOFF * (_ORDER_CREATION_BACKOFF_FACTOR ** (attempt - 1))
+            delay = min(delay, _ORDER_CREATION_BACKOFF_CAP)
+            if _ORDER_CREATION_JITTER > 0:
+                jitter = delay * _ORDER_CREATION_JITTER
+                low = max(0.0, delay - jitter)
+                high = delay + jitter
+                delay = random.uniform(low, high)
+            await asyncio.sleep(delay)
+
+    if last_exc is not None:
+        raise last_exc
 
 
 
