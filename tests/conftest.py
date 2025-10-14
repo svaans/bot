@@ -175,10 +175,12 @@ def trader_factory(monkeypatch: pytest.MonkeyPatch) -> Callable[
             config.trader_fastpath_enabled = True
             config.trader_fastpath_skip_entries = True
             config.trader_fastpath_threshold = 2
+            config.trader_fastpath_resume_threshold = 1
         else:
             config.trader_fastpath_enabled = False
             config.trader_fastpath_skip_entries = False
             config.trader_fastpath_threshold = 400
+            config.trader_fastpath_resume_threshold = 350
 
         trader = Trader(config, candle_handler=procesar_vela, supervisor=DummySupervisor())
         trader.habilitar_estrategias()
