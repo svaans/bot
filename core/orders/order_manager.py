@@ -2,12 +2,11 @@
 from __future__ import annotations
 
 import asyncio
-import math
 import os
 import random
 from collections.abc import Mapping
 from datetime import datetime, timezone
-from typing import Any, Dict, Iterable, Optional
+from typing import Any, Dict, Optional
 
 from core.orders.order_model import Order
 from core.utils.logger import configurar_logger, log_decision
@@ -24,7 +23,6 @@ from core.utils.utils import is_valid_number
 from core.event_bus import EventBus
 from core.metrics import (
     registrar_buy_rejected_insufficient_funds,
-    registrar_market_retry_exhausted,
     registrar_orden,
     registrar_orders_sync_failure,
     registrar_orders_sync_success,
@@ -33,135 +31,14 @@ from core.metrics import (
 )
 from core.registro_metrico import registro_metrico
 from binance_api.cliente import obtener_cliente
+from core.orders.market_retry_executor import MarketRetryExecutor
+from core.orders.order_helpers import coerce_float, coerce_int, lookup_meta
+from core.orders.quantity_resolver import QuantityResolver
 
 log = configurar_logger('orders', modo_silencioso=True)
 UTC = timezone.utc
 
 MAX_HISTORIAL_ORDENES = 1000
-
-
-_META_NESTED_KEYS = ("orden", "order", "position", "trade", "entrada", "payload")
-_EXPOSICION_KEYS = (
-    "exposicion_total",
-    "exposicion",
-    "exposure_total",
-    "total_exposure",
-    "exposure",
-)
-_STOP_LOSS_META_KEYS = (
-    "stop_loss",
-    "sl",
-    "precio_sl",
-    "stop_loss_price",
-    "stop",
-)
-
-
-def _coerce_float(value: Any) -> float | None:
-    """Convierte ``value`` en ``float`` si es posible."""
-
-    if value is None:
-        return None
-    if isinstance(value, bool):
-        return float(value)
-    if isinstance(value, (int, float)):
-        if isinstance(value, float) and math.isnan(value):  # pragma: no cover - defensivo
-            return None
-        return float(value)
-    try:
-        return float(str(value))
-    except (TypeError, ValueError):
-        return None
-
-
-def _coerce_int(value: Any) -> int | None:
-    """Convierte ``value`` en ``int`` si es posible."""
-
-    float_value = _coerce_float(value)
-    if float_value is None:
-        return None
-    try:
-        return int(float_value)
-    except (TypeError, ValueError):  # pragma: no cover - defensivo
-        return None
-
-
-def _lookup_meta(meta: Mapping[str, Any], keys: Iterable[str]) -> Any:
-    """Busca la primera coincidencia de ``keys`` en ``meta`` o sub-mappings conocidos."""
-
-    for key in keys:
-        if key in meta:
-            return meta[key]
-    for nested_key in _META_NESTED_KEYS:
-        nested = meta.get(nested_key)
-        if isinstance(nested, Mapping):
-            for key in keys:
-                if key in nested:
-                    return nested[key]
-    return None
-
-
-def _resolve_quantity(meta: Mapping[str, Any], precio: float) -> float:
-    """Obtiene la cantidad a operar a partir de distintos campos del ``meta``."""
-
-    quantity_value = _lookup_meta(
-        meta,
-        (
-            "cantidad",
-            "cantidad_operar",
-            "quantity",
-            "qty",
-            "size",
-            "amount",
-            "position_size",
-        ),
-    )
-    quantity = _coerce_float(quantity_value)
-    if quantity is not None and quantity > 0:
-        return float(quantity)
-
-    capital_value = _lookup_meta(
-        meta,
-        (
-            "capital",
-            "capital_operar",
-            "capital_disponible",
-            "risk_capital",
-            "notional",
-            "capital_usd",
-        ),
-    )
-    capital = _coerce_float(capital_value)
-    if capital is not None and capital > 0 and precio > 0:
-        return float(capital / precio)
-
-    return 0.0
-
-
-def _extract_quantity(result: Any) -> float:
-    """Normaliza distintos formatos de respuesta en una cantidad positiva."""
-
-    if isinstance(result, (list, tuple)):
-        candidate: Any | None = None
-        if len(result) >= 2:
-            candidate = result[1]
-        elif result:
-            candidate = result[0]
-        value = _coerce_float(candidate)
-        return float(value) if value and value > 0 else 0.0
-
-    if isinstance(result, Mapping):
-        candidate = (
-            result.get("cantidad")
-            or result.get("quantity")
-            or result.get("qty")
-            or result.get("size")
-        )
-        candidate_value = _coerce_float(candidate)
-        return float(candidate_value) if candidate_value and candidate_value > 0 else 0.0
-
-    value = _coerce_float(result)
-    return float(value) if value and value > 0 else 0.0
 
 
 class OrderManager:
@@ -196,23 +73,14 @@ class OrderManager:
         )
         self._sync_jitter = float(os.getenv("ORDERS_SYNC_JITTER", "0.1"))
         self._sync_failures = 0
-        self._market_retry_max_attempts = int(
-            os.getenv("ORDERS_MARKET_MAX_RETRIES", "5")
-        )
-        self._market_retry_backoff = float(
-            os.getenv("ORDERS_MARKET_BACKOFF_SECONDS", "1.0")
-        )
-        self._market_retry_backoff_multiplier = float(
-            os.getenv("ORDERS_MARKET_BACKOFF_MULTIPLIER", "1.5")
-        )
-        self._market_retry_backoff_cap = float(
-            os.getenv("ORDERS_MARKET_BACKOFF_MAX_SECONDS", "30.0")
-        )
-        self._market_retry_no_progress_limit = int(
-            os.getenv("ORDERS_MARKET_MAX_NO_PROGRESS", "3")
-        )
-		self._quantity_timeout = max(
+        self._quantity_timeout = max(
             0.1, float(os.getenv("ORDERS_QUANTITY_TIMEOUT", "5.0"))
+        )
+		self._market_executor = MarketRetryExecutor(log=log, bus=bus)
+        self._quantity_resolver = QuantityResolver(
+            log=log,
+            bus=bus,
+            quantity_timeout=self._quantity_timeout,
         )
         self.capital_manager: Any | None = None
         if bus:
@@ -224,169 +92,55 @@ class OrderManager:
         ts = int(datetime.now(UTC).timestamp() * 1000)
         return f"{symbol.replace('/', '')}-{ts}-{nonce}"
 
-    async def _ejecutar_market_retry(
-        self,
-        side: str,
-        symbol: str,
-        cantidad: float,
-        operation_id: str | None = None,
-    ) -> tuple[float, float, float]:
-        operation_id = operation_id or self._generar_operation_id(symbol)
-        entrada = {'side': side, 'symbol': symbol, 'cantidad': cantidad}
-        if side == 'sell':
-            return await self._ejecutar_market_sell(
-                symbol, cantidad, operation_id, entrada
-            )
-        return await self._ejecutar_market_buy(
-            symbol, cantidad, operation_id, entrada
-        )
+    # Compatibilidad con tests existentes que ajustan parámetros de reintentos.
+    @property
+    def _market_retry_backoff(self) -> float:  # pragma: no cover - compatibilidad
+        return self._market_executor._backoff
 
-    async def _ejecutar_market_sell(
-        self,
-        symbol: str,
-        cantidad: float,
-        operation_id: str,
-        entrada: dict,
-    ) -> tuple[float, float, float]:
-        """Ejecuta ventas de mercado con circuit breaker configurable."""
-        intentos = 0
-        while True:
-            intentos += 1
-            try:
-                resp = await asyncio.to_thread(
-                    real_orders._market_sell_retry, symbol, cantidad, operation_id
-                )
-                salida = {
-                    'ejecutado': float(resp.get('ejecutado', 0.0)),
-                    'fee': float(resp.get('fee', 0.0)),
-                    'pnl': float(resp.get('pnl', 0.0)),
-                }
-                log_decision(
-                    log, '_market_sell', operation_id, entrada, {}, 'execute', salida
-                )
-                return salida['ejecutado'], salida['fee'], salida['pnl']
-            except Exception as exc:  # pragma: no cover - path defensivo
-                log.error(
-                    '❌ Error ejecutando venta en %s (intento %s/%s): %s',
-                    symbol,
-                    intentos,
-                    self._market_retry_max_attempts,
-                    exc,
-                    extra={'event': 'market_sell_retry_error', 'symbol': symbol},
-                )
-                if intentos >= self._market_retry_max_attempts:
-                    await self._manejar_market_retry_exhausted(
-                        side='sell', symbol=symbol, operation_id=operation_id
-                    )
-                    return 0.0, 0.0, 0.0
-                await asyncio.sleep(self._market_retry_sleep(intentos))
+    @_market_retry_backoff.setter
+    def _market_retry_backoff(self, value: float) -> None:  # pragma: no cover
+        self._market_executor._backoff = value
 
-    async def _ejecutar_market_buy(
-        self,
-        symbol: str,
-        cantidad: float,
-        operation_id: str,
-        entrada: dict,
-    ) -> tuple[float, float, float]:
-        """Ejecuta compras de mercado con límite de reintentos y backoff."""
-        restante = cantidad
-        total = total_fee = total_pnl = 0.0
-        intentos = 0
-        sin_progreso = 0
-        while restante > 0:
-            intentos += 1
-            restante_previo = restante
-            try:
-                resp = await asyncio.to_thread(
-                    real_orders.ejecutar_orden_market, symbol, restante, operation_id
-                )
-            except Exception as exc:
-                log.error(
-                    '❌ Error ejecutando compra en %s (intento %s/%s): %s',
-                    symbol,
-                    intentos,
-                    self._market_retry_max_attempts,
-                    exc,
-                    extra={'event': 'market_buy_retry_error', 'symbol': symbol},
-                )
-                sin_progreso += 1
-                if self._should_break_retry(intentos, sin_progreso):
-                    await self._manejar_market_retry_exhausted(
-                        side='buy', symbol=symbol, operation_id=operation_id
-                    )
-                    break
-                await asyncio.sleep(self._market_retry_sleep(intentos))
-                continue
+    @property
+    def _market_retry_backoff_multiplier(self) -> float:  # pragma: no cover
+        return self._market_executor._backoff_multiplier
 
-            ejecutado = float(resp.get('ejecutado', 0.0))
-            total += ejecutado
-            restante = float(resp.get('restante', 0.0))
-            total_fee += float(resp.get('fee', 0.0))
-            total_pnl += float(resp.get('pnl', 0.0))
+    @_market_retry_backoff_multiplier.setter
+    def _market_retry_backoff_multiplier(self, value: float) -> None:  # pragma: no cover
+        self._market_executor._backoff_multiplier = value
 
-            if math.isclose(restante, restante_previo, rel_tol=1e-09, abs_tol=1e-12):
-                sin_progreso += 1
-            else:
-                sin_progreso = 0
+    @property
+    def _market_retry_backoff_cap(self) -> float:  # pragma: no cover
+        return self._market_executor._backoff_cap
 
-            if resp.get('status') != 'PARTIAL' or restante < resp.get('min_qty', 0):
-                break
+    @_market_retry_backoff_cap.setter
+    def _market_retry_backoff_cap(self, value: float) -> None:  # pragma: no cover
+        self._market_executor._backoff_cap = value
 
-            if self._should_break_retry(intentos, sin_progreso):
-                await self._manejar_market_retry_exhausted(
-                    side='buy', symbol=symbol, operation_id=operation_id
-                )
-                break
+    @property
+    def _market_retry_max_attempts(self) -> int:  # pragma: no cover
+        return self._market_executor._max_attempts
 
-            await asyncio.sleep(self._market_retry_sleep(intentos))
-        salida = {'ejecutado': total, 'fee': total_fee, 'pnl': total_pnl}
-        log_decision(log, '_market_buy', operation_id, entrada, {}, 'execute', salida)
-        return total, total_fee, total_pnl
-    
-    def _market_retry_sleep(self, attempt: int) -> float:
-        """Calcula la espera exponencial con límite superior."""
-        base = max(self._market_retry_backoff, 0.0)
-        if base <= 0:
-            return 0.0
-        multiplier = max(self._market_retry_backoff_multiplier, 1.0)
-        delay = base * (multiplier ** max(attempt - 1, 0))
-        return min(delay, self._market_retry_backoff_cap)
+    @_market_retry_max_attempts.setter
+    def _market_retry_max_attempts(self, value: int) -> None:  # pragma: no cover
+        self._market_executor._max_attempts = int(value)
 
-    def _should_break_retry(self, attempts: int, no_progress: int) -> bool:
-        """Evalúa si deben interrumpirse los reintentos."""
-        if attempts >= self._market_retry_max_attempts:
-            return True
-        return no_progress >= self._market_retry_no_progress_limit > 0
+    @property
+    def _market_retry_no_progress_limit(self) -> int:  # pragma: no cover
+        return self._market_executor._no_progress_limit
 
-    async def _manejar_market_retry_exhausted(
-        self, *, side: str, symbol: str, operation_id: str
-    ) -> None:
-        """Gestiona agotamiento de reintentos: logging, métricas y alertas."""
-        registrar_market_retry_exhausted(side, symbol)
-        log.error(
-            '⛔ Reintentos de orden de mercado agotados',
-            extra={
-                'event': 'market_retry_exhausted',
-                'side': side,
-                'symbol': symbol,
-                'operation_id': operation_id,
-                'max_attempts': self._market_retry_max_attempts,
-            },
-        )
-        if self.bus:
-            await self.bus.publish(
-                'notify',
-                {
-                    'mensaje': (
-                        f'⛔ No se pudo ejecutar orden {side} en {symbol}: '
-                        f'{self._market_retry_max_attempts} reintentos fallidos'
-                    ),
-                    'tipo': 'CRITICAL',
-                    'operation_id': operation_id,
-                },
-            )
+    @_market_retry_no_progress_limit.setter
+    def _market_retry_no_progress_limit(self, value: int) -> None:  # pragma: no cover
+        self._market_executor._no_progress_limit = int(value)
+
+    def _market_retry_sleep(self, attempt: int) -> float:  # pragma: no cover
+        return self._market_executor._market_retry_sleep(attempt)
+
 
     def subscribe(self, bus: EventBus) -> None:
+		self.bus = bus
+        self._market_executor.update_bus(bus)
+        self._quantity_resolver.update_bus(bus)
         bus.subscribe('abrir_orden', self._on_abrir)
         bus.subscribe('cerrar_orden', self._on_cerrar)
         bus.subscribe('cerrar_parcial', self._on_cerrar_parcial)
@@ -418,156 +172,20 @@ class OrderManager:
         if fut:
             fut.set_result(result)
 
-	async def _resolve_quantity_with_fallback(
+    async def _resolve_quantity_with_fallback(
         self,
         symbol: str,
         precio: float,
         sl: float,
         meta: Mapping[str, Any],
     ) -> tuple[float, str]:
-        base_quantity = _resolve_quantity(meta, precio)
-        if base_quantity > 0:
-            return float(base_quantity), "meta"
-
-        exposicion_val = _lookup_meta(meta, _EXPOSICION_KEYS)
-        exposicion = _coerce_float(exposicion_val) or 0.0
-        stop_loss_val = _lookup_meta(meta, _STOP_LOSS_META_KEYS)
-        stop_loss = _coerce_float(stop_loss_val)
-        if stop_loss is None and sl > 0:
-            stop_loss = float(sl)
-
-        quantity = await self._solicitar_cantidad_capital_manager(
+        return await self._quantity_resolver.resolve(
             symbol,
             precio,
-            exposicion,
-            stop_loss,
+            sl,
+            meta,
+            capital_manager=self.capital_manager,
         )
-        if quantity > 0:
-            return quantity, "capital_manager"
-
-        quantity = await self._solicitar_cantidad_bus(
-            symbol,
-            precio,
-            exposicion,
-            stop_loss,
-        )
-        if quantity > 0:
-            return quantity, "event_bus"
-
-        return 0.0, "none"
-
-    async def _solicitar_cantidad_capital_manager(
-        self,
-        symbol: str,
-        precio: float,
-        exposicion: float,
-        stop_loss: float | None,
-    ) -> float:
-        manager = getattr(self, "capital_manager", None)
-        if manager is None:
-            return 0.0
-
-        resolver = getattr(manager, "calcular_cantidad_async", None)
-        if not callable(resolver):
-            return 0.0
-
-        try:
-            resultado = resolver(
-                symbol,
-                precio,
-                exposicion_total=exposicion,
-                stop_loss=stop_loss,
-            )
-            if asyncio.iscoroutine(resultado):
-                resultado = await resultado
-            cantidad = _extract_quantity(resultado)
-            return cantidad if cantidad > 0 else 0.0
-        except Exception:
-            log.warning(
-                "crear.quantity_fallback_capital_error",
-                exc_info=True,
-                extra=safe_extra(
-                    {
-                        "symbol": symbol,
-                        "precio": precio,
-                        "exposicion_total": exposicion,
-                    }
-                ),
-            )
-            return 0.0
-
-    async def _solicitar_cantidad_bus(
-        self,
-        symbol: str,
-        precio: float,
-        exposicion: float,
-        stop_loss: float | None,
-    ) -> float:
-        if not self.bus:
-            return 0.0
-
-        try:
-            loop = asyncio.get_running_loop()
-        except RuntimeError:
-            return 0.0
-
-        future: asyncio.Future[Any] = loop.create_future()
-        payload = {
-            "symbol": symbol,
-            "precio": precio,
-            "exposicion_total": exposicion,
-            "stop_loss": stop_loss,
-            "future": future,
-        }
-
-        try:
-            await self.bus.publish("calcular_cantidad", payload)
-        except Exception:
-            log.warning(
-                "crear.quantity_fallback_bus_error",
-                exc_info=True,
-                extra=safe_extra(
-                    {
-                        "symbol": symbol,
-                        "precio": precio,
-                        "exposicion_total": exposicion,
-                    }
-                ),
-            )
-            future.cancel()
-            return 0.0
-
-        try:
-            resultado = await asyncio.wait_for(future, timeout=self._quantity_timeout)
-        except asyncio.TimeoutError:
-            future.cancel()
-            log.warning(
-                "crear.quantity_fallback_bus_timeout",
-                extra=safe_extra(
-                    {
-                        "symbol": symbol,
-                        "precio": precio,
-                        "timeout": self._quantity_timeout,
-                    }
-                ),
-            )
-            return 0.0
-        except Exception:
-            future.cancel()
-            log.warning(
-                "crear.quantity_fallback_bus_result_error",
-                exc_info=True,
-                extra=safe_extra(
-                    {
-                        "symbol": symbol,
-                        "precio": precio,
-                    }
-                ),
-            )
-            return 0.0
-
-        cantidad = _extract_quantity(resultado)
-        return cantidad if cantidad > 0 else 0.0
 
     def start_sync(self, intervalo: int | None = None) -> None:
         if intervalo:
@@ -962,7 +580,13 @@ class OrderManager:
 
                 try:
                     if self.modo_real and is_valid_number(cantidad) and cantidad > 0:
-                        ejecutado, fee, pnl = await self._ejecutar_market_retry('buy', symbol, cantidad, operation_id)
+                        ejecutado, fee, pnl = await self._market_executor.ejecutar(
+                            'buy',
+                            symbol,
+                            cantidad,
+                            operation_id,
+                            {'side': 'buy', 'symbol': symbol, 'cantidad': cantidad},
+                        )
                         # actualiza con lo realmente ejecutado
                         cantidad = float(ejecutado)
                         orden.fee_total = getattr(orden, 'fee_total', 0.0) + fee
@@ -1137,7 +761,13 @@ class OrderManager:
             if self.modo_real:
                 try:
                     if cantidad > 0:
-                        ejecutado, fee, pnl = await self._ejecutar_market_retry('buy', symbol, cantidad, operation_id)
+                        ejecutado, fee, pnl = await self._market_executor.ejecutar(
+                            'buy',
+                            symbol,
+                            cantidad,
+                            operation_id,
+                            {'side': 'buy', 'symbol': symbol, 'cantidad': cantidad},
+                        )
                         cantidad = ejecutado
                         orden.fee_total = getattr(orden, 'fee_total', 0.0) + fee
                         orden.pnl_operaciones = getattr(orden, 'pnl_operaciones', 0.0) + pnl
@@ -1199,7 +829,13 @@ class OrderManager:
 
                     if cantidad > 1e-08:
                         try:
-                            ejecutado, fee, pnl = await self._ejecutar_market_retry('sell', symbol, cantidad, operation_id)
+                            ejecutado, fee, pnl = await self._market_executor.ejecutar(
+                                'sell',
+                                symbol,
+                                cantidad,
+                                operation_id,
+                                {'side': 'sell', 'symbol': symbol, 'cantidad': cantidad},
+                            )
                             restante = cantidad - ejecutado
 
                             if ejecutado > 0:
@@ -1328,7 +964,13 @@ class OrderManager:
 				
                 if self.modo_real:
                     try:
-                        ejecutado, fee, pnl = await self._ejecutar_market_retry('sell', symbol, cantidad, operation_id)
+                        ejecutado, fee, pnl = await self._market_executor.ejecutar(
+                            'sell',
+                            symbol,
+                            cantidad,
+                            operation_id,
+                            {'side': 'sell', 'symbol': symbol, 'cantidad': cantidad},
+                        )
                         cantidad = ejecutado
                         orden.fee_total = getattr(orden, 'fee_total', 0.0) + fee
                         orden.pnl_operaciones = getattr(orden, 'pnl_operaciones', 0.0) + pnl
@@ -1427,13 +1069,13 @@ class OrderManager:
         elif direccion not in {"long", "short"}:
             direccion = "long"
 
-        estrategias_value = _lookup_meta(
+        estrategias_value = lookup_meta(
             meta_map,
             ("estrategias", "estrategias_activas", "strategies", "estrategias_detalle"),
         )
         estrategias = estrategias_value if isinstance(estrategias_value, dict) else {}
 
-        tendencia_value = _lookup_meta(meta_map, ("tendencia", "trend", "market_trend"))
+        tendencia_value = lookup_meta(meta_map, ("tendencia", "trend", "market_trend"))
         tendencia = str(tendencia_value) if tendencia_value is not None else ""
 
         cantidad, cantidad_source = await self._resolve_quantity_with_fallback(
@@ -1468,64 +1110,64 @@ class OrderManager:
                 ),
             )
 
-        puntaje_val = _lookup_meta(meta_map, ("score", "puntaje", "score_tecnico"))
-        puntaje = _coerce_float(puntaje_val) or 0.0
+        puntaje_val = lookup_meta(meta_map, ("score", "puntaje", "score_tecnico"))
+        puntaje = coerce_float(puntaje_val) or 0.0
 
-        umbral_val = _lookup_meta(meta_map, ("umbral_score", "umbral", "threshold"))
-        umbral = _coerce_float(umbral_val) or 0.0
+        umbral_val = lookup_meta(meta_map, ("umbral_score", "umbral", "threshold"))
+        umbral = coerce_float(umbral_val) or 0.0
 
-        score_tecnico_val = _lookup_meta(
+        score_tecnico_val = lookup_meta(
             meta_map,
             ("score_tecnico", "score_tecnico_final", "score_ajustado"),
         )
-        score_tecnico = _coerce_float(score_tecnico_val) or puntaje
+        score_tecnico = coerce_float(score_tecnico_val) or puntaje
 
-        objetivo_val = _lookup_meta(meta_map, ("objetivo", "cantidad_objetivo", "target_amount"))
-        objetivo = _coerce_float(objetivo_val)
+        objetivo_val = lookup_meta(meta_map, ("objetivo", "cantidad_objetivo", "target_amount"))
+        objetivo = coerce_float(objetivo_val)
 
-        fracciones_val = _lookup_meta(meta_map, ("fracciones", "fracciones_totales", "chunks"))
-        fracciones_int = _coerce_int(fracciones_val)
+        fracciones_val = lookup_meta(meta_map, ("fracciones", "fracciones_totales", "chunks"))
+        fracciones_int = coerce_int(fracciones_val)
         fracciones = fracciones_int if fracciones_int and fracciones_int > 0 else 1
 
-        detalles_value = _lookup_meta(
+        detalles_value = lookup_meta(
             meta_map,
             ("detalles_tecnicos", "detalles", "technical_details"),
         )
         detalles_tecnicos = detalles_value if isinstance(detalles_value, dict) else None
 
-        tick_size_val = _lookup_meta(
+        tick_size_val = lookup_meta(
             meta_map,
             ("tick_size", "precio_tick", "tick"),
         )
-        step_size_val = _lookup_meta(
+        step_size_val = lookup_meta(
             meta_map,
             ("step_size", "cantidad_step", "lot_step", "step"),
         )
-        min_dist_val = _lookup_meta(
+        min_dist_val = lookup_meta(
             meta_map,
             ("min_dist_pct", "min_dist", "min_distance_pct"),
         )
 
-        tick_size = _coerce_float(tick_size_val)
-        step_size = _coerce_float(step_size_val)
-        min_dist_pct = _coerce_float(min_dist_val)
+        tick_size = coerce_float(tick_size_val)
+        step_size = coerce_float(step_size_val)
+        min_dist_pct = coerce_float(min_dist_val)
 
-        filters_value = _lookup_meta(meta_map, ("market_filters", "filtros", "filters"))
+        filters_value = lookup_meta(meta_map, ("market_filters", "filtros", "filters"))
         if isinstance(filters_value, Mapping):
             if tick_size is None:
-                tick_size = _coerce_float(filters_value.get("tick_size"))
+                tick_size = coerce_float(filters_value.get("tick_size"))
             if step_size is None:
-                step_size = _coerce_float(filters_value.get("step_size"))
+                step_size = coerce_float(filters_value.get("step_size"))
             if min_dist_pct is None:
-                min_dist_pct = _coerce_float(filters_value.get("min_dist_pct"))
+                min_dist_pct = coerce_float(filters_value.get("min_dist_pct"))
 
-        candle_close_val = _lookup_meta(
+        candle_close_val = lookup_meta(
             meta_map,
             ("candle_close_ts", "timestamp", "bar_close_ts", "close_ts"),
         )
-        candle_close_ts = _coerce_int(candle_close_val)
+        candle_close_ts = coerce_int(candle_close_val)
 
-        strategy_version_val = _lookup_meta(
+        strategy_version_val = lookup_meta(
             meta_map,
             ("strategy_version", "version", "pipeline_version", "engine_version"),
         )
