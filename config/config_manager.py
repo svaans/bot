@@ -190,6 +190,7 @@ class Config:
     trader_metrics_log_interval: float = 5.0
     trader_fastpath_enabled: bool = True
     trader_fastpath_threshold: int = 350
+    trader_fastpath_resume_threshold: int = 300
     trader_fastpath_recovery: int = 200
     trader_fastpath_skip_notifications: bool = True
     trader_fastpath_skip_entries: bool = False
@@ -306,6 +307,10 @@ class ConfigManager:
             str(getattr(defaults, 'trader_fastpath_enabled', True)),
         ).lower() == 'true'
         trader_fastpath_threshold = _cargar_int('TRADER_FASTPATH_THRESHOLD', getattr(defaults, 'trader_fastpath_threshold', 350))
+        trader_fastpath_resume_threshold = _cargar_int(
+            'TRADER_FASTPATH_RESUME_THRESHOLD',
+            getattr(defaults, 'trader_fastpath_resume_threshold', 300),
+        )
         trader_fastpath_recovery = _cargar_int('TRADER_FASTPATH_RECOVERY', getattr(defaults, 'trader_fastpath_recovery', 200))
         trader_fastpath_skip_notifications = os.getenv(
             'TRADER_FASTPATH_SKIP_NOTIFICATIONS',
@@ -401,6 +406,7 @@ class ConfigManager:
             trader_metrics_log_interval=trader_metrics_log_interval,
             trader_fastpath_enabled=trader_fastpath_enabled,
             trader_fastpath_threshold=trader_fastpath_threshold,
+            trader_fastpath_resume_threshold=trader_fastpath_resume_threshold,
             trader_fastpath_recovery=trader_fastpath_recovery,
             trader_fastpath_skip_notifications=trader_fastpath_skip_notifications,
             trader_fastpath_skip_entries=trader_fastpath_skip_entries,
