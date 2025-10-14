@@ -1098,7 +1098,7 @@ class OrderManager:
                 ),
             )
             return False
-		if cantidad_source and cantidad_source != "meta":
+        if cantidad_source and cantidad_source != "meta":
             log.debug(
                 "crear.quantity_fallback",
                 extra=safe_extra(
