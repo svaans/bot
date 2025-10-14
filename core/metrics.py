@@ -78,6 +78,7 @@ _correlacion_btc: Dict[str, float] = {}
 
 _velas_total: Dict[tuple[str, str], int] = defaultdict(int)
 _velas_rechazadas: Dict[tuple[str, str], Dict[str, int]] = defaultdict(lambda: defaultdict(int))
+_ordenes_registro_pendiente_activas: set[str] = set()
 
 # ---- Definición de métricas ----
 VELAS_DUPLICADAS = Counter(
@@ -329,6 +330,18 @@ ORDERS_MARKET_RETRY_EXHAUSTED_TOTAL = Counter(
     ["side", "symbol"],
 )
 
+ORDERS_REGISTRO_PENDIENTE = Gauge(
+    "orders_registro_pendiente_active",
+    "Indicador binario de órdenes con registro pendiente por símbolo",
+    ["symbol"],
+)
+
+ORDERS_REGISTRO_PENDIENTE_TOTAL = Counter(
+    "orders_registro_pendiente_total",
+    "Veces que una orden quedó pendiente de registro por símbolo",
+    ["symbol"],
+)
+
 _METRICS_WITH_FALLBACK = [
     "VELAS_DUPLICADAS",
     "CANDLES_DUPLICADAS_RATE",
@@ -368,6 +381,8 @@ _METRICS_WITH_FALLBACK = [
     "ORDERS_SYNC_SUCCESS_TOTAL",
     "ORDERS_SYNC_FAILURE_TOTAL",
     "ORDERS_MARKET_RETRY_EXHAUSTED_TOTAL",
+    "ORDERS_REGISTRO_PENDIENTE",
+    "ORDERS_REGISTRO_PENDIENTE_TOTAL",
 ]
 
 for _metric_name in _METRICS_WITH_FALLBACK:
@@ -406,6 +421,39 @@ def registrar_partial_close_collision(symbol: str) -> None:
 def registrar_registro_error() -> None:
     CONTADOR_REGISTRO_ERRORES.inc()
     registro_metrico.registrar("order_register_error", {})
+
+
+def registrar_registro_pendiente(symbol: str) -> None:
+    """Marca una orden con registro pendiente y dispara alertas si persiste."""
+
+    previously_active = symbol in _ordenes_registro_pendiente_activas
+    ORDERS_REGISTRO_PENDIENTE.labels(symbol=symbol).set(1)
+    rate = alert_manager.record("registro_pendiente", symbol)
+    if alert_manager.should_alert("registro_pendiente", symbol):
+        log.warning(
+            "⚠️ Registro pendiente persistente para %s (rate=%.4f/s)",
+            symbol,
+            rate,
+        )
+    if not previously_active:
+        _ordenes_registro_pendiente_activas.add(symbol)
+        ORDERS_REGISTRO_PENDIENTE_TOTAL.labels(symbol=symbol).inc()
+        registro_metrico.registrar(
+            "order_register_pending",
+            {"symbol": symbol, "status": "active"},
+        )
+
+
+def limpiar_registro_pendiente(symbol: str) -> None:
+    """Limpia el estado pendiente cuando la orden queda registrada."""
+
+    ORDERS_REGISTRO_PENDIENTE.labels(symbol=symbol).set(0)
+    if symbol in _ordenes_registro_pendiente_activas:
+        _ordenes_registro_pendiente_activas.remove(symbol)
+        registro_metrico.registrar(
+            "order_register_pending",
+            {"symbol": symbol, "status": "resolved"},
+        )
 
 
 def registrar_orders_sync_success() -> None:
