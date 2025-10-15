@@ -10,6 +10,7 @@ import pytest
 
 import core.risk.risk_manager as risk_module
 from core.risk.risk_manager import RiskManager
+from core.utils.feature_flags import reset_flag_cache
 
 
 class DummyCapitalManager:
@@ -39,6 +40,14 @@ def patch_dependencies(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("core.risk.risk_manager.reporter_diario", dummy_reporter)
     dummy_registro = SimpleNamespace(registrar=lambda *args, **kwargs: None)
     monkeypatch.setattr("core.risk.risk_manager.registro_metrico", dummy_registro)
+
+
+@pytest.fixture(autouse=True)
+def _reset_flags() -> None:
+    try:
+        yield
+    finally:
+        reset_flag_cache()
 
 
 def test_registrar_perdida_activa_cooldown() -> None:
@@ -165,6 +174,31 @@ def test_multiplicador_kelly_media_suavizada(monkeypatch: pytest.MonkeyPatch) ->
     assert factor1 <= factor2 <= 1.5
     assert capital.aplicados  # Se aplicó al menos un factor
     assert pytest.approx(capital.aplicados[-1], rel=1e-9) == factor2
+
+
+def test_capital_guard_exposure(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("RISK_CAPITAL_MANAGER_ENABLED", "true")
+    reset_flag_cache()
+
+    class ExposureCapital:
+        def __init__(self) -> None:
+            self.capital_por_simbolo = {"BTCUSDT": 0.0}
+
+        def hay_capital_libre(self) -> bool:
+            return True
+
+        def exposure_disponible(self, symbol=None):  # type: ignore[override]
+            if symbol is None or symbol == "BTCUSDT":
+                return self.capital_por_simbolo.get("BTCUSDT", 0.0)
+            return 0.0
+
+    capital = ExposureCapital()
+    manager = RiskManager(0.05, capital_manager=capital)
+
+    assert manager.permite_entrada("BTCUSDT", {}, 0.5) is False
+
+    capital.capital_por_simbolo["BTCUSDT"] = 50.0
+    assert manager.permite_entrada("BTCUSDT", {}, 0.5) is True
 
 
 @pytest.mark.asyncio
