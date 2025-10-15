@@ -286,6 +286,7 @@ class Trader(TraderLite):
         self._eval_offload_enabled = bool(offload_enabled)
         self._eval_offload_min_df = max(1, threshold)
         self._eval_offload_count = 0
+        self._hook_error_counts: Dict[str, int] = {}
 
         # Lazy construcciones (si los módulos existen)
         if getattr(self, "_EventBus", None):
@@ -402,6 +403,33 @@ class Trader(TraderLite):
             _silence_task_result(completed)
 
         task.add_done_callback(_finalize)
+
+    def _log_hook_exception(
+        self,
+        hook_name: str,
+        exc: BaseException,
+        *,
+        context: dict[str, Any] | None = None,
+    ) -> None:
+        """Registra fallos de hooks externos limitando el ruido en los logs."""
+
+        total = self._hook_error_counts.get(hook_name, 0) + 1
+        self._hook_error_counts[hook_name] = total
+
+        if total > 5 and total % 50 != 0:
+            return
+
+        extra_context = {"hook": hook_name, "occurrences": total}
+        if context:
+            extra_context.update(context)
+
+        log.warning(
+            "Error ejecutando hook externo '%s' (ocurrencias=%d)",
+            hook_name,
+            total,
+            exc_info=True,
+            extra=safe_extra(extra_context),
+        )
 
     async def _precargar_historico(self, velas: int | None = None) -> None:
         """Realiza un backfill inicial antes de abrir streams."""
@@ -790,8 +818,20 @@ class Trader(TraderLite):
                     return
                 try:
                     base_on_event(evt, data)
-                except Exception:
-                    pass
+                except Exception as exc:
+                    payload_info: dict[str, Any] = {"event": evt}
+                    if isinstance(data, dict):
+                        try:
+                            payload_info["payload_keys"] = sorted(map(str, data.keys()))
+                        except Exception:
+                            payload_info["payload_repr"] = repr(data)
+                    else:
+                        payload_info["payload_type"] = type(data).__name__
+                    self._log_hook_exception(
+                        "on_event.pipeline",
+                        exc,
+                        context=payload_info,
+                    )
 
             try:
                 resultado = await self._execute_pipeline(
@@ -1269,8 +1309,12 @@ class Trader(TraderLite):
         if self.on_event:
             try:
                 self.on_event("notify", {"mensaje": mensaje, "nivel": nivel})
-            except Exception:
-                pass
+            except Exception as exc:
+                self._log_hook_exception(
+                    "on_event.notify",
+                    exc,
+                    context={"nivel": nivel},
+                )
 
         manager = getattr(self, "notificador", None)
         if manager is None:
@@ -1279,8 +1323,14 @@ class Trader(TraderLite):
         try:
             asyncio.get_running_loop()
         except RuntimeError:
-            with contextlib.suppress(Exception):
+            try:
                 manager.enviar(mensaje, nivel)
+            except Exception as exc:
+                self._log_hook_exception(
+                    "notification_manager.sync",
+                    exc,
+                    context={"nivel": nivel},
+                )
             return
 
         task = asyncio.create_task(manager.enviar_async(mensaje, nivel))
