@@ -318,6 +318,17 @@ class Trader(TraderLite):
         """Señala al trader que debe detenerse en cuanto sea posible."""
         self._stop_event.set()
 
+    def _register_bg_task(self, task: asyncio.Task) -> None:
+        """Mantiene controladas las tareas en segundo plano hasta el cierre."""
+
+        self._bg_tasks.add(task)
+
+        def _finalize(completed: asyncio.Task) -> None:
+            self._bg_tasks.discard(completed)
+            _silence_task_result(completed)
+
+        task.add_done_callback(_finalize)
+
     async def _precargar_historico(self, velas: int | None = None) -> None:
         """Realiza un backfill inicial antes de abrir streams."""
         used_backfill = False
@@ -1117,7 +1128,7 @@ class Trader(TraderLite):
             return
 
         task = asyncio.create_task(manager.enviar_async(mensaje, nivel))
-        task.add_done_callback(_silence_task_result)
+        self._register_bg_task(task)
 
     def enqueue_persistence(self, tipo: str, datos: dict, *, immediate: bool = False) -> None:
         if self.on_event:
