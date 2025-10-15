@@ -32,6 +32,7 @@ BACKFILL_MAX_CANDLES = cfg.backfill_max_candles
 TIMEOUT_EVALUAR_CONDICIONES_POR_SYMBOL = cfg.timeout_evaluar_condiciones_por_symbol
 INDICADORES_NORMALIZE_DEFAULT = cfg.indicadores_normalize_default
 INDICADORES_CACHE_MAX_ENTRIES = cfg.indicadores_cache_max_entries
+INDICATORS_INCREMENTAL_ENABLED = cfg.indicadores_incremental_enabled
 ORDERS_RETRY_PERSISTENCIA_ENABLED = cfg.orders_retry_persistencia_enabled
 TRADER_PURGE_HISTORIAL_ENABLED = cfg.trader_purge_historial_enabled
 METRICS_EXTENDED_ENABLED = cfg.metrics_extended_enabled
