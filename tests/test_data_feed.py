@@ -401,3 +401,56 @@ async def test_do_backfill_emits_error_on_fetch_failure(
     assert feed._queues[symbol].empty()
     assert symbol not in feed._last_backfill_ts
     assert any(evt == "backfill_error" for evt, _ in capture_events)
+
+
+@pytest.mark.asyncio
+async def test_consumer_does_not_enable_debug_wrapper_without_flag() -> None:
+    reset_flag_cache()
+
+    feed = make_feed()
+    symbol = "BTCUSDT"
+    feed._running = True
+    feed._handler_log_events = 0
+    feed._queues[symbol] = asyncio.Queue()
+
+    async def handler(_candle: dict) -> None:
+        feed._running = False
+
+    feed._handler = handler
+
+    task = asyncio.create_task(feed._consumer(symbol))
+
+    candle = {"symbol": symbol, "timestamp": 1_650_000_000_000, "is_closed": True}
+    await feed._queues[symbol].put(candle)
+    await asyncio.wait_for(feed._queues[symbol].join(), timeout=1)
+    await asyncio.wait_for(task, timeout=1)
+
+    assert not getattr(feed._handler, "__df_debug_wrapper__", False)
+    reset_flag_cache()
+
+
+@pytest.mark.asyncio
+async def test_consumer_enables_debug_wrapper_with_flag(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("DATAFEED_DEBUG_WRAPPER_ENABLED", "true")
+    reset_flag_cache()
+
+    feed = make_feed()
+    symbol = "ETHUSDT"
+    feed._running = True
+    feed._handler_log_events = 0
+    feed._queues[symbol] = asyncio.Queue()
+
+    async def handler(_candle: dict) -> None:
+        feed._running = False
+
+    feed._handler = handler
+
+    task = asyncio.create_task(feed._consumer(symbol))
+
+    candle = {"symbol": symbol, "timestamp": 1_650_100_000_000, "is_closed": True}
+    await feed._queues[symbol].put(candle)
+    await asyncio.wait_for(feed._queues[symbol].join(), timeout=1)
+    await asyncio.wait_for(task, timeout=1)
+
+    assert getattr(feed._handler, "__df_debug_wrapper__", False)
+    reset_flag_cache()
