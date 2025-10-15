@@ -1,8 +1,34 @@
 import asyncio
+import threading
 
 import pytest
 
 from core.event_bus import EventBus
+
+
+def _create_bus_with_pending_event() -> EventBus:
+    bus = EventBus()
+    bus.emit("boot", 7)
+    return bus
+
+
+@pytest.mark.asyncio
+async def test_emit_buffered_until_loop_registered() -> None:
+    bus = _create_bus_with_pending_event()
+    results: list[int] = []
+
+    async def listener(data: int) -> None:
+        results.append(data)
+
+    bus.subscribe("boot", listener)
+
+    for _ in range(10):
+        if results:
+            break
+        await asyncio.sleep(0)
+
+    assert results == [7]
+    await bus.close()
 
 
 @pytest.mark.asyncio
@@ -22,6 +48,32 @@ async def test_event_bus_publish_and_subscribe() -> None:
         await asyncio.sleep(0)
 
     assert results == [42]
+    await bus.close()
+
+
+@pytest.mark.asyncio
+async def test_emit_from_thread_without_loop_is_not_lost() -> None:
+    bus = EventBus()
+    results: list[str] = []
+
+    async def listener(data: str) -> None:
+        results.append(data)
+
+    def emit_from_thread() -> None:
+        bus.emit("thread", "ok")
+
+    thread = threading.Thread(target=emit_from_thread)
+    thread.start()
+    thread.join()
+
+    bus.subscribe("thread", listener)
+
+    for _ in range(10):
+        if results:
+            break
+        await asyncio.sleep(0)
+
+    assert results == ["ok"]
     await bus.close()
 
 

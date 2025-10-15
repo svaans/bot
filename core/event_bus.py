@@ -1,10 +1,11 @@
 from __future__ import annotations
 import asyncio
 import contextlib
-from collections import defaultdict
+from collections import defaultdict, deque
 from dataclasses import dataclass
 from functools import partial
-from typing import Any, Awaitable, Callable, Dict, List
+from threading import Lock
+from typing import Any, Awaitable, Callable, Deque, Dict, List, Tuple
 from core.utils.logger import configurar_logger
 
 log = configurar_logger('event_bus', modo_silencioso=True)
@@ -20,6 +21,8 @@ class EventBus:
         self._loop: asyncio.AbstractEventLoop | None = None
         self._closed = False
         self._last_payload: Dict[str, Any | None] = {}
+        self._pending: Deque[Tuple[str, Any | None]] = deque()
+        self._lock = Lock()
         try:
             loop = asyncio.get_running_loop()
         except RuntimeError:
@@ -40,6 +43,7 @@ class EventBus:
             return
         if loop.is_running():
             self._loop = loop
+            self._drain_pending_emits()
 
     def subscribe(self, event_type: str, callback: Callable[[Any], Awaitable[None]]) -> None:
         """Register ``callback`` to be invoked for ``event_type`` events."""
@@ -58,8 +62,14 @@ class EventBus:
         if loop and loop.is_running():
             loop.create_task(self.publish(event_type, data))
             return
-        if self._loop and not self._loop.is_closed():
-            asyncio.run_coroutine_threadsafe(self.publish(event_type, data), self._loop)
+        target_loop: asyncio.AbstractEventLoop | None
+        with self._lock:
+            target_loop = self._loop
+        if target_loop and not target_loop.is_closed():
+            asyncio.run_coroutine_threadsafe(self.publish(event_type, data), target_loop)
+            return
+        with self._lock:
+            self._pending.append((event_type, data))
 
     async def publish(self, event_type: str, data: Any | None) -> None:
         """Publish ``data`` for ``event_type``."""
@@ -177,7 +187,23 @@ class EventBus:
                     waiter.event.set()
             self._waiters.pop(event_type, None)
         self._last_payload.clear()
+        with self._lock:
+            self._pending.clear()
         self._loop = None
+
+    def _drain_pending_emits(self) -> None:
+        if self._loop is None or self._loop.is_closed():
+            return
+        pending: list[Tuple[str, Any | None]]
+        with self._lock:
+            if not self._pending:
+                return
+            pending = list(self._pending)
+            self._pending.clear()
+        loop = self._loop
+        assert loop is not None
+        for event_type, payload in pending:
+            loop.call_soon_threadsafe(asyncio.create_task, self.publish(event_type, payload))
 
     def _resolve_waiters(self, event_type: str, data: Any | None) -> None:
         waiters = self._waiters.pop(event_type, [])
