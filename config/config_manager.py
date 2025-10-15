@@ -135,6 +135,10 @@ class Config:
     persistencia_minima: int = 1
     peso_extra_persistencia: float = 0.5
     modo_capital_bajo: bool = False
+    risk_capital_total: float = 0.0 
+    risk_capital_default_per_symbol: float = 0.0 
+    risk_capital_per_symbol: Dict[str, float] = field(default_factory=dict)
+    risk_kelly_base: float = 0.1 
     telegram_token: Optional[str] = None
     telegram_chat_id: Optional[str] = None
     umbral_score_tecnico: float = 2.0
@@ -378,6 +382,21 @@ class ConfigManager:
             'BACKFILL_VENTANA_ENABLED',
             getattr(defaults, 'backfill_ventana_enabled', False),
         )
+
+        risk_capital_total = _cargar_float(
+ 'RISK_CAPITAL_TOTAL', getattr(predeterminados, 'risk_capital_total', 0.0) 
+        )
+        risk_capital_default_per_symbol = _cargar_float(
+ «RISK_CAPITAL_DEFAULT_PER_SYMBOL», 
+ getattr(predeterminados, 'risk_capital_default_per_symbol', 0.0), 
+        )
+        risk_capital_per_symbol = dict(
+ getattr(predeterminados, 'risk_capital_per_symbol', {}) 
+        )
+        risk_capital_per_symbol.update(_parse_float_mapping('RISK_CAPITAL_PER_SYMBOL'))
+        risk_kelly_base = _cargar_float(
+ 'RISK_KELLY_BASE', getattr(predeterminados, 'risk_kelly_base', 0.1) 
+        )
         
         config = Config(
             api_key=api_key,
@@ -392,6 +411,10 @@ class ConfigManager:
             persistencia_minima=_cargar_int('PERSISTENCIA_MINIMA', defaults.persistencia_minima),
             peso_extra_persistencia=_cargar_float('PESO_EXTRA_PERSISTENCIA', defaults.peso_extra_persistencia),
             modo_capital_bajo=os.getenv('MODO_CAPITAL_BAJO', str(defaults.modo_capital_bajo)).lower() == 'true',
+            risk_capital_total=risk_capital_total,
+            risk_capital_default_per_symbol=risk_capital_default_per_symbol,
+            risk_capital_per_symbol=risk_capital_per_symbol,
+            risk_kelly_base=risk_kelly_base,
             telegram_token=os.getenv('TELEGRAM_TOKEN', defaults.telegram_token),
             telegram_chat_id=os.getenv('TELEGRAM_CHAT_ID', defaults.telegram_chat_id),
             umbral_score_tecnico=_cargar_float('UMBRAL_SCORE_TECNICO', defaults.umbral_score_tecnico),
