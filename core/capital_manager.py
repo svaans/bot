@@ -1,277 +1,151 @@
+"""Minimal capital facade used by :mod:`core.risk.risk_manager`.
+
+The production project historically shipped a large ``CapitalManager`` that
+handled balance synchronisation with the exchange, advanced position sizing and
+event bus integrations.  For the current risk wave we only need a lightweight
+object that exposes the pieces consumed by :class:`RiskManager`: capital
+availability per symbol, a global exposure view and a simple Kelly multiplier.
+
+This module keeps that interface focused and backed by configuration data so it
+can be instantiated in unit tests without external dependencies.
+"""
 from __future__ import annotations
-from collections import Counter
-from datetime import datetime, timezone
-from typing import Dict
+from dataclasses import dataclass, field
+from typing import Dict, Mapping
+
 from config.config_manager import Config
 import asyncio
-from binance_api.cliente import fetch_balance_async
-from binance_api.filters import get_symbol_filters
 from core.utils.logger import configurar_logger
-from core.ajustador_riesgo import RIESGO_MAXIMO_DIARIO_BASE
-from core.risk import RiskManager, size_order, MarketInfo
-from core.event_bus import EventBus
-from core.contexto_externo import obtener_puntaje_contexto
 
-UTC = timezone.utc
-log = configurar_logger('capital_manager', modo_silencioso=False)
+log = configurar_logger("capital_manager", modo_silencioso=True)
+
+
+def _normalizar_symbol(symbol: str) -> str:
+    """Return ``symbol`` uppercased while tolerating ``None`` inputs."""
+
+    return symbol.upper() if isinstance(symbol, str) else ""
+
+
+@dataclass(slots=True)
+class CapitalState:
+    """Snapshot of capital configuration used by :class:`CapitalManager`."""
+
+    total: float = 0.0
+    default_por_symbol: float = 0.0
+    por_symbol: Dict[str, float] = field(default_factory=dict)
 
 
 class CapitalManager:
-    """Gestiona el capital disponible para trading."""
+    """Facade returning capital and exposure information for risk checks."""
 
-    def __init__(self, config: Config, cliente, risk: RiskManager,
-        fraccion_kelly: float, bus: EventBus | None = None) -> None:
+    def __init__(
+        self,
+        config: Config,
+        *,
+        exposure_limits: Mapping[str, float] | None = None,
+        exposure_total: float | None = None,
+    ) -> None:
         self.config = config
-        self.cliente = cliente
-        self.risk = risk
-        self._fraccion_kelly_base = fraccion_kelly
-        self._multiplicador_kelly = 1.0
-        self.fraccion_kelly = fraccion_kelly
-        self.modo_real = getattr(config, 'modo_real', False)
-        self.modo_capital_bajo = config.modo_capital_bajo
-        self.riesgo_maximo_diario = getattr(
-            config, 'riesgo_maximo_diario', RIESGO_MAXIMO_DIARIO_BASE
+        self._state = self._build_state(config, exposure_limits, exposure_total)
+        self.capital_por_simbolo = dict(self._state.por_symbol)
+        self._kelly_base = float(getattr(config, "risk_kelly_base", 0.1) or 0.1)
+        self.fraccion_kelly = self._kelly_base
+        self._recalcular_disponible_global()
+
+    # ------------------------------------------------------------------
+    # Construction helpers
+    # ------------------------------------------------------------------
+    def _build_state(
+        self,
+        config: Config,
+        exposure_limits: Mapping[str, float] | None,
+        exposure_total: float | None,
+    ) -> CapitalState:
+        total = float(
+            exposure_total
+            if exposure_total is not None
+            else getattr(config, "risk_capital_total", 0.0) or 0.0
         )
-        self._markets_cache: Dict[str, MarketInfo] = {}
-        self.capital_currency = getattr(config, 'capital_currency', None)
-        if not self.capital_currency:
-            self.capital_currency = self._detectar_divisa_principal(config.symbols)
-        capital_total = 1000.0
-        inicial = capital_total / max(len(config.symbols), 1)
-        inicial = max(inicial, 20.0)
-        self.capital_por_simbolo: Dict[str, float] = {s: inicial for s in config.symbols}
-        self.capital_inicial_diario = self.capital_por_simbolo.copy()
-        self.reservas_piramide: Dict[str, float] = {s: 0.0 for s in config.symbols}
-        self.fecha_actual = datetime.now(UTC).date()
-        if bus:
-            self.subscribe(bus)
+        default = float(
+            getattr(config, "risk_capital_default_per_symbol", 0.0) or 0.0
+        )
+        por_symbol = {
+            _normalizar_symbol(sym): float(value)
+            for sym, value in getattr(config, "risk_capital_per_symbol", {}).items()
+        }
+        if exposure_limits:
+            por_symbol.update(
+                {
+                    _normalizar_symbol(sym): float(value)
+                    for sym, value in exposure_limits.items()
+                }
+            )
+
+        symbols = [_normalizar_symbol(sym) for sym in getattr(config, "symbols", [])]
+        symbols = [sym for sym in symbols if sym]
+
+        if default <= 0 and total > 0 and symbols:
+            default = total / max(len(symbols), 1)
+
+        if default <= 0:
+            default = float(getattr(config, "min_order_eur", 0.0) or 0.0)
+
+        capital: Dict[str, float] = {}
+        for symbol in symbols:
+            capital[symbol] = max(0.0, por_symbol.get(symbol, default))
+
+        # Include any manual overrides not listed in ``config.symbols``.
+        for symbol, value in por_symbol.items():
+            capital.setdefault(symbol, max(0.0, value))
+
+        return CapitalState(total=total, default_por_symbol=default, por_symbol=capital)
+
+    def _recalcular_disponible_global(self) -> None:
+        disponible = sum(valor for valor in self.capital_por_simbolo.values() if valor > 0)
+        if self._state.total > 0:
+            disponible = min(disponible, self._state.total)
+        self._disponible_global = disponible
+
+    # ------------------------------------------------------------------
+    # Public API consumed by ``RiskManager``
+    # ------------------------------------------------------------------
+    def hay_capital_libre(self) -> bool:
+        """Return ``True`` when at least one symbol has positive exposure."""
+
+        if self._state.total > 0:
+            return self._disponible_global > 0
+        return any(valor > 0 for valor in self.capital_por_simbolo.values())
+
+    def tiene_capital(self, symbol: str) -> bool:
+        """Indicate whether ``symbol`` has positive exposure assigned."""
+
+        return self.exposure_disponible(symbol) > 0
+
+    def exposure_disponible(self, symbol: str | None = None) -> float:
+        """Return available exposure globally or for ``symbol`` if provided."""
+
+        if symbol:
+            clave = _normalizar_symbol(symbol)
+            return float(self.capital_por_simbolo.get(clave, 0.0))
+        return float(self._disponible_global)
+
+    def actualizar_exposure(self, symbol: str, disponible: float) -> None:
+        """Update the available exposure for ``symbol`` and refresh caches."""
+
+        clave = _normalizar_symbol(symbol)
+        self.capital_por_simbolo[clave] = max(0.0, float(disponible))
+        self._recalcular_disponible_global()
 
     def aplicar_multiplicador_kelly(self, factor: float) -> float:
-        """Actualiza ``fraccion_kelly`` aplicando ``factor`` controlado por riesgo."""
+        """Adjust the Kelly fraction with ``factor`` keeping defensive bounds."""
         if not isinstance(factor, (int, float)) or factor <= 0:
-            log.warning('Factor Kelly inválido: %s', factor)
+            log.debug("capital_manager.kelly_invalid", extra={"factor": factor})
             return self.fraccion_kelly
-        factor = float(max(0.1, min(2.0, factor)))
-        if abs(factor - self._multiplicador_kelly) < 1e-6:
-            return self.fraccion_kelly
-        self._multiplicador_kelly = factor
-        self.fraccion_kelly = round(self._fraccion_kelly_base * factor, 6)
+        multiplicador = max(0.1, min(5.0, float(factor)))
+        self.fraccion_kelly = round(self._kelly_base * multiplicador, 6)
         log.debug(
-            '🎯 Multiplicador Kelly aplicado: factor=%.3f → fracción=%.6f',
-            factor,
-            self.fraccion_kelly,
+            "capital_manager.kelly_applied",
+            extra={"factor": multiplicador, "fraccion": self.fraccion_kelly},
         )
         return self.fraccion_kelly
 
-    async def inicializar_capital_async(self) -> None:
-        """Obtiene el capital actual de manera asíncrona."""
-        capital_total = 1000.0
-        if self.modo_real and self.cliente:
-            try:
-                balance = await fetch_balance_async(self.cliente)
-                capital_total = balance['total'].get(self.capital_currency, 0)
-            except Exception as e:
-                log.error(f'❌ Error al obtener balance: {e}')
-        inicial = capital_total / max(len(self.config.symbols), 1)
-        inicial = max(inicial, 20.0)
-        self.capital_por_simbolo = {s: inicial for s in self.config.symbols}
-        self.capital_inicial_diario = self.capital_por_simbolo.copy()
-
-    @staticmethod
-    def _detectar_divisa_principal(symbols: list[str]) -> str:
-        monedas = [s.split('/')[-1] for s in symbols if '/' in s]
-        if not monedas:
-            return 'EUR'
-        return Counter(monedas).most_common(1)[0][0]
-
-    def subscribe(self, bus: EventBus) -> None:
-        bus.subscribe('calcular_cantidad', self._on_calcular_cantidad)
-        bus.subscribe('actualizar_capital', self._on_actualizar_capital)
-
-    def tiene_capital(self, symbol: str) -> bool:
-        """Devuelve ``True`` si hay capital asignado a ``symbol``."""
-        return self.capital_por_simbolo.get(symbol, 0.0) > 0
-    
-    def es_moneda_base(self, symbol: str) -> bool:
-        """Verifica que ``symbol`` opere contra la ``capital_currency``."""
-        return symbol.split('/')[-1] == self.capital_currency
-
-    def capital_libre(self) -> float:
-        total = sum(self.capital_por_simbolo.values())
-        comprometido = sum(
-            self.capital_por_simbolo.get(s, 0.0)
-            for s in self.risk.posiciones_abiertas
-        )
-        return max(0.0, total - comprometido)
-
-    def hay_capital_libre(self) -> bool:
-        return self.capital_libre() > 0
-    async def _on_calcular_cantidad(self, data: dict) -> None:
-        fut = data.get('future')
-        symbol = data.get('symbol')
-        precio = data.get('precio')
-        exposicion = data.get('exposicion_total', 0.0)
-        stop_loss = data.get('stop_loss')
-        if fut and not fut.done():
-            precio_adj, cantidad = await self.calcular_cantidad_async(
-                symbol,
-                precio,
-                exposicion_total=exposicion,
-                stop_loss=stop_loss,
-            )
-            fut.set_result((precio_adj, cantidad))
-
-    async def _on_actualizar_capital(self, data: dict) -> None:
-        fut = data.get('future')
-        symbol = data.get('symbol')
-        retorno = data.get('retorno_total', 0.0)
-        if fut and not fut.done():
-            fut.set_result(self.actualizar_capital(symbol, retorno))
-
-    async def _obtener_info_mercado(self, symbol: str) -> MarketInfo:
-        if symbol in self._markets_cache:
-            return self._markets_cache[symbol]
-        if not self.modo_real or not self.cliente:
-            info = MarketInfo(0.0, 0.0, 0.0)
-            self._markets_cache[symbol] = info
-            return info
-        try:
-            filtros = await asyncio.to_thread(get_symbol_filters, symbol, self.cliente)
-            market = MarketInfo(
-                filtros.get('tick_size', 0.0),
-                filtros.get('step_size', 0.0),
-                filtros.get('min_notional', 0.0),
-            )
-            self._markets_cache[symbol] = market
-            return market
-        except Exception as e:
-            log.warning(f'No se pudo obtener info de mercado para {symbol}: {e}')
-            info = MarketInfo(0.0, 0.0, 0.0)
-            self._markets_cache[symbol] = info
-            return info
-
-    async def info_mercado(self, symbol: str) -> MarketInfo:
-        return await self._obtener_info_mercado(symbol)
-    
-    def _validar_minimos(self, capital_necesario: float,
-                         minimo_dinamico: float,
-                         minimo_binance: float | None) -> tuple[bool, str | None]:
-        if capital_necesario < minimo_dinamico:
-            return False, (
-                f'Orden mínima {minimo_dinamico:.2f}{self.capital_currency}, '
-                f'intento {capital_necesario:.2f}{self.capital_currency}'
-            )
-        if minimo_binance and capital_necesario < minimo_binance:
-            return False, (
-                f'⛔ Orden para {{symbol}} por {capital_necesario:.2f}{self.capital_currency} '
-                f'inferior al mínimo Binance {minimo_binance:.2f}{self.capital_currency}'
-            )
-        return True, None
-
-    async def calcular_cantidad_async(
-        self,
-        symbol: str,
-        precio: float,
-        exposicion_total: float = 0.0,
-        stop_loss: float | None = None,
-        slippage_pct: float = 0.0,
-        fee_pct: float = 0.0,
-    ) -> tuple[float, float]:
-        if self.modo_real and self.cliente:
-            balance = await fetch_balance_async(self.cliente)
-            capital_total = balance['total'].get(self.capital_currency, 0)
-        else:
-            capital_total = sum(self.capital_por_simbolo.values())
-        capital_symbol = self.capital_por_simbolo.get(
-            symbol, capital_total / max(len(self.capital_por_simbolo), 1)
-        )
-        if not self.es_moneda_base(symbol):
-            log.warning(f'Moneda base incompatible para {symbol}')
-            return precio, 0.0
-        if capital_total <= 0 or capital_symbol <= 0:
-            log.warning(f'Saldo insuficiente en {self.capital_currency}')
-            return precio, 0.0
-        fraccion = self.fraccion_kelly
-        puntaje_macro = obtener_puntaje_contexto(symbol)
-        umbral_macro = getattr(self.config, 'umbral_puntaje_macro', 6)
-        if abs(puntaje_macro) > umbral_macro:
-            fraccion *= 0.5
-            log.debug(f'📉 Ajuste por contexto macro {puntaje_macro:.2f} para {symbol}')
-        if self.modo_capital_bajo and capital_total < 500:
-            deficit = (500 - capital_total) / 500
-            fraccion = max(fraccion, 0.02 + deficit * 0.1)
-        riesgo_teorico = capital_symbol * fraccion * self.risk.umbral
-        if exposicion_total > 0:
-            ajuste = max(0.0, 1 - exposicion_total / (capital_total * self.riesgo_maximo_diario))
-            riesgo_teorico *= ajuste
-        minimo_dinamico = max(10.0, capital_total * 0.02)
-        riesgo_permitido = max(riesgo_teorico, minimo_dinamico)
-        riesgo_permitido = min(
-            riesgo_permitido, capital_total * self.riesgo_maximo_diario
-        )
-        exposure_limit_global = capital_total * self.riesgo_maximo_diario
-        disponible_global = max(0.0, exposure_limit_global - exposicion_total)
-        if disponible_global <= 0:
-            log.warning('Límite de exposición global alcanzado')
-            return precio, 0.0
-        exposure_disponible = min(disponible_global, capital_symbol)
-        market = await self._obtener_info_mercado(symbol)
-        distancia_sl = abs(precio - stop_loss) if isinstance(stop_loss, (int, float)) else 0.0
-        costo_pct = max(slippage_pct, 0.0) + max(fee_pct, 0.0)
-        if distancia_sl <= 0:
-            log.warning(
-                f'⚠️ Stop Loss no especificado para {symbol}. Limitando la posición a una fracción del capital disponible.'
-            )
-            costo_unitario = precio * (1 + costo_pct)
-        else:
-            costo_unitario = distancia_sl + precio * costo_pct
-            exposure_limit = capital_total * self.riesgo_maximo_diario
-        precio_adj, cantidad = size_order(
-            price=precio,
-            stop_price=precio - distancia_sl if distancia_sl > 0 else precio,
-            market=market,
-            risk_limit=riesgo_permitido,
-            exposure_limit=exposure_limit,
-            current_exposure=exposicion_total,
-            fee_pct=fee_pct,
-            slippage_pct=slippage_pct,
-        )
-        capital_necesario = precio_adj * cantidad
-        costo_unitario = abs(precio_adj - (precio - distancia_sl if distancia_sl > 0 else precio_adj)) + precio_adj * costo_pct
-        riesgo_final = cantidad * costo_unitario
-        valido, error = self._validar_minimos(
-            capital_necesario, minimo_dinamico, market.min_notional
-        )
-        if not valido:
-            if error and error.startswith('⛔'):
-                log.warning(error.format(symbol=symbol))
-            else:
-                log.debug(error)
-            return precio_adj, 0.0
-        log.info(
-            '⚖️ Kelly ajustada: %.4f | Riesgo teórico: %.2f%s | Mínimo dinámico: %.2f%s | Riesgo final: %.2f%s',
-            fraccion,
-            riesgo_teorico,
-            self.capital_currency,
-            minimo_dinamico,
-            self.capital_currency,
-            riesgo_final,
-            self.capital_currency,
-        )
-        log.info(
-            '📊 Capital disponible: %.2f%s | Orden: %.2f%s | Mínimo Binance: %s | %s',
-            capital_total,
-            self.capital_currency,
-            capital_necesario,
-            self.capital_currency,
-            f'{market.min_notional:.2f}{self.capital_currency}' if market.min_notional else 'desconocido',
-            symbol,
-        )
-        return precio_adj, round(cantidad, 6)
-
-    def actualizar_capital(self, symbol: str, retorno_total: float) -> float:
-        capital_inicial = self.capital_por_simbolo.get(symbol, 0.0)
-        ganancia = capital_inicial * retorno_total
-        capital_final = capital_inicial + ganancia
-        self.capital_por_simbolo[symbol] = capital_final
-        return capital_final
