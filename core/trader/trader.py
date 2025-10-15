@@ -41,38 +41,51 @@ log = configurar_logger("trader_modular", modo_silencioso=True)
 class HistorialPorSimbolo(MutableMapping[str, Any]):
     """Almacén ordenado con límites de tamaño y TTL opcional por símbolo."""
 
-    __slots__ = ("_data", "_timestamps", "_max_entries", "_ttl_seconds")
+    __slots__ = ("_data", "_timestamps", "_max_entries", "_ttl_seconds", "_before_access")
 
-    def __init__(self, *, max_entries: int, ttl_seconds: int | None) -> None:
+    def __init__(
+        self,
+        *,
+        max_entries: int,
+        ttl_seconds: int | None,
+        before_access: Callable[[], None] | None = None,
+    ) -> None:
         self._data: OrderedDict[str, Any] = OrderedDict()
         self._timestamps: dict[str, float] = {}
         self._max_entries = max(0, int(max_entries))
         self._ttl_seconds = ttl_seconds if ttl_seconds and ttl_seconds > 0 else None
+        self._before_access = before_access
 
     def __getitem__(self, key: str) -> Any:
+        self._run_before_access()
         self.prune()
         return self._data[key]
 
     def __setitem__(self, key: str, value: Any) -> None:
+        self._run_before_access()
         self.prune()
         self._data[key] = value
         self._timestamps[key] = time.time()
         self._enforce_bounds()
 
     def __delitem__(self, key: str) -> None:
+        self._run_before_access()
         self.prune()
         del self._data[key]
         self._timestamps.pop(key, None)
 
     def __iter__(self) -> Iterator[str]:
+        self._run_before_access()
         self.prune()
         return iter(self._data)
 
     def __len__(self) -> int:
+        self._run_before_access()
         self.prune()
         return len(self._data)
 
     def clear(self) -> None:
+        self._run_before_access()
         self._data.clear()
         self._timestamps.clear()
 
@@ -96,11 +109,25 @@ class HistorialPorSimbolo(MutableMapping[str, Any]):
             oldest_key, _ = self._data.popitem(last=False)
             self._timestamps.pop(oldest_key, None)
 
+    def _run_before_access(self) -> None:
+        if self._before_access is None:
+            return
+        try:
+            self._before_access()
+        except Exception:  # pragma: no cover - defensivo
+            log.debug("before_access callback falló", exc_info=True)
+
 
 class HistorialCierresStore(MutableMapping[str, HistorialPorSimbolo]):
     """Agrupa ``HistorialPorSimbolo`` y ofrece utilidades agregadas."""
 
-    __slots__ = ("_stores", "_max_entries", "_ttl_seconds")
+    __slots__ = (
+        "_stores",
+        "_max_entries",
+        "_ttl_seconds",
+        "_last_global_prune",
+        "_prune_interval",
+    )
 
     def __init__(
         self,
@@ -108,25 +135,31 @@ class HistorialCierresStore(MutableMapping[str, HistorialPorSimbolo]):
         *,
         max_entries: int,
         ttl_seconds: int | None,
+        sweep_interval_seconds: int | None = None,
     ) -> None:
         self._max_entries = max_entries
         self._ttl_seconds = ttl_seconds
         self._stores: Dict[str, HistorialPorSimbolo] = {
             symbol: self._new_store() for symbol in symbols
         }
+        self._prune_interval = self._resolve_prune_interval(sweep_interval_seconds)
+        self._last_global_prune = time.monotonic()
 
     def _new_store(self) -> HistorialPorSimbolo:
         return HistorialPorSimbolo(
             max_entries=self._max_entries,
             ttl_seconds=self._ttl_seconds,
+            before_access=self._maybe_global_prune,
         )
 
     def __getitem__(self, key: str) -> HistorialPorSimbolo:
+        self._maybe_global_prune()
         store = self._stores.setdefault(key, self._new_store())
         store.prune()
         return store
 
     def __setitem__(self, key: str, value: MutableMapping[str, Any]) -> None:
+        self._maybe_global_prune()
         if not isinstance(value, MutableMapping):
             raise TypeError("El historial por símbolo debe ser un mapeo mutable")
         store = self._stores.setdefault(key, self._new_store())
@@ -135,17 +168,21 @@ class HistorialCierresStore(MutableMapping[str, HistorialPorSimbolo]):
             store[sub_key] = sub_value
 
     def __delitem__(self, key: str) -> None:
+        self._maybe_global_prune()
         del self._stores[key]
 
     def __iter__(self) -> Iterator[str]:
+        self._maybe_global_prune()
         return iter(self._stores)
 
     def __len__(self) -> int:
+        self._maybe_global_prune()
         return len(self._stores)
 
     def prune(self) -> None:
         for store in self._stores.values():
             store.prune()
+        self._last_global_prune = time.monotonic()
 
     def prune_symbol(self, symbol: str) -> None:
         store = self._stores.get(symbol)
@@ -154,7 +191,23 @@ class HistorialCierresStore(MutableMapping[str, HistorialPorSimbolo]):
         store.prune()
 
     def total_entries(self) -> int:
+        self._maybe_global_prune()
         return sum(len(store) for store in self._stores.values())
+    
+    def _resolve_prune_interval(self, sweep_interval_seconds: int | None) -> float:
+        if sweep_interval_seconds is not None:
+            return float(max(5, int(sweep_interval_seconds)))
+        if self._ttl_seconds is None:
+            return 300.0
+        return float(max(5, min(self._ttl_seconds, 300)))
+
+    def _maybe_global_prune(self) -> None:
+        if self._ttl_seconds is None:
+            return
+        now = time.monotonic()
+        if now - self._last_global_prune < self._prune_interval:
+            return
+        self.prune()
 
 
 class Trader(TraderLite):
@@ -188,10 +241,20 @@ class Trader(TraderLite):
             ttl_seconds = None
         else:
             ttl_seconds = max(0, int(ttl_minutes) * 60)
+        sweep_interval_min = getattr(
+            config,
+            "historial_cierres_sweep_interval_min",
+            None,
+        )
+        if sweep_interval_min is None:
+            sweep_interval_seconds = None
+        else:
+            sweep_interval_seconds = max(5, int(sweep_interval_min) * 60)
         self.historial_cierres = HistorialCierresStore(
             config.symbols,
             max_entries=max_historial,
             ttl_seconds=ttl_seconds,
+            sweep_interval_seconds=sweep_interval_seconds,
         )
         self._historial_cierres_max = max_historial
         self._historial_cierres_ttl = ttl_seconds

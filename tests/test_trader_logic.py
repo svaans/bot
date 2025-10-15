@@ -462,3 +462,34 @@ def test_purge_historial_cierres_respects_symbol_limit(monkeypatch: pytest.Monke
     assert list(hist.keys()) == ["three", "four"]
     assert list(other.keys()) == ["keep"]
     reset_flag_cache()
+
+
+def test_historial_cierres_prunes_idle_symbols(monkeypatch: pytest.MonkeyPatch) -> None:
+    trader = _build_trader(
+        historial_cierres_max_per_symbol=5,
+        historial_cierres_ttl_min=1,
+    )
+
+    btc_hist = trader.historial_cierres["BTCUSDT"]
+    eth_hist = trader.historial_cierres["ETHUSDT"]
+
+    clock = {"time": 1_000_000.0, "monotonic": 50_000.0}
+
+    def fake_time() -> float:
+        return clock["time"]
+
+    def fake_monotonic() -> float:
+        return clock["monotonic"]
+
+    monkeypatch.setattr("core.trader.trader.time.time", fake_time)
+    monkeypatch.setattr("core.trader.trader.time.monotonic", fake_monotonic)
+
+    btc_hist["old"] = {"id": 1}
+
+    clock["time"] += 120
+    clock["monotonic"] += 120
+
+    eth_hist["keep"] = {"id": 2}
+
+    btc_data = trader.historial_cierres._stores["BTCUSDT"]._data  # type: ignore[attr-defined]
+    assert "old" not in btc_data
