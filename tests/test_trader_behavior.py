@@ -8,6 +8,7 @@ import pandas as pd
 import pytest
 
 from core.trader_modular import Trader, TraderLite
+from core.funding_rate import FundingResult
 
 from .factories import DummyConfig, DummySupervisor
 
@@ -293,6 +294,95 @@ async def test_verificar_entrada_recurre_a_engine(trader_lite: TraderLite) -> No
 
     assert resultado == {"symbol": "BTCUSDT", "estado": {"rsi": 55}, "provider": "engine"}
     assert trader_lite._verificar_entrada_provider == "engine.verificar_entrada"
+
+
+    @pytest.mark.asyncio
+async def test_verificar_entrada_aplica_decorador_funding(
+    trader_lite: TraderLite, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    trader_lite.config.funding_enabled = True
+    trader_lite.config.umbral_score_tecnico = 0.0
+    trader_lite.config.funding_warning_threshold = 0.0001
+    trader_lite.config.funding_score_penalty_enabled = True
+    trader_lite.config.funding_score_penalty = 0.2
+
+    class DummyEngine:
+        async def evaluar_condiciones_de_entrada(
+            self,
+            symbol: str,
+            df: pd.DataFrame,
+            estado: Any,
+            *,
+            on_event: Callable[[str, dict], None] | None = None,
+        ) -> dict[str, Any]:
+            if on_event:
+                on_event("engine", {"symbol": symbol})
+            return {
+                "symbol": symbol,
+                "side": "long",
+                "score": 1.0,
+                "historial": {},
+                "pesos": {},
+            }
+
+    trader_lite.engine = DummyEngine()
+
+    funding_result = FundingResult(
+        symbol_spot="BTCUSDT",
+        mapped_symbol="BTCUSDT",
+        segment="usdtm",
+        available=True,
+        rate=0.001,
+        fetched_at=datetime.now(UTC),
+        reason=None,
+        source="test",
+    )
+
+    async def fake_cached(_trader: TraderLite, _symbol: str) -> FundingResult:
+        return funding_result
+
+    outcomes: list[str] = []
+
+    monkeypatch.setattr(
+        "core.strategies.entry.verificar_entradas._obtener_funding_cached",
+        fake_cached,
+    )
+    monkeypatch.setattr(
+        "core.strategies.entry.verificar_entradas.registrar_funding_signal_decoration",
+        lambda _symbol, _side, outcome: outcomes.append(outcome),
+    )
+
+    eventos: list[tuple[str, dict]] = []
+
+    def on_event(evt: str, data: dict) -> None:
+        eventos.append((evt, data))
+
+    df = pd.DataFrame(
+        {
+            "timestamp": [1000, 2000, 3000],
+            "open": [1.0, 1.0, 1.0],
+            "high": [1.0, 1.1, 1.2],
+            "low": [0.9, 0.95, 0.98],
+            "close": [1.0, 1.05, 1.1],
+            "volume": [10, 11, 12],
+        }
+    )
+    df.tf = "1m"  # type: ignore[attr-defined]
+
+    resultado = await Trader.verificar_entrada(
+        trader_lite,
+        "BTCUSDT",
+        df,
+        estado={},
+        on_event=on_event,
+    )
+
+    assert resultado is not None
+    assert resultado["score"] == pytest.approx(0.8)
+    funding_meta = resultado["meta"].get("funding", {})
+    assert funding_meta.get("warning") is True
+    assert funding_meta.get("direction") == "pay"
+    assert outcomes and outcomes[-1] == "penalized"
     assert eventos[0] == ("engine", {"symbol": "BTCUSDT"})
 
 
