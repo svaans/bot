@@ -84,3 +84,7 @@ class DevelopmentConfig:
     orders_limit_enabled: bool = False
     funding_enabled: bool = False
     backfill_ventana_enabled: bool = False
+    risk_capital_total: float = 0.0 
+    risk_capital_default_per_symbol: float = 0.0 
+    risk_capital_per_symbol: Dict[str, float] = field(default_factory=dict)
+    risk_kelly_base: float = 0.1
