@@ -10,6 +10,7 @@ import types
 import pytest
 
 from core.utils.feature_flags import reset_flag_cache
+from tests.factories import DummyConfig
 
 if 'core.notification_manager' not in sys.modules:
     notification_module = types.ModuleType('core.notification_manager')
@@ -66,6 +67,35 @@ def test_market_retry_sleep_caps_to_max() -> None:
     assert manager._market_retry_sleep(1) == 2.0
     assert manager._market_retry_sleep(2) == 5.0
     assert manager._market_retry_sleep(3) == 5.0
+
+
+def test_execution_policy_defaults_to_market(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("ORDERS_LIMIT_ENABLED", raising=False)
+    monkeypatch.delenv("ORDERS_EXECUTION_POLICY", raising=False)
+    monkeypatch.delenv("ORDERS_EXECUTION_POLICY_BY_SYMBOL", raising=False)
+    reset_flag_cache()
+
+    config = DummyConfig()
+    manager = OrderManager(modo_real=True, bus=None, config=config)
+
+    assert manager._resolve_execution_policy("BTC/USDT", "buy") == "market"
+    assert manager._resolve_execution_policy("BTC/USDT", "sell") == "market"
+
+
+def test_execution_policy_limit_by_symbol(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("ORDERS_LIMIT_ENABLED", "true")
+    monkeypatch.setenv("ORDERS_EXECUTION_POLICY", "market")
+    monkeypatch.setenv("ORDERS_EXECUTION_POLICY_BY_SYMBOL", "BTC/USDT:limit")
+    reset_flag_cache()
+
+    config = DummyConfig(orders_limit_enabled=True)
+    config.orders_execution_policy = "market"
+    config.orders_execution_policy_by_symbol = {"BTC/USDT": "limit"}
+
+    manager = OrderManager(modo_real=True, bus=None, config=config)
+
+    assert manager._resolve_execution_policy("BTC/USDT", "buy") == "limit"
+    assert manager._resolve_execution_policy("ETH/USDT", "buy") == "market"
 
 
 def test_compute_next_sync_delay_backoff_and_reset() -> None:
