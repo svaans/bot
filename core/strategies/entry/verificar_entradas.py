@@ -526,13 +526,13 @@ async def _evaluar_engine(trader: Any, symbol: str, df: pd.DataFrame, estado: An
 
     for idx, intento in enumerate(intentos):
         try:
-            resultado = _call((trader, symbol, df), {})
+            resultado = intento()
         except TypeError:
             if signature is None and idx == 0:
                 # Si la firma era inaccesible y falta el trader, probamos una vez
                 # con el trader como primer argumento.
                 try:
-                    resultado = _call(trader, symbol, df)
+                    resultado = fn(trader, symbol, df)  # type: ignore[misc]
                 except TypeError:
                     continue
             else:
