@@ -227,7 +227,11 @@ class Trader(TraderLite):
         order_manager_cls = getattr(self, "_OrderManager", None)
         subscribe = getattr(bus, "subscribe", None)
         if order_manager_cls and bus is not None and callable(subscribe):
-            self.orders = order_manager_cls(self.modo_real, bus)
+            self.orders = order_manager_cls(
+                self.modo_real,
+                bus,
+                config=getattr(self, "config", None),
+            )
             if not self.modo_real and getattr(self, "_sync_sim", None):
                 try:
                     self._sync_sim(self.orders)
