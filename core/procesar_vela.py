@@ -19,6 +19,11 @@ from prometheus_client import Gauge
 
 from core.metrics_helpers import safe_inc, safe_set
 from core.utils.metrics_compat import Counter, Histogram
+from indicadores.incremental import (
+    actualizar_atr_incremental,
+    actualizar_momentum_incremental,
+    actualizar_rsi_incremental,
+)
 
 try:  # pragma: no cover - métricas opcionales
     from core.metrics import (
@@ -481,6 +486,7 @@ def _resolve_spread_limit(trader: Any, default_ratio: float = 0.0015) -> float:
     Si el límite <= 0 → se interpreta como "sin límite" (gate deshabilitado).
     """
     try:
+        # 4) Estado por símbolo (compatible con Trader.estado) e indicadores incrementales
         cfg = getattr(trader, "config", None)
         if cfg is not None and hasattr(cfg, "max_spread_ratio"):
             v = float(getattr(cfg, "max_spread_ratio"))
@@ -886,6 +892,42 @@ async def procesar_vela(trader: Any, vela: dict) -> None:
                 timeframe = str(timeframe_hint)
                 timeframe_label = timeframe
 
+        cfg = getattr(trader, "config", None)
+        estado_trader = getattr(trader, "estado", None)
+        estado_symbol: Any | None = None
+        if isinstance(estado_trader, dict):
+            estado_symbol = estado_trader.setdefault(symbol, {})
+        elif estado_trader is not None:
+            try:
+                estado_symbol = getattr(estado_trader, symbol)
+            except Exception:
+                estado_symbol = None
+            if estado_symbol is None:
+                nuevo_estado: dict[str, Any] = {}
+                try:
+                    setattr(estado_trader, symbol, nuevo_estado)
+                    estado_symbol = nuevo_estado
+                except Exception:
+                    estado_symbol = nuevo_estado
+        incremental_enabled = bool(
+            getattr(cfg, "indicadores_incremental_enabled", False)
+            or getattr(trader, "indicadores_incremental_enabled", False)
+        )
+        if incremental_enabled and estado_symbol is not None:
+            try:
+                actualizar_rsi_incremental(estado_symbol, df=df)
+                actualizar_momentum_incremental(estado_symbol, df=df)
+                actualizar_atr_incremental(estado_symbol, df=df)
+            except Exception as exc:
+                log.debug(
+                    "incremental_indicators_failed",
+                    extra={
+                        "symbol": symbol,
+                        "timeframe": timeframe_label,
+                        "error": str(exc),
+                    },
+                )
+
         ready_checker = getattr(trader, "is_symbol_ready", None)
         if callable(ready_checker) and not ready_checker(symbol, timeframe_label):
             _ensure_gating_end()
@@ -919,12 +961,7 @@ async def procesar_vela(trader: Any, vela: dict) -> None:
         except Exception:
             pass
 
-        # 4) Estado por símbolo (compatible con Trader.estado)
-        estado_trader = getattr(trader, "estado", None)
-        estado_symbol = estado_trader.get(symbol) if isinstance(estado_trader, dict) else None
-
         # 5) Fast-path si estás bajo presión con histéresis configurable
-        cfg = getattr(trader, "config", None)
         fast_enabled = bool(getattr(cfg, "trader_fastpath_enabled", True))
         if fast_enabled and getattr(cfg, "trader_fastpath_skip_entries", True):
             threshold = int(getattr(cfg, "trader_fastpath_threshold", 350))
