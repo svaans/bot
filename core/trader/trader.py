@@ -5,18 +5,22 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import time
-from collections import OrderedDict
+from collections import OrderedDict, deque
 from collections.abc import Iterable, Iterator, MutableMapping
 from datetime import datetime, timezone
+from copy import deepcopy
 from typing import Any, Awaitable, Callable, Dict, Optional, TYPE_CHECKING
 
 import pandas as pd
+
+from core.streams.candle_filter import CandleFilter
 
 from core.utils.feature_flags import is_flag_enabled
 from core.utils.log_utils import safe_extra
 from core.utils.utils import configurar_logger
 
 from ._utils import (
+    EstadoSimbolo,
     _maybe_await,
     _normalize_timestamp,
     _reason_none,
@@ -806,6 +810,7 @@ class Trader(TraderLite):
 
         loop = asyncio.get_running_loop()
         df_copy = df.copy(deep=False)
+        estado_copy = self._snapshot_offload_state(estado)
 
         _threadsafe_event: Callable[[str, dict], None] | None
         if on_event is not None:
@@ -821,7 +826,7 @@ class Trader(TraderLite):
             self._blocking_verificar_entrada,
             symbol,
             df_copy,
-            estado,
+            estado_copy,
             _threadsafe_event,
         )
 
@@ -836,6 +841,57 @@ class Trader(TraderLite):
             return await TraderLite._execute_pipeline(self, symbol, df, estado, on_event)
 
         return asyncio.run(_runner())
+    
+    def _snapshot_offload_state(self, estado: Any) -> Any:
+        """Devuelve una copia aislada de ``estado`` para evaluaciones offloaded."""
+
+        if estado is None:
+            return None
+        if isinstance(estado, EstadoSimbolo):
+            return self._clone_estado_simbolo(estado)
+        try:
+            return deepcopy(estado)
+        except Exception:  # pragma: no cover - fallback defensivo
+            return estado
+
+    def _clone_estado_simbolo(self, estado: EstadoSimbolo) -> EstadoSimbolo:
+        """Crea una copia superficial segura del ``EstadoSimbolo``."""
+
+        buffer_items = [
+            dict(item) if isinstance(item, dict) else item
+            for item in estado.buffer
+        ]
+        buffer_copy = deque(buffer_items, maxlen=estado.buffer.maxlen)
+
+        estrategias_items = [
+            dict(item) if isinstance(item, dict) else item
+            for item in estado.estrategias_buffer
+        ]
+        estrategias_copy = deque(
+            estrategias_items,
+            maxlen=estado.estrategias_buffer.maxlen,
+        )
+
+        indicadores_copy: dict[str, dict[str, float | None]] = {
+            key: dict(value)
+            for key, value in estado.indicadores_cache.items()
+        }
+
+        candle_filter = estado.candle_filter
+        candle_filter_copy = CandleFilter(
+            ultimo_timestamp=candle_filter.ultimo_timestamp,
+            ultimo_close=candle_filter.ultimo_close,
+            estadisticas=dict(candle_filter.estadisticas),
+        )
+
+        return EstadoSimbolo(
+            buffer=buffer_copy,
+            estrategias_buffer=estrategias_copy,
+            ultimo_timestamp=estado.ultimo_timestamp,
+            candle_filter=candle_filter_copy,
+            indicadores_cache=indicadores_copy,
+            fastpath_mode=estado.fastpath_mode,
+        )
 
     def purge_historial_cierres(self, symbol: str | None = None) -> None:
         """Fuerza la poda del historial de cierres.

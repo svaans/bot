@@ -213,4 +213,3 @@ def actualizar_atr_incremental(
 
     set_cached_value(df_resuelto, ("atr", periodo), float(atr))
     return float(atr)
-    return float(atr)
