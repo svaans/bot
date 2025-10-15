@@ -979,7 +979,7 @@ class OrderManager:
                                 {'reason': 'no_fills'},
                             )
                             return
-						if execution.status == 'PARTIAL' and execution.remaining > 0:
+                        if execution.status == 'PARTIAL' and execution.remaining > 0:
                             log.warning(
                                 'orders.execution.partial',
                                 extra=safe_extra(
