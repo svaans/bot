@@ -208,6 +208,9 @@ class Config:
     datafeed_debug_wrapper_enabled: bool = False
     orders_flush_periodico_enabled: bool = False
     orders_limit_enabled: bool = False
+    orders_execution_policy: str = "market"
+    orders_execution_policy_by_symbol: Dict[str, str] = field(default_factory=dict)
+    orders_reconcile_enabled: bool = False
     funding_enabled: bool = False
     backfill_ventana_enabled: bool = False
 
@@ -374,6 +377,38 @@ class ConfigManager:
             'ORDERS_LIMIT_ENABLED',
             getattr(defaults, 'orders_limit_enabled', False),
         )
+        policy_default = str(getattr(defaults, 'orders_execution_policy', 'market')).strip().lower()
+        orders_execution_policy = os.getenv('ORDERS_EXECUTION_POLICY', policy_default).strip().lower()
+        if orders_execution_policy not in {'market', 'limit'}:
+            log.warning(
+                "⚠️ Valor inválido para ORDERS_EXECUTION_POLICY: %s. Usando 'market'",
+                orders_execution_policy,
+            )
+            orders_execution_policy = 'market'
+        execution_overrides: Dict[str, str] = {}
+        defaults_overrides = getattr(defaults, 'orders_execution_policy_by_symbol', {})
+        if isinstance(defaults_overrides, dict):
+            for sym, policy in defaults_overrides.items():
+                if not isinstance(sym, str):
+                    continue
+                normalized = str(policy).strip().lower()
+                if normalized in {'market', 'limit'}:
+                    execution_overrides[sym.strip().upper()] = normalized
+        raw_execution_overrides = _parse_str_mapping('ORDERS_EXECUTION_POLICY_BY_SYMBOL')
+        for sym, policy in raw_execution_overrides.items():
+            normalized = policy.strip().lower()
+            if normalized in {'market', 'limit'}:
+                execution_overrides[sym] = normalized
+            else:
+                log.warning(
+                    "⚠️ Policy inválida para %s en ORDERS_EXECUTION_POLICY_BY_SYMBOL: %s",
+                    sym,
+                    policy,
+                )
+        orders_reconcile_enabled = _env_bool(
+            'ORDERS_RECONCILE_ENABLED',
+            getattr(defaults, 'orders_reconcile_enabled', False),
+        )
         funding_enabled = _env_bool(
             'FUNDING_ENABLED',
             getattr(defaults, 'funding_enabled', False),
@@ -484,6 +519,9 @@ class ConfigManager:
             datafeed_debug_wrapper_enabled=datafeed_debug_wrapper_enabled,
             orders_flush_periodico_enabled=orders_flush_periodico_enabled,
             orders_limit_enabled=orders_limit_enabled,
+            orders_execution_policy=orders_execution_policy,
+            orders_execution_policy_by_symbol=execution_overrides,
+            orders_reconcile_enabled=orders_reconcile_enabled,
             funding_enabled=funding_enabled,
             backfill_ventana_enabled=backfill_ventana_enabled,
         )
