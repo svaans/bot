@@ -124,7 +124,7 @@ class OrderManager:
         self._registro_retry_tasks: Dict[str, asyncio.Task] = {}
         self._registro_retry_error_keywords = _PERSISTENCE_ERROR_KEYWORDS
         self.capital_manager: Any | None = None
-		self._config = config or getattr(app_config, "cfg", None)
+        self._config = config or getattr(app_config, "cfg", None)
         self._flush_task: asyncio.Task | None = None
         self._reconcile_task: asyncio.Task | None = None
         self._flush_enabled = is_flag_enabled(
