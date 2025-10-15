@@ -5,8 +5,30 @@ from __future__ import annotations
 from typing import Any
 
 from core.metrics import WS_CONNECTED_GAUGE
+from core.utils.feature_flags import is_flag_enabled
 
 from ._shared import log
+
+
+def _ws_signals_enabled() -> bool:
+    """Indica si deben emitirse señales extendidas del DataFeed."""
+
+    return is_flag_enabled("metrics.extended.enabled") or is_flag_enabled("datafeed.signals.enabled")
+
+
+def ws_signals_enabled() -> bool:
+    """Expone si las señales extendidas están habilitadas (para otros módulos)."""
+
+    return _ws_signals_enabled()
+
+
+def _emit_signal(feed: "DataFeed", event: str, payload: dict[str, Any]) -> None:
+    """Emite ``event`` hacia el bus solo cuando la bandera correspondiente está activa."""
+
+    if not _ws_signals_enabled():
+        return
+    enriched = {"intervalo": feed.intervalo, **payload}
+    emit_bus_signal(feed, event, enriched)
 
 
 def set_ws_connection_metric(value: float) -> None:
@@ -92,6 +114,7 @@ def signal_ws_failure(feed: "DataFeed", reason: Any) -> None:
         payload["reason"] = reason
     mark_ws_state(feed, False, {k: v for k, v in payload.items() if k != "intervalo"})
     emit_event(feed, "ws_connect_failed", payload)
+    _emit_signal(feed, "datafeed.ws.failure", payload)
 
 
 def _handle_limit_exceeded(
@@ -119,6 +142,7 @@ def _handle_limit_exceeded(
             },
         )
         emit_event(feed, "ws_retries_exceeded", payload)
+        _emit_signal(feed, "datafeed.ws.limit_exceeded", {**payload, "limit": "attempts"})
         signal_ws_failure(
             feed,
             f"Se superó el máximo de reintentos permitidos ({feed.max_reconnect_attempts})",
@@ -136,6 +160,7 @@ def _handle_limit_exceeded(
         },
     )
     emit_event(feed, "ws_downtime_exceeded", payload)
+    _emit_signal(feed, "datafeed.ws.limit_exceeded", {**payload, "limit": "downtime"})
     signal_ws_failure(
         feed,
         f"Se superó el máximo de tiempo sin conexión ({feed.max_reconnect_time:.1f}s)",
@@ -146,6 +171,7 @@ def _emit_retry_event(feed: "DataFeed", payload: dict[str, Any]) -> None:
     """Emite el evento ``ws_retry`` y evita duplicar lógica."""
 
     emit_event(feed, "ws_retry", payload)
+    _emit_signal(feed, "datafeed.ws.retry", payload)
 
 
 def register_reconnect_attempt(feed: "DataFeed", key: str, reason: str) -> bool:
