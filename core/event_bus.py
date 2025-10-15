@@ -1,7 +1,7 @@
 from __future__ import annotations
 import asyncio
 import contextlib
-from collections import defaultdict, deque
+from collections import OrderedDict, defaultdict, deque
 from dataclasses import dataclass
 from functools import partial
 from threading import Lock
@@ -14,13 +14,16 @@ log = configurar_logger('event_bus', modo_silencioso=True)
 class EventBus:
     """Simple asynchronous event bus backed by lightweight asyncio tasks."""
 
-    def __init__(self) -> None:
+    def __init__(self, *, max_cached_payloads: int = 256) -> None:
         self._listeners: Dict[str, List[Callable[[Any], Awaitable[None]]]] = defaultdict(list)
         self._waiters: Dict[str, List["EventBus._Waiter"]] = defaultdict(list)
         self._inflight: set[asyncio.Task] = set()
         self._loop: asyncio.AbstractEventLoop | None = None
         self._closed = False
-        self._last_payload: Dict[str, Any | None] = {}
+        if max_cached_payloads < 0:
+            raise ValueError("max_cached_payloads debe ser mayor o igual a cero")
+        self._max_cached_payloads = max_cached_payloads
+        self._last_payload: "OrderedDict[str, Any | None]" = OrderedDict()
         self._pending: Deque[Tuple[str, Any | None]] = deque()
         self._lock = Lock()
         try:
@@ -214,7 +217,7 @@ class EventBus:
         if waiters:
             self._last_payload.pop(event_type, None)
         else:
-            self._last_payload[event_type] = data
+            self._cache_payload(event_type, data)
 
     def _schedule_callback(
         self,
@@ -233,3 +236,12 @@ class EventBus:
     def _cleanup_task(self, task: asyncio.Task, event_type: str) -> None:
         self._inflight.discard(task)
         self._log_task_error(task, event_type)
+
+    def _cache_payload(self, event_type: str, data: Any | None) -> None:
+        if self._max_cached_payloads <= 0:
+            self._last_payload.clear()
+            return
+        self._last_payload[event_type] = data
+        self._last_payload.move_to_end(event_type)
+        while len(self._last_payload) > self._max_cached_payloads:
+            self._last_payload.popitem(last=False)

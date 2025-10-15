@@ -144,3 +144,21 @@ async def test_event_bus_inflight_tasks_cleanup() -> None:
 
     assert not bus._inflight
     await bus.close()
+
+
+@pytest.mark.asyncio
+async def test_event_bus_payload_cache_prunes_old_entries() -> None:
+    bus = EventBus(max_cached_payloads=2)
+
+    bus.emit("alpha", 1)
+    bus.emit("beta", 2)
+    bus.emit("gamma", 3)
+
+    # Permitir que las tareas de publish pendientes se ejecuten antes de esperar.
+    await asyncio.sleep(0)
+
+    with pytest.raises(asyncio.TimeoutError):
+        await asyncio.wait_for(bus.wait("alpha", timeout=0.01), timeout=0.05)
+
+    assert await bus.wait("gamma") == 3
+    await bus.close()
