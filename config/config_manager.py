@@ -202,6 +202,7 @@ class Config:
     timeout_evaluar_condiciones_por_symbol: Dict[str, int] = field(default_factory=dict)
     indicadores_normalize_default: bool = True
     indicadores_cache_max_entries: int = 128
+    indicadores_incremental_enabled: bool = False
     orders_retry_persistencia_enabled: bool = False
     trader_purge_historial_enabled: bool = False
     metrics_extended_enabled: bool = False
@@ -351,6 +352,10 @@ class ConfigManager:
         indicadores_cache_max_entries = _cargar_int(
             'INDICADORES_CACHE_MAX_ENTRIES',
             getattr(defaults, 'indicadores_cache_max_entries', 128),
+        )
+        indicadores_incremental_enabled = _env_bool(
+            'INDICATORS_INCREMENTAL_ENABLED',
+            getattr(defaults, 'indicadores_incremental_enabled', False),
         )
 
         orders_retry_persistencia_enabled = _env_bool(
@@ -513,6 +518,7 @@ class ConfigManager:
             timeout_evaluar_condiciones_por_symbol=timeout_evaluar_por_symbol,
             indicadores_normalize_default=indicadores_normalize_default,
             indicadores_cache_max_entries=indicadores_cache_max_entries,
+            indicadores_incremental_enabled=indicadores_incremental_enabled,
             orders_retry_persistencia_enabled=orders_retry_persistencia_enabled,
             trader_purge_historial_enabled=trader_purge_historial_enabled,
             metrics_extended_enabled=metrics_extended_enabled,
