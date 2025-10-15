@@ -66,6 +66,7 @@ class DummyConfig:
         self.trader_purge_historial_enabled = False
         self.metrics_extended_enabled = False
         self.datafeed_debug_wrapper_enabled = False
+        self.indicadores_incremental_enabled = False
         self.orders_flush_periodico_enabled = False
         self.orders_limit_enabled = False
         self.orders_execution_policy = "market"
