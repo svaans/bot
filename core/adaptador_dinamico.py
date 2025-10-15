@@ -290,14 +290,109 @@ def calcular_tp_sl_adaptativos(
     )
 
 
-async def backfill_ventana(symbol: str, ventana: List[Dict[str, float]], window_size: int) -> List[Dict[str, float]]:
-    """Rellena ``ventana`` con velas faltantes tras una reconexión.
+async def backfill_ventana(
+    symbol: str,
+    *,
+    intervalo: str,
+    cliente: Any | None,
+    start_ts: int,
+    candles: int,
+    current_ts: int | None = None,
+    max_candles: int = 1000,
+    fetcher: Any | None = None,
+) -> List[Dict[str, float]]:
+    """Obtiene velas intermedias tras una reconexión limitada a ``max_candles``.
 
-    Si ``ventana`` tiene menos elementos que ``window_size`` se consultan las
-    velas faltantes mediante la API REST de Binance.
+    Parameters
+    ----------
+    symbol:
+        Símbolo a rellenar.
+    intervalo:
+        Timeframe textual (``1m``, ``5m``...).
+    cliente:
+        Cliente REST de Binance reutilizado por el ``DataFeed``.
+    start_ts:
+        Timestamp (ms) esperado para la primera vela faltante.
+    candles:
+        Cantidad estimada de velas a recuperar.
+    current_ts:
+        Timestamp de la vela recibida que disparó el backfill. Se excluye de los
+        resultados para evitar duplicados.
+    max_candles:
+        Límite superior de velas a solicitar en esta operación.
+    fetcher:
+        Callable opcional compatible con :func:`data_feed.candle_builder.backfill`.
     """
-    if len(ventana) >= window_size:
-        return ventana
-    faltantes = window_size - len(ventana)
-    asyncio.create_task(backfill(symbol, faltantes))
-    return ventana
+    if candles <= 0 or max_candles <= 0:
+        return []
+
+    limit = min(int(candles), int(max_candles))
+    if limit <= 0:
+        return []
+
+    try:
+        fetched = await backfill(
+            symbol,
+            limit,
+            intervalo=intervalo,
+            cliente=cliente,
+            fetcher=fetcher,
+        )
+    except Exception:
+        log.exception(
+            "backfill_ventana.error",
+            extra={"symbol": symbol, "intervalo": intervalo, "limit": limit},
+        )
+        return []
+
+    end_ts = current_ts if current_ts is not None else None
+    normalized: Dict[int, Dict[str, float]] = {}
+    for candle in fetched:
+        timestamp_raw = (
+            candle.get("timestamp")
+            or candle.get("close_time")
+            or candle.get("closeTime")
+            or candle.get("open_time")
+            or candle.get("openTime")
+        )
+        try:
+            ts = int(float(timestamp_raw)) if timestamp_raw is not None else None
+        except (TypeError, ValueError):
+            ts = None
+        if ts is None:
+            continue
+        if ts < start_ts:
+            continue
+        if end_ts is not None and ts >= end_ts:
+            continue
+
+        def _safe_float(value: Any, default: float = 0.0) -> float:
+            try:
+                return float(value)
+            except (TypeError, ValueError):
+                return default
+
+        normalized[ts] = {
+            "symbol": str(symbol).upper(),
+            "timestamp": ts,
+            "open": _safe_float(candle.get("open")),
+            "high": _safe_float(candle.get("high")),
+            "low": _safe_float(candle.get("low")),
+            "close": _safe_float(candle.get("close")),
+            "volume": _safe_float(candle.get("volume")),
+            "is_closed": True,
+        }
+
+    ordered = [normalized[key] for key in sorted(normalized)]
+    if ordered:
+        log.debug(
+            "backfill_ventana.completed",
+            extra={
+                "symbol": symbol,
+                "intervalo": intervalo,
+                "count": len(ordered),
+                "start_ts": ordered[0]["timestamp"],
+                "end_ts": ordered[-1]["timestamp"],
+            },
+        )
+    return ordered
