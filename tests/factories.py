@@ -68,6 +68,9 @@ class DummyConfig:
         self.datafeed_debug_wrapper_enabled = False
         self.orders_flush_periodico_enabled = False
         self.orders_limit_enabled = False
+        self.orders_execution_policy = "market"
+        self.orders_execution_policy_by_symbol: dict[str, str] = {}
+        self.orders_reconcile_enabled = False
         self.funding_enabled = False
         self.backfill_ventana_enabled = False
         for key, value in overrides.items():
