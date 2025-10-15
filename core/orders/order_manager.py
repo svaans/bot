@@ -158,7 +158,7 @@ class OrderManager:
         self._reconcile_limit = int(os.getenv("ORDERS_RECONCILE_LIMIT", "50") or 50)
         if bus:
             self.subscribe(bus)
-		else:
+        else:
             self._ensure_background_tasks()
 
     def _generar_operation_id(self, symbol: str) -> str:
