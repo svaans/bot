@@ -73,6 +73,14 @@ class DummyConfig:
         self.orders_execution_policy_by_symbol: dict[str, str] = {}
         self.orders_reconcile_enabled = False
         self.funding_enabled = False
+        self.funding_warning_threshold = 0.0005
+        self.funding_score_penalty_enabled = False
+        self.funding_score_penalty = 0.0
+        self.funding_score_bonus = 0.0
+        self.funding_cache_ttl = 300
+        self.funding_symbol_overrides: dict[str, str] = {}
         self.backfill_ventana_enabled = False
+        self.backfill_ventana_window: int | None = None
+        self.backfill_max_candles = 1000
         for key, value in overrides.items():
             setattr(self, key, value)
