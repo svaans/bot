@@ -296,7 +296,7 @@ async def test_verificar_entrada_recurre_a_engine(trader_lite: TraderLite) -> No
     assert trader_lite._verificar_entrada_provider == "engine.verificar_entrada"
 
 
-    @pytest.mark.asyncio
+@pytest.mark.asyncio
 async def test_verificar_entrada_aplica_decorador_funding(
     trader_lite: TraderLite, monkeypatch: pytest.MonkeyPatch
 ) -> None:
