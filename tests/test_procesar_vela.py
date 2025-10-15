@@ -3,13 +3,16 @@ from __future__ import annotations
 import asyncio
 import logging
 from dataclasses import dataclass
-from typing import Generator
-from typing import Any, Dict
+from math import isclose
+from typing import Any, Dict, Generator
 
 import pytest
 
 from core import procesar_vela as procesar_vela_mod
 from core.procesar_vela import procesar_vela
+from indicadores.atr import calcular_atr
+from indicadores.momentum import calcular_momentum
+from indicadores.rsi import calcular_rsi
 
 
 @dataclass
@@ -20,6 +23,7 @@ class DummyConfig:
     trader_fastpath_threshold: int = 400
     trader_fastpath_resume_threshold: int = 350
     trader_fastpath_skip_entries: bool = False
+    indicadores_incremental_enabled: bool = False
 
 
 class DummyMetric:
@@ -358,3 +362,55 @@ async def test_procesar_vela_circuit_breaker_abre_y_evita_reintentos() -> None:
 
     assert always_fail.attempts == procesar_vela_mod._ORDER_CREATION_MAX_ATTEMPTS
     assert candle2.get("_df_skip_reason") == "orders_circuit_open"
+
+
+@pytest.mark.asyncio
+async def test_incremental_indicators_sincronizados_con_batch() -> None:
+    trader = DummyTrader(side="long", generar_propuesta=False)
+    trader.config.indicadores_incremental_enabled = True
+    trader.estado["BTCUSDT"] = {}
+
+    base_ts = 1_700_000_000_000
+    for idx in range(20):
+        close = 100.0 + idx
+        candle = {
+            "symbol": "BTCUSDT",
+            "timestamp": base_ts + idx * 60_000,
+            "open": close - 0.5,
+            "high": close + 1.0,
+            "low": close - 1.0,
+            "close": close,
+            "volume": 1_000.0 + idx,
+            "is_closed": True,
+        }
+        await procesar_vela(trader, candle)
+
+    assert trader.evaluaciones
+    symbol, df_final, _ = trader.evaluaciones[-1]
+    assert symbol == "BTCUSDT"
+
+    estado_symbol = trader.estado["BTCUSDT"]
+    caches = estado_symbol.get("indicadores_cache")
+    assert isinstance(caches, dict)
+
+    rsi_val = caches.get("rsi", {}).get("valor")
+    momentum_val = caches.get("momentum", {}).get("valor")
+    atr_val = caches.get("atr", {}).get("valor")
+
+    assert rsi_val is not None
+    assert momentum_val is not None
+    assert atr_val is not None
+
+    rsi_batch = calcular_rsi(df_final, 14)
+    atr_batch = calcular_atr(df_final, 14)
+    momentum_batch = calcular_momentum(df_final, 10)
+
+    assert rsi_batch is not None
+    assert atr_batch is not None
+
+    assert isclose(float(rsi_val), float(rsi_batch), rel_tol=1e-7, abs_tol=1e-7)
+    assert isclose(float(momentum_val), float(momentum_batch), rel_tol=1e-7, abs_tol=1e-7)
+    assert isclose(float(atr_val), float(atr_batch), rel_tol=1e-7, abs_tol=1e-7)
+
+    cache_obj = df_final.attrs.get("_indicators_cache")
+    assert cache_obj is not None
