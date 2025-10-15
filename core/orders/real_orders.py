@@ -29,7 +29,7 @@ import atexit
 import threading
 import asyncio
 import inspect
-from typing import Any, Awaitable, Mapping, TypeVar, Coroutine
+from typing import Any, Awaitable, Callable, Mapping, TypeVar, Coroutine
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from datetime import datetime, timezone
 
@@ -282,6 +282,7 @@ _MAX_SLIPPAGE_PCT = float(os.getenv('MAX_SLIPPAGE_PCT', '0.05') or 0.05)
 _LIMIT_TIMEOUT = float(os.getenv('LIMIT_ORDER_TIMEOUT', '10') or 10)
 _OFFSET_REPRICE = float(os.getenv('OFFSET_REPRICE', '0.001') or 0.001)
 _LIMIT_MAX_RETRY = int(os.getenv('LIMIT_ORDER_MAX_RETRY', '3') or 3)
+_RECONCILE_QTY_TOLERANCE = float(os.getenv('ORDERS_RECONCILE_QTY_TOLERANCE', '0.01') or 0.01)
 
 
 
@@ -766,7 +767,34 @@ def consultar_ordenes_abiertas(symbol: str) -> list[dict]:
     return ordenes_validas
 
 
-def reconciliar_trades_binance(simbolos: list[str] | None = None, limit: int = 50) -> None:
+def reconciliar_trades_binance(
+    simbolos: list[str] | None = None,
+    limit: int = 50,
+    apply_changes: bool = False,
+    reporter: Callable[[list[dict[str, Any]]], None] | None = None,
+) -> list[dict[str, Any]]:
+    """Analiza trades recientes y detecta divergencias con el estado local.
+
+    Parameters
+    ----------
+    simbolos:
+        Lista de símbolos a reconciliar. Si se omite se utilizan todos los
+        mercados disponibles en el cliente.
+    limit:
+        Número máximo de trades recientes a consultar por símbolo.
+    apply_changes:
+        Cuando es ``True`` intenta persistir automáticamente las divergencias.
+        Por defecto sólo se reportan para revisión manual.
+    reporter:
+        Callback opcional que recibe la lista de divergencias detectadas.
+
+    Returns
+    -------
+    list[dict[str, Any]]
+        Detalles de cada divergencia detectada.
+    """
+
+    divergencias: list[dict[str, Any]] = []
     try:
         cliente = obtener_cliente()
         if simbolos is None:
@@ -777,47 +805,124 @@ def reconciliar_trades_binance(simbolos: list[str] | None = None, limit: int = 5
             min_cost = filtros.get('min_notional', 0.0)
             try:
                 trades = cliente.fetch_my_trades(s, limit=limit)
-            except Exception:
+            except Exception as exc:
+                log.warning(
+                    '⚠️ No se pudieron obtener trades para %s: %s',
+                    s,
+                    exc,
+                )
                 continue
+
+            orden_local = obtener_orden(s)
+            local_qty = 0.0
+            if orden_local is not None:
+                local_qty = float(
+                    getattr(orden_local, 'cantidad_abierta', None)
+                    or getattr(orden_local, 'cantidad', 0.0)
+                )
+              
             for t in trades:
                 try:
                     price = float(t.get('price') or 0)
-                    amount = float(t.get('amount') or 0)
+                    amount = float(t.get('amount') or t.get('qty') or 0)
                 except (TypeError, ValueError):
                     continue
                 cost = price * amount
                 if amount < min_amount or cost < min_cost:
                     continue
                 side = t.get('side', 'buy').lower()
-                sl = tp = 0.0
+                timestamp_value = datetime.fromtimestamp(
+                    t.get('timestamp', 0) / 1000,
+                    timezone.utc,
+                ).isoformat()
+
+                reason: str | None = None
                 if side == 'buy':
-                    try:
-                        ohlcv = cliente.fetch_ohlcv(s, timeframe='1h', limit=100)
-                        df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
-                        cfg = load_exit_config(s)
-                        sl, tp = calcular_tp_sl_adaptativos(s, df, cfg, precio_actual=price)
-                    except Exception as e:
-                        log.debug(f'No se pudieron calcular SL/TP para {s}: {e}', extra={'symbol': s, 'timeframe': None})
-                data = {
+                    if local_qty <= 0:
+                        reason = 'missing_local_order'
+                    else:
+                        diff = abs(local_qty - amount)
+                        threshold = max(local_qty, amount) * _RECONCILE_QTY_TOLERANCE
+                        if diff > threshold:
+                            reason = 'quantity_mismatch'
+                elif side == 'sell' and local_qty > 0:
+                    reason = 'unexpected_sell_trade_with_open_order'
+
+                if not reason:
+                    continue
+
+                entry = {
                     'symbol': s,
-                    'precio_entrada': price,
-                    'cantidad': amount,
-                    'timestamp': datetime.utcfromtimestamp(t.get('timestamp', 0) / 1000).isoformat(),
-                    'stop_loss': sl,
-                    'take_profit': tp,
-                    'estrategias_activas': {},
-                    'tendencia': '',
-                    'max_price': price,
-                    'direccion': 'long' if side == 'buy' else 'short',
+                    'side': side,
+                    'price': price,
+                    'amount': amount,
+                    'timestamp': timestamp_value,
+                    'local_amount': local_qty,
+                    'reason': reason,
                 }
-                guardar_orden_real(s, data)
-                if side == 'buy' and amount > 0 and not obtener_orden(s):
-                    try:
-                        registrar_orden(s, price, amount, 0.0, 0.0, {}, '', 'long', None)
-                    except Exception as e:
-                        log.warning(f'⚠️ No se pudo registrar orden reconciliada para {s}: {e}')
+                divergencias.append(entry)
+
+                if not apply_changes:
+                    continue
+
+                try:
+                    sl = tp = 0.0
+                    if side == 'buy':
+                        ohlcv = cliente.fetch_ohlcv(s, timeframe='1h', limit=100)
+                        if ohlcv:
+                            df = pd.DataFrame(
+                                ohlcv,
+                                columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'],
+                            )
+                            cfg = load_exit_config(s)
+                            sl, tp = calcular_tp_sl_adaptativos(
+                                s,
+                                df,
+                                cfg,
+                                precio_actual=price,
+                            )
+                    data = {
+                        'symbol': s,
+                        'precio_entrada': price,
+                        'cantidad': amount,
+                        'timestamp': timestamp_value,
+                        'stop_loss': sl,
+                        'take_profit': tp,
+                        'estrategias_activas': {},
+                        'tendencia': '',
+                        'max_price': price,
+                        'direccion': 'long' if side == 'buy' else 'short',
+                    }
+                    guardar_orden_real(s, data)
+                    if side == 'buy' and amount > 0 and not obtener_orden(s):
+                        try:
+                            registrar_orden(s, price, amount, sl, tp, {}, '', 'long', None)
+                        except Exception as reg_exc:
+                            log.warning(
+                                '⚠️ No se pudo registrar orden reconciliada para %s: %s',
+                                s,
+                                reg_exc,
+                            )
+                except Exception as persist_exc:
+                    log.error(
+                        '❌ Error aplicando reconciliación para %s: %s',
+                        s,
+                        persist_exc,
+                    )
     except Exception as e:
         log.error(f'❌ Error al reconciliar trades: {e}')
+
+    if reporter:
+        reporter(divergencias)
+    else:
+        if divergencias:
+            log.warning(
+                'orders.reconcile_trades.divergences_detected',
+                extra={'count': len(divergencias)},
+            )
+        else:
+            log.info('orders.reconcile_trades.sin_divergencias')
+    return divergencias
 
 
 def actualizar_orden(symbol: str, data: (Order | dict)) ->None:
