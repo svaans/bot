@@ -4,11 +4,23 @@ from __future__ import annotations
 import asyncio
 import math
 import os
+from dataclasses import dataclass
 from typing import Any
 
 from core.metrics import registrar_market_retry_exhausted
 from core.orders import real_orders
 from core.utils.logger import log_decision
+
+
+@dataclass(slots=True)
+class ExecutionResult:
+    """Resultado normalizado de una ejecución de orden."""
+
+    executed: float
+    fee: float
+    pnl: float
+    status: str
+    remaining: float = 0.0
 
 
 class MarketRetryExecutor:
@@ -36,7 +48,7 @@ class MarketRetryExecutor:
         cantidad: float,
         operation_id: str,
         entrada: dict[str, Any],
-    ) -> tuple[float, float, float]:
+    ) -> ExecutionResult:
         if side == "sell":
             return await self._ejecutar_market_sell(symbol, cantidad, operation_id, entrada)
         return await self._ejecutar_market_buy(symbol, cantidad, operation_id, entrada)
@@ -47,7 +59,7 @@ class MarketRetryExecutor:
         cantidad: float,
         operation_id: str,
         entrada: dict[str, Any],
-    ) -> tuple[float, float, float]:
+    ) -> ExecutionResult:
         intentos = 0
         while True:
             intentos += 1
@@ -69,7 +81,15 @@ class MarketRetryExecutor:
                     "execute",
                     salida,
                 )
-                return salida["ejecutado"], salida["fee"], salida["pnl"]
+                status = str(resp.get("status") or "FILLED").upper()
+                remaining = float(resp.get("restante", 0.0))
+                return ExecutionResult(
+                    executed=salida["ejecutado"],
+                    fee=salida["fee"],
+                    pnl=salida["pnl"],
+                    status=status,
+                    remaining=remaining,
+                )
             except Exception as exc:  # pragma: no cover - defensivo
                 self.log.error(
                     "❌ Error ejecutando venta en %s (intento %s/%s): %s",
@@ -90,7 +110,7 @@ class MarketRetryExecutor:
         cantidad: float,
         operation_id: str,
         entrada: dict[str, Any],
-    ) -> tuple[float, float, float]:
+    ) -> ExecutionResult:
         restante = cantidad
         total = total_fee = total_pnl = 0.0
         intentos = 0
@@ -147,7 +167,14 @@ class MarketRetryExecutor:
             "execute",
             salida,
         )
-        return total, total_fee, total_pnl
+        status = "FILLED" if restante <= 1e-8 else "PARTIAL"
+        return ExecutionResult(
+            executed=total,
+            fee=total_fee,
+            pnl=total_pnl,
+            status=status,
+            remaining=max(restante, 0.0),
+        )
 
     def _market_retry_sleep(self, attempt: int) -> float:
         base = max(self._backoff, 0.0)
