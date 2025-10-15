@@ -10,6 +10,12 @@ from aiohttp.client_exceptions import ServerTimeoutError
 
 from core.utils import configurar_logger
 
+try:  # pragma: no cover - métricas opcionales
+    from core.metrics import registrar_feed_funding_missing
+except Exception:  # pragma: no cover - entorno minimalista
+    def registrar_feed_funding_missing(*_args, **_kwargs) -> None:  # type: ignore[override]
+        return None
+
 log = configurar_logger('funding_rate')
 
 
@@ -31,6 +37,12 @@ FUTURES_MAPPING: Dict[str, Dict[str, str]] = {
     "ADA/EUR": {"symbol": "ADAUSDT", "segment": "usdtm"},
     "BNB/EUR": {"symbol": "BNBUSDT", "segment": "usdtm"},
     "SOL/EUR": {"symbol": "SOLUSDT", "segment": "usdtm"},
+    # Soporta símbolos spot directos sin separador.
+    "BTCUSDT": {"symbol": "BTCUSDT", "segment": "usdtm"},
+    "ETHUSDT": {"symbol": "ETHUSDT", "segment": "usdtm"},
+    "ADAUSDT": {"symbol": "ADAUSDT", "segment": "usdtm"},
+    "BNBUSDT": {"symbol": "BNBUSDT", "segment": "usdtm"},
+    "SOLUSDT": {"symbol": "SOLUSDT", "segment": "usdtm"},
 }
 
 
@@ -110,6 +122,7 @@ async def obtener_funding(symbol_spot: str) -> FundingResult:
             reason="NO_MAPPING",
             source="binance",
         )
+        registrar_feed_funding_missing(symbol_spot, "no_mapping")
         log.info("Sin mapping de futuros para %s", symbol_spot)
         return result
     client = FundingClient()
@@ -118,6 +131,8 @@ async def obtener_funding(symbol_spot: str) -> FundingResult:
     finally:
         await client.close()
     if not result.available:
+        reason = (result.reason or "unknown").lower()
+        registrar_feed_funding_missing(symbol_spot, reason)
         level = log.info if result.reason == "NO_MAPPING" else log.warning
         level("Funding rate no disponible para %s: %s", symbol_spot, result.reason)
     return result
