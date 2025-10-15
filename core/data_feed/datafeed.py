@@ -115,6 +115,12 @@ class DataFeed:
         self.min_buffer_candles = int(os.getenv("MIN_BUFFER_CANDLES", "30"))
         self._last_backfill_ts: Dict[str, int] = {}
         self._backfill_max = int(os.getenv("BACKFILL_MAX_CANDLES", "1000"))
+        self._backfill_ventana_enabled = os.getenv("BACKFILL_VENTANA_ENABLED", "false").lower() == "true"
+        raw_window = os.getenv("BACKFILL_VENTANA_WINDOW")
+        try:
+            self._backfill_window_target = int(raw_window) if raw_window is not None else self.min_buffer_candles
+        except (TypeError, ValueError):
+            self._backfill_window_target = self.min_buffer_candles
 
         self._managed_by_trader: bool = bool(getattr(self, "_managed_by_trader", False))
 
