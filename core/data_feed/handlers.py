@@ -10,6 +10,7 @@ from typing import Any, Awaitable, Callable, Mapping
 from core.utils.feature_flags import is_flag_enabled
 from core.utils.utils import timestamp_alineado, validar_integridad_velas
 from core.utils.log_utils import safe_extra
+from core.adaptador_dinamico import backfill_ventana
 from ._shared import COMBINED_STREAM_KEY, ConsumerState, log
 from . import events
 
@@ -79,6 +80,85 @@ def _to_int(value: Any) -> int | None:
         return int(float(value))
     except (TypeError, ValueError):
         return None
+
+
+def _backfill_window_enabled(feed: "DataFeed") -> bool:
+    if getattr(feed, "_backfill_ventana_enabled", False):
+        return True
+    return is_flag_enabled("backfill.ventana.enabled")
+
+
+async def _maybe_run_backfill_window(
+    feed: "DataFeed",
+    symbol: str,
+    *,
+    last_ts: int | None,
+    new_ts: int | None,
+    intervalo_ms: int,
+) -> None:
+    if last_ts is None or new_ts is None or intervalo_ms <= 0:
+        return
+
+    gap_ms = new_ts - last_ts
+    if gap_ms <= intervalo_ms:
+        return
+
+    if not _backfill_window_enabled(feed):
+        return
+
+    cliente = getattr(feed, "_cliente", None)
+    if cliente is None:
+        return
+
+    max_total = getattr(feed, "_backfill_window_target", None)
+    try:
+        max_total_int = int(max_total) if max_total is not None else feed.min_buffer_candles
+    except (TypeError, ValueError):
+        max_total_int = feed.min_buffer_candles
+    max_total_int = max(0, max_total_int)
+    max_total_int = min(max_total_int, getattr(feed, "_backfill_max", max_total_int))
+    if max_total_int <= 0:
+        return
+
+    missing_intervals = int(gap_ms // intervalo_ms) - 1
+    if missing_intervals <= 0:
+        return
+
+    allowed = min(missing_intervals, max_total_int)
+    total_fetched = 0
+    start_ts = last_ts + intervalo_ms
+
+    while total_fetched < allowed and missing_intervals > 0:
+        remaining = min(allowed - total_fetched, missing_intervals)
+        extras = await backfill_ventana(
+            symbol,
+            intervalo=feed.intervalo,
+            cliente=cliente,
+            start_ts=start_ts,
+            candles=remaining,
+            current_ts=new_ts,
+            max_candles=remaining,
+        )
+        if not extras:
+            break
+
+        extras_sorted = sorted(extras, key=lambda c: c.get("timestamp", 0))
+        for extra in extras_sorted:
+            extra.setdefault("symbol", symbol)
+            extra.setdefault("timeframe", feed.intervalo)
+            extra.setdefault("interval", feed.intervalo)
+            extra.setdefault("tf", feed.intervalo)
+            extra["_df_backfill_window"] = True
+            await handle_candle(feed, symbol, extra, _from_backfill=True)
+            total_fetched += 1
+            ts_extra = extra.get("timestamp")
+            if isinstance(ts_extra, int):
+                start_ts = ts_extra + intervalo_ms
+
+        last_processed = feed._last_close_ts.get(symbol, last_ts)
+        missing_intervals = int((new_ts - last_processed) // intervalo_ms) - 1
+        if len(extras_sorted) < remaining:
+            break
 
 
 def _to_float(value: Any) -> float | None:
@@ -182,7 +262,9 @@ def _normalize_candle_payload(candle: Mapping[str, Any]) -> dict[str, Any]:
 
 
 
-async def handle_candle(feed: "DataFeed", symbol: str, candle: dict) -> None:
+async def handle_candle(
+    feed: "DataFeed", symbol: str, candle: dict, *, _from_backfill: bool = False
+) -> None:
     """Normaliza y encola una vela recibida desde el stream."""
 
     candle = _normalize_candle_payload(candle)
@@ -228,6 +310,17 @@ async def handle_candle(feed: "DataFeed", symbol: str, candle: dict) -> None:
     candle.setdefault("interval", feed.intervalo)
     candle.setdefault("tf", feed.intervalo)
     last = feed._last_close_ts.get(symbol)
+
+    if not _from_backfill:
+        intervalo_ms = int(getattr(feed, "intervalo_segundos", 0) * 1000)
+        await _maybe_run_backfill_window(
+            feed,
+            symbol,
+            last_ts=last,
+            new_ts=ts,
+            intervalo_ms=intervalo_ms,
+        )
+        last = feed._last_close_ts.get(symbol)
     if last is not None and ts <= last:
         if metrics_enabled:
             registrar_vela_rechazada(symbol_label, "stale", timeframe_label)
