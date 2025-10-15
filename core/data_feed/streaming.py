@@ -10,6 +10,15 @@ from ._shared import COMBINED_STREAM_KEY, log
 from . import events
 
 
+def _emit_ws_drop_signal(feed: "DataFeed", payload: dict[str, object]) -> None:
+    """Emite una señal diagnóstica cuando se detecta la caída de un stream WS."""
+
+    if not events.ws_signals_enabled():
+        return
+    enriched = {"intervalo": feed.intervalo, **payload}
+    feed._emit_bus_signal("datafeed.ws.drop", enriched)
+
+
 async def stream_simple(feed: "DataFeed", symbol: str) -> None:
     """Loop principal de escucha de velas por símbolo."""
 
@@ -52,7 +61,9 @@ async def stream_simple(feed: "DataFeed", symbol: str) -> None:
                     ),
                 },
             )
-            events.mark_ws_state(feed, False, {"symbol": symbol, "reason": "stream_end"})
+            drop_payload = {"symbol": symbol, "reason": "stream_end"}
+            events.mark_ws_state(feed, False, drop_payload)
+            _emit_ws_drop_signal(feed, drop_payload)
             log.info("stream simple finalizado; reintentando…", extra={"symbol": symbol})
             events.emit_event(feed, "ws_end", {"symbol": symbol})
             if not events.register_reconnect_attempt(feed, symbol, "stream_end"):
@@ -71,7 +82,9 @@ async def stream_simple(feed: "DataFeed", symbol: str) -> None:
                 },
                 exc_info=True,
             )
-            events.mark_ws_state(feed, False, {"symbol": symbol, "reason": "inactividad"})
+            drop_payload = {"symbol": symbol, "reason": "inactividad"}
+            events.mark_ws_state(feed, False, drop_payload)
+            _emit_ws_drop_signal(feed, drop_payload)
             log.warning("stream simple: reinicio por inactividad", extra={"symbol": symbol})
             events.emit_event(feed, "ws_inactividad", {"symbol": symbol})
             if not feed.ws_connected_event.is_set():
@@ -96,7 +109,9 @@ async def stream_simple(feed: "DataFeed", symbol: str) -> None:
                 },
                 exc_info=True,
             )
-            events.mark_ws_state(feed, False, {"symbol": symbol, "reason": type(exc).__name__})
+            drop_payload = {"symbol": symbol, "reason": type(exc).__name__}
+            events.mark_ws_state(feed, False, drop_payload)
+            _emit_ws_drop_signal(feed, drop_payload)
             log.exception("stream simple: error; reintentando", extra={"symbol": symbol})
             events.emit_event(feed, "ws_error", {"symbol": symbol, "error": str(exc)})
             if not feed.ws_connected_event.is_set():
@@ -165,7 +180,9 @@ async def stream_combinado(feed: "DataFeed", symbols: List[str]) -> None:
                     for s in symbols
                 },
             )
-            events.mark_ws_state(feed, False, {"symbols": symbols, "reason": "stream_end"})
+            drop_payload = {"symbols": symbols, "reason": "stream_end"}
+            events.mark_ws_state(feed, False, drop_payload)
+            _emit_ws_drop_signal(feed, drop_payload)
             log.info("stream combinado finalizado; reintentando…")
             events.emit_event(feed, "ws_end", {"symbols": symbols})
             if not events.register_reconnect_attempt(feed, COMBINED_STREAM_KEY, "stream_end"):
@@ -184,7 +201,9 @@ async def stream_combinado(feed: "DataFeed", symbols: List[str]) -> None:
                 },
                 exc_info=True,
             )
-            events.mark_ws_state(feed, False, {"symbols": symbols, "reason": "inactividad"})
+            drop_payload = {"symbols": symbols, "reason": "inactividad"}
+            events.mark_ws_state(feed, False, drop_payload)
+            _emit_ws_drop_signal(feed, drop_payload)
             log.warning("stream combinado: reinicio por inactividad")
             events.emit_event(feed, "ws_inactividad", {"symbols": symbols})
             if not feed.ws_connected_event.is_set():
@@ -209,7 +228,9 @@ async def stream_combinado(feed: "DataFeed", symbols: List[str]) -> None:
                 },
                 exc_info=True,
             )
-            events.mark_ws_state(feed, False, {"symbols": symbols, "reason": type(exc).__name__})
+            drop_payload = {"symbols": symbols, "reason": type(exc).__name__}
+            events.mark_ws_state(feed, False, drop_payload)
+            _emit_ws_drop_signal(feed, drop_payload)
             log.exception("stream combinado: error; reintentando")
             events.emit_event(feed, "ws_error", {"symbols": symbols, "error": str(exc)})
             if not feed.ws_connected_event.is_set():
