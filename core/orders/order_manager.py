@@ -222,7 +222,7 @@ class OrderManager:
         bus.subscribe('agregar_parcial', self._on_agregar_parcial)
         if self.modo_real:
             self.start_sync()
-		self._ensure_background_tasks()
+        self._ensure_background_tasks()
 
     def _ensure_background_tasks(self) -> None:
         self._maybe_start_flush_task()
