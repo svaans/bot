@@ -1,8 +1,7 @@
 """Motor de estrategias para el bot de trading."""
 from __future__ import annotations
 import asyncio
-from typing import Any, Awaitable, Callable, Dict, Mapping, Optional
-
+from typing import TYPE_CHECKING, Any, Awaitable, Callable, Dict, Mapping, Optional
 import pandas as pd
 
 from core.adaptador_umbral import calcular_umbral_adaptativo
@@ -45,6 +44,9 @@ TechnicalScorer = Callable[[
 ], tuple[float, Any]]
 
 
+if TYPE_CHECKING:  # pragma: no cover - solo para type checkers
+    from core.trader import EstadoSimbolo
+
 class StrategyEngine:
     """Evalúa estrategias de entrada y salida."""
 
@@ -73,11 +75,27 @@ class StrategyEngine:
         self._metrics = metrics_module
         self._salida_evaluator = salida_evaluator or evaluar_salidas
 
+
+    @staticmethod
+    def _normalizar_tendencia(
+        tendencia: str | None | "EstadoSimbolo",
+    ) -> str | None:
+        """Devuelve una tendencia str válida o ``None`` si no es usable."""
+
+        if tendencia is None:
+            return None
+        if isinstance(tendencia, str):
+            return tendencia
+        candidata = getattr(tendencia, "tendencia", None)
+        if isinstance(candidata, str):
+            return candidata
+        return None
+
     async def evaluar_entrada(
         self,
         symbol: str,
         df: pd.DataFrame,
-        tendencia: str | None = None,
+        tendencia: str | None | "EstadoSimbolo" = None,
         config: dict | None = None,
         pesos_symbol: Mapping[str, float] | None = None,
     ) -> Dict[str, Any]:
@@ -110,15 +128,18 @@ class StrategyEngine:
             }
         try:
             pesos = pesos_symbol or self._peso_provider(symbol)
-            if tendencia is None:
-                tendencia, _ = self._tendencia_detector(symbol, df)
-            log.debug(f"[{symbol}] Tendencia usada: {tendencia}")
-            resultado = await self._strategy_evaluator(symbol, df, tendencia)
+            tendencia_normalizada = self._normalizar_tendencia(tendencia)
+            if tendencia_normalizada is None:
+                tendencia_normalizada, _ = self._tendencia_detector(symbol, df)
+            log.debug(f"[{symbol}] Tendencia usada: {tendencia_normalizada}")
+            resultado = await self._strategy_evaluator(
+                symbol, df, tendencia_normalizada
+            )
             analisis = await asyncio.to_thread(
                 self._procesar_resultado_entrada,
                 symbol,
                 df,
-                tendencia,
+                tendencia_normalizada,
                 resultado,
                 pesos,
                 config or {},
