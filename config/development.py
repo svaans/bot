@@ -82,6 +82,9 @@ class DevelopmentConfig:
     datafeed_debug_wrapper_enabled: bool = False
     orders_flush_periodico_enabled: bool = False
     orders_limit_enabled: bool = False
+    orders_execution_policy: str = "market"
+    orders_execution_policy_by_symbol: Dict[str, str] = field(default_factory=dict)
+    orders_reconcile_enabled: bool = False
     funding_enabled: bool = False
     backfill_ventana_enabled: bool = False
     risk_capital_total: float = 0.0
