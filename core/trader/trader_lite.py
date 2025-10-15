@@ -199,6 +199,27 @@ class TraderLite(TraderLiteBackfillMixin, TraderLiteProcessingMixin):
             on_event=on_event,
             **self._resolve_data_feed_kwargs(),
         )
+        if hasattr(self.feed, "_backfill_max"):
+            cfg_max = getattr(config, "backfill_max_candles", None)
+            try:
+                cfg_max_int = int(cfg_max) if cfg_max is not None else None
+            except (TypeError, ValueError):
+                cfg_max_int = None
+            if cfg_max_int is not None and cfg_max_int > 0:
+                self.feed._backfill_max = cfg_max_int
+        if hasattr(self.feed, "_backfill_ventana_enabled"):
+            flag_enabled = bool(getattr(config, "backfill_ventana_enabled", False))
+            self.feed._backfill_ventana_enabled = (
+                self.feed._backfill_ventana_enabled or flag_enabled
+            )
+        if hasattr(self.feed, "_backfill_window_target"):
+            window_cfg = getattr(config, "backfill_ventana_window", None)
+            try:
+                window_int = int(window_cfg) if window_cfg is not None else None
+            except (TypeError, ValueError):
+                window_int = None
+            if window_int is not None and window_int > 0:
+                self.feed._backfill_window_target = window_int
         # Señal para el StartupManager: este feed se arranca desde TraderLite
         try:
             setattr(self.feed, "_managed_by_trader", True)
