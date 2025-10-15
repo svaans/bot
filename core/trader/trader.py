@@ -802,8 +802,25 @@ class Trader(TraderLite):
                 )
             except asyncio.CancelledError:
                 raise
-            except Exception:
+            except Exception as error:
                 log.exception("❌ Error evaluando condiciones de entrada para %s", symbol)
+                error_details: dict[str, Any] = {
+                    "symbol": symbol,
+                    "timeframe": timeframe_str,
+                    "reason": "pipeline_exception",
+                    "exception_type": type(error).__name__,
+                    "exception_message": str(error),
+                    "exception_repr": repr(error),
+                }
+                provider = getattr(self, "_verificar_entrada_provider", None)
+                if provider is not None:
+                    error_details["provider"] = provider
+                self._last_eval_skip_reason = "entry_exception"
+                self._last_eval_skip_details = dict(error_details)
+                _handle_event("entry_error", dict(error_details))
+                notify_exception = getattr(self, "_notify_eval_exception", None)
+                if callable(notify_exception):
+                    notify_exception(symbol, timeframe_str, error_details)
                 return None
 
             if resultado:
@@ -876,6 +893,56 @@ class Trader(TraderLite):
             return await _evaluate()
         async with lock:
             return await _evaluate()
+        
+    def _notify_eval_exception(
+        self,
+        symbol: str,
+        timeframe: str | None,
+        payload: dict[str, Any],
+    ) -> None:
+        """Propaga fallos críticos del pipeline a los canales de monitoreo."""
+
+        event_payload = dict(payload)
+        event_payload.setdefault("symbol", symbol)
+        if timeframe is not None:
+            event_payload.setdefault("timeframe", timeframe)
+
+        bus = getattr(self, "bus", None) or getattr(self, "event_bus", None)
+        if bus is not None:
+            try:
+                emit = getattr(bus, "emit", None)
+                if callable(emit):
+                    emit("trader.entry.error", dict(event_payload))
+                else:
+                    publish = getattr(bus, "publish", None)
+                    if callable(publish):
+                        result = publish("trader.entry.error", dict(event_payload))
+                        if asyncio.iscoroutine(result):
+                            try:
+                                loop = asyncio.get_running_loop()
+                            except RuntimeError:
+                                loop = None
+                            if loop and loop.is_running():
+                                loop.create_task(result)
+            except Exception:
+                log.debug(
+                    "No se pudo notificar error de entrada al EventBus",
+                    extra=safe_extra({"symbol": symbol, "timeframe": timeframe}),
+                    exc_info=True,
+                )
+
+        supervisor = getattr(self, "supervisor", None)
+        if supervisor is not None:
+            supervisor_emit = getattr(supervisor, "_emit", None)
+            if callable(supervisor_emit):
+                try:
+                    supervisor_emit("entry_error", dict(event_payload))
+                except Exception:
+                    log.debug(
+                        "No se pudo notificar error de entrada al supervisor",
+                        extra=safe_extra({"symbol": symbol, "timeframe": timeframe}),
+                        exc_info=True,
+                    )
 
     async def _execute_pipeline(
         self,

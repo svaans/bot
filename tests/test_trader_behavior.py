@@ -490,3 +490,105 @@ async def test_evaluar_condiciones_de_entrada_propagates_skip_details(
     assert isinstance(details, dict)
     assert details.get("score") == pytest.approx(1.5)
     assert details.get("umbral") == pytest.approx(2.0)
+
+
+@pytest.mark.asyncio
+async def test_evaluar_condiciones_de_entrada_reporta_excepciones(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class RecordingSupervisor(DummySupervisor):
+        def __init__(self) -> None:
+            super().__init__()
+            self.events: list[tuple[str, dict]] = []
+
+        def _emit(self, evt: str, data: dict) -> None:  # type: ignore[override]
+            self.events.append((evt, data))
+
+    supervisor = RecordingSupervisor()
+    config = DummyConfig()
+
+    class _SilentNotificationManager:
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            self.args = args
+            self.kwargs = kwargs
+
+        def start(self) -> None:  # pragma: no cover - stub
+            return None
+
+        async def close(self) -> None:  # pragma: no cover - stub
+            return None
+
+    monkeypatch.setattr(
+        "core.notification_manager.NotificationManager",
+        _SilentNotificationManager,
+    )
+
+    async def handler(_: dict) -> None:
+        return None
+
+    class RecordingBus:
+        def __init__(self) -> None:
+            self.emitted: list[tuple[str, dict | None]] = []
+
+        def emit(self, event_type: str, data: dict | None = None) -> None:
+            self.emitted.append((event_type, data))
+
+        async def publish(self, event_type: str, data: dict | None = None) -> None:
+            self.emitted.append((event_type, data))
+
+    bus = RecordingBus()
+
+    monkeypatch.setattr("core.event_bus.EventBus", lambda *args, **kwargs: bus)
+
+    trader = Trader(config, candle_handler=handler, supervisor=supervisor)
+    trader.habilitar_estrategias()
+
+    eventos: list[tuple[str, dict]] = []
+
+    def on_event(evt: str, data: dict) -> None:
+        eventos.append((evt, data))
+
+    trader.on_event = on_event
+
+    async def pipeline(
+        symbol: str,
+        df: pd.DataFrame,
+        estado: Any,
+        *,
+        on_event: Callable[[str, dict], None] | None = None,
+    ) -> dict[str, Any]:
+        raise RuntimeError("pipeline exploded")
+
+    trader.verificar_entrada = pipeline  # type: ignore[assignment]
+
+    df = pd.DataFrame({"timestamp": [1, 2], "close": [1.0, 1.1]})
+    df.tf = "1m"  # type: ignore[attr-defined]
+    estado_symbol = trader.estado["BTCUSDT"]
+
+    resultado = await Trader.evaluar_condiciones_de_entrada(
+        trader,
+        "BTCUSDT",
+        df,
+        estado_symbol,
+    )
+
+    assert resultado is None
+    assert trader._last_eval_skip_reason == "entry_exception"
+    details = trader._last_eval_skip_details
+    assert isinstance(details, dict)
+    assert details.get("reason") == "pipeline_exception"
+    assert details.get("exception_type") == "RuntimeError"
+    assert "pipeline exploded" in str(details.get("exception_message"))
+
+    entry_event = next((evt for evt in eventos if evt[0] == "entry_error"), None)
+    assert entry_event is not None
+    assert entry_event[1].get("reason") == "pipeline_exception"
+
+    bus_event = next((evt for evt in bus.emitted if evt[0] == "trader.entry.error"), None)
+    assert bus_event is not None
+    assert bus_event[1] is not None
+    assert bus_event[1].get("exception_type") == "RuntimeError"
+
+    supervisor_event = next((evt for evt in supervisor.events if evt[0] == "entry_error"), None)
+    assert supervisor_event is not None
+    assert supervisor_event[1].get("exception_type") == "RuntimeError"
