@@ -76,6 +76,7 @@ class DevelopmentConfig:
     timeout_evaluar_condiciones_por_symbol: Dict[str, int] = field(default_factory=dict)
     indicadores_normalize_default: bool = True
     indicadores_cache_max_entries: int = 128
+    indicadores_incremental_enabled: bool = False
     orders_retry_persistencia_enabled: bool = False
     trader_purge_historial_enabled: bool = False
     metrics_extended_enabled: bool = False
