@@ -208,7 +208,15 @@ class HistorialCierresStore(MutableMapping[str, HistorialPorSimbolo]):
         if self._ttl_seconds is None:
             return
         now = time.monotonic()
-        if now - self._last_global_prune < self._prune_interval:
+        elapsed = now - self._last_global_prune
+        if elapsed < 0:
+            # El reloj monotónico retrocedió (por ejemplo, durante pruebas).
+            # Para evitar saltarnos purgas programadas forzamos una ejecución
+            # inmediata.
+            self._last_global_prune = now
+            self.prune()
+            return
+        if elapsed < self._prune_interval:
             return
         self.prune()
 
