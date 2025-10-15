@@ -54,6 +54,10 @@ def _metrics_extended_enabled() -> bool:
     return is_flag_enabled("metrics.extended.enabled")
 
 
+def _debug_wrapper_enabled() -> bool:
+    return is_flag_enabled("datafeed.debug_wrapper.enabled")
+
+
 def _ensure_patch_logged() -> None:
     """Emite un log informativo único para verificar el parche en ejecución."""
 
@@ -490,6 +494,12 @@ async def consumer_loop(feed: "DataFeed", symbol: str) -> None:
                 log_method("consumer.skip", extra=safe_extra(payload))
             elif outcome == "ok":
                 feed._stats[symbol]["processed"] += 1
+            should_activate_debug_wrapper = (
+                outcome == "ok"
+                and feed._handler_log_events == 0
+                and not getattr(handler, "__df_debug_wrapper__", False)
+                and _debug_wrapper_enabled()
+            )
             if handler_completed:
                 note_handler_log(feed)
             log.debug(
@@ -506,11 +516,7 @@ async def consumer_loop(feed: "DataFeed", symbol: str) -> None:
                     }
                 ),
             )
-            if (
-                outcome == "ok"
-                and feed._handler_log_events == 0
-                and not getattr(handler, "__df_debug_wrapper__", False)
-            ):
+            if should_activate_debug_wrapper:
                 activate_handler_debug_wrapper(feed)
             ts_processed = candle.get("timestamp")
             prev = getattr(feed, f"_last_processed_{symbol}", None)
@@ -561,6 +567,8 @@ def activate_handler_debug_wrapper(feed: "DataFeed") -> None:
     """Envuelve el handler para instrumentar llamadas si no hay evidencias de logs."""
 
     if feed._handler is None:
+        return
+    if not _debug_wrapper_enabled():
         return
     if getattr(feed._handler, "__df_debug_wrapper__", False):
         return
