@@ -13,6 +13,7 @@ from core.reporting import reporter_diario
 from core.risk.riesgo import actualizar_perdida
 from core.risk.riesgo import riesgo_superado as _riesgo_superado
 from core.registro_metrico import registro_metrico
+from core.utils.feature_flags import is_flag_enabled
 from core.utils.metrics_compat import Gauge
 from core.utils.utils import configurar_logger
 
@@ -55,6 +56,9 @@ class RiskManager:
         self._fecha_riesgo = datetime.now(UTC).date()
         self.riesgo_diario = 0.0
         self._ultimo_factor_kelly = 1.0
+        self._capital_guard_enabled = is_flag_enabled(
+            "risk.capital_manager.enabled", default=False
+        )
         if bus:
             self.subscribe(bus)
 
@@ -166,6 +170,28 @@ class RiskManager:
         if self.capital_manager and not self.capital_manager.hay_capital_libre():
             log.info('🚫 Sin capital libre para nuevas posiciones')
             return False
+        if self.capital_manager and self._capital_guard_enabled:
+            exposure_fn = getattr(self.capital_manager, "exposure_disponible", None)
+            if callable(exposure_fn):
+                try:
+                    disponible_symbol = float(exposure_fn(symbol))
+                except TypeError:
+                    disponible_symbol = float(exposure_fn(symbol=symbol))  # type: ignore[call-arg]
+                except Exception:
+                    log.warning('⚠️ Error consultando exposición disponible', exc_info=True)
+                    disponible_symbol = 0.0
+                if disponible_symbol <= 0:
+                    log.info('🚫 %s: sin exposición disponible', symbol)
+                    return False
+                try:
+                    disponible_global = float(exposure_fn(None))
+                except TypeError:
+                    disponible_global = float(exposure_fn(symbol=None))  # type: ignore[call-arg]
+                except Exception:
+                    disponible_global = disponible_symbol
+                if disponible_global <= 0:
+                    log.info('🚫 Exposición global agotada')
+                    return False
         media = self.correlacion_media(symbol, correlaciones)
         if media > diversidad_minima:
             log.info(
