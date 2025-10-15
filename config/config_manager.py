@@ -384,18 +384,18 @@ class ConfigManager:
         )
 
         risk_capital_total = _cargar_float(
- 'RISK_CAPITAL_TOTAL', getattr(predeterminados, 'risk_capital_total', 0.0) 
+            'RISK_CAPITAL_TOTAL', getattr(defaults, 'risk_capital_total', 0.0)
         )
         risk_capital_default_per_symbol = _cargar_float(
- «RISK_CAPITAL_DEFAULT_PER_SYMBOL», 
- getattr(predeterminados, 'risk_capital_default_per_symbol', 0.0), 
+            'RISK_CAPITAL_DEFAULT_PER_SYMBOL',
+            getattr(defaults, 'risk_capital_default_per_symbol', 0.0),
         )
         risk_capital_per_symbol = dict(
- getattr(predeterminados, 'risk_capital_per_symbol', {}) 
+            getattr(defaults, 'risk_capital_per_symbol', {})
         )
         risk_capital_per_symbol.update(_parse_float_mapping('RISK_CAPITAL_PER_SYMBOL'))
         risk_kelly_base = _cargar_float(
- 'RISK_KELLY_BASE', getattr(predeterminados, 'risk_kelly_base', 0.1) 
+            'RISK_KELLY_BASE', getattr(defaults, 'risk_kelly_base', 0.1)
         )
         
         config = Config(
