@@ -37,7 +37,8 @@ from core.metrics import (
 )
 from core.registro_metrico import registro_metrico
 from binance_api.cliente import obtener_cliente
-from core.orders.market_retry_executor import MarketRetryExecutor
+from config import config as app_config
+from core.orders.market_retry_executor import ExecutionResult, MarketRetryExecutor
 from core.orders.order_helpers import coerce_float, coerce_int, lookup_meta
 from core.orders.quantity_resolver import QuantityResolver
 
@@ -69,6 +70,7 @@ class OrderManager:
         modo_real: bool,
         bus: EventBus | None = None,
         max_historial: int = MAX_HISTORIAL_ORDENES,
+		config: Any | None = None,
     ) -> None:
         self.modo_real = modo_real
         self.ordenes: Dict[str, Order] = {}
@@ -122,8 +124,42 @@ class OrderManager:
         self._registro_retry_tasks: Dict[str, asyncio.Task] = {}
         self._registro_retry_error_keywords = _PERSISTENCE_ERROR_KEYWORDS
         self.capital_manager: Any | None = None
+		self._config = config or getattr(app_config, "cfg", None)
+        self._flush_task: asyncio.Task | None = None
+        self._reconcile_task: asyncio.Task | None = None
+        self._flush_enabled = is_flag_enabled(
+            "orders.flush_periodico.enabled",
+            bool(getattr(self._config, "orders_flush_periodico_enabled", False)),
+        )
+        self._limit_enabled = is_flag_enabled(
+            "orders.limit.enabled",
+            bool(getattr(self._config, "orders_limit_enabled", False)),
+        )
+        self._execution_policy_default = self._resolve_config_policy_default()
+        self._execution_policy_overrides = self._resolve_config_policy_overrides()
+        self._limit_timeout = float(
+            os.getenv("LIMIT_ORDER_TIMEOUT", str(getattr(real_orders, "_LIMIT_TIMEOUT", 10.0)))
+            or getattr(real_orders, "_LIMIT_TIMEOUT", 10.0)
+        )
+        self._limit_offset = float(
+            os.getenv("OFFSET_REPRICE", str(getattr(real_orders, "_OFFSET_REPRICE", 0.001)))
+            or getattr(real_orders, "_OFFSET_REPRICE", 0.001)
+        )
+        self._limit_max_retry = int(
+            os.getenv("LIMIT_ORDER_MAX_RETRY", str(getattr(real_orders, "_LIMIT_MAX_RETRY", 3)))
+            or getattr(real_orders, "_LIMIT_MAX_RETRY", 3)
+        )
+        self._bot_env = os.getenv("BOT_ENV", "").lower()
+        self._reconcile_enabled = self._resolve_reconcile_enabled()
+        self._reconcile_interval = max(
+            60.0,
+            float(os.getenv("ORDERS_RECONCILE_INTERVAL", "1800.0") or 1800.0),
+        )
+        self._reconcile_limit = int(os.getenv("ORDERS_RECONCILE_LIMIT", "50") or 50)
         if bus:
             self.subscribe(bus)
+		else:
+            self._ensure_background_tasks()
 
     def _generar_operation_id(self, symbol: str) -> str:
         """Genera un identificador único para agrupar fills de una operación."""
@@ -186,6 +222,172 @@ class OrderManager:
         bus.subscribe('agregar_parcial', self._on_agregar_parcial)
         if self.modo_real:
             self.start_sync()
+		self._ensure_background_tasks()
+
+    def _ensure_background_tasks(self) -> None:
+        self._maybe_start_flush_task()
+        self._maybe_start_reconcile_task()
+
+    def _maybe_start_flush_task(self) -> None:
+        if not (self.modo_real and self._flush_enabled):
+            return
+        if self._flush_task is not None and not self._flush_task.done():
+            return
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        self._flush_task = loop.create_task(
+            real_orders.flush_periodico(),
+            name="orders.flush_periodico",
+        )
+        log.info(
+            "orders.flush_periodico.started",
+            extra=safe_extra({"interval": getattr(real_orders, "_FLUSH_INTERVAL", None)}),
+        )
+
+    def _maybe_start_reconcile_task(self) -> None:
+        if not (self.modo_real and self._reconcile_enabled):
+            return
+        if self._reconcile_task is not None and not self._reconcile_task.done():
+            return
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        self._reconcile_task = loop.create_task(
+            self._reconcile_loop(),
+            name="orders.reconcile_trades",
+        )
+
+    def _resolve_config_policy_default(self) -> str:
+        policy = getattr(self._config, "orders_execution_policy", "market")
+        policy_str = str(policy).strip().lower()
+        return policy_str if policy_str in {"market", "limit"} else "market"
+
+    def _resolve_config_policy_overrides(self) -> dict[str, str]:
+        overrides_raw = getattr(self._config, "orders_execution_policy_by_symbol", {})
+        result: dict[str, str] = {}
+        if isinstance(overrides_raw, Mapping):
+            for key, value in overrides_raw.items():
+                if not isinstance(key, str):
+                    continue
+                sym = key.strip().upper()
+                policy = str(value).strip().lower()
+                if policy in {"market", "limit"}:
+                    result[sym] = policy
+        return result
+
+    def _resolve_reconcile_enabled(self) -> bool:
+        base_enabled = bool(getattr(self._config, "orders_reconcile_enabled", False))
+        flag_enabled = is_flag_enabled("orders.reconcile.enabled", base_enabled)
+        if self._bot_env == "staging":
+            return flag_enabled
+        return False
+
+    def _resolve_execution_policy(self, symbol: str, side: str) -> str:
+        if not self._limit_enabled:
+            return "market"
+        symbol_key = symbol.upper().replace("-", "/")
+        policy = self._execution_policy_overrides.get(symbol_key)
+        if not policy:
+            policy = self._execution_policy_default
+        if policy != "limit":
+            return "market"
+        if side not in {"buy", "sell"}:
+            return "market"
+        return "limit"
+
+    async def _reconcile_loop(self) -> None:
+        while True:
+            try:
+                divergencias = await asyncio.to_thread(
+                    real_orders.reconciliar_trades_binance,
+                    None,
+                    self._reconcile_limit,
+                    False,
+                    self._log_reconcile_report,
+                )
+                if divergencias:
+                    log.warning(
+                        "orders.reconcile_trades.detected",
+                        extra=safe_extra({
+                            "count": len(divergencias),
+                        }),
+                    )
+            except Exception as exc:  # pragma: no cover - defensivo
+                log.error(
+                    "orders.reconcile_trades.error",
+                    extra=safe_extra({"error": str(exc)}),
+                )
+            await asyncio.sleep(self._reconcile_interval)
+
+    def _log_reconcile_report(self, divergencias: list[dict[str, Any]]) -> None:
+        if not divergencias:
+            log.debug("orders.reconcile_trades.clean")
+            return
+        for divergence in divergencias:
+            log.warning(
+                "orders.reconcile_trades.divergence",
+                extra=safe_extra(divergence),
+            )
+
+    async def _execute_real_order(
+        self,
+        side: str,
+        symbol: str,
+        cantidad: float,
+        operation_id: str,
+        entrada: dict[str, Any],
+        *,
+        precio: float | None = None,
+    ) -> ExecutionResult:
+        policy = self._resolve_execution_policy(symbol, side)
+        if policy == "limit" and precio is not None and self._limit_enabled:
+            try:
+                resultado = await asyncio.to_thread(
+                    real_orders.ejecutar_orden_limit,
+                    symbol,
+                    side,
+                    float(precio),
+                    float(cantidad),
+                    operation_id,
+                    self._limit_timeout,
+                    self._limit_offset,
+                    self._limit_max_retry,
+                )
+            except Exception as exc:  # pragma: no cover - defensivo
+                log.error(
+                    "orders.limit_execution.error",
+                    extra=safe_extra(
+                        {
+                            "symbol": symbol,
+                            "side": side,
+                            "reason": str(exc),
+                        }
+                    ),
+                )
+                return ExecutionResult(0.0, 0.0, 0.0, "ERROR", remaining=float(cantidad))
+            executed = float(resultado.get("ejecutado", 0.0))
+            fee = float(resultado.get("fee", 0.0))
+            pnl = float(resultado.get("pnl", 0.0))
+            remaining = float(resultado.get("restante", 0.0))
+            status = str(resultado.get("status") or "FILLED").upper()
+            if remaining > 0:
+                log.warning(
+                    "orders.limit_execution.partial",
+                    extra=safe_extra(
+                        {
+                            "symbol": symbol,
+                            "side": side,
+                            "remaining": remaining,
+                            "operation_id": operation_id,
+                        }
+                    ),
+                )
+            return ExecutionResult(executed, fee, pnl, status, remaining=remaining)
+
+        return await self._market_executor.ejecutar(side, symbol, cantidad, operation_id, entrada)
 
     async def _on_abrir(self, data: dict) -> None:
         fut = data.pop('future', None)
@@ -744,17 +946,18 @@ class OrderManager:
 
                 try:
                     if self.modo_real and is_valid_number(cantidad) and cantidad > 0:
-                        ejecutado, fee, pnl = await self._market_executor.ejecutar(
+                        execution = await self._execute_real_order(
                             'buy',
                             symbol,
                             cantidad,
                             operation_id,
                             {'side': 'buy', 'symbol': symbol, 'cantidad': cantidad},
+							precio=precio,
                         )
                         # actualiza con lo realmente ejecutado
-                        cantidad = float(ejecutado)
-                        orden.fee_total = getattr(orden, 'fee_total', 0.0) + fee
-                        orden.pnl_operaciones = getattr(orden, 'pnl_operaciones', 0.0) + pnl
+                        cantidad = float(execution.executed)
+                        orden.fee_total = getattr(orden, 'fee_total', 0.0) + execution.fee
+                        orden.pnl_operaciones = getattr(orden, 'pnl_operaciones', 0.0) + execution.pnl
                         if cantidad <= 0:
                             if self.bus:
                                 await self.bus.publish(
@@ -776,6 +979,18 @@ class OrderManager:
                                 {'reason': 'no_fills'},
                             )
                             return
+						if execution.status == 'PARTIAL' and execution.remaining > 0:
+                            log.warning(
+                                'orders.execution.partial',
+                                extra=safe_extra(
+                                    {
+                                        'symbol': symbol,
+                                        'side': 'buy',
+                                        'remaining': execution.remaining,
+                                        'operation_id': operation_id,
+                                    }
+                                ),
+                            )
                     else:
                         # Simulado: el “coste” inicial lo cargamos como PnL negativo hasta el cierre
                         orden.pnl_operaciones = getattr(orden, 'pnl_operaciones', 0.0) - (precio * cantidad)
@@ -938,16 +1153,17 @@ class OrderManager:
             if self.modo_real:
                 try:
                     if cantidad > 0:
-                        ejecutado, fee, pnl = await self._market_executor.ejecutar(
+                        execution = await self._execute_real_order(
                             'buy',
                             symbol,
                             cantidad,
                             operation_id,
                             {'side': 'buy', 'symbol': symbol, 'cantidad': cantidad},
+							precio=precio,
                         )
-                        cantidad = ejecutado
-                        orden.fee_total = getattr(orden, 'fee_total', 0.0) + fee
-                        orden.pnl_operaciones = getattr(orden, 'pnl_operaciones', 0.0) + pnl
+                        cantidad = execution.executed
+                        orden.fee_total = getattr(orden, 'fee_total', 0.0) + execution.fee
+                        orden.pnl_operaciones = getattr(orden, 'pnl_operaciones', 0.0) + execution.pnl
                 except Exception as e:
                     log.error(f'❌ No se pudo agregar posición real para {symbol}: {e}')
                     if self.bus:
@@ -1006,26 +1222,27 @@ class OrderManager:
 
                     if cantidad > 1e-08:
                         try:
-                            ejecutado, fee, pnl = await self._market_executor.ejecutar(
+                            execution = await self._execute_real_order(
                                 'sell',
                                 symbol,
                                 cantidad,
                                 operation_id,
                                 {'side': 'sell', 'symbol': symbol, 'cantidad': cantidad},
+								precio=precio,
                             )
-                            restante = cantidad - ejecutado
+                            restante = max(cantidad - execution.executed, 0.0)
 
-                            if ejecutado > 0:
-                                orden.fee_total = getattr(orden, 'fee_total', 0.0) + fee
-                                orden.pnl_operaciones = getattr(orden, 'pnl_operaciones', 0.0) + pnl
+                            if execution.executed > 0:
+                                orden.fee_total = getattr(orden, 'fee_total', 0.0) + execution.fee
+                                orden.pnl_operaciones = getattr(orden, 'pnl_operaciones', 0.0) + execution.pnl
 
                             if restante > 0 and not remainder_executable(symbol, precio, restante):
                                 log.info(f'♻️ Resto no ejecutable para {symbol}: {restante}')
                                 venta_exitosa = True
                                 motivo += '|non_executable_remainder'
-                            elif ejecutado > 0 and restante <= 1e-08:
+                            elif execution.executed > 0 and restante <= 1e-08:
                                 venta_exitosa = True
-                            elif ejecutado > 0 and restante > 0:
+                            elif execution.executed > 0 and restante > 0:
                                 log.error(f'❌ Venta parcial pendiente ejecutable para {symbol}: restante={restante}')
                                 real_orders.registrar_venta_fallida(symbol)
                             else:
@@ -1143,16 +1360,17 @@ class OrderManager:
 				
                 if self.modo_real:
                     try:
-                        ejecutado, fee, pnl = await self._market_executor.ejecutar(
+                        execution = await self._execute_real_order(
                             'sell',
                             symbol,
                             cantidad,
                             operation_id,
                             {'side': 'sell', 'symbol': symbol, 'cantidad': cantidad},
+							precio=precio,
                         )
-                        cantidad = ejecutado
-                        orden.fee_total = getattr(orden, 'fee_total', 0.0) + fee
-                        orden.pnl_operaciones = getattr(orden, 'pnl_operaciones', 0.0) + pnl
+                        cantidad = execution.executed
+                        orden.fee_total = getattr(orden, 'fee_total', 0.0) + execution.fee
+                        orden.pnl_operaciones = getattr(orden, 'pnl_operaciones', 0.0) + execution.pnl
                     except Exception as e:
                         log.error(
                             'Error en venta parcial',
