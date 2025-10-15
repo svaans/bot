@@ -261,6 +261,89 @@ async def test_handle_candle_records_metrics_when_enabled(monkeypatch: pytest.Mo
 
 
 @pytest.mark.asyncio
+async def test_handle_candle_realiza_backfill_de_ventana(monkeypatch: pytest.MonkeyPatch) -> None:
+    feed = make_feed()
+    symbol = "BTCUSDT"
+    feed._queues[symbol] = asyncio.Queue()
+    feed._cliente = object()
+    feed._backfill_ventana_enabled = True
+    feed._backfill_window_target = 5
+    feed._backfill_max = 5
+
+    base_ts = 1_650_000_000_000
+    intervalo_ms = feed.intervalo_segundos * 1000
+
+    first = {
+        "symbol": symbol,
+        "timestamp": base_ts,
+        "open": 1.0,
+        "high": 1.1,
+        "low": 0.9,
+        "close": 1.05,
+        "volume": 10.0,
+        "is_closed": True,
+    }
+
+    await feed._handle_candle(symbol, first)
+
+    first_item = feed._queues[symbol].get_nowait()
+    assert int(first_item["timestamp"]) == first["timestamp"]
+    feed._queues[symbol].task_done()
+
+    extras = [
+        {
+            "timestamp": base_ts + intervalo_ms,
+            "open": 1.1,
+            "high": 1.2,
+            "low": 1.0,
+            "close": 1.15,
+            "volume": 12.0,
+        },
+        {
+            "timestamp": base_ts + 2 * intervalo_ms,
+            "open": 1.15,
+            "high": 1.25,
+            "low": 1.1,
+            "close": 1.2,
+            "volume": 14.0,
+        },
+    ]
+
+    async def fake_backfill(
+        _symbol: str,
+        limit: int,
+        *,
+        intervalo: str,
+        cliente: Any | None,
+        fetcher: Any | None = None,
+    ) -> list[dict[str, Any]]:
+        return extras[:limit]
+
+    monkeypatch.setattr("core.adaptador_dinamico.backfill", fake_backfill)
+
+    gap_candle = {
+        "symbol": symbol,
+        "timestamp": base_ts + 3 * intervalo_ms,
+        "open": 1.2,
+        "high": 1.3,
+        "low": 1.15,
+        "close": 1.25,
+        "volume": 16.0,
+        "is_closed": True,
+    }
+
+    await feed._handle_candle(symbol, gap_candle)
+
+    queued_ts: list[int] = []
+    while not feed._queues[symbol].empty():
+        item = feed._queues[symbol].get_nowait()
+        queued_ts.append(int(item["timestamp"]))
+        feed._queues[symbol].task_done()
+
+    assert queued_ts == [extras[0]["timestamp"], extras[1]["timestamp"], gap_candle["timestamp"]]
+
+
+@pytest.mark.asyncio
 async def test_consumer_processes_and_updates_stats(capture_events: list[tuple[str, dict[str, Any]]]) -> None:
     processed: list[dict[str, Any]] = []
 
