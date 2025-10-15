@@ -120,6 +120,12 @@ VELAS_RECHAZADAS_PCT = Gauge(
     ["symbol", "timeframe"],
 )
 
+FUNDING_SIGNAL_DECORATIONS_TOTAL = Counter(
+    "funding_signal_decorations_total",
+    "Resultados del decorador de funding aplicado a señales",
+    ["symbol", "side", "outcome"],
+)
+
 WARMUP_PROGRESS = Gauge(
     "context_warmup_progress",
     "Progreso de warmup de datos",
@@ -567,6 +573,23 @@ def registrar_feed_funding_missing(symbol: str, reason: str) -> None:
 def registrar_feed_open_interest_missing(symbol: str, reason: str) -> None:
     FEEDS_OPEN_INTEREST_MISSING.labels(symbol=symbol, reason=reason).inc()
     registro_metrico.registrar("feed_open_interest_missing", {"symbol": symbol, "reason": reason})
+
+
+def registrar_funding_signal_decoration(symbol: str, side: str, outcome: str) -> None:
+    """Registra el efecto aplicado por el decorador de funding."""
+
+    try:
+        FUNDING_SIGNAL_DECORATIONS_TOTAL.labels(
+            symbol=str(symbol).upper(),
+            side=str(side).lower(),
+            outcome=str(outcome),
+        ).inc()
+    except Exception:
+        pass
+    registro_metrico.registrar(
+        "funding_signal_decoration",
+        {"symbol": str(symbol).upper(), "side": str(side).lower(), "outcome": str(outcome)},
+    )
 
 
 def registrar_watchdog_restart(task: str) -> None:
