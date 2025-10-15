@@ -19,6 +19,9 @@ from core.utils.feature_flags import is_flag_enabled
 from core.utils.log_utils import safe_extra
 from core.utils.utils import configurar_logger
 
+from ._locks import AsyncSymbolLock
+
+
 from ._utils import (
     EstadoSimbolo,
     _maybe_await,
@@ -499,357 +502,372 @@ class Trader(TraderLite):
             Diccionario con la propuesta de entrada listo para `_abrir_operacion_real`
             o ``None`` si no se cumplieron las condiciones.
         """
-        self._last_eval_skip_reason = None
-        self._last_eval_skip_details = None
-        if not self.estrategias_habilitadas:
-            log.debug("[%s] Estrategias deshabilitadas; entrada omitida", symbol)
-            self._last_eval_skip_reason = "strategies_disabled"
-            self._last_eval_skip_details = {"symbol": symbol}
-            return None
-        if not isinstance(df, pd.DataFrame) or df.empty:
-            log.warning("[%s] DataFrame inválido al evaluar entrada", symbol)
-            self._last_eval_skip_reason = "invalid_df"
-            self._last_eval_skip_details = {"symbol": symbol}
-            return None
-        
-        timeframe: Optional[str] = getattr(df, "tf", None)
-        if timeframe is None:
-            attrs_tf: Optional[str] = None
-            if hasattr(df, "attrs"):
-                try:
-                    attrs_tf = df.attrs.get("tf")  # type: ignore[assignment]
-                except Exception:
-                    attrs_tf = None
-            if attrs_tf:
-                timeframe = str(attrs_tf)
-            else:
-                config_tf = getattr(getattr(self, "config", None), "intervalo_velas", None)
-                timeframe = str(config_tf) if config_tf else None
-        timeframe_str = str(timeframe) if timeframe else None
-
-        buf_len = len(df)
-        min_bars = self._resolve_min_bars_requirement()
-        last_bar_ts_raw: Optional[int] = None
-        if buf_len:
-            try:
-                last_bar_ts_raw = int(df.iloc[-1]["timestamp"])
-            except Exception:
-                last_bar_ts_raw = None
-
-        tf_secs = tf_seconds(timeframe_str)
-
-        bar_close_ts = _normalize_timestamp(last_bar_ts_raw)
-        bar_open_raw: Any = None
-        bar_close_raw: Any = None
-        bar_event_raw: Any = None
-
-        buffer_ref = getattr(estado, "buffer", None)
-        last_candle: Any = None
-        if buffer_ref:
-            try:
-                last_candle = buffer_ref[-1]
-            except (IndexError, TypeError):
-                last_candle = None
-
-        if isinstance(last_candle, dict):
-            bar_open_raw = last_candle.get("open_time")
-            bar_close_raw = last_candle.get("close_time")
-            bar_event_raw = (
-                last_candle.get("event_time")
-                or last_candle.get("close_time")
-                or last_candle.get("timestamp")
-            )
-
-        bar_close_ts = _normalize_timestamp(bar_close_raw) or bar_close_ts
-        bar_event_ts = _normalize_timestamp(
-            bar_event_raw
-            if bar_event_raw is not None
-            else bar_close_raw
-            if bar_close_raw is not None
-            else last_bar_ts_raw
-        )
-        bar_open_ts = _normalize_timestamp(bar_open_raw)
-
-        if bar_open_ts is None and bar_close_ts is not None and tf_secs > 0:
-            bar_open_ts = bar_close_ts - tf_secs
-        if bar_open_ts is None and bar_event_ts is not None and tf_secs > 0:
-            bar_open_ts = bar_event_ts - tf_secs
-
-        timing_ctx: Dict[str, Any] = {}
-        reason = _reason_none(
-            symbol,
-            timeframe_str,
-            buf_len,
-            min_bars,
-            bar_open_ts,
-            bar_event_ts,
-            interval_secs=tf_secs,
-            bar_close_ts=bar_close_ts,
-            context=timing_ctx,
-        )
-
-        interval_secs = timing_ctx.get("interval_secs") or tf_secs
-        bar_open_ts = timing_ctx.get("bar_open_ts", bar_open_ts)
-        bar_close_ts = timing_ctx.get("bar_close_ts", bar_close_ts)
-        bar_event_ts = timing_ctx.get("bar_event_ts", bar_event_ts)
-        elapsed_secs = timing_ctx.get("elapsed_secs")
-        skew_allow = timing_ctx.get("skew_allow_secs", 1.5)
-        remaining_secs = (
-            (interval_secs - elapsed_secs)
-            if (interval_secs and elapsed_secs is not None)
-            else None
-        )
-
-        eval_key = (symbol.upper(), (timeframe_str or "unknown"))
-
-        if reason == "warmup":
-            self._eval_enabled[eval_key] = False
-            log.debug(
-                "[%s] Warmup incompleto; omitiendo evaluación",
-                symbol,
-                extra=safe_extra(
-                    {
-                        "symbol": symbol,
-                        "timeframe": timeframe_str,
-                        "reason": reason,
-                        "buffer_len": buf_len,
-                        "min_needed": min_bars,
-                    }
-                ),
-            )
-            self._last_eval_skip_reason = "warmup"
-            self._last_eval_skip_details = {
-                "timeframe": timeframe_str,
-                "buffer_len": buf_len,
-                "min_needed": min_bars,
-            }
-            return None
-
-        if reason == "waiting_close":
-            log.debug(
-                "[%s] Esperando cierre de vela para evaluar",
-                symbol,
-                extra=safe_extra(
-                    {
-                        "symbol": symbol,
-                        "timeframe": timeframe_str,
-                        "reason": reason,
-                        "buffer_len": buf_len,
-                        "min_needed": min_bars,
-                        "bar_open_ts": bar_open_ts,
-                        "bar_close_ts": bar_close_ts,
-                        "event_ts": bar_event_ts,
-                        "elapsed_secs": elapsed_secs,
-                        "elapsed_ms": int(elapsed_secs * 1000)
-                        if elapsed_secs is not None
-                        else None,
-                        "remaining_secs": remaining_secs,
-                        "remaining_ms": int(remaining_secs * 1000)
-                        if remaining_secs is not None
-                        else None,
-                        "interval_secs": interval_secs,
-                        "interval_ms": interval_secs * 1000 if interval_secs else None,
-                        "skew_allow_secs": skew_allow,
-                        "skew_allow_ms": int(skew_allow * 1000),
-                        "last_bar_ts_raw": last_bar_ts_raw,
-                    }
-                ),
-            )
-            self._last_eval_skip_reason = "waiting_close"
-            self._last_eval_skip_details = {
-                "timeframe": timeframe_str,
-                "buffer_len": buf_len,
-                "min_needed": min_bars,
-                "bar_open_ts": bar_open_ts,
-                "bar_close_ts": bar_close_ts,
-                "event_ts": bar_event_ts,
-                "elapsed_secs": elapsed_secs,
-                "elapsed_ms": int(elapsed_secs * 1000)
-                if elapsed_secs is not None
-                else None,
-                "remaining_secs": remaining_secs,
-                "remaining_ms": int(remaining_secs * 1000)
-                if remaining_secs is not None
-                else None,
-                "interval_secs": interval_secs,
-                "interval_ms": interval_secs * 1000 if interval_secs else None,
-                "skew_allow_secs": skew_allow,
-                "skew_allow_ms": int(skew_allow * 1000),
-                "last_bar_ts_raw": last_bar_ts_raw,
-            }
-            return None
-
-        if reason in {"bar_in_future", "bar_ts_out_of_range"}:
-            log.warning(
-                "[%s] Timestamp de vela inválido (%s)",
-                symbol,
-                reason,
-                extra=safe_extra(
-                    {
-                        "symbol": symbol,
-                        "timeframe": timeframe_str,
-                        "reason": reason,
-                        "buffer_len": buf_len,
-                        "min_needed": min_bars,
-                        "bar_open_ts": bar_open_ts,
-                        "bar_close_ts": bar_close_ts,
-                        "event_ts": bar_event_ts,
-                        "elapsed_secs": elapsed_secs,
-                        "elapsed_ms": int(elapsed_secs * 1000)
-                        if elapsed_secs is not None
-                        else None,
-                        "interval_secs": interval_secs,
-                        "interval_ms": interval_secs * 1000 if interval_secs else None,
-                        "skew_allow_secs": skew_allow,
-                        "skew_allow_ms": int(skew_allow * 1000),
-                        "last_bar_ts_raw": last_bar_ts_raw,
-                    }
-                ),
-            )
-            self._last_eval_skip_reason = reason
-            self._last_eval_skip_details = {
-                "timeframe": timeframe_str,
-                "buffer_len": buf_len,
-                "min_needed": min_bars,
-                "bar_open_ts": bar_open_ts,
-                "bar_close_ts": bar_close_ts,
-                "event_ts": bar_event_ts,
-                "elapsed_secs": elapsed_secs,
-                "elapsed_ms": int(elapsed_secs * 1000)
-                if elapsed_secs is not None
-                else None,
-                "interval_secs": interval_secs,
-                "interval_ms": interval_secs * 1000 if interval_secs else None,
-                "skew_allow_secs": skew_allow,
-                "skew_allow_ms": int(skew_allow * 1000),
-                "last_bar_ts_raw": last_bar_ts_raw,
-            }
-            return None
-
-        if not self._should_evaluate(symbol, timeframe_str, last_bar_ts_raw):
-            log.debug(
-                "[%s] Saltando evaluación (sin nueva vela cerrada)",
-                symbol,
-                extra=safe_extra(
-                    {
-                        "symbol": symbol,
-                        "timeframe": timeframe_str,
-                        "reason": "duplicate_bar",
-                        "buffer_len": buf_len,
-                        "min_needed": min_bars,
-                    }
-                ),
-            )
-            self._last_eval_skip_reason = "duplicate_bar"
-            self._last_eval_skip_details = {
-                "timeframe": timeframe_str,
-                "buffer_len": buf_len,
-                "min_needed": min_bars,
-            }
-            return None
-
-        previously_disabled = self._eval_enabled.get(eval_key)
-        if previously_disabled is False:
-            self._eval_enabled[eval_key] = True
-            log.info(
-                "eval.enabled",
-                extra=safe_extra(
-                    {
-                        "symbol": symbol,
-                        "timeframe": timeframe_str,
-                        "buffer_len": buf_len,
-                        "min_needed": min_bars,
-                    }
-                ),
-            )
-        else:
-            self._eval_enabled.setdefault(eval_key, True)
-
-        base_on_event: Callable[[str, dict], None] | None = None
-        if hasattr(self, "_emit"):
-            base_on_event = self._emit
-        elif callable(self.on_event):
-            base_on_event = self.on_event
-
-        captured_events: list[tuple[str, dict[str, Any]]] = []
-
-        def _handle_event(evt: str, data: dict) -> None:
-            captured_events.append((evt, data))
-            if base_on_event is None:
-                return
-            try:
-                base_on_event(evt, data)
-            except Exception:
-                pass
-
-        try:
-            resultado = await self._execute_pipeline(
-                symbol,
-                df,
-                estado,
-                _handle_event,
-            )
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            log.exception("❌ Error evaluando condiciones de entrada para %s", symbol)
-            return None
-
-        if resultado:
-            log.debug("[%s] Entrada candidata generada", symbol)
+        async def _evaluate() -> dict[str, Any] | None:
             self._last_eval_skip_reason = None
             self._last_eval_skip_details = None
-            return resultado
-
-        provider = getattr(self, "_verificar_entrada_provider", None)
-
-        skip_reason: str | None = None
-        skip_details: dict[str, Any] | None = None
-        for evt, data in reversed(captured_events):
-            if evt not in {"entry_skip", "entry_error", "entry_timeout", "entry_gate_blocked"}:
-                continue
-            reason_candidate = data.get("reason")
-            skip_reason = str(reason_candidate) if reason_candidate else evt
-            skip_details = dict(data)
-            break
-
-        if skip_reason is not None:
-            if skip_details is not None and provider and "provider" not in skip_details:
-                skip_details = {**skip_details, "provider": provider}
-            self._last_eval_skip_reason = skip_reason
-            self._last_eval_skip_details = skip_details
-            return None
+            if not self.estrategias_habilitadas:
+                log.debug("[%s] Estrategias deshabilitadas; entrada omitida", symbol)
+                self._last_eval_skip_reason = "strategies_disabled"
+                self._last_eval_skip_details = {"symbol": symbol}
+                return None
+            if not isinstance(df, pd.DataFrame) or df.empty:
+                log.warning("[%s] DataFrame inválido al evaluar entrada", symbol)
+                self._last_eval_skip_reason = "invalid_df"
+                self._last_eval_skip_details = {"symbol": symbol}
+                return None
         
-        self._last_eval_skip_reason = "no_signal" if provider else "pipeline_missing"
-        pipeline_diagnostics: dict[str, Any] = {}
-        if provider is None:
-            pipeline_diagnostics = self._collect_pipeline_diagnostics()
+            timeframe: Optional[str] = getattr(df, "tf", None)
+            if timeframe is None:
+                attrs_tf: Optional[str] = None
+                if hasattr(df, "attrs"):
+                    try:
+                        attrs_tf = df.attrs.get("tf")  # type: ignore[assignment]
+                    except Exception:
+                        attrs_tf = None
+                if attrs_tf:
+                    timeframe = str(attrs_tf)
+                else:
+                    config_tf = getattr(getattr(self, "config", None), "intervalo_velas", None)
+                    timeframe = str(config_tf) if config_tf else None
+            timeframe_str = str(timeframe) if timeframe else None
 
-        details: dict[str, Any] = {
-            "timeframe": timeframe_str,
-            "buffer_len": buf_len,
-            "min_needed": min_bars,
-            "provider": provider,
-        }
-        if pipeline_diagnostics:
-            details.update(pipeline_diagnostics)
-        self._last_eval_skip_details = details
-        log.debug(
-            "[%s] Sin condiciones de entrada válidas",
-            symbol,
-            extra=safe_extra(
-                {
-                    "symbol": symbol,
+            buf_len = len(df)
+            min_bars = self._resolve_min_bars_requirement()
+            last_bar_ts_raw: Optional[int] = None
+            if buf_len:
+                try:
+                    last_bar_ts_raw = int(df.iloc[-1]["timestamp"])
+                except Exception:
+                    last_bar_ts_raw = None
+
+            tf_secs = tf_seconds(timeframe_str)
+
+            bar_close_ts = _normalize_timestamp(last_bar_ts_raw)
+            bar_open_raw: Any = None
+            bar_close_raw: Any = None
+            bar_event_raw: Any = None
+
+            buffer_ref = getattr(estado, "buffer", None)
+            last_candle: Any = None
+            if buffer_ref:
+                try:
+                    last_candle = buffer_ref[-1]
+                except (IndexError, TypeError):
+                    last_candle = None
+
+            if isinstance(last_candle, dict):
+                bar_open_raw = last_candle.get("open_time")
+                bar_close_raw = last_candle.get("close_time")
+                bar_event_raw = (
+                    last_candle.get("event_time")
+                    or last_candle.get("close_time")
+                    or last_candle.get("timestamp")
+                )
+
+            bar_close_ts = _normalize_timestamp(bar_close_raw) or bar_close_ts
+            bar_event_ts = _normalize_timestamp(
+                bar_event_raw
+                if bar_event_raw is not None
+                else bar_close_raw
+                if bar_close_raw is not None
+                else last_bar_ts_raw
+            )
+            bar_open_ts = _normalize_timestamp(bar_open_raw)
+
+            if bar_open_ts is None and bar_close_ts is not None and tf_secs > 0:
+                bar_open_ts = bar_close_ts - tf_secs
+            if bar_open_ts is None and bar_event_ts is not None and tf_secs > 0:
+                bar_open_ts = bar_event_ts - tf_secs
+
+            timing_ctx: Dict[str, Any] = {}
+            reason = _reason_none(
+                symbol,
+                timeframe_str,
+                buf_len,
+                min_bars,
+                bar_open_ts,
+                bar_event_ts,
+                interval_secs=tf_secs,
+                bar_close_ts=bar_close_ts,
+                context=timing_ctx,
+            )
+
+            interval_secs = timing_ctx.get("interval_secs") or tf_secs
+            bar_open_ts = timing_ctx.get("bar_open_ts", bar_open_ts)
+            bar_close_ts = timing_ctx.get("bar_close_ts", bar_close_ts)
+            bar_event_ts = timing_ctx.get("bar_event_ts", bar_event_ts)
+            elapsed_secs = timing_ctx.get("elapsed_secs")
+            skew_allow = timing_ctx.get("skew_allow_secs", 1.5)
+            remaining_secs = (
+                (interval_secs - elapsed_secs)
+                if (interval_secs and elapsed_secs is not None)
+                else None
+            )
+            eval_key = (symbol.upper(), (timeframe_str or "unknown"))
+
+            if reason == "warmup":
+                self._eval_enabled[eval_key] = False
+                log.debug(
+                    "[%s] Warmup incompleto; omitiendo evaluación",
+                    symbol,
+                    extra=safe_extra(
+                        {
+                            "symbol": symbol,
+                            "timeframe": timeframe_str,
+                            "reason": reason,
+                            "buffer_len": buf_len,
+                            "min_needed": min_bars,
+                        }
+                    ),
+                )
+                self._last_eval_skip_reason = "warmup"
+                self._last_eval_skip_details = {
                     "timeframe": timeframe_str,
-                    "reason": "sin_senal" if provider else "pipeline_missing",
                     "buffer_len": buf_len,
                     "min_needed": min_bars,
-                    "provider": provider,
-                    **{k: v for k, v in pipeline_diagnostics.items() if k.startswith("pipeline_")},
                 }
-            ),
-        )
-        return None
+                return None
+
+            if reason == "waiting_close":
+                log.debug(
+                    "[%s] Esperando cierre de vela para evaluar",
+                    symbol,
+                    extra=safe_extra(
+                        {
+                            "symbol": symbol,
+                            "timeframe": timeframe_str,
+                            "reason": reason,
+                            "buffer_len": buf_len,
+                            "min_needed": min_bars,
+                            "bar_open_ts": bar_open_ts,
+                            "bar_close_ts": bar_close_ts,
+                            "event_ts": bar_event_ts,
+                            "elapsed_secs": elapsed_secs,
+                            "elapsed_ms": int(elapsed_secs * 1000)
+                            if elapsed_secs is not None
+                            else None,
+                            "remaining_secs": remaining_secs,
+                            "remaining_ms": int(remaining_secs * 1000)
+                            if remaining_secs is not None
+                            else None,
+                            "interval_secs": interval_secs,
+                            "interval_ms": interval_secs * 1000 if interval_secs else None,
+                            "skew_allow_secs": skew_allow,
+                            "skew_allow_ms": int(skew_allow * 1000),
+                            "last_bar_ts_raw": last_bar_ts_raw,
+                        }
+                    ),
+                )
+                self._last_eval_skip_reason = "waiting_close"
+                self._last_eval_skip_details = {
+                    "timeframe": timeframe_str,
+                    "buffer_len": buf_len,
+                    "min_needed": min_bars,
+                    "bar_open_ts": bar_open_ts,
+                    "bar_close_ts": bar_close_ts,
+                    "event_ts": bar_event_ts,
+                    "elapsed_secs": elapsed_secs,
+                    "elapsed_ms": int(elapsed_secs * 1000)
+                    if elapsed_secs is not None
+                    else None,
+                    "remaining_secs": remaining_secs,
+                    "remaining_ms": int(remaining_secs * 1000)
+                    if remaining_secs is not None
+                    else None,
+                    "interval_secs": interval_secs,
+                    "interval_ms": interval_secs * 1000 if interval_secs else None,
+                    "skew_allow_secs": skew_allow,
+                    "skew_allow_ms": int(skew_allow * 1000),
+                    "last_bar_ts_raw": last_bar_ts_raw,
+                }
+                return None
+
+            if reason in {"bar_in_future", "bar_ts_out_of_range"}:
+                log.warning(
+                    "[%s] Timestamp de vela inválido (%s)",
+                    symbol,
+                    reason,
+                    extra=safe_extra(
+                        {
+                            "symbol": symbol,
+                            "timeframe": timeframe_str,
+                            "reason": reason,
+                            "buffer_len": buf_len,
+                            "min_needed": min_bars,
+                            "bar_open_ts": bar_open_ts,
+                            "bar_close_ts": bar_close_ts,
+                            "event_ts": bar_event_ts,
+                            "elapsed_secs": elapsed_secs,
+                            "elapsed_ms": int(elapsed_secs * 1000)
+                            if elapsed_secs is not None
+                            else None,
+                            "interval_secs": interval_secs,
+                            "interval_ms": interval_secs * 1000 if interval_secs else None,
+                            "skew_allow_secs": skew_allow,
+                            "skew_allow_ms": int(skew_allow * 1000),
+                            "last_bar_ts_raw": last_bar_ts_raw,
+                        }
+                    ),
+                )
+                self._last_eval_skip_reason = reason
+                self._last_eval_skip_details = {
+                    "timeframe": timeframe_str,
+                    "buffer_len": buf_len,
+                    "min_needed": min_bars,
+                    "bar_open_ts": bar_open_ts,
+                    "bar_close_ts": bar_close_ts,
+                    "event_ts": bar_event_ts,
+                    "elapsed_secs": elapsed_secs,
+                    "elapsed_ms": int(elapsed_secs * 1000)
+                    if elapsed_secs is not None
+                    else None,
+                    "interval_secs": interval_secs,
+                    "interval_ms": interval_secs * 1000 if interval_secs else None,
+                    "skew_allow_secs": skew_allow,
+                    "skew_allow_ms": int(skew_allow * 1000),
+                    "last_bar_ts_raw": last_bar_ts_raw,
+                }
+                return None
+
+            if not self._should_evaluate(symbol, timeframe_str, last_bar_ts_raw):
+                log.debug(
+                    "[%s] Saltando evaluación (sin nueva vela cerrada)",
+                    symbol,
+                    extra=safe_extra(
+                        {
+                            "symbol": symbol,
+                            "timeframe": timeframe_str,
+                            "reason": "duplicate_bar",
+                            "buffer_len": buf_len,
+                            "min_needed": min_bars,
+                        }
+                    ),
+                )
+                self._last_eval_skip_reason = "duplicate_bar"
+                self._last_eval_skip_details = {
+                    "timeframe": timeframe_str,
+                    "buffer_len": buf_len,
+                    "min_needed": min_bars,
+                }
+                return None
+
+            previously_disabled = self._eval_enabled.get(eval_key)
+            if previously_disabled is False:
+                self._eval_enabled[eval_key] = True
+                log.info(
+                    "eval.enabled",
+                    extra=safe_extra(
+                        {
+                            "symbol": symbol,
+                            "timeframe": timeframe_str,
+                            "buffer_len": buf_len,
+                            "min_needed": min_bars,
+                        }
+                    ),
+                )
+            else:
+                self._eval_enabled.setdefault(eval_key, True)
+
+            base_on_event: Callable[[str, dict], None] | None = None
+            if hasattr(self, "_emit"):
+                base_on_event = self._emit
+            elif callable(self.on_event):
+                base_on_event = self.on_event
+
+            captured_events: list[tuple[str, dict[str, Any]]] = []
+
+            def _handle_event(evt: str, data: dict) -> None:
+                captured_events.append((evt, data))
+                if base_on_event is None:
+                    return
+                try:
+                    base_on_event(evt, data)
+                except Exception:
+                    pass
+
+            try:
+                resultado = await self._execute_pipeline(
+                    symbol,
+                    df,
+                    estado,
+                    _handle_event,
+                )
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                log.exception("❌ Error evaluando condiciones de entrada para %s", symbol)
+                return None
+
+            if resultado:
+                log.debug("[%s] Entrada candidata generada", symbol)
+                self._last_eval_skip_reason = None
+                self._last_eval_skip_details = None
+                return resultado
+
+            provider = getattr(self, "_verificar_entrada_provider", None)
+
+            skip_reason: str | None = None
+            skip_details: dict[str, Any] | None = None
+            for evt, data in reversed(captured_events):
+                if evt not in {"entry_skip", "entry_error", "entry_timeout", "entry_gate_blocked"}:
+                    continue
+                reason_candidate = data.get("reason")
+                skip_reason = str(reason_candidate) if reason_candidate else evt
+                skip_details = dict(data)
+                break
+
+            if skip_reason is not None:
+                if skip_details is not None and provider and "provider" not in skip_details:
+                    skip_details = {**skip_details, "provider": provider}
+                self._last_eval_skip_reason = skip_reason
+                self._last_eval_skip_details = skip_details
+                return None
+        
+            self._last_eval_skip_reason = "no_signal" if provider else "pipeline_missing"
+            pipeline_diagnostics: dict[str, Any] = {}
+            if provider is None:
+                pipeline_diagnostics = self._collect_pipeline_diagnostics()
+
+            details: dict[str, Any] = {
+                "timeframe": timeframe_str,
+                "buffer_len": buf_len,
+                "min_needed": min_bars,
+                "provider": provider,
+            }
+            if pipeline_diagnostics:
+                details.update(pipeline_diagnostics)
+            self._last_eval_skip_details = details
+            log.debug(
+                "[%s] Sin condiciones de entrada válidas",
+                symbol,
+                extra=safe_extra(
+                    {
+                        "symbol": symbol,
+                        "timeframe": timeframe_str,
+                        "reason": "sin_senal" if provider else "pipeline_missing",
+                        "buffer_len": buf_len,
+                        "min_needed": min_bars,
+                        "provider": provider,
+                        **{k: v for k, v in pipeline_diagnostics.items() if k.startswith("pipeline_")},
+                    }
+                ),
+            )
+            return None
+
+        lock: AsyncSymbolLock | None = None
+        if isinstance(symbol, str) and symbol:
+            try:
+                current_loop = asyncio.get_running_loop()
+            except RuntimeError:
+                current_loop = None
+            main_loop = getattr(self, "_loop", None)
+            if current_loop is not None and current_loop is main_loop:
+                lock = self._get_symbol_lock(symbol)
+
+        if lock is None:
+            return await _evaluate()
+        async with lock:
+            return await _evaluate()
 
     async def _execute_pipeline(
         self,

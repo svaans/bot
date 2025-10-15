@@ -16,6 +16,7 @@ from core.backfill_service import BackfillService
 from core.utils.log_utils import safe_extra
 from core.utils.utils import configurar_logger
 
+from ._locks import AsyncSymbolLock
 from ._utils import EstadoSimbolo, _is_awaitable, _maybe_await
 from .trader_lite_backfill import TraderLiteBackfillMixin
 from .trader_lite_processing import TraderLiteProcessingMixin
@@ -152,6 +153,12 @@ class TraderLite(TraderLiteBackfillMixin, TraderLiteProcessingMixin):
         self.estado: Dict[str, EstadoSimbolo] = {s: EstadoSimbolo() for s in config.symbols}
         # Registro de tendencia por símbolo (utilizado por procesar_vela)
         self.estado_tendencia: Dict[str, Any] = {s: None for s in config.symbols}
+        # Bloqueos por símbolo para coordinar acceso concurrente desde tareas
+        # asíncronas y pipelines offloaded.
+        self._symbol_state_locks: Dict[str, AsyncSymbolLock] = {
+            s.upper(): AsyncSymbolLock() for s in config.symbols
+        }
+        self._loop: asyncio.AbstractEventLoop | None = None
         self._last_evaluated_bar: Dict[tuple[str, str], int] = {}
         self._eval_enabled: Dict[tuple[str, str], bool] = {}
         self._waiting_close_streak: Dict[tuple[str, str], int] = defaultdict(int)
@@ -539,6 +546,24 @@ class TraderLite(TraderLiteBackfillMixin, TraderLiteProcessingMixin):
             self.event_bus = None
 
     # ------------------- utilidades internas -------------------
+    def _get_symbol_lock(self, symbol: str) -> AsyncSymbolLock:
+        """Obtiene (o crea) el lock reentrante asociado a ``symbol``."""
+
+        key = str(symbol or "").upper()
+        if not key:
+            # Símbolos vacíos se manejan con un lock dedicado para evitar None.
+            key = "__GLOBAL__"
+        lock = self._symbol_state_locks.get(key)
+        if lock is None:
+            lock = AsyncSymbolLock()
+            self._symbol_state_locks[key] = lock
+        return lock
+
+    def symbol_lock(self, symbol: str) -> AsyncSymbolLock:
+        """Exposición controlada del lock asociado a ``symbol``."""
+
+        return self._get_symbol_lock(symbol)
+    
     def _create_spread_guard(self) -> Any | None:
         """Instancia ``SpreadGuard`` cuando la configuración lo habilita."""
         base_limit = float(getattr(self.config, "max_spread_ratio", 0.0) or 0.0)
@@ -676,6 +701,7 @@ class TraderLite(TraderLiteBackfillMixin, TraderLiteProcessingMixin):
 
     # ------------------- ciclo principal -------------------
     async def _run(self) -> None:
+        self._loop = asyncio.get_running_loop()
         symbols = list({s.upper() for s in self.config.symbols})
         self._emit("trader_start", {"symbols": symbols, "intervalo": self.config.intervalo_velas})
 
@@ -710,13 +736,26 @@ class TraderLite(TraderLiteBackfillMixin, TraderLiteProcessingMixin):
                 ),
             )
             outcome = "accepted"
-            try:
+            async def _process() -> None:
+                nonlocal outcome
                 should_process = self._update_estado_con_candle(c)
                 if not should_process:
                     outcome = "skipped"
                     return
                 await self._procesar_vela(c)
                 outcome = "processed"
+
+
+            lock: AsyncSymbolLock | None = None
+            if isinstance(sym, str) and sym:
+                lock = self._get_symbol_lock(sym)
+
+            try:
+                if lock is None:
+                    await _process()
+                else:
+                    async with lock:
+                        await _process()
             except Exception:
                 outcome = "error"
                 raise
