@@ -20,7 +20,9 @@ from __future__ import annotations
 import asyncio
 import inspect
 import math
+import asyncio
 from dataclasses import dataclass, field
+import time
 from typing import Any, Callable, Optional
 
 import pandas as pd
@@ -38,6 +40,13 @@ from core.utils.log_utils import safe_extra
 from core.metrics_helpers import safe_inc, safe_set
 from core.utils.metrics_compat import Counter, Gauge
 from core.utils.feature_flags import is_flag_enabled
+from core.funding_rate import FundingResult, obtener_funding
+
+try:  # pragma: no cover - métricas opcionales
+    from core.metrics import registrar_funding_signal_decoration
+except Exception:  # pragma: no cover - entorno degradado
+    def registrar_funding_signal_decoration(*_args: Any, **_kwargs: Any) -> None:  # type: ignore[override]
+        return None
 
 try:  # pragma: no cover - fallback cuando las métricas no están disponibles
     from core.metrics import registrar_decision
@@ -468,14 +477,19 @@ async def _evaluar_engine(trader: Any, symbol: str, df: pd.DataFrame, estado: An
     except (TypeError, ValueError):
         signature = None
 
-    def _call(*args: Any) -> Any:
-        if (
-            signature is not None
-            and "on_event" in signature.parameters
-            and on_event is not None
-        ):
-            return fn(*args, on_event=on_event)
-        return fn(*args)
+    def _call(call_args: tuple[Any, ...], call_kwargs: dict[str, Any]) -> Any:
+        kwargs = dict(call_kwargs)
+        if signature is not None:
+            if "on_event" in signature.parameters and on_event is not None:
+                kwargs.setdefault("on_event", on_event)
+            return fn(*call_args, **kwargs)
+
+        if on_event is not None and "on_event" not in kwargs:
+            try:
+                return fn(*call_args, on_event=on_event, **kwargs)
+            except TypeError:
+                pass
+        return fn(*call_args, **kwargs)
 
     necesita_trader = False
     if signature is not None:
@@ -490,15 +504,29 @@ async def _evaluar_engine(trader: Any, symbol: str, df: pd.DataFrame, estado: An
             ):
                 necesita_trader = True
                 break
+
+    def _attempt(*args: Any, **kwargs: Any) -> Callable[[], Any]:
+        call_args = tuple(args)
+        call_kwargs = dict(kwargs)
+
+        def _runner() -> Any:
+            return _call(call_args, call_kwargs)
+
+        return _runner
         
     intentos: list[Callable[[], Any]] = []
     if necesita_trader:
-        intentos.append(lambda: _call(trader, symbol, df))
-    intentos.append(lambda: _call(symbol, df))
+        intentos.append(_attempt(trader, symbol, df, estado))
+        intentos.append(_attempt(trader, symbol, df, estado=estado))
+    intentos.append(_attempt(symbol, df, estado))
+    intentos.append(_attempt(symbol, df, estado=estado))
+    if necesita_trader:
+        intentos.append(_attempt(trader, symbol, df))
+    intentos.append(_attempt(symbol, df))
 
     for idx, intento in enumerate(intentos):
         try:
-            resultado = intento()
+            resultado = _call((trader, symbol, df), {})
         except TypeError:
             if signature is None and idx == 0:
                 # Si la firma era inaccesible y falta el trader, probamos una vez
@@ -746,6 +774,15 @@ async def verificar_entrada(
         score_missing=score_missing,
     )
 
+    await _apply_signal_decorators(trader, decision, symbol=symbol_norm, side=side)
+    propuesta["meta"].update(decision.meta)
+    propuesta["score"] = decision.score
+    decision.raw["score"] = decision.score
+    if isinstance(decision.raw.get("meta"), dict):
+        decision.raw["meta"].update(decision.meta)
+    else:
+        decision.raw["meta"] = dict(decision.meta)
+
     score_pass, _ = _apply_score_gate(
         decision,
         cfg,
@@ -798,6 +835,186 @@ async def verificar_entrada(
     final_payload = decision.to_payload()
     _finalize_decision(decision)
     return _approve(final_payload)
+
+
+
+_FUNDING_CACHE_ATTR = "_funding_cache_store"
+
+
+def _funding_feature_enabled(trader: Any) -> bool:
+    cfg = getattr(trader, "config", None)
+    if cfg is not None and bool(getattr(cfg, "funding_enabled", False)):
+        return True
+    return is_flag_enabled("funding.enabled")
+
+
+def _funding_cache(trader: Any) -> dict[str, tuple[float, FundingResult]]:
+    cache = getattr(trader, _FUNDING_CACHE_ATTR, None)
+    if cache is None:
+        cache = {}
+        setattr(trader, _FUNDING_CACHE_ATTR, cache)
+    return cache
+
+
+def _funding_cache_ttl(trader: Any) -> float:
+    cfg = getattr(trader, "config", None)
+    raw = getattr(cfg, "funding_cache_ttl", 300) if cfg is not None else 300
+    try:
+        ttl = float(raw)
+    except (TypeError, ValueError):
+        return 300.0
+    return max(0.0, ttl)
+
+
+async def _obtener_funding_cached(trader: Any, symbol: str) -> FundingResult:
+    cache = _funding_cache(trader)
+    ttl = _funding_cache_ttl(trader)
+    now = time.monotonic()
+    entry = cache.get(symbol)
+    if entry is not None:
+        expires_at, cached_result = entry
+        if expires_at >= now:
+            return cached_result
+    result = await obtener_funding(symbol)
+    if ttl > 0:
+        cache[symbol] = (now + ttl, result)
+    else:
+        cache.pop(symbol, None)
+    return result
+
+
+def _resolve_funding_symbol(cfg: Any, symbol: str) -> str:
+    overrides = getattr(cfg, "funding_symbol_overrides", {}) if cfg is not None else {}
+    resolved = None
+    if isinstance(overrides, dict):
+        resolved = overrides.get(str(symbol).upper())
+    if resolved:
+        return str(resolved)
+    return str(symbol).upper()
+
+
+async def _apply_signal_decorators(
+    trader: Any,
+    decision: EntryDecision,
+    *,
+    symbol: str,
+    side: str,
+) -> None:
+    if not _funding_feature_enabled(trader):
+        return
+    try:
+        await _apply_funding_decorator(trader, decision, symbol=symbol, side=side)
+    except asyncio.CancelledError:  # pragma: no cover - respeta cancelaciones
+        raise
+    except Exception:
+        log.exception(
+            "funding.decorator_error",
+            extra=safe_extra({"symbol": symbol, "side": side}),
+        )
+
+
+async def _apply_funding_decorator(
+    trader: Any,
+    decision: EntryDecision,
+    *,
+    symbol: str,
+    side: str,
+) -> None:
+    cfg = getattr(trader, "config", None)
+    query_symbol = _resolve_funding_symbol(cfg, symbol)
+    if not query_symbol:
+        registrar_funding_signal_decoration(symbol, side, "missing_symbol")
+        return
+
+    result = await _obtener_funding_cached(trader, query_symbol)
+    meta_funding: dict[str, Any] = {
+        "symbol": symbol,
+        "query_symbol": query_symbol,
+        "mapped_symbol": result.mapped_symbol,
+        "segment": result.segment,
+        "source": result.source,
+        "available": result.available,
+        "reason": result.reason,
+        "fetched_at": result.fetched_at.isoformat(),
+    }
+    decision.meta.setdefault("funding", {}).update(meta_funding)
+
+    if not result.available or result.rate is None:
+        registrar_funding_signal_decoration(symbol, side, "missing")
+        log.info(
+            "funding.missing",
+            extra=safe_extra(
+                {
+                    "symbol": symbol,
+                    "query_symbol": query_symbol,
+                    "reason": result.reason or "unknown",
+                }
+            ),
+        )
+        return
+
+    rate = float(result.rate)
+    decision.meta["funding"]["rate"] = rate
+
+    warning_threshold = getattr(cfg, "funding_warning_threshold", 0.0005) if cfg is not None else 0.0005
+    try:
+        warning_threshold = abs(float(warning_threshold))
+    except (TypeError, ValueError):
+        warning_threshold = 0.0005
+
+    direction_cost = (side.lower() == "long" and rate > 0) or (side.lower() == "short" and rate < 0)
+    direction_label = "pay" if direction_cost else "receive"
+    decision.meta["funding"]["direction"] = direction_label
+
+    magnitude = abs(rate)
+    outcome = "info"
+    if warning_threshold > 0 and magnitude >= warning_threshold:
+        decision.meta["funding"]["warning"] = True
+        log.info(
+            "funding.warning",
+            extra=safe_extra(
+                {
+                    "symbol": symbol,
+                    "side": side,
+                    "rate": rate,
+                    "direction": direction_label,
+                }
+            ),
+        )
+        outcome = "warning"
+    else:
+        decision.meta["funding"].setdefault("warning", False)
+
+    penalty_enabled = bool(getattr(cfg, "funding_score_penalty_enabled", False)) if cfg is not None else False
+    penalty_value = getattr(cfg, "funding_score_penalty", 0.0) if cfg is not None else 0.0
+    try:
+        penalty_value = float(penalty_value)
+    except (TypeError, ValueError):
+        penalty_value = 0.0
+
+    bonus_value = getattr(cfg, "funding_score_bonus", 0.0) if cfg is not None else 0.0
+    try:
+        bonus_value = float(bonus_value)
+    except (TypeError, ValueError):
+        bonus_value = 0.0
+
+    adjustment_meta: dict[str, Any] = {}
+    adjusted = False
+    if direction_cost and penalty_enabled and penalty_value > 0:
+        decision.score -= penalty_value
+        adjustment_meta["penalty"] = penalty_value
+        adjusted = True
+        outcome = "penalized"
+    elif not direction_cost and bonus_value > 0:
+        decision.score += bonus_value
+        adjustment_meta["bonus"] = bonus_value
+        adjusted = True
+        outcome = "boosted"
+
+    if adjusted:
+        decision.meta.setdefault("funding_adjustment", {}).update(adjustment_meta)
+
+    registrar_funding_signal_decoration(symbol, side, outcome)
 
 
 
