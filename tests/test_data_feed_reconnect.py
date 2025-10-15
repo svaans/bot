@@ -4,8 +4,11 @@ from __future__ import annotations
 
 from typing import Callable, List, Tuple
 
+import pytest
+
 import core.data_feed as data_feed_module
 from core.data_feed import DataFeed
+from core.utils.feature_flags import reset_flag_cache
 
 
 def _collect_event_sink(events: List[Tuple[str, dict]]) -> Callable[[str, dict], None]:
@@ -13,6 +16,15 @@ def _collect_event_sink(events: List[Tuple[str, dict]]) -> Callable[[str, dict],
         events.append((evento, data))
 
     return _sink
+
+
+
+class _DummyBus:
+    def __init__(self) -> None:
+        self.events: list[tuple[str, dict]] = []
+
+    def emit(self, event: str, payload: dict) -> None:
+        self.events.append((event, dict(payload)))
 
 
 def test_register_reconnect_attempt_respects_max_attempts() -> None:
@@ -61,6 +73,68 @@ def test_register_reconnect_attempt_respects_max_downtime(monkeypatch) -> None:
     downtime_events = [evt for evt in eventos if evt[0] == "ws_downtime_exceeded"]
     assert downtime_events
     assert downtime_events[-1][1]["elapsed"] >= 1.0
+
+@pytest.mark.flags("datafeed.signals.enabled")
+def test_register_reconnect_attempt_emits_bus_signal(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("DATAFEED_SIGNALS_ENABLED", "true")
+    reset_flag_cache()
+
+    bus = _DummyBus()
+    feed = DataFeed(
+        "1m",
+        max_reconnect_attempts=3,
+        max_reconnect_time=None,
+        event_bus=bus,
+    )
+
+    assert feed._register_reconnect_attempt("BTCUSDT", "error temporal") is True
+    assert bus.events, "Se esperaba señal en el bus"
+    event, payload = bus.events[-1]
+    assert event == "datafeed.ws.retry"
+    assert payload["attempts"] == 1
+    assert payload["reason"] == "error temporal"
+    assert payload["intervalo"] == "1m"
+
+    reset_flag_cache()
+
+
+@pytest.mark.flags("datafeed.signals.enabled")
+def test_signal_ws_failure_emits_bus_signal(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("DATAFEED_SIGNALS_ENABLED", "true")
+    reset_flag_cache()
+
+    bus = _DummyBus()
+    feed = DataFeed("1m", event_bus=bus)
+
+    feed._signal_ws_failure("ws_drop")
+
+    assert bus.events, "Se esperaba señal de falla"
+    event, payload = bus.events[-1]
+    assert event == "datafeed.ws.failure"
+    assert payload["reason"] == "ws_drop"
+    assert payload["intervalo"] == "1m"
+
+    reset_flag_cache()
+
+
+@pytest.mark.flags("datafeed.signals.enabled")
+def test_limit_exceeded_emits_bus_signal(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("DATAFEED_SIGNALS_ENABLED", "true")
+    reset_flag_cache()
+
+    bus = _DummyBus()
+    feed = DataFeed("1m", event_bus=bus, max_reconnect_attempts=1, max_reconnect_time=None)
+
+    assert feed._register_reconnect_attempt("BTCUSDT", "fallo") is True
+    assert feed._register_reconnect_attempt("BTCUSDT", "fallo") is False
+
+    limit_events = [evt for evt in bus.events if evt[0] == "datafeed.ws.limit_exceeded"]
+    assert limit_events, "Se esperaba señal de límite superado"
+    last_event = limit_events[-1][1]
+    assert last_event["limit"] == "attempts"
+    assert last_event["attempts"] == 2
+
+    reset_flag_cache()
 
 
 def test_reset_reconnect_tracking_clears_counters() -> None:
