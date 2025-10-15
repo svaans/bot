@@ -147,6 +147,20 @@ class _IndicatorsCache:
             while len(self._store) > max_entries:
                 self._store.popitem(last=False)
 
+    def set(self, key: tuple[Hashable, ...], value: Any) -> Any:
+        """Inserta ``value`` en cache respetando la política LRU."""
+
+        with self._lock:
+            if self.max_entries <= 0:
+                return value
+
+            wrapped = _CacheEntry(value)
+            self._store[key] = wrapped
+            self._store.move_to_end(key)
+            while len(self._store) > self.max_entries:
+                self._store.popitem(last=False)
+            return wrapped.value
+
     def __getstate__(self) -> dict[str, Any]:  # pragma: no cover - comportamiento pandas
         """Evita copiar la estructura interna cuando Pandas duplica ``attrs``."""
 
@@ -188,6 +202,17 @@ def clear_cache(df: pd.DataFrame) -> None:
     cache = df.attrs.pop('_indicators_cache', None)
     if isinstance(cache, _IndicatorsCache):
         cache.clear()
+
+
+def set_cached_value(df: pd.DataFrame, key: tuple[Hashable, ...], value: Any) -> Any:
+    """Escribe ``value`` en el cache del ``DataFrame`` si está habilitado."""
+
+    settings = get_indicator_settings()
+    if settings.cache_max_entries <= 0:
+        return value
+
+    cache = _ensure_cache(df)
+    return cache.set(key, value)
 
 
 def get_rsi(data, periodo: int = 14, serie_completa: bool = False):
