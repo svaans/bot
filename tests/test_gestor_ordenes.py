@@ -16,12 +16,29 @@ class DummyBus:
         self.published: list[tuple[str, dict[str, Any]]] = []
 
     async def publish(self, evento: str, payload: dict[str, Any]) -> None:
-        future = payload.get("future")
         copia = {k: v for k, v in payload.items() if k != "future"}
         self.published.append((evento, copia))
-        respuesta = self._responses.pop(0) if self._responses else True
-        if future and not future.done():
-            future.set_result(respuesta)
+    
+    async def request(
+        self,
+        evento: str,
+        payload: dict[str, Any],
+        *,
+        timeout: float | None = None,
+    ) -> dict[str, Any]:
+        del timeout
+        data = dict(payload)
+        data.setdefault("ack", None)
+        data.setdefault("error", None)
+        self.published.append((evento, data))
+        respuesta = self._responses.pop(0) if self._responses else {"ack": True}
+        if isinstance(respuesta, dict):
+            result = dict(respuesta)
+            result["ack"] = bool(result.get("ack", True))
+            result.setdefault("error", None)
+            return result
+        ack_value = bool(respuesta)
+        return {"ack": ack_value, "error": None if ack_value else "nack"}
 
 
 class PayloadDict(dict):
@@ -124,7 +141,17 @@ async def test_abrir_operacion_exitosa_emite_evento() -> None:
     assert len(orders.created) == 1
     assert orders.obtener("BTCUSDT") is orders.created[0]
     assert bus.published == [
-        ("abrir_orden", {"symbol": "BTCUSDT", "precio": 10_000.0, "cantidad": 0.25, "direccion": "long"})
+        (
+            "abrir_orden",
+            {
+                "symbol": "BTCUSDT",
+                "precio": 10_000.0,
+                "cantidad": 0.25,
+                "direccion": "long",
+                "ack": None,
+                "error": None,
+            },
+        )
     ]
     assert eventos[0][0] == "orden_abierta"
     assert eventos[0][1]["symbol"] == "BTCUSDT"

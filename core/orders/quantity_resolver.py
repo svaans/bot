@@ -127,22 +127,36 @@ class QuantityResolver:
         if not self.bus:
             return 0.0
 
-        try:
-            loop = asyncio.get_running_loop()
-        except RuntimeError:
+        request = getattr(self.bus, "request", None)
+        if not callable(request):
             return 0.0
 
-        future: asyncio.Future[Any] = loop.create_future()
         payload = {
             "symbol": symbol,
             "precio": precio,
             "exposicion_total": exposicion,
             "stop_loss": stop_loss,
-            "future": future,
         }
 
         try:
-            await self.bus.publish("calcular_cantidad", payload)
+            respuesta = await request(
+                "calcular_cantidad",
+                payload,
+                timeout=self._quantity_timeout,
+            )
+        except asyncio.TimeoutError:
+            self.log.warning(
+                "crear.quantity_fallback_bus_timeout",
+                extra=safe_extra(
+                    {
+                        "symbol": symbol,
+                        "precio": precio,
+                        "timeout": self._quantity_timeout,
+                    }
+                ),
+            )
+            return 0.0
+
         except Exception:  # pragma: no cover - defensivo
             self.log.warning(
                 "crear.quantity_fallback_bus_error",
@@ -155,41 +169,22 @@ class QuantityResolver:
                     }
                 ),
             )
-            future.cancel()
             return 0.0
-
-        try:
-            resultado = await asyncio.wait_for(
-                future, timeout=self._quantity_timeout
-            )
-        except asyncio.TimeoutError:
-            future.cancel()
+        
+        if not respuesta.get("ack", False):
             self.log.warning(
-                "crear.quantity_fallback_bus_timeout",
+                "crear.quantity_fallback_bus_nack",
                 extra=safe_extra(
                     {
                         "symbol": symbol,
                         "precio": precio,
-                        "timeout": self._quantity_timeout,
-                    }
-                ),
-            )
-            return 0.0
-        except Exception:  # pragma: no cover - defensivo
-            future.cancel()
-            self.log.warning(
-                "crear.quantity_fallback_bus_result_error",
-                exc_info=True,
-                extra=safe_extra(
-                    {
-                        "symbol": symbol,
-                        "precio": precio,
+                        "error": respuesta.get("error"),
                     }
                 ),
             )
             return 0.0
 
-        cantidad = extract_quantity(resultado)
+        cantidad = extract_quantity(respuesta)
         return cantidad if cantidad > 0 else 0.0
 
     def update_bus(self, bus) -> None:

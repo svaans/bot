@@ -390,28 +390,20 @@ class OrderManager:
         return await self._market_executor.ejecutar(side, symbol, cantidad, operation_id, entrada)
 
     async def _on_abrir(self, data: dict) -> None:
-        fut = data.pop('future', None)
         result = await self.abrir_async(**data)
-        if fut:
-            fut.set_result(result)
+        EventBus.respond(data, ack=bool(result), result=result)
 
     async def _on_cerrar(self, data: dict) -> None:
-        fut = data.pop('future', None)
         result = await self.cerrar_async(**data)
-        if fut:
-            fut.set_result(result)
+        EventBus.respond(data, ack=bool(result), result=result)
 
     async def _on_cerrar_parcial(self, data: dict) -> None:
-        fut = data.pop('future', None)
         result = await self.cerrar_parcial_async(**data)
-        if fut:
-            fut.set_result(result)
+        EventBus.respond(data, ack=bool(result), result=result)
 
     async def _on_agregar_parcial(self, data: dict) -> None:
-        fut = data.pop('future', None)
         result = await self.agregar_parcial_async(**data)
-        if fut:
-            fut.set_result(result)
+        EventBus.respond(data, ack=bool(result), result=result)
 
     async def _resolve_quantity_with_fallback(
         self,

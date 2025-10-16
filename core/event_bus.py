@@ -4,10 +4,11 @@ import contextlib
 from collections import OrderedDict, defaultdict, deque
 from dataclasses import dataclass
 from functools import partial
+import time
 from threading import Lock
 from typing import Any, Awaitable, Callable, Deque, Dict, List, Tuple
 from core.utils.logger import configurar_logger
-from core.utils.metrics_compat import Counter, Gauge
+from core.utils.metrics_compat import Counter, Gauge, Histogram
 
 log = configurar_logger('event_bus', modo_silencioso=True)
 
@@ -20,6 +21,26 @@ _PENDING_QUEUE_GAUGE = Gauge(
     'event_bus_pending_queue',
     'Número de eventos pendientes por falta de loop activo',
 )
+_INFLIGHT_CALLBACKS_GAUGE = Gauge(
+    'event_bus_inflight_callbacks',
+    'Callbacks en ejecución por tipo de evento',
+    ('event_type',),
+)
+_CALLBACK_DISPATCH_LATENCY = Histogram(
+    'event_bus_dispatch_latency_seconds',
+    'Latencia entre el encolado y la ejecución del callback',
+    ('event_type', 'callback'),
+)
+_CALLBACK_DURATION = Histogram(
+    'event_bus_callback_duration_seconds',
+    'Duración total de callbacks ejecutados por el EventBus',
+    ('event_type', 'callback'),
+)
+_CALLBACK_EXCEPTIONS = Counter(
+    'event_bus_callback_exceptions_total',
+    'Excepciones no controladas en callbacks del EventBus',
+    ('event_type', 'callback'),
+)
 
 
 class EventBus:
@@ -29,6 +50,7 @@ class EventBus:
         self._listeners: Dict[str, List[Callable[[Any], Awaitable[None]]]] = defaultdict(list)
         self._waiters: Dict[str, List["EventBus._Waiter"]] = defaultdict(list)
         self._inflight: set[asyncio.Task] = set()
+        self._inflight_by_event: Dict[str, int] = defaultdict(int)
         self._loop: asyncio.AbstractEventLoop | None = None
         self._closed = False
         if max_cached_payloads < 0:
@@ -110,6 +132,32 @@ class EventBus:
             self._schedule_callback(cb, event_type, data)
         # Yield control so scheduled callbacks can start executing.
         await asyncio.sleep(0)
+
+    async def request(
+        self,
+        event_type: str,
+        payload: Dict[str, Any],
+        *,
+        timeout: float | None = None,
+    ) -> Dict[str, Any]:
+        """Publica ``payload`` y espera una respuesta estilo ACK/NACK."""
+
+        self.start()
+        loop = asyncio.get_running_loop()
+        future: asyncio.Future[Any] = loop.create_future()
+        data: Dict[str, Any] = dict(payload)
+        data.setdefault("ack", None)
+        data.setdefault("error", None)
+        data["future"] = future
+        await self.publish(event_type, data)
+        try:
+            if timeout is None:
+                result = await future
+            else:
+                result = await asyncio.wait_for(future, timeout)
+        finally:
+            data.pop("future", None)
+        return EventBus._normalize_ack_result(result)
 
     async def wait(self, event_type: str, timeout: float | None = None) -> Any | None:
         """Wait until ``event_type`` is emitted and return its payload.
@@ -198,6 +246,38 @@ class EventBus:
         if exc:
             log.error(f"❌ Error en callback de '{event_type}': {exc}")
 
+    @staticmethod
+    def respond(
+        payload: Dict[str, Any],
+        *,
+        ack: bool,
+        error: str | None = None,
+        **extra: Any,
+    ) -> None:
+        """Completa el ``payload`` ACK/NACK y resuelve el ``future`` asociado."""
+
+        ack_value = bool(ack)
+        payload["ack"] = ack_value
+        payload["error"] = error
+        result: Dict[str, Any] = {"ack": ack_value, "error": error}
+        if extra:
+            result.update(extra)
+        fut = payload.pop("future", None)
+        if isinstance(fut, asyncio.Future) and not fut.done():
+            fut.set_result(result)
+
+    @staticmethod
+    def _normalize_ack_result(result: Any) -> Dict[str, Any]:
+        """Normaliza la respuesta de un consumidor en el formato ACK/NACK."""
+
+        if isinstance(result, dict):
+            normalized = dict(result)
+            normalized["ack"] = bool(normalized.get("ack"))
+            normalized.setdefault("error", None)
+            return normalized
+        ack_value = bool(result)
+        return {"ack": ack_value, "error": None, "result": result}
+
     async def close(self) -> None:
         self._closed = True
         tasks = list(self._inflight)
@@ -219,6 +299,9 @@ class EventBus:
             self._pending.clear()
             self._pending_alerted.clear()
         _PENDING_QUEUE_GAUGE.set(0.0)
+        for event_type in list(self._inflight_by_event):
+            _INFLIGHT_CALLBACKS_GAUGE.labels(event_type=event_type).set(0.0)
+        self._inflight_by_event.clear()
         self._loop = None
 
     def _drain_pending_emits(self) -> None:
@@ -254,16 +337,53 @@ class EventBus:
         event_type: str,
         data: Any | None,
     ) -> None:
+        callback_name = self._describe_callback(callback)
+        scheduled_at = time.perf_counter()
+
+        async def _runner() -> None:
+            started_at = time.perf_counter()
+            _CALLBACK_DISPATCH_LATENCY.labels(
+                event_type=event_type,
+                callback=callback_name,
+            ).observe(max(started_at - scheduled_at, 0.0))
+            try:
+                await callback(data)
+            except Exception:
+                _CALLBACK_EXCEPTIONS.labels(
+                    event_type=event_type,
+                    callback=callback_name,
+                ).inc()
+                raise
+            finally:
+                finished_at = time.perf_counter()
+                _CALLBACK_DURATION.labels(
+                    event_type=event_type,
+                    callback=callback_name,
+                ).observe(max(finished_at - started_at, 0.0))
         try:
-            task = asyncio.create_task(callback(data))
+            task = asyncio.create_task(
+                _runner(),
+                name=f"event_bus:{event_type}:{callback_name}",
+            )
         except RuntimeError as exc:
             log.error(f"❌ Error despachando '{event_type}': {exc}")
             return
         self._inflight.add(task)
+        self._inflight_by_event[event_type] += 1
+        _INFLIGHT_CALLBACKS_GAUGE.labels(event_type=event_type).set(
+            float(self._inflight_by_event[event_type])
+        )
         task.add_done_callback(partial(self._cleanup_task, event_type=event_type))
 
     def _cleanup_task(self, task: asyncio.Task, event_type: str) -> None:
         self._inflight.discard(task)
+        if event_type in self._inflight_by_event:
+            remaining = max(self._inflight_by_event[event_type] - 1, 0)
+            if remaining == 0:
+                self._inflight_by_event.pop(event_type, None)
+            else:
+                self._inflight_by_event[event_type] = remaining
+            _INFLIGHT_CALLBACKS_GAUGE.labels(event_type=event_type).set(float(remaining))
         self._log_task_error(task, event_type)
 
     def _cache_payload(self, event_type: str, data: Any | None) -> None:
@@ -274,3 +394,40 @@ class EventBus:
         self._last_payload.move_to_end(event_type)
         while len(self._last_payload) > self._max_cached_payloads:
             self._last_payload.popitem(last=False)
+
+    @staticmethod
+    def _describe_callback(callback: Callable[[Any], Awaitable[None]]) -> str:
+        """Devuelve un nombre legible para métricas de callbacks."""
+
+        if isinstance(callback, partial):  # type: ignore[arg-type]
+            inner = EventBus._describe_callback(callback.func)  # type: ignore[attr-defined]
+            return f"partial({inner})"
+        qualname = getattr(callback, "__qualname__", None)
+        if qualname:
+            owner = getattr(getattr(callback, "__self__", None), "__class__", None)
+            if owner:
+                return f"{owner.__name__}.{qualname.split('.')[-1]}"
+            return qualname
+        name = getattr(callback, "__name__", None)
+        if name:
+            return name
+        return callback.__class__.__name__
+
+    def routes_snapshot(self) -> Dict[str, List[str]]:
+        """Retorna un mapeo evento -> callbacks registrados (nombres legibles)."""
+
+        return {
+            event: [self._describe_callback(cb) for cb in callbacks]
+            for event, callbacks in self._listeners.items()
+        }
+
+    def waiters_snapshot(self) -> Dict[str, int]:
+        """Retorna conteo de waiters activos por evento."""
+
+        return {event: len(waiters) for event, waiters in self._waiters.items()}
+
+    def pending_snapshot(self) -> List[Tuple[str, Any | None]]:
+        """Retorna una copia de los eventos pendientes por falta de loop."""
+
+        with self._lock:
+            return list(self._pending)

@@ -49,9 +49,12 @@ async def test_crear_fallback_event_bus() -> None:
     manager = OrderManager(modo_real=False, bus=bus)
 
     async def _resolver_cantidad(payload: dict) -> None:
-        fut = payload.get("future")
-        if fut is not None and not fut.done():
-            fut.set_result((payload.get("precio", 0.0), 0.33))
+        EventBus.respond(
+            payload,
+            ack=True,
+            cantidad=0.33,
+            precio=payload.get("precio", 0.0),
+        )
 
     bus.subscribe("calcular_cantidad", _resolver_cantidad)
 

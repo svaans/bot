@@ -72,15 +72,41 @@ class GestorOrdenes:
 
     # ---------------- utils ----------------
     async def _safe_publish(self, evento: str, payload: dict, *, timeout: float | None = None) -> Any:
+        timeout_target = timeout or self.timeout_bus
+        data = dict(payload)
+        data.setdefault("ack", None)
+        data.setdefault("error", None)
+        request = getattr(self.bus, "request", None)
+        if callable(request):
+            try:
+                respuesta = await request(evento, data, timeout=timeout_target)
+            except asyncio.TimeoutError:
+                self._emit("timeout", {"evento": evento})
+                return None
+            ack = bool(respuesta.get("ack"))
+            if not ack:
+                self._emit("nack", {"evento": evento, "error": respuesta.get("error")})
+            return ack
+        
         fut = asyncio.get_running_loop().create_future()
-        payload = dict(payload)
-        payload["future"] = fut
-        await self.bus.publish(evento, payload)
+        data["future"] = fut
+        await self.bus.publish(evento, data)
         try:
-            return await asyncio.wait_for(fut, timeout=timeout or self.timeout_bus)
+            result = await asyncio.wait_for(fut, timeout=timeout_target)
         except asyncio.TimeoutError:
             self._emit("timeout", {"evento": evento})
             return None
+        finally:
+            data.pop("future", None)
+        if isinstance(result, dict):
+            ack = bool(result.get("ack"))
+            if not ack:
+                self._emit("nack", {"evento": evento, "error": result.get("error")})
+            return ack
+        ack = bool(result)
+        if not ack:
+            self._emit("nack", {"evento": evento})
+        return ack
 
     async def _ticker_precio(self, symbol: str, fallback: float | None = None) -> float | None:
         try:
