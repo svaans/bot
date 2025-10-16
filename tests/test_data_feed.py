@@ -9,6 +9,7 @@ import pytest
 
 from core.utils.feature_flags import reset_flag_cache
 from core.data_feed import DataFeed
+from core.event_bus import EventBus
 
 
 @pytest.fixture
@@ -105,6 +106,30 @@ def test_queue_autotune_respects_disable_flag() -> None:
     assert feed.queue_policy == "drop_oldest"
     assert feed.queue_max == 2
     assert feed._queue_autotune_applied is False
+
+
+@pytest.mark.asyncio
+async def test_event_bus_queue_drop_adjusts_backfill_window() -> None:
+    feed = make_feed(queue_autotune=False)
+    feed._queues["BTCUSDT"] = asyncio.Queue(maxsize=3)
+    feed._backfill_window_target = 2
+    feed._backfill_max = 50
+
+    bus = EventBus()
+    feed.event_bus = bus
+
+    bus.emit("queue_drop", {"symbol": "BTCUSDT"})
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
+
+    resolver = getattr(feed, "_resolve_backfill_window_target")
+    assert callable(resolver)
+    assert resolver("BTCUSDT") == 3
+
+    notifier = getattr(feed, "_note_backfill_window_recovery")
+    assert callable(notifier)
+    notifier("BTCUSDT", 1)
+    assert resolver("BTCUSDT") == 2
 
 
 @pytest.mark.asyncio
