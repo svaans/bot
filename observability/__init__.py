@@ -1,5 +1,5 @@
 """Paquete de compatibilidad para componentes de observabilidad."""
 
-from . import metrics
+from . import alerts, metrics
 
-__all__ = ["metrics"]
+__all__ = ["alerts", "metrics"]
