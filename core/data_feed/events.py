@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import Any
 
+import time
+
 from core.metrics import WS_CONNECTED_GAUGE
 from core.utils.feature_flags import is_flag_enabled
 
@@ -172,6 +174,11 @@ def _emit_retry_event(feed: "DataFeed", payload: dict[str, Any]) -> None:
 
     emit_event(feed, "ws_retry", payload)
     _emit_signal(feed, "datafeed.ws.retry", payload)
+    telemetry = getattr(feed, "_ws_retry_telemetry", None)
+    if isinstance(telemetry, dict):
+        key = payload.get("key")
+        if isinstance(key, str) and key:
+            telemetry[key] = {**payload, "timestamp": time.monotonic()}
 
 
 def register_reconnect_attempt(feed: "DataFeed", key: str, reason: str) -> bool:
@@ -267,6 +274,9 @@ def reset_reconnect_tracking(feed: "DataFeed", key: str) -> None:
 
     feed._reconnect_attempts.pop(key, None)
     feed._reconnect_since.pop(key, None)
+    telemetry = getattr(feed, "_ws_retry_telemetry", None)
+    if isinstance(telemetry, dict):
+        telemetry.pop(key, None)
 
 
 def set_consumer_state(feed: "DataFeed", symbol: str, state: "ConsumerState") -> None:
