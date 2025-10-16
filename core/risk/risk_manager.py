@@ -45,6 +45,7 @@ class RiskManager:
     ) -> None:
         self.umbral = umbral
         self._factor_kelly_prev = None
+        self._bus: EventBus | None = None
         self.bus = bus
         self.capital_manager = capital_manager
         self.cooldown_pct = cooldown_pct
@@ -61,6 +62,25 @@ class RiskManager:
         )
         if bus:
             self.subscribe(bus)
+
+    @property
+    def bus(self) -> EventBus | None:
+        return self._bus
+
+    @bus.setter
+    def bus(self, value: EventBus | None) -> None:
+        self._bus = value
+        if value is None:
+            return
+        start = getattr(value, "start", None)
+        if callable(start):
+            try:
+                start()
+            except Exception:
+                log.warning(
+                    "No se pudo iniciar event_bus tras inyección en RiskManager",
+                    exc_info=True,
+                )
 
     def subscribe(self, bus: EventBus) -> None:
         bus.subscribe('registrar_perdida', self._on_registrar_perdida)
