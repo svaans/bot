@@ -443,6 +443,9 @@ class TraderLite(TraderLiteBackfillMixin, TraderLiteProcessingMixin):
             "handler_timeout": _resolve("handler_timeout", "DF_HANDLER_TIMEOUT_SEC", 2.0, float),
             "inactivity_intervals": _resolve("inactivity_intervals", "DF_INACTIVITY_INTERVALS", 10, int),
             "queue_max": _resolve("df_queue_default_limit", "DF_QUEUE_MAX", 2000, int),
+            "queue_min_recommended": _resolve(
+                "df_queue_min_recommended", "DF_QUEUE_MIN_RECOMMENDED", 16, int
+            ),
             "queue_policy": _resolve("df_queue_policy", "DF_QUEUE_POLICY", "drop_oldest", lambda x: str(x).lower()),
             "monitor_interval": _resolve("monitor_interval", "DF_MONITOR_INTERVAL", 5.0, float),
             "cancel_timeout": _resolve(None, "DF_CANCEL_TIMEOUT", 5.0, float),
