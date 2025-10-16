@@ -19,10 +19,42 @@ def _emit_ws_drop_signal(feed: "DataFeed", payload: dict[str, object]) -> None:
     feed._emit_bus_signal("datafeed.ws.drop", enriched)
 
 
+def _compute_retry_delay(feed: "DataFeed", key: str, *, reset_backoff: bool = False) -> float:
+    """Calcula el tiempo de espera aplicando backoff exponencial con jitter."""
+
+    attempts = 1
+    telemetry = getattr(feed, "_ws_retry_telemetry", {})
+    if isinstance(telemetry, dict):
+        data = telemetry.get(key)
+        if isinstance(data, dict):
+            raw_attempts = data.get("attempts")
+            try:
+                attempts = max(1, int(raw_attempts))
+            except (TypeError, ValueError):
+                attempts = 1
+    if reset_backoff:
+        attempts = 1
+
+    base = getattr(feed, "ws_backoff_base", 0.5) or 0.5
+    max_delay = getattr(feed, "ws_backoff_max", 60.0) or 60.0
+    jitter_factor = getattr(feed, "ws_backoff_jitter", 0.25) or 0.0
+
+    delay = base * (2 ** max(0, attempts - 1))
+    delay = min(delay, max_delay)
+
+    if jitter_factor > 0:
+        low = max(0.0, 1.0 - float(jitter_factor))
+        high = 1.0 + float(jitter_factor)
+        if high <= low:
+            high = low + 0.01
+        delay *= random.uniform(low, high)
+
+    return max(0.0, round(delay, 3))
+
+
 async def stream_simple(feed: "DataFeed", symbol: str) -> None:
     """Loop principal de escucha de velas por símbolo."""
 
-    backoff = 0.5
     primera_vez = True
     while feed._running and symbol in feed._queues:
         if not events.verify_reconnect_limits(feed, symbol, "loop_guard"):
@@ -68,8 +100,8 @@ async def stream_simple(feed: "DataFeed", symbol: str) -> None:
             events.emit_event(feed, "ws_end", {"symbol": symbol})
             if not events.register_reconnect_attempt(feed, symbol, "stream_end"):
                 return
-            backoff = min(60.0, backoff * 2)
-            await asyncio.sleep(backoff)
+            delay = _compute_retry_delay(feed, symbol)
+            await asyncio.sleep(delay)
 
         except InactividadTimeoutError:
             log.warning(
@@ -92,8 +124,8 @@ async def stream_simple(feed: "DataFeed", symbol: str) -> None:
                 return
             if not events.register_reconnect_attempt(feed, symbol, "inactividad"):
                 return
-            backoff = 0.5
-            await asyncio.sleep(backoff)
+            delay = _compute_retry_delay(feed, symbol, reset_backoff=True)
+            await asyncio.sleep(delay)
 
         except asyncio.CancelledError:
             raise
@@ -119,14 +151,13 @@ async def stream_simple(feed: "DataFeed", symbol: str) -> None:
                 return
             if not events.register_reconnect_attempt(feed, symbol, "error"):
                 return
-            backoff = min(60.0, backoff * 2)
-            await asyncio.sleep(backoff)
+            delay = _compute_retry_delay(feed, symbol)
+            await asyncio.sleep(delay)
 
 
 async def stream_combinado(feed: "DataFeed", symbols: List[str]) -> None:
     """Loop principal para streams combinados de múltiples símbolos."""
 
-    backoff = 0.5
     primera_vez = True
     while feed._running and all(s in feed._queues for s in symbols):
         if not events.verify_reconnect_limits(feed, COMBINED_STREAM_KEY, "loop_guard"):
@@ -187,8 +218,8 @@ async def stream_combinado(feed: "DataFeed", symbols: List[str]) -> None:
             events.emit_event(feed, "ws_end", {"symbols": symbols})
             if not events.register_reconnect_attempt(feed, COMBINED_STREAM_KEY, "stream_end"):
                 return
-            backoff = min(60.0, backoff * 2)
-            await asyncio.sleep(backoff)
+            delay = _compute_retry_delay(feed, COMBINED_STREAM_KEY)
+            await asyncio.sleep(delay)
 
         except InactividadTimeoutError as exc:
             log.warning(
@@ -211,8 +242,8 @@ async def stream_combinado(feed: "DataFeed", symbols: List[str]) -> None:
                 return
             if not events.register_reconnect_attempt(feed, COMBINED_STREAM_KEY, "inactividad"):
                 return
-            backoff = 0.5
-            await asyncio.sleep(backoff)
+            delay = _compute_retry_delay(feed, COMBINED_STREAM_KEY, reset_backoff=True)
+            await asyncio.sleep(delay)
 
         except asyncio.CancelledError:
             raise
@@ -238,8 +269,8 @@ async def stream_combinado(feed: "DataFeed", symbols: List[str]) -> None:
                 return
             if not events.register_reconnect_attempt(feed, COMBINED_STREAM_KEY, "error"):
                 return
-            backoff = min(60.0, backoff * 2)
-            await asyncio.sleep(backoff)
+            delay = _compute_retry_delay(feed, COMBINED_STREAM_KEY)
+            await asyncio.sleep(delay)
 
 
 from typing import TYPE_CHECKING
