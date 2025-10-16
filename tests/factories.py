@@ -59,6 +59,7 @@ class DummyConfig:
         self.handler_timeout = 2.0
         self.inactivity_intervals = 10
         self.df_queue_default_limit = 2000
+        self.df_queue_min_recommended = 16
         self.df_queue_policy = "drop_oldest"
         self.monitor_interval = 5.0
         self.df_backpressure = True
