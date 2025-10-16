@@ -74,3 +74,17 @@ def test_riesgo_superado(tmp_path: Path) -> None:
     assert riesgo.riesgo_superado(0.1, 100.0) is True
     assert riesgo.riesgo_superado(0.6, 100.0) is False
     assert riesgo.riesgo_superado(0.1, 0.0) is False
+
+
+def test_actualizar_perdida_ignora_ganancias(tmp_path: Path) -> None:
+    fecha = datetime.now(UTC).date().isoformat()
+    riesgo.guardar_estado_riesgo_seguro({"fecha": fecha, "perdida_acumulada": 5.0})
+    riesgo.actualizar_perdida("BTCUSDT", 15.0)
+    riesgo.esperar_persistencia()
+    data = json.loads(Path(riesgo.RUTA_ESTADO).read_text())
+    assert data["perdida_acumulada"] == 5.0
+
+
+def test_riesgo_superado_fecha_antigua(tmp_path: Path) -> None:
+    riesgo.guardar_estado_riesgo_seguro({"fecha": "2000-01-01", "perdida_acumulada": 100.0})
+    assert riesgo.riesgo_superado(0.01, 1.0) is False
