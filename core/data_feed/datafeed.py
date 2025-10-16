@@ -32,7 +32,7 @@ class DataFeed:
         handler_timeout: float = float(os.getenv("DF_HANDLER_TIMEOUT_SEC", "2.0")),
         inactivity_intervals: int = int(os.getenv("DF_INACTIVITY_INTERVALS", "10")),
         queue_max: int = int(os.getenv("DF_QUEUE_MAX", "2000")),
-        queue_policy: str = os.getenv("DF_QUEUE_POLICY", "drop_oldest").lower(),
+        queue_policy: str | None = None,
         monitor_interval: float = float(os.getenv("DF_MONITOR_INTERVAL", "5")),
         queue_min_recommended: int | None = None,
         consumer_timeout_intervals: float | None = None,
@@ -43,6 +43,8 @@ class DataFeed:
         event_bus: Any | None = None,
         max_reconnect_attempts: int | None = None,
         max_reconnect_time: float | None = None,
+        queue_autotune: bool | None = None,
+        queue_burst_factor: float | None = None,
     ) -> None:
         self.intervalo = intervalo
         self.intervalo_segundos = intervalo_a_segundos(intervalo)
@@ -51,8 +53,13 @@ class DataFeed:
         self.inactivity_intervals = max(1, int(inactivity_intervals))
         self.tiempo_inactividad = self.intervalo_segundos * self.inactivity_intervals
 
+        if queue_policy is None:
+            queue_policy = os.getenv("DF_QUEUE_POLICY", "drop_oldest")
+        allowed_policies = {"drop_oldest", "block", "drop_newest"}
+        parsed_policy = str(queue_policy).lower()
+        self.queue_policy = parsed_policy if parsed_policy in allowed_policies else "drop_oldest"
+
         self.queue_max = max(0, int(queue_max))
-        self.queue_policy = queue_policy if queue_policy in {"drop_oldest", "block"} else "drop_oldest"
         self.on_event = on_event
 
         env_queue_min = max(0, _safe_int(os.getenv("DF_QUEUE_MIN_RECOMMENDED", "16"), 16))
@@ -74,6 +81,14 @@ class DataFeed:
             log.warning("queue.capacity.low_config", extra=safe_extra(payload))
             events_module.emit_event(self, "queue_capacity_below_recommended", payload)
             self._queue_capacity_warning_emitted = True
+
+        if queue_autotune is None:
+            queue_autotune = os.getenv("DF_QUEUE_AUTOTUNE", "true").lower() == "true"
+        self.queue_autotune = bool(queue_autotune)
+        if queue_burst_factor is None:
+            queue_burst_factor = _safe_float(os.getenv("DF_QUEUE_BURST_FACTOR", "4.0"), 4.0)
+        self.queue_burst_factor = max(1.0, float(queue_burst_factor))
+        self._queue_autotune_applied = False
 
         self.monitor_interval = max(0.05, float(monitor_interval))
 
@@ -159,6 +174,9 @@ class DataFeed:
             raw_backfill_threshold if raw_backfill_threshold > 0 else None
         )
 
+        if self.backpressure and self.queue_autotune:
+            self._apply_queue_backpressure_strategy()
+
         # ``precargar`` modifica temporalmente el estado interno del feed; el lock
         # asegura que no se ejecute concurrentemente con otras llamadas que
         # mutan ``_symbols`` o ``_cliente``.
@@ -167,6 +185,55 @@ class DataFeed:
         self.ws_connected_event: asyncio.Event = asyncio.Event()
         self.ws_failed_event: asyncio.Event = asyncio.Event()
         self._ws_failure_reason: str | None = None
+
+    def _apply_queue_backpressure_strategy(self) -> None:
+        """Ajusta la cola para escenarios con bursts elevados y backpressure."""
+
+        original_policy = self.queue_policy
+        original_max = self.queue_max
+
+        target_base = self.queue_min_recommended or self.queue_max or 16
+        target_capacity = max(int(target_base), int(target_base * self.queue_burst_factor))
+        target_capacity = max(1, target_capacity)
+
+        changes: Dict[str, Any] = {}
+
+        if self.queue_policy == "block":
+            if self.queue_max <= 0 or self.queue_max < target_capacity:
+                self.queue_max = target_capacity
+                changes["queue_max"] = self.queue_max
+        else:
+            if self.queue_max <= 0:
+                self.queue_policy = "block"
+                changes["queue_policy"] = self.queue_policy
+                self.queue_max = target_capacity
+                changes["queue_max"] = self.queue_max
+            elif 0 < self.queue_max < max(1, self.queue_min_recommended):
+                self.queue_policy = "block"
+                changes["queue_policy"] = self.queue_policy
+                if self.queue_max < target_capacity:
+                    self.queue_max = target_capacity
+                    changes["queue_max"] = self.queue_max
+            elif self.queue_max < target_capacity:
+                self.queue_max = target_capacity
+                changes["queue_max"] = self.queue_max
+
+        self._queue_autotune_applied = bool(changes)
+
+        if not changes:
+            return
+
+        payload = {
+            "intervalo": self.intervalo,
+            "original_policy": original_policy,
+            "new_policy": self.queue_policy,
+            "original_max": original_max,
+            "new_max": self.queue_max,
+            "burst_factor": self.queue_burst_factor,
+            **changes,
+        }
+        log.info("queue.autotune", extra=safe_extra(payload))
+        events_module.emit_event(self, "queue_autotune", payload)
 
     @property
     def event_bus(self) -> Any | None:
