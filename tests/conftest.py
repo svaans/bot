@@ -77,6 +77,7 @@ def stub_data_feed(monkeypatch: pytest.MonkeyPatch) -> list[Any]:
             self.handler_timeout = kwargs.get("handler_timeout")
             self.inactivity_intervals = kwargs.get("inactivity_intervals")
             self.queue_max = kwargs.get("queue_max")
+            self.queue_min_recommended = kwargs.get("queue_min_recommended")
             self.queue_policy = kwargs.get("queue_policy")
             self.monitor_interval = kwargs.get("monitor_interval")
             self.backpressure = kwargs.get("backpressure")
