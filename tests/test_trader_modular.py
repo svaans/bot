@@ -37,6 +37,7 @@ async def test_data_feed_uses_config_values_over_environment(monkeypatch: pytest
         handler_timeout=3.5,
         inactivity_intervals=12,
         df_queue_default_limit=123,
+        df_queue_min_recommended=64,
         df_queue_policy="block",
         monitor_interval=2.5,
         df_backpressure=False,
@@ -49,6 +50,7 @@ async def test_data_feed_uses_config_values_over_environment(monkeypatch: pytest
     monkeypatch.setenv("DF_QUEUE_POLICY", "drop_oldest")
     monkeypatch.setenv("DF_MONITOR_INTERVAL", "9.0")
     monkeypatch.setenv("DF_BACKPRESSURE", "true")
+    monkeypatch.setenv("DF_QUEUE_MIN_RECOMMENDED", "8")
 
     async def handler(_: dict) -> None:
         return None
@@ -58,6 +60,7 @@ async def test_data_feed_uses_config_values_over_environment(monkeypatch: pytest
     assert trader.feed.handler_timeout == pytest.approx(3.5)
     assert trader.feed.inactivity_intervals == 12
     assert trader.feed.queue_max == 123
+    assert trader.feed.queue_min_recommended == 64
     assert trader.feed.queue_policy == "block"
     assert trader.feed.monitor_interval == pytest.approx(2.5)
     assert trader.feed.backpressure is False
