@@ -363,6 +363,25 @@ async def handle_candle(
     if feed.queue_policy == "block" or not queue.maxsize:
         await queue.put(candle)
         queue_size_after = queue.qsize()
+    elif feed.queue_policy == "drop_newest":
+        if queue.full():
+            feed._stats[symbol]["dropped"] += 1
+            events.emit_event(feed, "queue_drop", {"symbol": symbol, "policy": "drop_newest"})
+            queue_size_after = queue.qsize()
+            log.debug(
+                "queue.drop_newest",
+                extra=safe_extra(
+                    {
+                        "symbol": symbol,
+                        "tf": feed.intervalo,
+                        "queue_size": queue_size_after,
+                        "maxsize": queue.maxsize,
+                    }
+                ),
+            )
+            return
+        queue.put_nowait(candle)
+        queue_size_after = queue.qsize()
     else:
         while True:
             try:
