@@ -198,6 +198,20 @@ WS_CONNECTED_GAUGE = Gauge(
     "Estado binario de la conexión WS del DataFeed (1=conectado, 0=desconectado)",
 )
 
+DATAFEED_BACKFILL_WINDOW_REQUESTED = Histogram(
+    "datafeed_backfill_window_requested",
+    "Velas solicitadas en cada chunk del backfill por ventana dinámica",
+    ["symbol", "timeframe"],
+    buckets=(1, 2, 5, 10, 20, 50, 100, 200, 500, 1000),
+)
+
+DATAFEED_BACKFILL_WINDOW_FETCHED = Histogram(
+    "datafeed_backfill_window_fetched",
+    "Velas efectivamente obtenidas en cada chunk del backfill por ventana dinámica",
+    ["symbol", "timeframe"],
+    buckets=(1, 2, 5, 10, 20, 50, 100, 200, 500, 1000),
+)
+
 DATAFEED_WS_MESSAGES_TOTAL = Counter(
     "datafeed_ws_messages_total",
     "Mensajes recibidos desde Binance WebSocket por tipo",
