@@ -34,7 +34,12 @@ def test_queue_min_recommended_warning(monkeypatch: pytest.MonkeyPatch) -> None:
     events: list[tuple[str, dict[str, Any]]] = []
     monkeypatch.setenv("DF_QUEUE_MIN_RECOMMENDED", "5")
 
-    feed = make_feed(events=events, queue_max=2)
+    feed = make_feed(
+        events=events,
+        queue_max=2,
+        queue_autotune=False,
+        queue_policy="drop_oldest",
+    )
 
     assert feed.queue_min_recommended == 5
     assert feed._queue_capacity_warning_emitted is True
@@ -46,7 +51,13 @@ async def test_queue_capacity_breach_event_emitted(monkeypatch: pytest.MonkeyPat
     events: list[tuple[str, dict[str, Any]]] = []
     monkeypatch.setenv("DF_QUEUE_MIN_RECOMMENDED", "6")
 
-    feed = make_feed(events=events, queue_max=2)
+    feed = make_feed(
+        events=events,
+        queue_max=2,
+        queue_autotune=False,
+        queue_policy="drop_oldest",
+    )
+    assert feed.queue_policy == "drop_oldest"
     symbol = "BTCUSDT"
     feed._queues[symbol] = asyncio.Queue(maxsize=2)
 
@@ -63,6 +74,37 @@ async def test_queue_capacity_breach_event_emitted(monkeypatch: pytest.MonkeyPat
     assert any(evt == "queue_capacity_breach" for evt, _ in events)
     assert feed._queue_capacity_breach_logged is True
     assert feed._stats[symbol]["dropped"] == 1
+
+
+def test_queue_autotune_switches_to_block_when_required() -> None:
+    events: list[tuple[str, dict[str, Any]]] = []
+
+    feed = make_feed(
+        events=events,
+        queue_max=2,
+        queue_policy="drop_oldest",
+        queue_min_recommended=8,
+        queue_burst_factor=2.0,
+    )
+
+    assert feed.queue_policy == "block"
+    assert feed.queue_max == 16
+    assert feed._queue_autotune_applied is True
+    assert any(evt == "queue_autotune" for evt, _ in events)
+
+
+def test_queue_autotune_respects_disable_flag() -> None:
+    feed = make_feed(
+        queue_max=2,
+        queue_policy="drop_oldest",
+        queue_min_recommended=8,
+        queue_autotune=False,
+        queue_burst_factor=2.0,
+    )
+
+    assert feed.queue_policy == "drop_oldest"
+    assert feed.queue_max == 2
+    assert feed._queue_autotune_applied is False
 
 
 @pytest.mark.asyncio
@@ -243,6 +285,40 @@ async def test_handle_candle_drops_oldest_when_queue_full() -> None:
     queued = feed._queues[symbol].get_nowait()
     feed._queues[symbol].task_done()
     assert queued["timestamp"] == second["timestamp"]
+
+
+@pytest.mark.asyncio
+async def test_handle_candle_drop_newest_policy_drops_incoming() -> None:
+    events: list[tuple[str, dict[str, Any]]] = []
+    feed = make_feed(
+        events=events,
+        queue_policy="drop_newest",
+        queue_max=1,
+        queue_autotune=False,
+    )
+    symbol = "FTMUSDT"
+    feed._queues[symbol] = asyncio.Queue(maxsize=1)
+
+    first = {
+        "symbol": symbol,
+        "timestamp": 1_650_000_000_000,
+        "is_closed": True,
+    }
+    second = {
+        "symbol": symbol,
+        "timestamp": 1_650_000_060_000,
+        "is_closed": True,
+    }
+
+    await feed._handle_candle(symbol, first)
+    await feed._handle_candle(symbol, second)
+
+    assert feed._queues[symbol].qsize() == 1
+    queued = feed._queues[symbol].get_nowait()
+    feed._queues[symbol].task_done()
+    assert queued["timestamp"] == first["timestamp"]
+    assert feed._stats[symbol]["dropped"] == 1
+    assert any(evt == "queue_drop" for evt, _ in events)
 
 
 @pytest.mark.asyncio
