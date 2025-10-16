@@ -11,7 +11,7 @@ can be instantiated in unit tests without external dependencies.
 """
 from __future__ import annotations
 from dataclasses import dataclass, field
-from typing import Dict, Mapping
+from typing import Any, Dict, Mapping
 
 from config.config_manager import Config
 import asyncio
@@ -51,6 +51,7 @@ class CapitalManager:
         self._kelly_base = float(getattr(config, "risk_kelly_base", 0.1) or 0.1)
         self.fraccion_kelly = self._kelly_base
         self._recalcular_disponible_global()
+        self._event_bus: Any | None = None
 
     # ------------------------------------------------------------------
     # Construction helpers
@@ -148,4 +149,23 @@ class CapitalManager:
             extra={"factor": multiplicador, "fraccion": self.fraccion_kelly},
         )
         return self.fraccion_kelly
+
+    @property
+    def event_bus(self) -> Any | None:
+        return self._event_bus
+
+    @event_bus.setter
+    def event_bus(self, value: Any | None) -> None:
+        self._event_bus = value
+        if value is None:
+            return
+        start = getattr(value, "start", None)
+        if callable(start):
+            try:
+                start()
+            except Exception:
+                log.warning(
+                    "No se pudo iniciar event_bus tras inyección en CapitalManager",
+                    exc_info=True,
+                )
 
