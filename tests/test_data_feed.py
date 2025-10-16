@@ -30,6 +30,41 @@ def make_feed(
     return DataFeed("1m", on_event=on_event, **kwargs)
 
 
+def test_queue_min_recommended_warning(monkeypatch: pytest.MonkeyPatch) -> None:
+    events: list[tuple[str, dict[str, Any]]] = []
+    monkeypatch.setenv("DF_QUEUE_MIN_RECOMMENDED", "5")
+
+    feed = make_feed(events=events, queue_max=2)
+
+    assert feed.queue_min_recommended == 5
+    assert feed._queue_capacity_warning_emitted is True
+    assert any(evt == "queue_capacity_below_recommended" for evt, _ in events)
+
+
+@pytest.mark.asyncio
+async def test_queue_capacity_breach_event_emitted(monkeypatch: pytest.MonkeyPatch) -> None:
+    events: list[tuple[str, dict[str, Any]]] = []
+    monkeypatch.setenv("DF_QUEUE_MIN_RECOMMENDED", "6")
+
+    feed = make_feed(events=events, queue_max=2)
+    symbol = "BTCUSDT"
+    feed._queues[symbol] = asyncio.Queue(maxsize=2)
+
+    base_ts = 1_650_000_000_000
+    for idx in range(3):
+        candle = {
+            "symbol": symbol,
+            "timestamp": base_ts + idx * 60_000,
+            "is_closed": True,
+        }
+        await feed._handle_candle(symbol, candle)
+
+    assert any(evt == "queue_drop" for evt, _ in events)
+    assert any(evt == "queue_capacity_breach" for evt, _ in events)
+    assert feed._queue_capacity_breach_logged is True
+    assert feed._stats[symbol]["dropped"] == 1
+
+
 @pytest.mark.asyncio
 async def test_handle_candle_enqueues_closed_aligned(capture_events: list[tuple[str, dict[str, Any]]]) -> None:
     feed = make_feed(events=capture_events)
