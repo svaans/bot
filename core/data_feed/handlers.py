@@ -18,6 +18,8 @@ try:  # pragma: no cover - métricas opcionales
     from core.metrics import (
         CONSUMER_SKIPPED_EXPECTED_TOTAL,
         DATAFEED_CANDLES_ENQUEUED_TOTAL,
+        DATAFEED_BACKFILL_WINDOW_FETCHED,
+        DATAFEED_BACKFILL_WINDOW_REQUESTED,
         DATAFEED_HANDLER_LATENCY,
         DATAFEED_WS_MESSAGES_TOTAL,
         registrar_vela_recibida,
@@ -40,6 +42,20 @@ except Exception:  # pragma: no cover - fallback cuando Prometheus no está disp
         "datafeed_candles_enqueued_total",
         "Velas encoladas por símbolo y timeframe",
         ["symbol", "tf"],
+    )
+
+    DATAFEED_BACKFILL_WINDOW_REQUESTED = Histogram(
+        "datafeed_backfill_window_requested",
+        "Velas solicitadas en cada chunk de backfill ventana",
+        ["symbol", "timeframe"],
+        buckets=(1, 2, 5, 10, 20, 50, 100, 200, 500, 1000),
+    )
+
+    DATAFEED_BACKFILL_WINDOW_FETCHED = Histogram(
+        "datafeed_backfill_window_fetched",
+        "Velas obtenidas en cada chunk de backfill ventana",
+        ["symbol", "timeframe"],
+        buckets=(1, 2, 5, 10, 20, 50, 100, 200, 500, 1000),
     )
 
     DATAFEED_HANDLER_LATENCY = Histogram(
@@ -118,7 +134,11 @@ async def _maybe_run_backfill_window(
     if cliente is None:
         return
 
-    max_total = getattr(feed, "_backfill_window_target", None)
+    resolver = getattr(feed, "_resolve_backfill_window_target", None)
+    if callable(resolver):
+        max_total = resolver(symbol)
+    else:
+        max_total = getattr(feed, "_backfill_window_target", None)
     try:
         max_total_int = int(max_total) if max_total is not None else feed.min_buffer_candles
     except (TypeError, ValueError):
@@ -135,9 +155,16 @@ async def _maybe_run_backfill_window(
     allowed = min(missing_intervals, max_total_int)
     total_fetched = 0
     start_ts = last_ts + intervalo_ms
+    symbol_label = str(symbol).upper()
+    timeframe_label = str(feed.intervalo or "unknown")
 
     while total_fetched < allowed and missing_intervals > 0:
         remaining = min(allowed - total_fetched, missing_intervals)
+        if remaining <= 0:
+            break
+        DATAFEED_BACKFILL_WINDOW_REQUESTED.labels(
+            symbol=symbol_label, timeframe=timeframe_label
+        ).observe(float(remaining))
         extras = await backfill_ventana(
             symbol,
             intervalo=feed.intervalo,
@@ -151,6 +178,10 @@ async def _maybe_run_backfill_window(
             break
 
         extras_sorted = sorted(extras, key=lambda c: c.get("timestamp", 0))
+        fetched_count = len(extras_sorted)
+        DATAFEED_BACKFILL_WINDOW_FETCHED.labels(
+            symbol=symbol_label, timeframe=timeframe_label
+        ).observe(float(fetched_count))
         for extra in extras_sorted:
             extra.setdefault("symbol", symbol)
             extra.setdefault("timeframe", feed.intervalo)
@@ -163,6 +194,9 @@ async def _maybe_run_backfill_window(
             if isinstance(ts_extra, int):
                 start_ts = ts_extra + intervalo_ms
 
+        notifier = getattr(feed, "_note_backfill_window_recovery", None)
+        if callable(notifier):
+            notifier(symbol, fetched_count)
         last_processed = feed._last_close_ts.get(symbol, last_ts)
         missing_intervals = int((new_ts - last_processed) // intervalo_ms) - 1
         if len(extras_sorted) < remaining:
