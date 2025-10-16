@@ -1,0 +1,72 @@
+# Prometheus alerting rules for monitoring EventBus callback latencies.
+groups:
+  - name: event_bus_callback_latency
+    interval: 30s
+    rules:
+      - alert: EventBusCallbackDispatchLatencyWarning
+        expr: |
+          histogram_quantile(0.95,
+            sum by (event_type, callback, le) (
+              rate(event_bus_dispatch_latency_seconds_bucket[5m])
+            )
+          ) > 0.25
+        for: 2m
+        labels:
+          severity: warning
+          service: event-bus
+        annotations:
+          summary: "Latencia alta al despachar callbacks en el EventBus"
+          description: |
+            El percentil 95 de la latencia de despacho para {{ $labels.event_type }} / {{ $labels.callback }}
+            supera los 250 ms (valor actual {{ printf "%.3f" $value }} s), indicando un posible cuello de botella
+            en la toma de control del loop. Verifica saturación del event loop o bloqueos en el scheduler.
+      - alert: EventBusCallbackDispatchLatencyCritical
+        expr: |
+          histogram_quantile(0.99,
+            sum by (event_type, callback, le) (
+              rate(event_bus_dispatch_latency_seconds_bucket[5m])
+            )
+          ) > 0.5
+        for: 2m
+        labels:
+          severity: critical
+          service: event-bus
+        annotations:
+          summary: "Latencia crítica al despachar callbacks en el EventBus"
+          description: |
+            El percentil 99 de la latencia de despacho para {{ $labels.event_type }} / {{ $labels.callback }}
+            supera el SLA crítico de 500 ms (valor actual {{ printf "%.3f" $value }} s). Investiga bloqueo del loop,
+            callbacks pesados o ausencia de workers disponibles.
+      - alert: EventBusCallbackDurationWarning
+        expr: |
+          histogram_quantile(0.95,
+            sum by (event_type, callback, le) (
+              rate(event_bus_callback_duration_seconds_bucket[5m])
+            )
+          ) > 1
+        for: 5m
+        labels:
+          severity: warning
+          service: event-bus
+        annotations:
+          summary: "Callbacks del EventBus ejecutándose más lento de lo esperado"
+          description: |
+            El percentil 95 de la duración de {{ $labels.event_type }} / {{ $labels.callback }} supera 1s (valor actual
+            {{ printf "%.3f" $value }} s). Revisa la lógica del callback o divide la carga en tareas más pequeñas.
+      - alert: EventBusCallbackDurationCritical
+        expr: |
+          histogram_quantile(0.99,
+            sum by (event_type, callback, le) (
+              rate(event_bus_callback_duration_seconds_bucket[5m])
+            )
+          ) > 2
+        for: 5m
+        labels:
+          severity: critical
+          service: event-bus
+        annotations:
+          summary: "Callbacks del EventBus excediendo el SLA de duración"
+          description: |
+            El percentil 99 de la duración de {{ $labels.event_type }} / {{ $labels.callback }} supera el límite crítico de 2s
+            (valor actual {{ printf "%.3f" $value }} s). Evalúa optimizaciones, paralelización o recortes en la lógica
+            del callback antes de que impacte el tiempo de reacción del bot.
