@@ -69,6 +69,7 @@ class DataFeed:
         self.backpressure = bool(backpressure)
         self.cancel_timeout = max(0.5, float(cancel_timeout))
         self.on_event = on_event
+        self._event_bus: Any | None = None
         self.event_bus = event_bus
         self._set_ws_connection_metric(0.0)
 
@@ -145,6 +146,25 @@ class DataFeed:
         self.ws_connected_event: asyncio.Event = asyncio.Event()
         self.ws_failed_event: asyncio.Event = asyncio.Event()
         self._ws_failure_reason: str | None = None
+
+    @property
+    def event_bus(self) -> Any | None:
+        return self._event_bus
+
+    @event_bus.setter
+    def event_bus(self, value: Any | None) -> None:
+        self._event_bus = value
+        if value is None:
+            return
+        start = getattr(value, "start", None)
+        if callable(start):
+            try:
+                start()
+            except Exception:
+                log.warning(
+                    "No se pudo iniciar event_bus tras inyección en DataFeed",
+                    exc_info=True,
+                )
 
     @property
     def connected(self) -> bool:
