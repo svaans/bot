@@ -18,12 +18,13 @@ try:  # pragma: no cover - métricas opcionales
     from core.metrics import (
         CONSUMER_SKIPPED_EXPECTED_TOTAL,
         DATAFEED_CANDLES_ENQUEUED_TOTAL,
+        DATAFEED_HANDLER_LATENCY,
         DATAFEED_WS_MESSAGES_TOTAL,
         registrar_vela_recibida,
         registrar_vela_rechazada,
     )
 except Exception:  # pragma: no cover - fallback cuando Prometheus no está disponible
-    from core.utils.metrics_compat import Counter
+    from core.utils.metrics_compat import Counter, Histogram
 
     CONSUMER_SKIPPED_EXPECTED_TOTAL = Counter(
         "consumer_skipped_expected_total",
@@ -39,6 +40,13 @@ except Exception:  # pragma: no cover - fallback cuando Prometheus no está disp
         "datafeed_candles_enqueued_total",
         "Velas encoladas por símbolo y timeframe",
         ["symbol", "tf"],
+    )
+
+    DATAFEED_HANDLER_LATENCY = Histogram(
+        "datafeed_handler_latency_seconds",
+        "Latencia del handler de DataFeed desde el encolado hasta la ejecución",
+        ["symbol", "timeframe"],
+        buckets=(0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2, 5),
     )
 
     def registrar_vela_recibida(*_args: Any, **_kwargs: Any) -> None:
@@ -470,6 +478,7 @@ async def consumer_loop(feed: "DataFeed", symbol: str) -> None:
         sym = str(candle.get("symbol") or symbol).upper()
         ts = candle.get("timestamp") or candle.get("close_time") or candle.get("open_time")
         timeframe = candle.get("timeframe") or candle.get("interval") or candle.get("tf")
+        metrics_enabled = _metrics_extended_enabled()
         outcome = "ok"
         handler = feed._handler
         if handler is None:
@@ -516,6 +525,9 @@ async def consumer_loop(feed: "DataFeed", symbol: str) -> None:
             if candle.get("_df_enqueue_time") is not None:
                 edad = time.monotonic() - candle["_df_enqueue_time"]
                 feed._stats[symbol]["latency_ms"] = int(edad * 1000)
+                if metrics_enabled:
+                    timeframe_label = str(timeframe or feed.intervalo or "unknown").lower()
+                    DATAFEED_HANDLER_LATENCY.labels(symbol=sym, timeframe=timeframe_label).observe(edad)
 
             events.set_consumer_state(feed, symbol, ConsumerState.HEALTHY)
             feed._stats[symbol]["handler_calls"] += 1
