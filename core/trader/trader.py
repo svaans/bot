@@ -1315,8 +1315,27 @@ class Trader(TraderLite):
                 exc_info=True,
             )
 
-    def get_eval_offload_stats(self) -> dict[str, Any]:
-        """Estadísticas del mecanismo de offload de evaluaciones."""
+    def get_eval_offload_stats(self, *, include_monitor: bool = False) -> dict[str, Any]:
+        """Estadísticas del mecanismo de offload de evaluaciones.
+
+        Parameters
+        ----------
+        include_monitor:
+            Cuando es ``True`` adjunta un bloque ``monitor`` con métricas
+            internas adicionales como tamaño de la cola o estado del loop.
+            Se deja desactivado por omisión para mantener compatibilidad con
+            integraciones previas y evitar exponer información innecesaria en
+            contextos sensibles (por ejemplo, serialización de respuestas).
+        """
+
+        stats: dict[str, Any] = {
+            "enabled": self._eval_offload_enabled,
+            "threshold": self._eval_offload_min_df,
+            "count": self._eval_offload_count,
+        }
+
+        if not include_monitor:
+            return stats
         with self._eval_offload_monitor_lock:
             inflight = self._eval_offload_inflight
             queue_size = self._eval_offload_queue_size
@@ -1325,15 +1344,14 @@ class Trader(TraderLite):
         loop = self._eval_offload_loop
         loop_running = bool(loop and loop.is_running())
 
-        return {
-            "enabled": self._eval_offload_enabled,
-            "threshold": self._eval_offload_min_df,
-            "count": self._eval_offload_count,
+        stats["monitor"] = {
             "inflight": inflight,
             "queue_size": queue_size,
             "queue_peak": queue_peak,
             "loop_running": loop_running,
         }
+
+        return stats
     
     def _collect_pipeline_diagnostics(self) -> dict[str, Any]:
         """Expone información de apoyo cuando el pipeline no está disponible."""
