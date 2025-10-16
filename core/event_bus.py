@@ -7,8 +7,19 @@ from functools import partial
 from threading import Lock
 from typing import Any, Awaitable, Callable, Deque, Dict, List, Tuple
 from core.utils.logger import configurar_logger
+from core.utils.metrics_compat import Counter, Gauge
 
 log = configurar_logger('event_bus', modo_silencioso=True)
+
+_PENDING_EMIT_COUNTER = Counter(
+    'event_bus_pending_emits_total',
+    'Eventos emitidos sin loop activo y encolados temporalmente',
+    ('event_type',),
+)
+_PENDING_QUEUE_GAUGE = Gauge(
+    'event_bus_pending_queue',
+    'Número de eventos pendientes por falta de loop activo',
+)
 
 
 class EventBus:
@@ -26,6 +37,7 @@ class EventBus:
         self._last_payload: "OrderedDict[str, Any | None]" = OrderedDict()
         self._pending: Deque[Tuple[str, Any | None]] = deque()
         self._lock = Lock()
+        self._pending_alerted: set[str] = set()
         try:
             loop = asyncio.get_running_loop()
         except RuntimeError:
@@ -73,6 +85,19 @@ class EventBus:
             return
         with self._lock:
             self._pending.append((event_type, data))
+            pending_size = len(self._pending)
+            warn = False
+            if event_type not in self._pending_alerted:
+                self._pending_alerted.add(event_type)
+                warn = True
+        _PENDING_EMIT_COUNTER.labels(event_type=event_type).inc()
+        _PENDING_QUEUE_GAUGE.set(float(pending_size))
+        if warn:
+            log.warning(
+                "⚠️ EventBus.emit sin loop activo; evento '%s' encolado (pendientes=%d)",
+                event_type,
+                pending_size,
+            )
 
     async def publish(self, event_type: str, data: Any | None) -> None:
         """Publish ``data`` for ``event_type``."""
@@ -192,6 +217,8 @@ class EventBus:
         self._last_payload.clear()
         with self._lock:
             self._pending.clear()
+            self._pending_alerted.clear()
+        _PENDING_QUEUE_GAUGE.set(0.0)
         self._loop = None
 
     def _drain_pending_emits(self) -> None:
@@ -203,6 +230,8 @@ class EventBus:
                 return
             pending = list(self._pending)
             self._pending.clear()
+            self._pending_alerted.clear()
+            _PENDING_QUEUE_GAUGE.set(float(len(self._pending)))
         loop = self._loop
         assert loop is not None
         for event_type, payload in pending:
