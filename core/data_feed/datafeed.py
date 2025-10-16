@@ -145,6 +145,14 @@ class DataFeed:
         self._consumer_state: Dict[str, ConsumerState] = {}
         self._reconnect_attempts: Dict[str, int] = {}
         self._reconnect_since: Dict[str, float] = {}
+        self._ws_retry_telemetry: Dict[str, dict[str, Any]] = {}
+
+        self.ws_backoff_base = max(0.05, _safe_float(os.getenv("DF_WS_BACKOFF_BASE", "0.5"), 0.5))
+        self.ws_backoff_max = max(
+            self.ws_backoff_base,
+            _safe_float(os.getenv("DF_WS_BACKOFF_MAX", "60.0"), 60.0),
+        )
+        self.ws_backoff_jitter = max(0.0, _safe_float(os.getenv("DF_WS_BACKOFF_JITTER", "0.25"), 0.25))
 
         self._monitor_inactividad_task: asyncio.Task | None = None
         self._monitor_consumers_task: asyncio.Task | None = None
@@ -370,6 +378,7 @@ class DataFeed:
         self._running = True
         self._reconnect_attempts.clear()
         self._reconnect_since.clear()
+        self._ws_retry_telemetry.clear()
 
         log.info(
             "suscrito",
@@ -513,6 +522,7 @@ class DataFeed:
         self._consumer_state.clear()
         self._reconnect_attempts.clear()
         self._reconnect_since.clear()
+        self._ws_retry_telemetry.clear()
 
         if isinstance(self.ws_connected_event, asyncio.Event):
             self.ws_connected_event.clear()
