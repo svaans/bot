@@ -239,6 +239,13 @@ INGEST_LATENCY = Histogram(
     ["symbol"],
 )
 
+DATAFEED_HANDLER_LATENCY = Histogram(
+    "datafeed_handler_latency_seconds",
+    "Latencia del handler de DataFeed desde el encolado hasta la ejecución",
+    ["symbol", "timeframe"],
+    buckets=(0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2, 5),
+)
+
 # Métricas de Trader
 BARS_IN_FUTURE_TOTAL = Counter(
     "bars_in_future_total",
@@ -391,6 +398,7 @@ _METRICS_WITH_FALLBACK = [
     "QUEUE_SIZE",
     "CONSUMER_SKIPPED_EXPECTED_TOTAL",
     "INGEST_LATENCY",
+    "DATAFEED_HANDLER_LATENCY",
     "TRADER_QUEUE_SIZE",
     "TRADER_PIPELINE_LATENCY",
     "TRADER_PROCESAR_VELA_CALLS_TOTAL",
