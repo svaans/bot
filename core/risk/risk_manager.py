@@ -84,13 +84,9 @@ class RiskManager:
 
     def subscribe(self, bus: EventBus) -> None:
         bus.subscribe('registrar_perdida', self._on_registrar_perdida)
-        bus.subscribe('ajustar_riesgo', self._on_ajustar_riesgo)
 
     async def _on_registrar_perdida(self, data: Any) -> None:
         self.registrar_perdida(data.get('symbol'), data.get('perdida', 0.0))
-
-    async def _on_ajustar_riesgo(self, data: Any) -> None:
-        self.ajustar_umbral(data)
 
     def riesgo_superado(self, capital_total: float) ->bool:
         """Indica si el capital perdido supera el umbral configurado."""

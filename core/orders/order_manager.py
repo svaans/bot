@@ -219,7 +219,6 @@ class OrderManager:
         bus.subscribe('abrir_orden', self._on_abrir)
         bus.subscribe('cerrar_orden', self._on_cerrar)
         bus.subscribe('cerrar_parcial', self._on_cerrar_parcial)
-        bus.subscribe('agregar_parcial', self._on_agregar_parcial)
         if self.modo_real:
             self.start_sync()
         self._ensure_background_tasks()
@@ -399,10 +398,6 @@ class OrderManager:
 
     async def _on_cerrar_parcial(self, data: dict) -> None:
         result = await self.cerrar_parcial_async(**data)
-        EventBus.respond(data, ack=bool(result), result=result)
-
-    async def _on_agregar_parcial(self, data: dict) -> None:
-        result = await self.agregar_parcial_async(**data)
         EventBus.respond(data, ack=bool(result), result=result)
 
     async def _resolve_quantity_with_fallback(
