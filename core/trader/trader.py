@@ -189,6 +189,12 @@ class HistorialCierresStore(MutableMapping[str, HistorialPorSimbolo]):
             store.prune()
         self._last_global_prune = time.monotonic()
 
+    @property
+    def prune_interval(self) -> float:
+        """Intervalo objetivo (en segundos) entre purgas globales."""
+
+        return self._prune_interval
+
     def prune_symbol(self, symbol: str) -> None:
         store = self._stores.get(symbol)
         if store is None:
@@ -272,6 +278,12 @@ class Trader(TraderLite):
         self._historial_cierres_max = max_historial
         self._historial_cierres_ttl = ttl_seconds
         self._historial_purge_enabled = is_flag_enabled("trader.purge_historial.enabled")
+        try:
+            interval_candidate = float(self.historial_cierres.prune_interval)
+        except Exception:
+            interval_candidate = float(sweep_interval_seconds or 300)
+        self._historial_cierres_purge_interval = max(5.0, interval_candidate)
+        self._historial_cierres_maintenance_started = False
         self.fecha_actual = datetime.now(UTC).date()
         self.estrategias_habilitadas = False
         self._eval_enabled: Dict[tuple[str, str], bool] = {}
@@ -368,6 +380,7 @@ class Trader(TraderLite):
     def start(self) -> None:
         """Arranca el trader y asegura la sincronización inicial de órdenes."""
         super().start()
+        self._ensure_historial_cierres_maintenance()
 
         if not self.modo_real:
             return
@@ -1284,6 +1297,103 @@ class Trader(TraderLite):
             self.historial_cierres.prune_symbol(symbol)
         else:
             self.historial_cierres.prune()
+
+    def _ensure_historial_cierres_maintenance(self) -> None:
+        """Registra una purga periódica supervisada del historial de cierres."""
+
+        if self._historial_cierres_maintenance_started:
+            return
+        if not self._historial_purge_enabled:
+            return
+        supervisor = getattr(self, "supervisor", None)
+        if supervisor is None:
+            return
+
+        interval_seconds = max(5.0, float(self._historial_cierres_purge_interval))
+        expected_interval = max(60, int(round(interval_seconds)))
+
+        supervisor.supervised_task(
+            lambda: self._historial_cierres_purge_loop(interval_seconds),
+            name="historial_cierres_purge",
+            expected_interval=expected_interval,
+        )
+        self._historial_cierres_maintenance_started = True
+
+    async def _historial_cierres_purge_loop(self, interval: float) -> None:
+        """Mantiene purgas periódicas utilizando el ``Supervisor``."""
+
+        sleep_interval = max(5.0, float(interval))
+        self._run_historial_cierres_purge_cycle()
+        while not self._stop_event.is_set():
+            try:
+                await asyncio.wait_for(self._stop_event.wait(), timeout=sleep_interval)
+                break
+            except asyncio.TimeoutError:
+                self._run_historial_cierres_purge_cycle()
+
+    def _run_historial_cierres_purge_cycle(self) -> None:
+        """Ejecuta una purga y emite métricas vía Supervisor/EventBus."""
+
+        try:
+            self.historial_cierres.prune()
+        except Exception:
+            log.debug(
+                "No se pudo purgar historial de cierres en mantenimiento programado",
+                exc_info=True,
+            )
+            return
+
+        supervisor = getattr(self, "supervisor", None)
+        if supervisor is not None:
+            try:
+                supervisor.beat("historial_cierres_purge")
+            except Exception:
+                log.debug(
+                    "No se pudo registrar heartbeat de historial_cierres_purge",
+                    exc_info=True,
+                )
+
+        bus = getattr(self, "bus", None) or getattr(self, "event_bus", None)
+        if bus is None:
+            return
+
+        try:
+            payload = {
+                "timestamp": datetime.now(UTC).isoformat(),
+                "total_entries": self.historial_cierres.total_entries(),
+            }
+        except Exception:
+            payload = {"timestamp": datetime.now(UTC).isoformat()}
+
+        emit = getattr(bus, "emit", None)
+        if callable(emit):
+            try:
+                emit("historial_cierres.pruned", dict(payload))
+                return
+            except Exception:
+                log.debug(
+                    "No se pudo emitir evento de purga de historial de cierres",
+                    exc_info=True,
+                )
+
+        publish = getattr(bus, "publish", None)
+        if callable(publish):
+            try:
+                result = publish("historial_cierres.pruned", dict(payload))
+            except Exception:
+                log.debug(
+                    "No se pudo publicar evento de purga de historial de cierres",
+                    exc_info=True,
+                )
+                return
+            if asyncio.iscoroutine(result):
+                try:
+                    loop = asyncio.get_running_loop()
+                except RuntimeError:
+                    loop = None
+                if loop and loop.is_running():
+                    task = loop.create_task(result)
+                    self._register_bg_task(task)
 
     def get_historial_cierres_stats(self) -> dict[str, Any]:
         """Devuelve métricas agregadas del historial para monitoreo."""
