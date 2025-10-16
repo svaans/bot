@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import threading
 import time
 from collections import OrderedDict, deque
 from collections.abc import Iterable, Iterator, MutableMapping
 from datetime import datetime, timezone
 from copy import deepcopy
+from concurrent.futures import Future
 from typing import Any, Awaitable, Callable, Dict, Optional, TYPE_CHECKING
 
 import pandas as pd
@@ -286,6 +288,14 @@ class Trader(TraderLite):
         self._eval_offload_enabled = bool(offload_enabled)
         self._eval_offload_min_df = max(1, threshold)
         self._eval_offload_count = 0
+        self._eval_offload_loop: asyncio.AbstractEventLoop | None = None
+        self._eval_offload_loop_thread: threading.Thread | None = None
+        self._eval_offload_loop_lock = threading.Lock()
+        self._eval_offload_monitor_lock = threading.Lock()
+        self._eval_offload_pending: set[Future[Any]] = set()
+        self._eval_offload_inflight = 0
+        self._eval_offload_queue_size = 0
+        self._eval_offload_queue_peak = 0
         self._hook_error_counts: Dict[str, int] = {}
 
         # Lazy construcciones (si los módulos existen)
@@ -348,6 +358,12 @@ class Trader(TraderLite):
             }
         else:
             self.pesos_por_simbolo = {symbol: {} for symbol in config.symbols}
+
+    async def stop(self) -> None:  # type: ignore[override]
+        try:
+            await super().stop()
+        finally:
+            await self._shutdown_eval_offload_loop()
 
     def start(self) -> None:
         """Arranca el trader y asegura la sincronización inicial de órdenes."""
@@ -1006,6 +1022,144 @@ class Trader(TraderLite):
             return False
         return length >= self._eval_offload_min_df
 
+    def _ensure_eval_offload_loop(self) -> asyncio.AbstractEventLoop:
+        loop = self._eval_offload_loop
+        if loop is not None and loop.is_running():
+            return loop
+
+        start_event: threading.Event | None = None
+        with self._eval_offload_loop_lock:
+            loop = self._eval_offload_loop
+            if loop is not None and loop.is_running():
+                return loop
+
+            start_event = threading.Event()
+
+            def _loop_runner(start_signal: threading.Event) -> None:
+                try:
+                    new_loop = asyncio.new_event_loop()
+                except Exception:
+                    log.exception("eval_offload.loop_init_failed")
+                    start_signal.set()
+                    return
+
+                try:
+                    asyncio.set_event_loop(new_loop)
+                    with self._eval_offload_monitor_lock:
+                        self._eval_offload_loop = new_loop
+                    start_signal.set()
+                    new_loop.run_forever()
+                except Exception:
+                    log.exception("Error en loop dedicado de evaluaciones offloaded")
+                finally:
+                    pending = [
+                        task for task in asyncio.all_tasks(new_loop) if not task.done()
+                    ]
+                    for task in pending:
+                        task.cancel()
+                    if pending:
+                        with contextlib.suppress(Exception):
+                            new_loop.run_until_complete(
+                                asyncio.gather(*pending, return_exceptions=True)
+                            )
+                    with contextlib.suppress(Exception):
+                        new_loop.run_until_complete(new_loop.shutdown_asyncgens())
+                    new_loop.close()
+                    with self._eval_offload_monitor_lock:
+                        self._eval_offload_loop = None
+                        self._eval_offload_pending.clear()
+                        self._eval_offload_inflight = 0
+                        self._eval_offload_queue_size = 0
+                    with self._eval_offload_loop_lock:
+                        if threading.current_thread() is self._eval_offload_loop_thread:
+                            self._eval_offload_loop_thread = None
+                    start_signal.set()
+
+            thread = threading.Thread(
+                target=_loop_runner,
+                name="trader.eval_offload",
+                args=(start_event,),
+                daemon=True,
+            )
+            self._eval_offload_loop_thread = thread
+            thread.start()
+
+        if start_event is not None:
+            start_event.wait()
+
+        loop = self._eval_offload_loop
+        if loop is None or not loop.is_running():
+            raise RuntimeError("No se pudo iniciar el loop dedicado de evaluaciones")
+        return loop
+
+    def _track_eval_offload_future(
+        self, future: Future[dict[str, Any] | None]
+    ) -> None:
+        def _on_done(completed: Future[dict[str, Any] | None]) -> None:
+            with self._eval_offload_monitor_lock:
+                self._eval_offload_pending.discard(completed)
+                pending = len(self._eval_offload_pending)
+                self._eval_offload_inflight = pending
+                queue_size = max(0, pending - 1)
+                self._eval_offload_queue_size = queue_size
+
+        with self._eval_offload_monitor_lock:
+            self._eval_offload_pending.add(future)
+            pending = len(self._eval_offload_pending)
+            self._eval_offload_inflight = pending
+            queue_size = max(0, pending - 1)
+            self._eval_offload_queue_size = queue_size
+            if queue_size > self._eval_offload_queue_peak:
+                self._eval_offload_queue_peak = queue_size
+
+        future.add_done_callback(_on_done)
+
+    def _submit_eval_offload(
+        self,
+        symbol: str,
+        df: pd.DataFrame,
+        estado: Any,
+        on_event: Callable[[str, dict], None] | None,
+    ) -> Future[dict[str, Any] | None] | None:
+        try:
+            worker_loop = self._ensure_eval_offload_loop()
+        except Exception:
+            log.exception("No se pudo inicializar loop dedicado para evaluaciones offloaded")
+            return None
+
+        coro = TraderLite._execute_pipeline(self, symbol, df, estado, on_event)
+        future = asyncio.run_coroutine_threadsafe(coro, worker_loop)
+        self._track_eval_offload_future(future)
+        return future
+
+    async def _shutdown_eval_offload_loop(self) -> None:
+        loop = self._eval_offload_loop
+        thread = self._eval_offload_loop_thread
+        if loop is None and thread is None:
+            return
+
+        if loop is not None and loop.is_running():
+            loop.call_soon_threadsafe(loop.stop)
+
+        if thread is not None:
+            await asyncio.to_thread(thread.join, 5.0)
+            if thread.is_alive():
+                log.warning(
+                    "eval_offload.loop_shutdown_timeout",
+                    extra=safe_extra({"timeout_seconds": 5.0}),
+                )
+
+        with self._eval_offload_loop_lock:
+            if thread is self._eval_offload_loop_thread:
+                self._eval_offload_loop_thread = None
+            if loop is self._eval_offload_loop:
+                self._eval_offload_loop = None
+
+        with self._eval_offload_monitor_lock:
+            self._eval_offload_pending.clear()
+            self._eval_offload_inflight = 0
+            self._eval_offload_queue_size = 0
+
     async def _run_eval_offloaded(
         self,
         symbol: str,
@@ -1029,13 +1183,21 @@ class Trader(TraderLite):
             _threadsafe_event = None
 
         self._eval_offload_count += 1
-        return await asyncio.to_thread(
-            self._blocking_verificar_entrada,
-            symbol,
-            df_copy,
-            estado_copy,
-            _threadsafe_event,
-        )
+        future = self._submit_eval_offload(symbol, df_copy, estado_copy, _threadsafe_event)
+        if future is None:
+            return await TraderLite._execute_pipeline(
+                self,
+                symbol,
+                df_copy,
+                estado_copy,
+                _threadsafe_event,
+            )
+
+        try:
+            return await asyncio.wrap_future(future)
+        except asyncio.CancelledError:
+            future.cancel()
+            raise
 
     def _blocking_verificar_entrada(
         self,
@@ -1044,10 +1206,19 @@ class Trader(TraderLite):
         estado: Any,
         on_event: Callable[[str, dict], None] | None,
     ) -> dict[str, Any] | None:
-        async def _runner() -> dict[str, Any] | None:
-            return await TraderLite._execute_pipeline(self, symbol, df, estado, on_event)
+        future = self._submit_eval_offload(symbol, df, estado, on_event)
+        if future is None:
+            async def _runner() -> dict[str, Any] | None:
+                return await TraderLite._execute_pipeline(self, symbol, df, estado, on_event)
 
-        return asyncio.run(_runner())
+            return asyncio.run(_runner())
+        try:
+            return future.result()
+        except asyncio.CancelledError:  # pragma: no cover - defensive
+            future.cancel()
+            raise
+        except Exception:
+            raise
     
     def _snapshot_offload_state(self, estado: Any) -> Any:
         """Devuelve una copia aislada de ``estado`` para evaluaciones offloaded."""
@@ -1146,11 +1317,22 @@ class Trader(TraderLite):
 
     def get_eval_offload_stats(self) -> dict[str, Any]:
         """Estadísticas del mecanismo de offload de evaluaciones."""
+        with self._eval_offload_monitor_lock:
+            inflight = self._eval_offload_inflight
+            queue_size = self._eval_offload_queue_size
+            queue_peak = self._eval_offload_queue_peak
+
+        loop = self._eval_offload_loop
+        loop_running = bool(loop and loop.is_running())
 
         return {
             "enabled": self._eval_offload_enabled,
             "threshold": self._eval_offload_min_df,
             "count": self._eval_offload_count,
+            "inflight": inflight,
+            "queue_size": queue_size,
+            "queue_peak": queue_peak,
+            "loop_running": loop_running,
         }
     
     def _collect_pipeline_diagnostics(self) -> dict[str, Any]:
