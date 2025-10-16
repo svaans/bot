@@ -375,6 +375,24 @@ async def handle_candle(
                     queue.task_done()
                     feed._stats[symbol]["dropped"] += 1
                     events.emit_event(feed, "queue_drop", {"symbol": symbol})
+                    current_size = queue.qsize()
+                    if (
+                        not getattr(feed, "_queue_capacity_breach_logged", False)
+                        and feed.queue_max
+                        and getattr(feed, "queue_min_recommended", 0) > 0
+                        and feed.queue_max < feed.queue_min_recommended
+                    ):
+                        feed._queue_capacity_breach_logged = True
+                        payload = {
+                            "symbol": symbol,
+                            "tf": feed.intervalo,
+                            "queue_max": feed.queue_max,
+                            "queue_min_recommended": feed.queue_min_recommended,
+                            "queue_size": current_size,
+                            "drops": feed._stats[symbol]["dropped"],
+                        }
+                        log.warning("queue.capacity.breach", extra=safe_extra(payload))
+                        events.emit_event(feed, "queue_capacity_breach", payload)
                 except asyncio.QueueEmpty:
                     await asyncio.sleep(0)
                     continue
