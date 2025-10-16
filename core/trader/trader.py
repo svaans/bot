@@ -979,7 +979,8 @@ class Trader(TraderLite):
                             except RuntimeError:
                                 loop = None
                             if loop and loop.is_running():
-                                loop.create_task(result)
+                                task = loop.create_task(result)
+                                self._register_bg_task(task)
             except Exception:
                 log.debug(
                     "No se pudo notificar error de entrada al EventBus",
