@@ -86,7 +86,13 @@ def _adaptar_configuracion_indicadores(symbol: str, df: pd.DataFrame, base_confi
         t = np.clip((volumen_relativo - 1.2) / (1.5 - 1.2), 0.0, 1.0)
         min_volumen_relativo = 1.1 + t * (1.3 - 1.1)
     min_volumen_relativo = round(float(min_volumen_relativo), 3)
-    modo_agresivo = es_modo_agresivo(atr_pct, slope_pct)
+    modo_agresivo = es_modo_agresivo(
+        atr_pct,
+        slope_pct,
+        symbol=symbol,
+        vol_threshold=base_config.get('modo_agresivo_vol_threshold'),
+        slope_threshold=base_config.get('modo_agresivo_slope_threshold'),
+    )
     if modo_agresivo:
         log.info(
             f"[{symbol}] Modo agresivo activado (ATR%={atr_pct:.4f}, Slope%={slope_pct:.4f})"

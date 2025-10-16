@@ -2,21 +2,39 @@ import os
 import json
 import shutil
 from datetime import datetime
+
+from core.ajustador_riesgo import (
+    MODO_AGRESIVO_SLOPE_THRESHOLD,
+    MODO_AGRESIVO_VOL_THRESHOLD,
+)
 from core.utils.utils import configurar_logger
 RUTA_CONFIG_SIMBOLOS = 'config/configuraciones_optimas.json'
 log = configurar_logger('config_service')
-CONFIG_BASE = {'factor_umbral': 1.0, 'ajuste_volatilidad': 1.0,
-    'riesgo_maximo_diario': 0.06, 'riesgo_por_trade': 0.02,
+CONFIG_BASE = {
+    'factor_umbral': 1.0,
+    'ajuste_volatilidad': 1.0,
+    'riesgo_maximo_diario': 0.06,
+    'riesgo_por_trade': 0.02,
     'ponderar_por_diversidad': True,
-    'modo_agresivo': False, 'multiplicador_estrategias_recurrentes': 1.5,
-    'peso_minimo_total': 0.5, 'diversidad_minima': 2,
+    'modo_agresivo': False,
+    'modo_agresivo_vol_threshold': MODO_AGRESIVO_VOL_THRESHOLD,
+    'modo_agresivo_slope_threshold': MODO_AGRESIVO_SLOPE_THRESHOLD,
+    'multiplicador_estrategias_recurrentes': 1.5,
+    'peso_minimo_total': 0.5,
+    'diversidad_minima': 2,
     'umbral_peso_estrategia_unica': 3.5,
     'umbral_score_estrategia_unica': 5.0,
-    'cooldown_tras_perdida': 3, 'sl_ratio': 1.5, 'tp_ratio': 3.0,
-    'ratio_minimo_beneficio': 1.3, 'uso_trailing_technico': True,
-    'trailing_buffer': 0.01, 'trailing_por_atr': True,
-    'usar_cierre_parcial': True, 'umbral_operacion_grande': 30.0,
-    'beneficio_minimo_parcial': 5.0}
+    'cooldown_tras_perdida': 3,
+    'sl_ratio': 1.5,
+    'tp_ratio': 3.0,
+    'ratio_minimo_beneficio': 1.3,
+    'uso_trailing_technico': True,
+    'trailing_buffer': 0.01,
+    'trailing_por_atr': True,
+    'usar_cierre_parcial': True,
+    'umbral_operacion_grande': 30.0,
+    'beneficio_minimo_parcial': 5.0,
+}
 
 
 def backup_json(path: str):

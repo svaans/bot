@@ -50,6 +50,35 @@ def test_es_modo_agresivo_umbral(volatilidad, slope_pct, esperado):
     assert es_modo_agresivo(volatilidad, slope_pct) is esperado
 
 
+def test_es_modo_agresivo_prioriza_config_sobre_entorno(monkeypatch):
+    monkeypatch.setenv("MODO_AGRESIVO_VOL_THRESHOLD", "0.05")
+    monkeypatch.setenv("MODO_AGRESIVO_SLOPE_THRESHOLD", "0.01")
+
+    assert es_modo_agresivo(
+        volatilidad=0.03,
+        slope_pct=0.0002,
+        vol_threshold=0.015,
+        slope_threshold=0.02,
+    )
+
+
+def test_es_modo_agresivo_lee_umbral_por_simbolo(monkeypatch):
+    monkeypatch.setenv("MODO_AGRESIVO_VOL_THRESHOLD_BTCUSDT", "0.1")
+    monkeypatch.setenv("MODO_AGRESIVO_SLOPE_THRESHOLD_BTCUSDT", "0.02")
+
+    assert not es_modo_agresivo(
+        volatilidad=0.05,
+        slope_pct=0.01,
+        symbol="BTCUSDT",
+    )
+    # Otro símbolo debe usar los valores globales por defecto.
+    assert es_modo_agresivo(
+        volatilidad=0.05,
+        slope_pct=0.003,
+        symbol="ETHUSDT",
+    )
+
+
 def test_ajustar_sl_tp_riesgo_respeta_limites_extremos():
     sl, tp, riesgo = ajustar_sl_tp_riesgo(
         volatilidad=1.0,

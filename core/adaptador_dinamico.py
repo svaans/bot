@@ -180,7 +180,13 @@ def _adaptar_configuracion_base(symbol: str, df: pd.DataFrame, base_config: dict
     elif slope < -0.002:
         diversidad = max(base_div, 2)
     cooldown = min(24, max(0, int(volatilidad * 100)))
-    modo_agresivo = es_modo_agresivo(volatilidad, slope_pct)
+    modo_agresivo = es_modo_agresivo(
+        volatilidad,
+        slope_pct,
+        symbol=symbol,
+        vol_threshold=base_config.get('modo_agresivo_vol_threshold'),
+        slope_threshold=base_config.get('modo_agresivo_slope_threshold'),
+    )
     if modo_agresivo:
         log.info(
             f"[{symbol}] Modo agresivo activado (Vol={volatilidad:.4f}, Slope%={slope_pct:.4f})"
