@@ -19,6 +19,7 @@ async def test_data_feed_uses_environment_when_config_missing(
         handler_timeout=None,
         inactivity_intervals=None,
         df_queue_default_limit=None,
+        df_queue_min_recommended=None,
         df_queue_policy=None,
         monitor_interval=None,
         df_backpressure=None,
@@ -31,6 +32,7 @@ async def test_data_feed_uses_environment_when_config_missing(
     monkeypatch.setenv("DF_MONITOR_INTERVAL", "1.25")
     monkeypatch.setenv("DF_BACKPRESSURE", "false")
     monkeypatch.setenv("DF_CANCEL_TIMEOUT", "8.5")
+    monkeypatch.setenv("DF_QUEUE_MIN_RECOMMENDED", "19")
 
     async def handler(_: dict) -> None:
         return None
@@ -41,6 +43,7 @@ async def test_data_feed_uses_environment_when_config_missing(
     assert feed.handler_timeout == pytest.approx(6.5)
     assert feed.inactivity_intervals == 7
     assert feed.queue_max == 321
+    assert feed.queue_min_recommended == 19
     assert feed.queue_policy == "block"
     assert feed.monitor_interval == pytest.approx(1.25)
     assert feed.backpressure is False
