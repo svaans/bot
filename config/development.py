@@ -57,6 +57,7 @@ class DevelopmentConfig:
     timeout_sin_datos_factor: int = 6
     backfill_max_candles: int = 1000
     df_queue_default_limit: int = 2000
+    df_queue_min_recommended: int = 16
     df_queue_limits: Dict[str, int] = field(default_factory=dict)
     df_queue_policy: str = "block"
     df_queue_policy_by_symbol: Dict[str, str] = field(default_factory=dict)
