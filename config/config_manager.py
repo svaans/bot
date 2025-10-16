@@ -183,6 +183,7 @@ class Config:
     df_backpressure: bool = True
     df_backpressure_drop: bool = True
     df_queue_default_limit: int = 2000
+    df_queue_min_recommended: int = 16
     df_queue_limits: Dict[str, int] = field(default_factory=dict)
     df_queue_policy: str = "block"
     df_queue_policy_by_symbol: Dict[str, str] = field(default_factory=dict)
@@ -309,6 +310,9 @@ class ConfigManager:
 
         # Queue defaults / policy
         df_queue_default_limit = _cargar_int('DF_QUEUE_DEFAULT_LIMIT', getattr(defaults, 'df_queue_default_limit', 2000))
+        df_queue_min_recommended = _cargar_int(
+            'DF_QUEUE_MIN_RECOMMENDED', getattr(defaults, 'df_queue_min_recommended', 16)
+        )
         df_queue_policy = os.getenv('DF_QUEUE_POLICY', getattr(defaults, 'df_queue_policy', 'block')).lower()
         df_queue_coalesce_ms = _cargar_int('DF_QUEUE_COALESCE_MS', getattr(defaults, 'df_queue_coalesce_ms', 0))
         df_queue_high_watermark = _cargar_float('DF_QUEUE_HIGH_WATERMARK', getattr(defaults, 'df_queue_high_watermark', 0.8))
@@ -499,6 +503,7 @@ class ConfigManager:
             df_backpressure=os.getenv('DF_BACKPRESSURE', 'true').lower() == 'true',
             df_backpressure_drop=os.getenv('DF_BACKPRESSURE_DROP', 'true').lower() == 'true',
             df_queue_default_limit=df_queue_default_limit,
+            df_queue_min_recommended=df_queue_min_recommended,
             df_queue_limits=df_queue_limits,
             df_queue_policy=df_queue_policy,
             df_queue_policy_by_symbol=df_queue_policy_by_symbol,
