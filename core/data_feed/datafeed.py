@@ -34,6 +34,7 @@ class DataFeed:
         queue_max: int = int(os.getenv("DF_QUEUE_MAX", "2000")),
         queue_policy: str = os.getenv("DF_QUEUE_POLICY", "drop_oldest").lower(),
         monitor_interval: float = float(os.getenv("DF_MONITOR_INTERVAL", "5")),
+        queue_min_recommended: int | None = None,
         consumer_timeout_intervals: float | None = None,
         consumer_timeout_min: float | None = None,
         backpressure: bool = os.getenv("DF_BACKPRESSURE", "true").lower() == "true",
@@ -52,6 +53,27 @@ class DataFeed:
 
         self.queue_max = max(0, int(queue_max))
         self.queue_policy = queue_policy if queue_policy in {"drop_oldest", "block"} else "drop_oldest"
+        self.on_event = on_event
+
+        env_queue_min = max(0, _safe_int(os.getenv("DF_QUEUE_MIN_RECOMMENDED", "16"), 16))
+        parsed_min = (
+            max(0, _safe_int(queue_min_recommended, env_queue_min))
+            if queue_min_recommended is not None
+            else env_queue_min
+        )
+        self.queue_min_recommended = max(0, parsed_min)
+        self._queue_capacity_warning_emitted = False
+        self._queue_capacity_breach_logged = False
+        if 0 < self.queue_max < self.queue_min_recommended:
+            payload = {
+                "intervalo": self.intervalo,
+                "queue_max": self.queue_max,
+                "queue_min_recommended": self.queue_min_recommended,
+                "queue_policy": self.queue_policy,
+            }
+            log.warning("queue.capacity.low_config", extra=safe_extra(payload))
+            events_module.emit_event(self, "queue_capacity_below_recommended", payload)
+            self._queue_capacity_warning_emitted = True
 
         self.monitor_interval = max(0.05, float(monitor_interval))
 
@@ -68,7 +90,6 @@ class DataFeed:
 
         self.backpressure = bool(backpressure)
         self.cancel_timeout = max(0.5, float(cancel_timeout))
-        self.on_event = on_event
         self._event_bus: Any | None = None
         self.event_bus = event_bus
         self._set_ws_connection_metric(0.0)
