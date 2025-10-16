@@ -60,7 +60,8 @@ class DataFeed:
         self.queue_policy = parsed_policy if parsed_policy in allowed_policies else "drop_oldest"
 
         self.queue_max = max(0, int(queue_max))
-        self.on_event = on_event
+        self._external_on_event = on_event
+        self.on_event = self._handle_feed_event
 
         env_queue_min = max(0, _safe_int(os.getenv("DF_QUEUE_MIN_RECOMMENDED", "16"), 16))
         parsed_min = (
@@ -106,6 +107,7 @@ class DataFeed:
         self.backpressure = bool(backpressure)
         self.cancel_timeout = max(0.5, float(cancel_timeout))
         self._event_bus: Any | None = None
+        self._event_bus_registered_events: set[str] = set()
         self.event_bus = event_bus
         self._set_ws_connection_metric(0.0)
 
@@ -166,6 +168,8 @@ class DataFeed:
             self._backfill_window_target = int(raw_window) if raw_window is not None else self.min_buffer_candles
         except (TypeError, ValueError):
             self._backfill_window_target = self.min_buffer_candles
+        self._backfill_window_targets: Dict[str, int] = {}
+        self._backfill_window_drop_balance: Dict[str, int] = defaultdict(int)
 
         self._managed_by_trader: bool = bool(getattr(self, "_managed_by_trader", False))
 
@@ -249,9 +253,13 @@ class DataFeed:
 
     @event_bus.setter
     def event_bus(self, value: Any | None) -> None:
+        previous = getattr(self, "_event_bus", None)
         self._event_bus = value
         if value is None:
+            self._event_bus_registered_events.clear()
             return
+        if value is not previous:
+            self._event_bus_registered_events.clear()
         start = getattr(value, "start", None)
         if callable(start):
             try:
@@ -261,6 +269,120 @@ class DataFeed:
                     "No se pudo iniciar event_bus tras inyección en DataFeed",
                     exc_info=True,
                 )
+        self._register_event_bus_handlers()
+
+    def _handle_feed_event(self, event: str, data: dict[str, Any]) -> None:
+        bus = getattr(self, "_event_bus", None)
+        if bus is not None:
+            emitter = getattr(bus, "emit", None)
+            if callable(emitter):
+                try:
+                    payload_for_bus = dict(data)
+                    payload_for_bus.setdefault("intervalo", self.intervalo)
+                    emitter(event, payload_for_bus)
+                except Exception:
+                    log.debug(
+                        "No se pudo reenviar evento %s al event_bus", event, exc_info=True
+                    )
+        if self._external_on_event is not None:
+            try:
+                self._external_on_event(event, data)
+            except Exception:
+                log.exception("on_event externo lanzó excepción")
+
+    def _register_event_bus_handlers(self) -> None:
+        bus = self._event_bus
+        if bus is None:
+            return
+        subscribe = getattr(bus, "subscribe", None)
+        if not callable(subscribe):
+            return
+        if "queue_drop" in self._event_bus_registered_events:
+            return
+        try:
+            subscribe("queue_drop", self._on_queue_drop_event)
+            self._event_bus_registered_events.add("queue_drop")
+        except Exception:
+            log.warning(
+                "No se pudo suscribir a queue_drop en event_bus", exc_info=True
+            )
+
+    async def _on_queue_drop_event(self, payload: Any | None) -> None:
+        if not isinstance(payload, dict):
+            return
+        symbol = payload.get("symbol")
+        if not symbol:
+            return
+        count_raw = payload.get("count", 1)
+        try:
+            count = int(count_raw)
+        except (TypeError, ValueError):
+            count = 1
+        if count <= 0:
+            count = 1
+        self._increase_backfill_drop(str(symbol).upper(), count)
+
+    def _increase_backfill_drop(self, symbol: str, count: int) -> None:
+        if count <= 0:
+            return
+        base_target = int(self._backfill_window_target or self.min_buffer_candles)
+        balance = self._backfill_window_drop_balance.get(symbol, 0) + count
+        self._backfill_window_drop_balance[symbol] = balance
+        new_target = min(self._backfill_max, max(base_target, base_target + balance))
+        self._backfill_window_targets[symbol] = new_target
+        log.debug(
+            "backfill.window.adjust",
+            extra=safe_extra(
+                {
+                    "symbol": symbol,
+                    "base": base_target,
+                    "balance": balance,
+                    "target": new_target,
+                }
+            ),
+        )
+
+    def _resolve_backfill_window_target(self, symbol: str | None = None) -> int:
+        base_target = int(self._backfill_window_target or self.min_buffer_candles)
+        if symbol:
+            dynamic = self._backfill_window_targets.get(str(symbol).upper())
+            if dynamic is not None:
+                return dynamic
+        return base_target
+
+    def _note_backfill_window_recovery(self, symbol: str, recovered: int) -> None:
+        if recovered <= 0:
+            return
+        sym_key = str(symbol).upper()
+        if not sym_key:
+            return
+        balance = self._backfill_window_drop_balance.get(sym_key, 0)
+        if balance <= 0:
+            return
+        remaining = max(0, balance - recovered)
+        if remaining == 0:
+            self._backfill_window_drop_balance.pop(sym_key, None)
+            self._backfill_window_targets.pop(sym_key, None)
+            log.debug(
+                "backfill.window.recovered",
+                extra=safe_extra({"symbol": sym_key, "recovered": recovered}),
+            )
+            return
+        self._backfill_window_drop_balance[sym_key] = remaining
+        base_target = int(self._backfill_window_target or self.min_buffer_candles)
+        new_target = min(self._backfill_max, max(base_target, base_target + remaining))
+        self._backfill_window_targets[sym_key] = new_target
+        log.debug(
+            "backfill.window.balance",
+            extra=safe_extra(
+                {
+                    "symbol": sym_key,
+                    "balance": remaining,
+                    "target": new_target,
+                    "recovered": recovered,
+                }
+            ),
+        )
 
     @property
     def connected(self) -> bool:
