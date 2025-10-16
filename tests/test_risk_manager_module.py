@@ -4,7 +4,8 @@ from datetime import datetime, timedelta, timezone
 
 UTC = timezone.utc
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, Generator
+from unittest.mock import ANY
 
 import pytest
 
@@ -43,11 +44,22 @@ def patch_dependencies(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.fixture(autouse=True)
-def _reset_flags() -> None:
+def _reset_flags() -> Generator[None, None, None]:
     try:
         yield
     finally:
         reset_flag_cache()
+
+
+@pytest.fixture(autouse=True)
+def reset_gauges() -> Generator[None, None, None]:
+    risk_module.RIESGO_CONSUMIDO_GAUGE.set(0.0)
+    risk_module.COOLDOWN_ACTIVO_GAUGE.set(0.0)
+    try:
+        yield
+    finally:
+        risk_module.RIESGO_CONSUMIDO_GAUGE.set(0.0)
+        risk_module.COOLDOWN_ACTIVO_GAUGE.set(0.0)
 
 
 def test_registrar_perdida_activa_cooldown() -> None:
@@ -80,6 +92,45 @@ def test_registrar_perdida_publica_evento_cooldown() -> None:
     evento, payload = bus.events[0]
     assert evento == "risk.cooldown_activated"
     assert payload["symbol"] == "BTCUSDT"
+
+
+def test_registrar_perdida_actualiza_metricas_y_resetea_dia(monkeypatch: pytest.MonkeyPatch) -> None:
+    capital = DummyCapitalManager({"BTCUSDT": 100.0})
+    manager = RiskManager(0.05, capital_manager=capital)
+
+    llamadas: list[tuple[tuple[Any, ...], dict[str, Any]]] = []
+    dummy_registro = SimpleNamespace(
+        registrar=lambda *args, **kwargs: llamadas.append((args, kwargs))
+    )
+    monkeypatch.setattr("core.risk.risk_manager.registro_metrico", dummy_registro)
+
+    real_datetime = risk_module.datetime
+    primera_fecha = real_datetime(2024, 1, 1, 12, 0, tzinfo=UTC)
+
+    class FixedDateTime(real_datetime):
+        current = primera_fecha
+
+        @classmethod
+        def now(cls, tz=None):  # type: ignore[override]
+            if tz is None:
+                return cls.current.replace(tzinfo=None)
+            return cls.current.astimezone(tz)
+
+    monkeypatch.setattr(risk_module, "datetime", FixedDateTime)
+
+    manager.registrar_perdida("BTCUSDT", -10.0)
+
+    assert pytest.approx(manager.riesgo_diario, rel=1e-9) == 10.0
+    assert pytest.approx(risk_module.RIESGO_CONSUMIDO_GAUGE._value, rel=1e-9) == 10.0
+    assert llamadas and llamadas[0][0][0] == "risk_drawdown"
+
+    FixedDateTime.current = primera_fecha + timedelta(days=1)
+
+    manager.registrar_perdida("BTCUSDT", -5.0)
+
+    assert pytest.approx(manager.riesgo_diario, rel=1e-9) == 5.0
+    assert pytest.approx(risk_module.RIESGO_CONSUMIDO_GAUGE._value, rel=1e-9) == 5.0
+    assert len(llamadas) == 2
 
 
 def test_permite_entrada_verifica_condiciones() -> None:
@@ -122,6 +173,22 @@ def test_correlaciones_expiran(monkeypatch: pytest.MonkeyPatch) -> None:
     manager._limpiar_correlaciones_expiradas()
     assert manager.correlacion_media("BTCUSDT", {}) == 0.0
     assert not manager.correlaciones
+
+
+def test_correlacion_media_con_valores_extremos() -> None:
+    capital = DummyCapitalManager({"BTCUSDT": 100.0, "ETHUSDT": 100.0, "SOLUSDT": 100.0})
+    manager = RiskManager(0.05, capital_manager=capital)
+    manager.abrir_posicion("BTCUSDT")
+    manager.abrir_posicion("ETHUSDT")
+    manager.abrir_posicion("SOLUSDT")
+
+    manager.registrar_correlaciones("BTCUSDT", {"ETHUSDT": 0.9})
+
+    media = manager.correlacion_media(
+        "ETHUSDT", {"BTCUSDT": -0.9, "SOLUSDT": -0.8}
+    )
+
+    assert pytest.approx(media, rel=1e-9) == pytest.approx((0.9 + 0.8) / 2, rel=1e-9)
 
 
 def test_ajustar_umbral_aplica_reglas() -> None:
@@ -234,3 +301,55 @@ async def test_kill_switch_cierra_posiciones_y_notifica() -> None:
     assert triggered is True
     assert orders.closed == [("BTCUSDT", 10.0, "Kill Switch")]
     assert bus.events and bus.events[0][0] == "notify"
+
+
+def test_cooldown_emite_alerta_y_se_libera(monkeypatch: pytest.MonkeyPatch) -> None:
+    class DummyBus:
+        def __init__(self) -> None:
+            self.events: list[tuple[str, Any]] = []
+
+        def subscribe(self, *_: Any, **__: Any) -> None:
+            return None
+
+        def emit(self, event_type: str, data: Any | None = None) -> None:
+            self.events.append((event_type, data))
+
+        def start(self) -> None:
+            return None
+
+    capital = DummyCapitalManager({"BTCUSDT": 100.0})
+    bus = DummyBus()
+    manager = RiskManager(0.05, bus=bus, capital_manager=capital, cooldown_pct=0.1, cooldown_duracion=120)
+
+    real_datetime = risk_module.datetime
+    base = real_datetime(2024, 1, 1, 12, 0, tzinfo=UTC)
+
+    class ControlledDateTime(real_datetime):
+        current = base
+
+        @classmethod
+        def now(cls, tz=None):  # type: ignore[override]
+            if tz is None:
+                return cls.current.replace(tzinfo=None)
+            return cls.current.astimezone(tz)
+
+        @classmethod
+        def advance(cls, **kwargs: Any) -> None:
+            cls.current = cls.current + timedelta(**kwargs)
+
+    monkeypatch.setattr(risk_module, "datetime", ControlledDateTime)
+
+    manager.registrar_perdida("BTCUSDT", -20.0)
+
+    assert bus.events == [("risk.cooldown_activated", ANY)]
+    assert manager.cooldown_activo is True
+    assert pytest.approx(risk_module.COOLDOWN_ACTIVO_GAUGE._value, rel=1e-9) == 1.0
+
+    manager.registrar_perdida("BTCUSDT", -1.0)
+    assert len(bus.events) == 1
+    assert pytest.approx(risk_module.COOLDOWN_ACTIVO_GAUGE._value, rel=1e-9) == 1.0
+
+    ControlledDateTime.advance(seconds=180)
+
+    assert manager.cooldown_activo is False
+    assert pytest.approx(risk_module.COOLDOWN_ACTIVO_GAUGE._value, rel=1e-9) == 0.0
