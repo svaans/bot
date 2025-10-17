@@ -4,6 +4,9 @@ import atexit
 from concurrent.futures import ProcessPoolExecutor
 from datetime import datetime, timezone
 from math import isclose
+from typing import Iterable
+
+import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_pdf import PdfPages
@@ -21,6 +24,46 @@ atexit.register(_executor.shutdown)
 
 
 class ReporterDiario:
+
+    _COLUMN_SCHEMA: dict[str, float] = {
+        "retorno_total": 0.0,
+        "precio_entrada": 0.0,
+        "precio_cierre": 0.0,
+        "stop_loss": 0.0,
+        "take_profit": 0.0,
+        "cantidad": 0.0,
+    }
+
+    _OPTIONAL_NUMERIC: dict[str, float] = {
+        "latencia_ejecucion_ms": 0.0,
+        "latencia_ms": 0.0,
+        "latency_ms": 0.0,
+        "execution_latency_ms": 0.0,
+        "slippage": 0.0,
+        "slippage_pct": 0.0,
+        "slippage_percent": 0.0,
+        "exposicion_total": 0.0,
+        "exposicion": 0.0,
+        "exposure_total": 0.0,
+        "exposure": 0.0,
+        "notional": 0.0,
+        "max_price": 0.0,
+    }
+
+    _LATENCY_COLUMNS: tuple[str, ...] = (
+        "latencia_ejecucion_ms",
+        "latencia_ms",
+        "latency_ms",
+        "execution_latency_ms",
+    )
+    _SLIPPAGE_COLUMNS: tuple[str, ...] = ("slippage", "slippage_pct", "slippage_percent")
+    _EXPOSURE_COLUMNS: tuple[str, ...] = (
+        "exposicion_total",
+        "exposicion",
+        "exposure_total",
+        "exposure",
+        "notional",
+    )
 
     def __init__(self, carpeta='reportes_diarios', max_operaciones=1000):
         self.carpeta = carpeta
@@ -149,13 +192,14 @@ class ReporterDiario:
                 set_status('missing')
                 return
             try:
-                df = leer_csv_seguro(archivo, expected_cols=20)
+                df = leer_csv_seguro(archivo)
             except Exception:
                 REPORT_IO_ERRORS_TOTAL.labels(operation="report_daily_read").inc()
                 raise
             if df.empty:
                 set_status('empty')
                 return
+        df = self._aplicar_esquema_operaciones(df)
         ganancia_total = df['retorno_total'].sum()
         winrate = (df['retorno_total'] > 0).mean() * 100
         curva = df['retorno_total'].cumsum()
@@ -197,13 +241,21 @@ class ReporterDiario:
                 ).sum()
         if 'capital_final' in df.columns:
             capital_final = df.groupby('symbol')['capital_final'].last().sum()
+        latencia_prom = self._calcular_promedio(df, self._LATENCY_COLUMNS)
+        slippage_prom = self._calcular_promedio(df, self._SLIPPAGE_COLUMNS)
+        exposicion_max = self._calcular_exposicion_maxima(df)
+        ratio_rr = self._calcular_ratio_riesgo_recompensa(df)
         resumen = {'fecha': fecha, 'operaciones': total_ops, 'ganadas':
             ganadas, 'perdidas': perdidas, 'beneficio_promedio': round(
             beneficio_prom or 0, 6), 'perdida_promedio': round(perdida_prom or
             0, 6), 'mejor': round(mejor or 0, 6), 'peor': round(peor or 0, 
             6), 'estrategias_top': mas_usadas, 'puntaje_promedio': round(
             puntaje_prom or 0, 4), 'capital_inicial': round(capital_inicial,
-            2), 'capital_final': round(capital_final, 2)}
+            2), 'capital_final': round(capital_final, 2),
+            'latencia_promedio_ms': round(latencia_prom, 2),
+            'slippage_promedio': round(slippage_prom, 6),
+            'exposicion_maxima': round(exposicion_max, 2),
+            'ratio_riesgo_recompensa': round(ratio_rr, 4)}
         self.log.info(
             f'📊 Informe {fecha}: Ganancia={ganancia_total:.2f}, Winrate={winrate:.2f}%, Drawdown={drawdown:.4f}'
             )
@@ -245,8 +297,8 @@ class ReporterDiario:
                 fig, ax = plt.subplots(figsize=(8, 2))
                 ax.axis('off')
                 texto = f"""Ganancia total: {ganancia:.2f}
-Winrate: {winrate:.2f}%
-Drawdown: {drawdown:.4f}"""
+                            Winrate: {winrate:.2f}%
+                            Drawdown: {drawdown:.4f}"""
                 ax.text(0.01, 0.8, texto, fontsize=12)
                 pdf.savefig(fig)
                 plt.close(fig)
@@ -257,6 +309,75 @@ Drawdown: {drawdown:.4f}"""
             REPORT_IO_ERRORS_TOTAL.labels(operation="report_pdf").inc()
             raise
         self.log.info(f'🗒️ Reporte PDF guardado en {pdf_path}')
+
+
+    def _aplicar_esquema_operaciones(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Valida y normaliza columnas obligatorias para cálculos de métricas."""
+        sanitized = df.copy()
+        for columna, default in self._COLUMN_SCHEMA.items():
+            if columna not in sanitized.columns:
+                self.log.warning(
+                    '⚠️ Columna %s ausente en reporte diario; se usará valor por defecto.',
+                    columna,
+                )
+                sanitized[columna] = default
+            sanitized[columna] = pd.to_numeric(sanitized[columna], errors='coerce').fillna(default)
+        for columna, default in self._OPTIONAL_NUMERIC.items():
+            if columna in sanitized.columns:
+                sanitized[columna] = pd.to_numeric(sanitized[columna], errors='coerce').fillna(default)
+        return sanitized
+
+    def _columna_disponible(self, df: pd.DataFrame, opciones: Iterable[str]) -> str | None:
+        for opcion in opciones:
+            if opcion in df.columns:
+                return opcion
+        return None
+
+    def _calcular_promedio(self, df: pd.DataFrame, columnas: Iterable[str]) -> float:
+        columna = self._columna_disponible(df, columnas)
+        if not columna:
+            return 0.0
+        serie = pd.to_numeric(df[columna], errors='coerce').replace([np.inf, -np.inf], np.nan).dropna()
+        if serie.empty:
+            return 0.0
+        return float(serie.mean())
+
+    def _calcular_exposicion_maxima(self, df: pd.DataFrame) -> float:
+        columna_exposicion = self._columna_disponible(df, self._EXPOSURE_COLUMNS)
+        if columna_exposicion:
+            serie = pd.to_numeric(df[columna_exposicion], errors='coerce').replace([np.inf, -np.inf], np.nan).dropna()
+            if serie.empty:
+                return 0.0
+            return float(serie.max())
+        cantidad = pd.to_numeric(df.get('cantidad', pd.Series(dtype=float)), errors='coerce').fillna(0.0)
+        if cantidad.empty:
+            return 0.0
+        precios_candidatos = []
+        for col in ('precio_entrada', 'precio_cierre', 'max_price'):
+            if col in df.columns:
+                precios_candidatos.append(pd.to_numeric(df[col], errors='coerce'))
+        if not precios_candidatos:
+            return 0.0
+        precios = pd.concat(precios_candidatos, axis=1).replace([np.inf, -np.inf], np.nan)
+        max_precio = precios.max(axis=1, skipna=True).fillna(0.0)
+        exposicion = (cantidad * max_precio).replace([np.inf, -np.inf], np.nan).fillna(0.0)
+        if exposicion.empty:
+            return 0.0
+        return float(exposicion.max())
+
+    def _calcular_ratio_riesgo_recompensa(self, df: pd.DataFrame) -> float:
+        if not {'precio_entrada', 'stop_loss', 'take_profit'}.issubset(df.columns):
+            return 0.0
+        precio_entrada = pd.to_numeric(df['precio_entrada'], errors='coerce')
+        stop_loss = pd.to_numeric(df['stop_loss'], errors='coerce')
+        take_profit = pd.to_numeric(df['take_profit'], errors='coerce')
+        risk = (precio_entrada - stop_loss).abs().replace([np.inf, -np.inf], np.nan)
+        reward = (take_profit - precio_entrada).abs().replace([np.inf, -np.inf], np.nan)
+        mask = (risk > 1e-12) & reward.notna()
+        ratios = (reward / risk).where(mask).replace([np.inf, -np.inf], np.nan).dropna()
+        if ratios.empty:
+            return 0.0
+        return float(ratios.mean())
 
 
 reporter_diario = ReporterDiario()
