@@ -335,6 +335,12 @@ WATCHDOG_RESTART_RATE = Gauge(
     ["task"],
 )
 
+TASK_TIMEOUT_SECONDS = Gauge(
+    "task_timeout_seconds",
+    "Timeout efectivo calculado por el watchdog para cada tarea supervisada",
+    ["task"],
+)
+
 BINANCE_WEIGHT_USED_1M = Gauge(
     "binance_weight_used_1m",
     "Peso utilizado en el último minuto según Binance",

@@ -12,6 +12,7 @@ class DummySupervisor:
         self.supervised: list[dict[str, Any]] = []
         self.beats: list[tuple[str, str | None]] = []
         self.shutdown_calls = 0
+        self.expected_interval_updates: list[tuple[str, float]] = []
 
     def start_supervision(self) -> None:
         self.started = True
@@ -22,7 +23,7 @@ class DummySupervisor:
         factory: Callable[[], Any],
         *,
         name: str | None = None,
-        expected_interval: int | None = None,
+        expected_interval: float | None = None,
         delay: float | None = None,
     ) -> None:
         self.supervised.append(
@@ -34,8 +35,21 @@ class DummySupervisor:
             }
         )
 
-    def beat(self, name: str, cause: str | None = None) -> None:  # pragma: no cover - dummy interface
+    def beat(
+        self,
+        name: str,
+        cause: str | None = None,
+        *,
+        expected_interval: float | None = None,
+    ) -> None:  # pragma: no cover - dummy interface
         self.beats.append((name, cause))
+        if expected_interval is not None:
+            self.set_expected_interval(name, expected_interval)
+
+    def set_expected_interval(self, name: str, interval: float | None) -> None:
+        if interval is None or interval <= 0:
+            return
+        self.expected_interval_updates.append((name, float(interval)))
 
     def tick_data(self, symbol: str, reinicio: bool = False) -> None:
         self.ticks.append((symbol, reinicio))

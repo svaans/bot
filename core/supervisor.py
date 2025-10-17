@@ -9,9 +9,9 @@ API principal:
 - SupervisorLite(on_event: callable|None = None, *, cooldown_sec=15, close_timeout=5)
 - start_supervision()
 - supervised_task(coro_factory, name: str | None = None,
-                  *, delay=5, max_restarts=None, expected_interval: int | None = None)
-- beat(name: str, cause: str | None = None)
-- tick(name: str, cause: str | None = None)  # alias
+                  *, delay=5, max_restarts=None, expected_interval: float | None = None)
+- beat(name: str, cause: str | None = None, *, expected_interval: float | None = None)
+- tick(name: str, cause: str | None = None, *, expected_interval: float | None = None)  # alias
 - tick_data(symbol: str, reinicio: bool = False)
 - set_watchdog_interval(interval: int)
 - restart_task(task_name: str)
@@ -27,6 +27,11 @@ import traceback
 from collections import defaultdict, deque
 from datetime import datetime, timedelta, timezone
 from typing import Awaitable, Callable, Deque, Dict, Optional
+
+try:  # pragma: no cover - métrica opcional
+    from core.metrics import TASK_TIMEOUT_SECONDS
+except Exception:  # pragma: no cover - entorno sin métricas
+    TASK_TIMEOUT_SECONDS = None  # type: ignore[assignment]
 
 UTC = timezone.utc
 
@@ -61,6 +66,7 @@ class Supervisor:
         self.task_factories: Dict[str, Callable[..., Awaitable]] = {}
         self.task_heartbeat: Dict[str, datetime] = {}
         self.task_intervals: Dict[str, Deque[float]] = defaultdict(lambda: deque(maxlen=100))
+        self.task_expected_interval: Dict[str, float] = {}
         self.task_expected_interval: Dict[str, int] = {}
         self.task_cooldown: Dict[str, datetime] = {}
         self.task_backoff: Dict[str, int] = defaultdict(int)
@@ -99,6 +105,24 @@ class Supervisor:
 
     def _now(self) -> datetime:
         return datetime.now(UTC)
+    
+    def _record_task_timeout_metric(self, task_name: str, timeout: float) -> None:
+        if TASK_TIMEOUT_SECONDS is None:
+            return
+        try:
+            TASK_TIMEOUT_SECONDS.labels(task_name).set(float(timeout))  # type: ignore[call-arg]
+        except Exception:  # pragma: no cover - errores de registro no críticos
+            pass
+
+    def set_task_expected_interval(self, name: str, interval: float | None) -> None:
+        """Configura o elimina el ``expected_interval`` dinámico de una tarea."""
+
+        if interval is None:
+            return
+        if interval <= 0:
+            self.task_expected_interval.pop(name, None)
+            return
+        self.task_expected_interval[name] = float(interval)
     
     def _get_circuit_config(self, task_name: str) -> tuple[int, float] | None:
         config = self.task_circuit_config.get(task_name)
@@ -175,9 +199,17 @@ class Supervisor:
             self._emit("loop_error", {"message": context.get("message")})
 
     # ------------------- heartbeat/data -------------------
-    def beat(self, name: str, cause: str | None = None) -> None:
+    def beat(
+        self,
+        name: str,
+        cause: str | None = None,
+        *,
+        expected_interval: float | None = None,
+    ) -> None:
         now = self._now()
         last = self.task_heartbeat.get(name)
+        if expected_interval is not None:
+            self.set_task_expected_interval(name, expected_interval)
         if last:
             self.task_intervals[name].append((now - last).total_seconds())
         self.task_heartbeat[name] = now
@@ -187,8 +219,14 @@ class Supervisor:
             self.task_backoff[name] = 0
         self._emit("beat", {"name": name, "cause": cause or ""})
 
-    def tick(self, name: str, cause: str | None = None) -> None:
-        self.beat(name, cause)
+    def tick(
+        self,
+        name: str,
+        cause: str | None = None,
+        *,
+        expected_interval: float | None = None,
+    ) -> None:
+        self.beat(name, cause, expected_interval=expected_interval)
 
     def tick_data(self, symbol: str, reinicio: bool = False) -> None:
         self.data_heartbeat[symbol] = self._now()
@@ -229,9 +267,10 @@ class Supervisor:
             else:
                 timeout_task = timeout
             expected = self.task_expected_interval.get(task_name)
-            if expected:
-                timeout_task = max(timeout_task, expected * 3)
+            if expected is not None:
+                timeout_task = max(timeout_task, float(expected) * 3)
             timeout_task = max(timeout_task, timeout)
+            self._record_task_timeout_metric(task_name, timeout_task)
             if (now - ts).total_seconds() > timeout_task:
                 await self.restart_task(task_name)
         # datos
@@ -391,7 +430,7 @@ class Supervisor:
             window_cfg = max(1.0, float(circuit_breaker_window))
         self.task_circuit_config[task_name] = (failures_cfg, window_cfg)
         if expected_interval is not None:
-            self.task_expected_interval[task_name] = expected_interval
+            self.set_task_expected_interval(task_name, expected_interval)
         task = asyncio.create_task(
             self._restartable_runner(coro_factory, task_name, delay, max_restarts),
             name=task_name,
@@ -494,6 +533,7 @@ beat = _default_supervisor.beat
 tick = _default_supervisor.tick
 tick_data = _default_supervisor.tick_data
 set_watchdog_interval = _default_supervisor.set_watchdog_interval
+set_task_expected_interval = _default_supervisor.set_task_expected_interval
 shutdown = _default_supervisor.shutdown
 registrar_ping = _default_supervisor.registrar_ping
 reset_task_circuit = _default_supervisor.reset_task_circuit

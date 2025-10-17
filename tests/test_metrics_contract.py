@@ -4,6 +4,7 @@ from core.metrics import (
     BUFFER_SIZE_V2,
     CANDLES_DUPLICADAS_RATE,
     ENTRADAS_RECHAZADAS_V2,
+    TASK_TIMEOUT_SECONDS,
     TRADER_PIPELINE_LATENCY,
     TRADER_PIPELINE_QUEUE_WAIT,
     TRADER_QUEUE_SIZE,
@@ -58,6 +59,10 @@ def test_trader_pipeline_metrics_include_timeframe() -> None:
     assert _labels_of(TRADER_QUEUE_SIZE) == expected
     assert _labels_of(TRADER_PIPELINE_LATENCY) == expected
     assert _labels_of(TRADER_PIPELINE_QUEUE_WAIT) == expected
+
+
+def test_watchdog_timeout_metric_labels() -> None:
+    assert _labels_of(TASK_TIMEOUT_SECONDS) == {"task"}
 
 
 def test_safe_helpers_do_not_crash() -> None:

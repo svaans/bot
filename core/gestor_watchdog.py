@@ -14,6 +14,7 @@ class GestorWatchdog:
     - detener()
     - latido(nombre, causa=None)
     - registrar_tarea(nombre, factory, *, expected_interval=None)
+    - configurar_expected_interval(nombre, intervalo)
     - reportar_datos(symbol, reinicio=False)
 """
 from __future__ import annotations
@@ -45,8 +46,14 @@ class GestorWatchdog:
             self._running = False
 
     # -------- latidos --------
-    def latido(self, nombre: str, causa: str | None = None) -> None:
-        self.supervisor.beat(nombre, causa)
+    def latido(
+        self,
+        nombre: str,
+        causa: str | None = None,
+        *,
+        expected_interval: float | None = None,
+    ) -> None:
+        self.supervisor.beat(nombre, causa, expected_interval=expected_interval)
 
     def reportar_datos(self, symbol: str, reinicio: bool = False) -> None:
         self.supervisor.tick_data(symbol, reinicio)
@@ -57,9 +64,14 @@ class GestorWatchdog:
         nombre: str,
         factory: Callable[..., Awaitable[Any]],
         *,
-        expected_interval: int | None = None,
+        expected_interval: float | None = None,
     ) -> asyncio.Task:
         return self.supervisor.supervised_task(factory, name=nombre, expected_interval=expected_interval)
+    
+    def configurar_expected_interval(self, nombre: str, intervalo: float | None) -> None:
+        """Permite ajustar dinámicamente el intervalo esperado de una tarea supervisada."""
+
+        self.supervisor.set_task_expected_interval(nombre, intervalo)
 
     def ajustar_intervalo(self, interval: int) -> None:
         self.supervisor.set_watchdog_interval(interval)
