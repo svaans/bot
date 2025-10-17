@@ -7,6 +7,7 @@ import random
 import sqlite3
 from collections.abc import Mapping
 from datetime import datetime, timezone
+from enum import Enum
 from typing import Any, Dict, Optional
 
 from core.orders.order_model import Order
@@ -60,6 +61,14 @@ _PERSISTENCE_ERROR_KEYWORDS = (
     "locked",
     "write",
 )
+
+
+class OrderOpenStatus(Enum):
+    """Estado resultante al intentar abrir una orden."""
+
+    OPENED = "opened"
+    PENDING_REGISTRATION = "pending_registration"
+    FAILED = "failed"
 
 
 class OrderManager:
@@ -466,8 +475,12 @@ class OrderManager:
             )
 
     async def _on_abrir(self, data: dict) -> None:
-        result = await self.abrir_async(**data)
-        EventBus.respond(data, ack=bool(result), result=result)
+        status = await self.abrir_async(**data)
+        EventBus.respond(
+            data,
+            ack=status is OrderOpenStatus.OPENED,
+            result=status.value,
+        )
 
     async def _on_cerrar(self, data: dict) -> None:
         result = await self.cerrar_async(**data)
@@ -776,7 +789,7 @@ class OrderManager:
         *,
         candle_close_ts: int | None = None,   # reservado (no usado aquí)
         strategy_version: str | None = None,  # reservado (no usado aquí)
-    ) -> bool:
+    ) -> OrderOpenStatus:
         operation_id = self._generar_operation_id(symbol)
         tick_size_value = float(tick_size or 0.0)
         step_size_value = float(step_size or 0.0)
@@ -819,7 +832,7 @@ class OrderManager:
                 {'reason': 'invalid_levels', 'contexto': contexto},
             )
             registrar_orden('rejected')
-            return False
+            return OrderOpenStatus.FAILED
         
         entrada_log = {
             'symbol': symbol,
@@ -844,7 +857,7 @@ class OrderManager:
                     'reject',
                     {'reason': 'duplicate'},
                 )
-                return False
+                return OrderOpenStatus.FAILED
             if symbol in self._registro_pendiente_paused:
                 log.warning(
                     '🚫 Apertura bloqueada para %s por registro pendiente persistente',
@@ -869,7 +882,7 @@ class OrderManager:
                     'reject',
                     {'reason': 'registro_pendiente_bloqueado'},
                 )
-                return False
+                return OrderOpenStatus.FAILED
             ordenes_api = {}
             if self.modo_real:
                 reintentos_sync = 3
@@ -914,7 +927,7 @@ class OrderManager:
                         'reject',
                         {'reason': 'sync_error', 'intentos': reintentos_sync},
                     )
-                    return False
+                    return OrderOpenStatus.FAILED
                 
             if symbol in ordenes_api:
                 self.ordenes[symbol] = ordenes_api[symbol]
@@ -935,7 +948,7 @@ class OrderManager:
                     'reject',
                     {'reason': 'already_open'},
                 )
-                return False
+                return OrderOpenStatus.FAILED
             
             if self.modo_real:
                 try:
@@ -966,7 +979,7 @@ class OrderManager:
                         'reject',
                         {'reason': 'insufficient_funds'},
                     )
-                    return False
+                    return OrderOpenStatus.FAILED
 
             self.abriendo.add(symbol)
             try:
@@ -1042,7 +1055,7 @@ class OrderManager:
                                 'reject',
                                 {'reason': 'no_fills'},
                             )
-                            return
+                            return OrderOpenStatus.FAILED
                         if execution.status == 'PARTIAL' and execution.remaining > 0:
                             log.warning(
                                 'orders.execution.partial',
@@ -1165,7 +1178,7 @@ class OrderManager:
                     limpiar_registro_pendiente(symbol)
                     self._registro_pendiente_paused.discard(symbol)
                     registrar_orden('failed')
-                    return False
+                    return OrderOpenStatus.FAILED
 
             finally:
                 self.abriendo.discard(symbol)
@@ -1182,7 +1195,7 @@ class OrderManager:
                     'reject',
                     {'reason': 'registro_pendiente'},
                 )
-                return False
+                return OrderOpenStatus.PENDING_REGISTRATION
 
             registrar_orden('opened')
             log.info(f'🟢 Orden abierta para {symbol} @ {precio:.2f}')
@@ -1203,7 +1216,7 @@ class OrderManager:
                 {'cantidad': cantidad},
             )
             self._actualizar_capital_disponible(symbol, orden)
-            return True
+            return OrderOpenStatus.OPENED
 				
     async def agregar_parcial_async(self, symbol: str, precio: float, cantidad: float) -> bool:
         lock = self._locks.setdefault(symbol, asyncio.Lock())
@@ -1522,7 +1535,7 @@ class OrderManager:
         sl: float,
         tp: float,
         meta: Mapping[str, Any] | None = None,
-    ) -> bool:
+    ) -> OrderOpenStatus:
         """Crea y envía una orden utilizando la interfaz moderna del Trader."""
 
         meta_map: Mapping[str, Any]
@@ -1566,7 +1579,7 @@ class OrderManager:
                     }
                 ),
             )
-            return False
+            return OrderOpenStatus.FAILED
         if cantidad_source and cantidad_source != "meta":
             log.debug(
                 "crear.quantity_fallback",
@@ -1669,7 +1682,7 @@ class OrderManager:
                 "crear.exception",
                 extra=safe_extra({"symbol": symbol, "side": direccion, "error": str(exc)}),
             )
-            return False
+            return OrderOpenStatus.FAILED
 
     def eliminar(self, symbol: str) -> None:
         """Elimina la orden local asociada a ``symbol`` si existe."""
