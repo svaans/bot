@@ -132,6 +132,9 @@ class OrderManager:
         self._registro_retry_attempts: Dict[str, int] = {}
         self._registro_retry_tasks: Dict[str, asyncio.Task] = {}
         self._registro_retry_error_keywords = _PERSISTENCE_ERROR_KEYWORDS
+		self._partial_close_retry_delay = max(
+            0.0, float(os.getenv("ORDERS_PARTIAL_CLOSE_RETRY_DELAY", "1.0"))
+        )
         self.capital_manager: Any | None = None
         self.risk_manager: Any | None = None
         self._config = config or getattr(app_config, "cfg", None)
@@ -473,6 +476,64 @@ class OrderManager:
                 extra=safe_extra({"symbol": symbol}),
                 exc_info=True,
             )
+
+	def _requeue_partial_close(
+        self,
+        symbol: str,
+        cantidad: float,
+        precio: float,
+        motivo: str,
+        *,
+        operation_id: str,
+    ) -> bool:
+        if not self.bus:
+            return False
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return False
+
+        payload = {
+            "symbol": symbol,
+            "cantidad": cantidad,
+            "precio": precio,
+            "motivo": motivo,
+        }
+
+        async def _retry() -> None:
+            try:
+                if self._partial_close_retry_delay > 0:
+                    await asyncio.sleep(self._partial_close_retry_delay)
+                await self.bus.publish("cerrar_parcial", dict(payload))
+            except Exception:
+                log.warning(
+                    "orders.partial_close.retry_failed",
+                    extra=safe_extra(
+                        {
+                            "symbol": symbol,
+                            "operation_id": operation_id,
+                        }
+                    ),
+                    exc_info=True,
+                )
+
+        loop.create_task(
+            _retry(),
+            name=f"orders.retry_partial_close.{symbol.replace('/', '')}",
+        )
+        log.info(
+            "orders.partial_close.reenqueued",
+            extra=safe_extra(
+                {
+                    "symbol": symbol,
+                    "cantidad": cantidad,
+                    "precio": precio,
+                    "operation_id": operation_id,
+                    "delay": self._partial_close_retry_delay,
+                }
+            ),
+        )
+        return True
 
     async def _on_abrir(self, data: dict) -> None:
         status = await self.abrir_async(**data)
@@ -1429,6 +1490,13 @@ class OrderManager:
                     return False
 
                 cantidad = min(cantidad, orden.cantidad_abierta)
+
+				entrada_log = {
+                    "symbol": symbol,
+                    "cantidad": cantidad,
+                    "precio": precio,
+                    "motivo": motivo,
+                }
                 if cantidad < 1e-08:
                     log.warning(
                         'Cantidad demasiado pequeña para vender',
@@ -1448,7 +1516,41 @@ class OrderManager:
                             {'side': 'sell', 'symbol': symbol, 'cantidad': cantidad},
 							precio=precio,
                         )
-                        cantidad = execution.executed
+                        executed_qty = float(execution.executed or 0.0)
+                        if executed_qty <= 0.0:
+                            log.warning(
+                                "orders.partial_close.no_fill",
+                                extra=safe_extra(
+                                    {
+                                        "symbol": symbol,
+                                        "operation_id": operation_id,
+                                        "requested_qty": cantidad,
+                                        "status": execution.status,
+                                    }
+                                ),
+                            )
+                            requeued = self._requeue_partial_close(
+                                symbol,
+                                cantidad,
+                                precio,
+                                motivo,
+                                operation_id=operation_id,
+                            )
+                            log_decision(
+                                log,
+                                'cerrar_parcial',
+                                operation_id,
+                                entrada_log,
+                                {},
+                                'reject',
+                                {
+                                    'reason': 'no_fill',
+                                    'requeued': requeued,
+                                    'status': execution.status,
+                                },
+                            )
+                            return False
+                        cantidad = executed_qty
                         orden.fee_total = getattr(orden, 'fee_total', 0.0) + execution.fee
                         orden.pnl_operaciones = getattr(orden, 'pnl_operaciones', 0.0) + execution.pnl
                     except Exception as e:
@@ -1458,7 +1560,7 @@ class OrderManager:
                         )
                         if self.bus:
                             await self.bus.publish('notify', {'mensaje': f'❌ Venta parcial fallida en {symbol}: {e}', 'operation_id': operation_id})
-                        log_decision(log, 'cerrar_parcial', operation_id, {'symbol': symbol, 'cantidad': cantidad}, {}, 'reject', {'reason': str(e)})
+                        log_decision(log, 'cerrar_parcial', operation_id, entrada_log, {}, 'reject', {'reason': str(e)})
                         return False
                 else:
                     diff = (precio - orden.precio_entrada) * cantidad
