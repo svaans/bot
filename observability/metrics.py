@@ -17,6 +17,8 @@ __all__ = [
     "BOT_DATAFEED_WS_FAILURES_TOTAL",
     "BOT_LIMIT_ORDERS_SUBMITTED_TOTAL",
     "BOT_BACKFILL_WINDOW_RUNS_TOTAL",
+    "METRIC_EXPORT_FAILURES_TOTAL",
+    "REPORT_IO_ERRORS_TOTAL",
     "CAPITAL_REGISTERED_GAUGE",
     "CAPITAL_CONFIGURED_GAUGE",
     "CAPITAL_REGISTERED_TOTAL",
@@ -103,6 +105,20 @@ BOT_BACKFILL_WINDOW_RUNS_TOTAL = Counter(
     "bot_backfill_window_runs_total",
     "Backfills ejecutados para recalentar ventanas de historial",
     ["symbol", "timeframe"],
+)
+
+
+METRIC_EXPORT_FAILURES_TOTAL = Counter(
+    "metric_export_failures_total",
+    "Errores al exportar registros de métricas al almacenamiento persistente",
+    ["operation"],
+)
+
+
+REPORT_IO_ERRORS_TOTAL = Counter(
+    "report_io_errors_total",
+    "Errores de entrada/salida al generar o persistir reportes",
+    ["operation"],
 )
 
 

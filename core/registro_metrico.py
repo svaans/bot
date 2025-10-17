@@ -9,6 +9,7 @@ UTC = timezone.utc
 import pandas as pd
 from core.utils.io_metrics import observe_disk_write
 from core.utils.logger import configurar_logger
+from observability.metrics import METRIC_EXPORT_FAILURES_TOTAL
 
 
 LOG_DIR = os.getenv('LOG_DIR', 'logs')
@@ -142,6 +143,9 @@ class RegistroMetrico:
                     self.buffer = []
                     return
                 except Exception as e:
+                    METRIC_EXPORT_FAILURES_TOTAL.labels(
+                        operation="registro_metrico_csv"
+                    ).inc()
                     if intento == intentos:
                         log.warning(f'⚠️ Error exportando métricas tras {intentos} intentos: {e}')
             time.sleep(1)

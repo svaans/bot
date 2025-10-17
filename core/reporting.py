@@ -10,6 +10,7 @@ from matplotlib.backends.backend_pdf import PdfPages
 from core.utils.io_metrics import observe_disk_write, report_generation_timer
 from core.utils.utils import configurar_logger
 from core.utils.utils import leer_csv_seguro
+from observability.metrics import REPORT_IO_ERRORS_TOTAL
 
 UTC = timezone.utc
 
@@ -41,6 +42,7 @@ class ReporterDiario:
                 self.estadisticas = leer_csv_seguro(self.
                     estadisticas_archivo, expected_cols=len(columnas))
             except Exception:
+                REPORT_IO_ERRORS_TOTAL.labels(operation="report_stats_read").inc()
                 self.estadisticas = pd.DataFrame(columns=columnas)
         else:
             self.estadisticas = pd.DataFrame(columns=columnas)
@@ -52,11 +54,15 @@ class ReporterDiario:
         df['winrate'] = df['wins'] / df['operaciones'] * 100
         df['buy_hold'] = (df['last_price'] - df['buy_hold_start']) / df[
             'buy_hold_start']
-        observe_disk_write(
-            "report_estadisticas_csv",
-            self.estadisticas_archivo,
-            lambda: df.to_csv(self.estadisticas_archivo, index=False),
-        )
+        try:
+            observe_disk_write(
+                "report_estadisticas_csv",
+                self.estadisticas_archivo,
+                lambda: df.to_csv(self.estadisticas_archivo, index=False),
+            )
+        except Exception:
+            REPORT_IO_ERRORS_TOTAL.labels(operation="report_estadisticas_csv").inc()
+            raise
 
     def _actualizar_estadisticas(self, info: dict):
         symbol = info.get('symbol') or info.get('simbolo')
@@ -101,17 +107,25 @@ class ReporterDiario:
         archivo = os.path.join(self.carpeta, f'{fecha}.csv')
         df = pd.DataFrame([info])
         if os.path.exists(archivo):
-            observe_disk_write(
-                "report_operacion_csv_append",
-                archivo,
-                lambda: df.to_csv(archivo, mode='a', header=False, index=False),
-            )
+            try:
+                observe_disk_write(
+                    "report_operacion_csv_append",
+                    archivo,
+                    lambda: df.to_csv(archivo, mode='a', header=False, index=False),
+                )
+            except Exception:
+                REPORT_IO_ERRORS_TOTAL.labels(operation="report_operacion_csv_append").inc()
+                raise
         else:
-            observe_disk_write(
-                "report_operacion_csv_create",
-                archivo,
-                lambda: df.to_csv(archivo, index=False),
-            )
+            try:
+                observe_disk_write(
+                    "report_operacion_csv_create",
+                    archivo,
+                    lambda: df.to_csv(archivo, index=False),
+                )
+            except Exception:
+                REPORT_IO_ERRORS_TOTAL.labels(operation="report_operacion_csv_create").inc()
+                raise
         symbol = info.get('symbol') or info.get('simbolo')
         if symbol:
             ops = self.ultimas_operaciones.setdefault(symbol, [])
@@ -124,6 +138,7 @@ class ReporterDiario:
             try:
                 _executor.submit(self.generar_informe, self.fecha_actual)
             except Exception:
+                REPORT_IO_ERRORS_TOTAL.labels(operation="report_async_submit").inc()
                 self.log.exception('Error al generar informe en proceso separado')
             self.fecha_actual = fecha
 
@@ -133,7 +148,11 @@ class ReporterDiario:
             if not os.path.exists(archivo):
                 set_status('missing')
                 return
-            df = leer_csv_seguro(archivo, expected_cols=20)
+            try:
+                df = leer_csv_seguro(archivo, expected_cols=20)
+            except Exception:
+                REPORT_IO_ERRORS_TOTAL.labels(operation="report_daily_read").inc()
+                raise
             if df.empty:
                 set_status('empty')
                 return
@@ -195,13 +214,21 @@ class ReporterDiario:
                 for k, v in resumen.items():
                     f.write(f'{k}: {v}\n')
 
-        observe_disk_write('report_resumen_txt', resumen_path_txt, _write_resumen_txt)
+        try:
+            observe_disk_write('report_resumen_txt', resumen_path_txt, _write_resumen_txt)
+        except Exception:
+            REPORT_IO_ERRORS_TOTAL.labels(operation="report_resumen_txt").inc()
+            raise
 
-        observe_disk_write(
-            'report_resumen_csv',
-            resumen_path_csv,
-            lambda: pd.DataFrame([resumen]).to_csv(resumen_path_csv, index=False),
-        )
+        try:
+            observe_disk_write(
+                'report_resumen_csv',
+                resumen_path_csv,
+                lambda: pd.DataFrame([resumen]).to_csv(resumen_path_csv, index=False),
+            )
+        except Exception:
+            REPORT_IO_ERRORS_TOTAL.labels(operation="report_resumen_csv").inc()
+            raise
         self._guardar_pdf(df, fecha, ganancia_total, winrate, drawdown)
 
     def _guardar_pdf(self, df, fecha, ganancia, winrate, drawdown):
@@ -224,7 +251,11 @@ Drawdown: {drawdown:.4f}"""
                 pdf.savefig(fig)
                 plt.close(fig)
 
-        observe_disk_write('report_pdf', pdf_path, _write_pdf)
+        try:
+            observe_disk_write('report_pdf', pdf_path, _write_pdf)
+        except Exception:
+            REPORT_IO_ERRORS_TOTAL.labels(operation="report_pdf").inc()
+            raise
         self.log.info(f'🗒️ Reporte PDF guardado en {pdf_path}')
 
 
