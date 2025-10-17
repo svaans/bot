@@ -1581,7 +1581,7 @@ class OrderManager:
                     orden.precio_cierre = precio
                     orden.fecha_cierre = datetime.now(UTC).isoformat()
                     orden.motivo_cierre = motivo
-					orden.pnl_latente = 0.0
+                    orden.pnl_latente = 0.0
                     base = orden.precio_entrada * orden.cantidad if orden.cantidad else 0.0
                     retorno = (orden.pnl_realizado / base) if base else 0.0
                     orden.retorno_total = retorno
