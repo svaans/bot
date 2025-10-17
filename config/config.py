@@ -44,3 +44,4 @@ ORDERS_EXECUTION_POLICY_BY_SYMBOL = cfg.orders_execution_policy_by_symbol
 ORDERS_RECONCILE_ENABLED = cfg.orders_reconcile_enabled
 FUNDING_ENABLED = cfg.funding_enabled
 BACKFILL_VENTANA_ENABLED = cfg.backfill_ventana_enabled
+RISK_ALERTA_CAPITAL_PCT = getattr(cfg, "risk_alerta_capital_pct", 0.0)
