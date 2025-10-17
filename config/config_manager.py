@@ -139,7 +139,8 @@ class Config:
     risk_capital_default_per_symbol: float = 0.0
     risk_capital_per_symbol: Dict[str, float] = field(default_factory=dict)
     risk_kelly_base: float = 0.1
-    risk_alerta_capital_pct: float = 0.0 
+    risk_alerta_capital_pct: float = 0.0
+    risk_capital_divergence_threshold: float = 0.0 
     telegram_token: Optional[str] = None
     telegram_chat_id: Optional[str] = None
     umbral_score_tecnico: float = 2.0
@@ -445,6 +446,10 @@ class ConfigManager:
         risk_alerta_capital_pct = _cargar_float(
             'RISK_ALERTA_CAPITAL_PCT', getattr(defaults, 'risk_alerta_capital_pct', 0.0)
         )
+        risk_capital_divergence_threshold = _cargar_float(
+            'RISK_CAPITAL_DIVERGENCE_THRESHOLD',
+            getattr(defaults, 'risk_capital_divergence_threshold', 0.0),
+        )
         
         config = Config(
             api_key=api_key,
@@ -464,6 +469,7 @@ class ConfigManager:
             risk_capital_per_symbol=risk_capital_per_symbol,
             risk_kelly_base=risk_kelly_base,
             risk_alerta_capital_pct=risk_alerta_capital_pct,
+            risk_capital_divergence_threshold=risk_capital_divergence_threshold,
             telegram_token=os.getenv('TELEGRAM_TOKEN', defaults.telegram_token),
             telegram_chat_id=os.getenv('TELEGRAM_CHAT_ID', defaults.telegram_chat_id),
             umbral_score_tecnico=_cargar_float('UMBRAL_SCORE_TECNICO', defaults.umbral_score_tecnico),
