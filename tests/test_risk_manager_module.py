@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 
 UTC = timezone.utc
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Generator
 from unittest.mock import ANY
@@ -12,6 +13,7 @@ import pytest
 import core.risk.risk_manager as risk_module
 from core.risk.risk_manager import RiskManager
 from core.capital_manager import CapitalManager
+from core.capital_repository import CapitalRepository
 from core.utils.feature_flags import reset_flag_cache
 
 
@@ -325,7 +327,7 @@ def test_capital_guard_exposure(monkeypatch: pytest.MonkeyPatch) -> None:
     assert manager.permite_entrada("BTCUSDT", {}, 0.5) is True
 
 
-def test_sincronizar_exposure_actualiza_capital() -> None:
+def test_sincronizar_exposure_actualiza_capital(tmp_path: Path) -> None:
     config = SimpleNamespace(
         symbols=["BTCUSDT"],
         risk_capital_total=0.0,
@@ -334,7 +336,8 @@ def test_sincronizar_exposure_actualiza_capital() -> None:
         min_order_eur=10.0,
         risk_kelly_base=0.1,
     )
-    capital = CapitalManager(config)
+    repo = CapitalRepository(path=tmp_path / "capital.json")
+    capital = CapitalManager(config, capital_repository=repo)
     manager = RiskManager(0.05, capital_manager=capital)
 
     manager.sincronizar_exposure("BTCUSDT", 120.0)
