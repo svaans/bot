@@ -22,12 +22,18 @@ Se mantienen alias a nivel de módulo si decides exportarlos igual que antes.
 """
 from __future__ import annotations
 import asyncio
+import inspect
 import traceback
 from collections import defaultdict, deque
 from datetime import datetime, timedelta, timezone
-from typing import Awaitable, Callable, Deque, Dict
+from typing import Awaitable, Callable, Deque, Dict, Optional
 
 UTC = timezone.utc
+
+
+
+class FactoryValidationError(TypeError):
+    """Raised when a task factory registered in the ``Supervisor`` is invalid."""
 
 
 class Supervisor:
@@ -41,6 +47,8 @@ class Supervisor:
         close_timeout: float = 5.0,
         watchdog_timeout: int = 120,
         watchdog_check_interval: int = 10,
+        validate_factories: bool = False,
+        factory_validator: Callable[[Callable[..., Awaitable]], None] | None = None,
     ) -> None:
         self.on_event = on_event
         self.last_alive = datetime.now(UTC)
@@ -65,6 +73,12 @@ class Supervisor:
         self._watchdog_timeout = watchdog_timeout
         self.cooldown_sec = float(cooldown_sec)
         self.close_timeout = float(close_timeout)
+        self._validate_factories = bool(validate_factories or factory_validator)
+        self._factory_validator: Optional[Callable[[Callable[..., Awaitable]], None]] = (
+            factory_validator if factory_validator is not None else None
+        )
+        if self._validate_factories and self._factory_validator is None:
+            self._factory_validator = self._default_factory_validator
 
     # --------------------- utilidades ---------------------
     def _emit(self, evento: str, data: dict) -> None:
@@ -237,7 +251,38 @@ class Supervisor:
         max_restarts: int | None = None,
         expected_interval: int | None = None,
     ) -> asyncio.Task:
+        """Register a coroutine factory that can be restarted on failures.
+
+        The factory **must** be un-parameterised and return a fresh awaitable
+        every time it is invoked. Enabling ``validate_factories`` (or providing
+        a ``factory_validator``) activates static checks that reject factories
+        with argumentos obligatorios, async generators o coroutines ya creados.
+
+        Parameters
+        ----------
+        coro_factory:
+            Callable que produce un nuevo ``Awaitable`` en cada invocación.
+        name:
+            Nombre opcional para identificar la tarea en los logs y métricas.
+        delay:
+            Retardo base del backoff exponencial tras errores consecutivos.
+        max_restarts:
+            Reinicios consecutivos antes de aplicar un enfriamiento prolongado.
+        expected_interval:
+            Intervalo esperado (en segundos) entre heartbeats/ticks de la tarea.
+
+        Returns
+        -------
+        asyncio.Task
+            La tarea supervisada que ejecutará el bucle reiniciable.
+
+        Raises
+        ------
+        FactoryValidationError
+            Si la factoría infringe las validaciones activas.
+        """
         task_name = name or getattr(coro_factory, "__name__", "task")
+        self._validate_factory(coro_factory, task_name)
         self.task_factories[task_name] = coro_factory
         self.task_backoff[task_name] = 0
         if expected_interval is not None:
@@ -263,6 +308,75 @@ class Supervisor:
         if self.tasks:
             await asyncio.gather(*self.tasks.values(), return_exceptions=True)
         self._emit("supervision_stopped", {})
+
+
+    # ------------------- validación factorías -------------------
+
+    def enable_factory_validation(
+        self,
+        *,
+        validator: Callable[[Callable[..., Awaitable]], None] | None = None,
+    ) -> None:
+        """Activa o sustituye las validaciones de factorías en caliente.
+
+        Si no se proporciona ``validator`` se reutiliza el validador por
+        defecto, el cual garantiza que la factoría pueda ejecutarse sin
+        argumentos requeridos. Esta operación es idempotente y puede ejecutarse
+        en tiempo de ejecución antes de registrar nuevas tareas.
+        """
+
+        self._validate_factories = True
+        self._factory_validator = validator or self._default_factory_validator
+
+    def _validate_factory(
+        self, coro_factory: Callable[..., Awaitable], task_name: str
+    ) -> None:
+        if asyncio.iscoroutine(coro_factory):
+            raise FactoryValidationError(
+                f"La factoría registrada para '{task_name}' es un coroutine ya creado; "
+                "usa un callable que construya un nuevo coroutine en cada reinicio."
+            )
+        if inspect.isasyncgen(coro_factory):  # pragma: no cover - defensivo
+            raise FactoryValidationError(
+                f"La factoría registrada para '{task_name}' es un async generator ya creado; "
+                "no es compatible con Supervisor."
+            )
+        if not callable(coro_factory):
+            raise FactoryValidationError(
+                f"La factoría registrada para '{task_name}' no es invocable (tipo: {type(coro_factory)!r})."
+            )
+
+        if self._validate_factories and self._factory_validator is not None:
+            self._factory_validator(coro_factory)
+
+    def _default_factory_validator(self, coro_factory: Callable[..., Awaitable]) -> None:
+        if inspect.isasyncgenfunction(coro_factory):
+            raise FactoryValidationError(
+                "Las factorías supervisadas no pueden ser funciones generadoras asíncronas."
+            )
+
+        try:
+            signature = inspect.signature(coro_factory)
+        except (TypeError, ValueError):  # pragma: no cover - objetos opacos
+            return
+
+        required = [
+            parameter.name
+            for parameter in signature.parameters.values()
+            if parameter.kind
+            in (
+                inspect.Parameter.POSITIONAL_ONLY,
+                inspect.Parameter.POSITIONAL_OR_KEYWORD,
+                inspect.Parameter.KEYWORD_ONLY,
+            )
+            and parameter.default is inspect._empty
+        ]
+        if required:
+            raise FactoryValidationError(
+                "La factoría supervisada debe poder llamarse sin argumentos. "
+                f"Faltan valores por defecto para: {', '.join(required)}. "
+                "Usa un closure/lambda puro que capture los valores necesarios."
+            )
 
 
 # ------------- API de compatibilidad opcional -------------

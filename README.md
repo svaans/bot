@@ -80,7 +80,12 @@
 67. `core/position_manager.py` sigue las posiciones abiertas y su PnL.
 68. `core/registro_metrico.py` guarda métricas operativas en persistencia.
 69. `core/reporting.py` genera reportes de desempeño.
-70. `core/supervisor.py` vigila la salud del bot y gestiona reinicios.
+70. `core/supervisor.py` vigila la salud del bot y gestiona reinicios. Ofrece
+    validaciones opcionales para garantizar que las factorías registradas sean
+    puras (sin efectos colaterales ni argumentos obligatorios) mediante el
+    flag `validate_factories=True` o el método `enable_factory_validation()`. Se
+    recomienda documentar y lintear estas factorías para evitar inconsistencias
+    tras los reinicios.
 71. `core/monitor_estado_bot.py` ofrece un endpoint para monitorear vida del proceso.
 72. `core/notificador.py` envía mensajes a sistemas externos (Telegram, correo).
 73. `core/notification_manager.py` centraliza diferentes canales de notificación.
