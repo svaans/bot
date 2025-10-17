@@ -19,6 +19,13 @@ from observability.metrics import (
     BOT_LIMIT_ORDERS_SUBMITTED_TOTAL,
     BOT_ORDERS_RETRY_SCHEDULED_TOTAL,
     BOT_TRADER_PURGE_RUNS_TOTAL,
+    CAPITAL_CONFIGURED_GAUGE,
+    CAPITAL_CONFIGURED_TOTAL,
+    CAPITAL_DIVERGENCE_ABSOLUTE,
+    CAPITAL_DIVERGENCE_RATIO,
+    CAPITAL_DIVERGENCE_THRESHOLD,
+    CAPITAL_REGISTERED_GAUGE,
+    CAPITAL_REGISTERED_TOTAL,
 )
 
 
@@ -73,3 +80,13 @@ def test_bot_guardrail_metrics_labels() -> None:
     assert _labels_of(BOT_DATAFEED_WS_FAILURES_TOTAL) == {"reason"}
     assert _labels_of(BOT_LIMIT_ORDERS_SUBMITTED_TOTAL) == {"symbol", "side"}
     assert _labels_of(BOT_BACKFILL_WINDOW_RUNS_TOTAL) == {"symbol", "timeframe"}
+
+
+def test_capital_metrics_labels() -> None:
+    assert _labels_of(CAPITAL_REGISTERED_GAUGE) == {"symbol"}
+    assert _labels_of(CAPITAL_CONFIGURED_GAUGE) == {"symbol"}
+    assert _labels_of(CAPITAL_REGISTERED_TOTAL) == set()
+    assert _labels_of(CAPITAL_CONFIGURED_TOTAL) == set()
+    assert _labels_of(CAPITAL_DIVERGENCE_ABSOLUTE) == set()
+    assert _labels_of(CAPITAL_DIVERGENCE_RATIO) == set()
+    assert _labels_of(CAPITAL_DIVERGENCE_THRESHOLD) == set()
