@@ -233,7 +233,7 @@ class OrderManager:
         bus.subscribe('abrir_orden', self._on_abrir)
         bus.subscribe('cerrar_orden', self._on_cerrar)
         bus.subscribe('cerrar_parcial', self._on_cerrar_parcial)
-		subscribe_order_pnl_metrics(bus)
+        subscribe_order_pnl_metrics(bus)
         if self.modo_real:
             self.start_sync()
         self._ensure_background_tasks()
