@@ -1,8 +1,10 @@
 import pytest
+from pathlib import Path
 from types import SimpleNamespace
 
 from core.event_bus import EventBus
 from core.capital_manager import CapitalManager
+from core.capital_repository import CapitalRepository
 from core.orders.order_manager import OrderManager
 
 
@@ -76,7 +78,7 @@ async def test_crear_fallback_event_bus() -> None:
 
 
 @pytest.mark.asyncio
-async def test_capital_manager_actualizado_con_fills() -> None:
+async def test_capital_manager_actualizado_con_fills(tmp_path: Path) -> None:
     config = SimpleNamespace(
         symbols=["BTC/USDT"],
         risk_capital_total=0.0,
@@ -85,7 +87,8 @@ async def test_capital_manager_actualizado_con_fills() -> None:
         min_order_eur=10.0,
         risk_kelly_base=0.1,
     )
-    capital = CapitalManager(config)
+    repo = CapitalRepository(path=tmp_path / "capital.json")
+    capital = CapitalManager(config, capital_repository=repo)
     manager = OrderManager(modo_real=False, bus=None)
     manager.capital_manager = capital
 
