@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+import math
 import os
 import types
 import sys
 from collections import defaultdict
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Mapping, Optional
 from wsgiref.simple_server import WSGIServer
 
 from core.utils.metrics_compat import (
@@ -86,6 +87,7 @@ _correlacion_btc: Dict[str, float] = {}
 _velas_total: Dict[tuple[str, str], int] = defaultdict(int)
 _velas_rechazadas: Dict[tuple[str, str], Dict[str, int]] = defaultdict(lambda: defaultdict(int))
 _ordenes_registro_pendiente_activas: set[str] = set()
+_pnl_metrics_subscribers: set[int] = set()
 
 # ---- Definición de métricas ----
 VELAS_DUPLICADAS = Counter(
@@ -388,6 +390,24 @@ ORDERS_RETRY_SCHEDULED_BY_REASON_TOTAL = Counter(
     ["symbol", "reason"],
 )
 
+ORDERS_PNL_REALIZED = Gauge(
+    "orders_pnl_realized",
+    "PnL realizado acumulado por símbolo",
+    ["symbol"],
+)
+
+ORDERS_PNL_LATENT = Gauge(
+    "orders_pnl_latent",
+    "PnL latente (mark-to-market) por símbolo",
+    ["symbol"],
+)
+
+ORDERS_PNL_TOTAL = Gauge(
+    "orders_pnl_total",
+    "PnL total (realizado + latente) por símbolo",
+    ["symbol"],
+)
+
 _METRICS_WITH_FALLBACK = [
     "VELAS_DUPLICADAS",
     "CANDLES_DUPLICADAS_RATE",
@@ -432,6 +452,9 @@ _METRICS_WITH_FALLBACK = [
     "ORDERS_REGISTRO_PENDIENTE",
     "ORDERS_REGISTRO_PENDIENTE_TOTAL",
     "ORDERS_RETRY_SCHEDULED_BY_REASON_TOTAL",
+    "ORDERS_PNL_REALIZED",
+    "ORDERS_PNL_LATENT",
+    "ORDERS_PNL_TOTAL",
 ]
 
 for _metric_name in _METRICS_WITH_FALLBACK:
@@ -678,6 +701,52 @@ def subscribe_simulated_order_metrics(bus) -> None:
         registrar_orden('closed')
     bus.subscribe('orden_simulada_creada', _on_open)
     bus.subscribe('orden_simulada_cerrada', _on_close)
+
+
+def subscribe_order_pnl_metrics(bus) -> None:
+    """Suscribe la actualización de PnL a eventos del ``EventBus``."""
+
+    bus_id = id(bus)
+    if bus_id in _pnl_metrics_subscribers:
+        return
+    _pnl_metrics_subscribers.add(bus_id)
+
+    def _safe_float(value: Any) -> float:
+        try:
+            result = float(value)
+        except (TypeError, ValueError):
+            return 0.0
+        if not math.isfinite(result):
+            return 0.0
+        return result
+
+    async def _on_pnl(payload: Any) -> None:
+        if not isinstance(payload, Mapping):
+            return
+        symbol_val = payload.get('symbol')
+        if symbol_val is None:
+            return
+        symbol = str(symbol_val).upper().strip()
+        if not symbol:
+            return
+        realized = _safe_float(payload.get('pnl_realizado'))
+        latent = _safe_float(payload.get('pnl_latente'))
+        total_value = payload.get('pnl_total')
+        total = _safe_float(total_value if total_value is not None else realized + latent)
+        ORDERS_PNL_REALIZED.labels(symbol=symbol).set(realized)
+        ORDERS_PNL_LATENT.labels(symbol=symbol).set(latent)
+        ORDERS_PNL_TOTAL.labels(symbol=symbol).set(total)
+        registro_metrico.registrar(
+            'orders.pnl_update',
+            {
+                'symbol': symbol,
+                'pnl_realizado': realized,
+                'pnl_latente': latent,
+                'pnl_total': total,
+            },
+        )
+
+    bus.subscribe('orders.pnl_update', _on_pnl)
 
 
 def iniciar_exporter() -> Optional[WSGIServer]:
