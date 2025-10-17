@@ -11,6 +11,7 @@ from typing import Dict, List, Optional
 
 import pandas as pd
 
+from core.utils.io_metrics import observe_disk_write
 from core.registro_metrico import registro_metrico
 from core.auditoria import registrar_auditoria
 from core.utils.utils import configurar_logger
@@ -90,7 +91,16 @@ class RejectionHandler:
         archivo = os.path.join(self.log_dir, 'rechazos', f'{fecha}.csv')
         df = pd.DataFrame(buffer)
         modo = 'a' if os.path.exists(archivo) else 'w'
-        df.to_csv(archivo, mode=modo, header=not os.path.exists(archivo), index=False)
+        observe_disk_write(
+            'rechazos_csv',
+            archivo,
+            lambda: df.to_csv(
+                archivo,
+                mode=modo,
+                header=not os.path.exists(archivo),
+                index=False,
+            ),
+        )
         self._buffer.clear()
 
     async def flush_periodically(self, intervalo: int, stop_event: asyncio.Event) -> None:
@@ -124,9 +134,13 @@ class RejectionHandler:
         }
         df = pd.DataFrame([fila])
         modo = 'a' if os.path.exists(self.registro_tecnico_csv) else 'w'
-        df.to_csv(
+        observe_disk_write(
+            'rechazos_tecnicos_csv',
             self.registro_tecnico_csv,
-            mode=modo,
-            header=not os.path.exists(self.registro_tecnico_csv),
-            index=False,
+            lambda: df.to_csv(
+                self.registro_tecnico_csv,
+                mode=modo,
+                header=not os.path.exists(self.registro_tecnico_csv),
+                index=False,
+            ),
         )

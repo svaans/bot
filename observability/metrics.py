@@ -1,7 +1,7 @@
 """Métricas de observabilidad expuestas para las estrategias y servicios."""
 from __future__ import annotations
 
-from core.utils.metrics_compat import Counter, Gauge
+from core.utils.metrics_compat import Counter, Gauge, Histogram
 
 __all__ = [
     "SIGNALS_CONFLICT",
@@ -24,6 +24,8 @@ __all__ = [
     "CAPITAL_DIVERGENCE_ABSOLUTE",
     "CAPITAL_DIVERGENCE_RATIO",
     "CAPITAL_DIVERGENCE_THRESHOLD",
+    "METRIC_WRITE_LATENCY_SECONDS",
+    "REPORT_GENERATION_DURATION_SECONDS",
 ]
 
 SIGNALS_CONFLICT = Counter(
@@ -139,4 +141,17 @@ CAPITAL_DIVERGENCE_RATIO = Gauge(
 CAPITAL_DIVERGENCE_THRESHOLD = Gauge(
     "bot_capital_divergence_threshold",
     "Umbral configurado para divergencia relativa de capital",
+)
+
+
+METRIC_WRITE_LATENCY_SECONDS = Histogram(
+    "metric_write_latency_seconds",
+    "Latencia en segundos de operaciones de escritura a disco",
+    ["operation", "extension"],
+)
+
+REPORT_GENERATION_DURATION_SECONDS = Histogram(
+    "report_generation_duration_seconds",
+    "Duración en segundos de la generación de reportes diarios",
+    ["status"],
 )

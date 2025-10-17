@@ -7,6 +7,7 @@ from typing import Any, Mapping
 
 UTC = timezone.utc
 import pandas as pd
+from core.utils.io_metrics import observe_disk_write
 from core.utils.logger import configurar_logger
 
 
@@ -133,7 +134,11 @@ class RegistroMetrico:
                 try:
                     modo = 'a' if os.path.exists(archivo) else 'w'
                     cab = not os.path.exists(archivo)
-                    df.to_csv(archivo, mode=modo, header=cab, index=False)
+                    observe_disk_write(
+                        'registro_metrico_csv',
+                        archivo,
+                        lambda: df.to_csv(archivo, mode=modo, header=cab, index=False),
+                    )
                     self.buffer = []
                     return
                 except Exception as e:

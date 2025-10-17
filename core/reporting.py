@@ -7,6 +7,7 @@ from math import isclose
 import pandas as pd
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_pdf import PdfPages
+from core.utils.io_metrics import observe_disk_write, report_generation_timer
 from core.utils.utils import configurar_logger
 from core.utils.utils import leer_csv_seguro
 
@@ -51,7 +52,11 @@ class ReporterDiario:
         df['winrate'] = df['wins'] / df['operaciones'] * 100
         df['buy_hold'] = (df['last_price'] - df['buy_hold_start']) / df[
             'buy_hold_start']
-        df.to_csv(self.estadisticas_archivo, index=False)
+        observe_disk_write(
+            "report_estadisticas_csv",
+            self.estadisticas_archivo,
+            lambda: df.to_csv(self.estadisticas_archivo, index=False),
+        )
 
     def _actualizar_estadisticas(self, info: dict):
         symbol = info.get('symbol') or info.get('simbolo')
@@ -96,9 +101,17 @@ class ReporterDiario:
         archivo = os.path.join(self.carpeta, f'{fecha}.csv')
         df = pd.DataFrame([info])
         if os.path.exists(archivo):
-            df.to_csv(archivo, mode='a', header=False, index=False)
+            observe_disk_write(
+                "report_operacion_csv_append",
+                archivo,
+                lambda: df.to_csv(archivo, mode='a', header=False, index=False),
+            )
         else:
-            df.to_csv(archivo, index=False)
+            observe_disk_write(
+                "report_operacion_csv_create",
+                archivo,
+                lambda: df.to_csv(archivo, index=False),
+            )
         symbol = info.get('symbol') or info.get('simbolo')
         if symbol:
             ops = self.ultimas_operaciones.setdefault(symbol, [])
@@ -116,11 +129,14 @@ class ReporterDiario:
 
     def generar_informe(self, fecha):
         archivo = os.path.join(self.carpeta, f'{fecha}.csv')
-        if not os.path.exists(archivo):
-            return
-        df = leer_csv_seguro(archivo, expected_cols=20)
-        if df.empty:
-            return
+        with report_generation_timer() as set_status:
+            if not os.path.exists(archivo):
+                set_status('missing')
+                return
+            df = leer_csv_seguro(archivo, expected_cols=20)
+            if df.empty:
+                set_status('empty')
+                return
         ganancia_total = df['retorno_total'].sum()
         winrate = (df['retorno_total'] > 0).mean() * 100
         curva = df['retorno_total'].cumsum()
@@ -174,30 +190,41 @@ class ReporterDiario:
             )
         resumen_path_txt = os.path.join(self.carpeta, f'{fecha}_resumen.txt')
         resumen_path_csv = os.path.join(self.carpeta, f'{fecha}_resumen.csv')
-        with open(resumen_path_txt, 'w') as f:
-            for k, v in resumen.items():
-                f.write(f'{k}: {v}\n')
-        pd.DataFrame([resumen]).to_csv(resumen_path_csv, index=False)
+        def _write_resumen_txt() -> None:
+            with open(resumen_path_txt, 'w') as f:
+                for k, v in resumen.items():
+                    f.write(f'{k}: {v}\n')
+
+        observe_disk_write('report_resumen_txt', resumen_path_txt, _write_resumen_txt)
+
+        observe_disk_write(
+            'report_resumen_csv',
+            resumen_path_csv,
+            lambda: pd.DataFrame([resumen]).to_csv(resumen_path_csv, index=False),
+        )
         self._guardar_pdf(df, fecha, ganancia_total, winrate, drawdown)
 
     def _guardar_pdf(self, df, fecha, ganancia, winrate, drawdown):
         pdf_path = os.path.join(self.carpeta, f'{fecha}.pdf')
-        with PdfPages(pdf_path) as pdf:
-            fig, ax = plt.subplots()
-            df['retorno_total'].cumsum().plot(ax=ax)
-            ax.set_title('Retorno acumulado')
-            ax.set_xlabel('Operaciones')
-            ax.set_ylabel('Beneficio')
-            pdf.savefig(fig)
-            plt.close(fig)
-            fig, ax = plt.subplots(figsize=(8, 2))
-            ax.axis('off')
-            texto = f"""Ganancia total: {ganancia:.2f}
+        def _write_pdf() -> None:
+            with PdfPages(pdf_path) as pdf:
+                fig, ax = plt.subplots()
+                df['retorno_total'].cumsum().plot(ax=ax)
+                ax.set_title('Retorno acumulado')
+                ax.set_xlabel('Operaciones')
+                ax.set_ylabel('Beneficio')
+                pdf.savefig(fig)
+                plt.close(fig)
+                fig, ax = plt.subplots(figsize=(8, 2))
+                ax.axis('off')
+                texto = f"""Ganancia total: {ganancia:.2f}
 Winrate: {winrate:.2f}%
 Drawdown: {drawdown:.4f}"""
-            ax.text(0.01, 0.8, texto, fontsize=12)
-            pdf.savefig(fig)
-            plt.close(fig)
+                ax.text(0.01, 0.8, texto, fontsize=12)
+                pdf.savefig(fig)
+                plt.close(fig)
+
+        observe_disk_write('report_pdf', pdf_path, _write_pdf)
         self.log.info(f'🗒️ Reporte PDF guardado en {pdf_path}')
 
 

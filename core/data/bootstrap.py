@@ -11,6 +11,7 @@ import pandas as _PD_REAL
 import numpy as np
 from binance_api.cliente import fetch_ohlcv_async, obtener_cliente
 from core.metrics import registrar_warmup_progress
+from core.utils.io_metrics import observe_disk_write
 from core.utils.utils import configurar_logger
 
 log = configurar_logger('bootstrap')
@@ -252,7 +253,11 @@ async def warmup_symbol(
             df = _normalize_df(df)
             # Persistir caché (best-effort)
             try:
-                df.to_csv(path, index=False)
+                observe_disk_write(
+                    'warmup_cache_csv',
+                    path,
+                    lambda: df.to_csv(path, index=False),
+                )
             except Exception:
                 log.exception(f'Error guardando caché {path}')
 
