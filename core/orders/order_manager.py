@@ -124,6 +124,7 @@ class OrderManager:
         self._registro_retry_tasks: Dict[str, asyncio.Task] = {}
         self._registro_retry_error_keywords = _PERSISTENCE_ERROR_KEYWORDS
         self.capital_manager: Any | None = None
+		self.risk_manager: Any | None = None
         self._config = config or getattr(app_config, "cfg", None)
         self._flush_task: asyncio.Task | None = None
         self._reconcile_task: asyncio.Task | None = None
@@ -387,6 +388,82 @@ class OrderManager:
             return ExecutionResult(executed, fee, pnl, status, remaining=remaining)
 
         return await self._market_executor.ejecutar(side, symbol, cantidad, operation_id, entrada)
+
+	def _capital_comprometido(self, orden: Order | None) -> float:
+        if orden is None:
+            return 0.0
+        cantidad = getattr(orden, "cantidad_abierta", None)
+        if not is_valid_number(cantidad):
+            cantidad = getattr(orden, "cantidad", 0.0)
+        precio = getattr(orden, "precio_entrada", 0.0)
+        if not is_valid_number(precio):
+            precio = 0.0
+        try:
+            comprometido = float(abs(float(precio) * float(cantidad)))
+        except Exception:
+            comprometido = 0.0
+        return comprometido if comprometido > 0 else 0.0
+
+    def _capital_asignado(self, manager: Any, symbol: str, comprometido: float) -> float:
+        obtener_asignado = getattr(manager, "exposure_asignada", None)
+        if callable(obtener_asignado):
+            try:
+                return float(obtener_asignado(symbol))
+            except TypeError:
+                return float(obtener_asignado(symbol=symbol))  # type: ignore[call-arg]
+            except Exception:
+                pass
+        disponible_actual = 0.0
+        exposure_fn = getattr(manager, "exposure_disponible", None)
+        if callable(exposure_fn):
+            try:
+                disponible_actual = float(exposure_fn(symbol))
+            except TypeError:
+                disponible_actual = float(exposure_fn(symbol=symbol))  # type: ignore[call-arg]
+            except Exception:
+                disponible_actual = 0.0
+        else:
+            capital_map = getattr(manager, "capital_por_simbolo", {})
+            if isinstance(capital_map, Mapping):
+                disponible_actual = float(
+                    capital_map.get(symbol, capital_map.get(symbol.upper(), 0.0))
+                )
+        return max(disponible_actual + max(comprometido, 0.0), 0.0)
+
+    def _actualizar_capital_disponible(
+        self, symbol: str, orden: Order | None = None
+    ) -> None:
+        manager = self.capital_manager
+        if manager is None:
+            return
+        actualizar = getattr(manager, "actualizar_exposure", None)
+        if not callable(actualizar):
+            return
+        vigente = orden or self.ordenes.get(symbol)
+        comprometido = self._capital_comprometido(vigente)
+        risk = getattr(self, "risk_manager", None)
+        if risk is not None:
+            sincronizar = getattr(risk, "sincronizar_exposure", None)
+            if callable(sincronizar):
+                try:
+                    sincronizar(symbol, comprometido)
+                    return
+                except Exception:
+                    log.warning(
+                        "orders.capital_sync_risk_failed",
+                        extra=safe_extra({"symbol": symbol}),
+                        exc_info=True,
+                    )
+        asignado = self._capital_asignado(manager, symbol, comprometido)
+        disponible = max(asignado - comprometido, 0.0)
+        try:
+            actualizar(symbol, disponible)
+        except Exception:
+            log.warning(
+                "orders.capital_update_failed",
+                extra=safe_extra({"symbol": symbol}),
+                exc_info=True,
+            )
 
     async def _on_abrir(self, data: dict) -> None:
         result = await self.abrir_async(**data)
@@ -1125,6 +1202,7 @@ class OrderManager:
                 'accept',
                 {'cantidad': cantidad},
             )
+			self._actualizar_capital_disponible(symbol, orden)
             return True
 				
     async def agregar_parcial_async(self, symbol: str, precio: float, cantidad: float) -> bool:
@@ -1181,6 +1259,7 @@ class OrderManager:
                 orden.entradas = []
             orden.entradas.append({'precio': precio, 'cantidad': cantidad})
             orden.precio_ultima_piramide = precio
+			self._actualizar_capital_disponible(symbol, orden)
             return True
 
     async def cerrar_async(self, symbol: str, precio: float, motivo: str) -> bool:
@@ -1305,6 +1384,7 @@ class OrderManager:
                 self.ordenes.pop(symbol, None)
                 limpiar_registro_pendiente(symbol)
                 self._registro_pendiente_paused.discard(symbol)
+				self._actualizar_capital_disponible(symbol)
                 return True
 
             finally:
@@ -1421,9 +1501,11 @@ class OrderManager:
                             log.error(f'❌ Error eliminando orden {symbol} de SQLite: {e}')
                     registrar_orden('closed')
                     log_decision(log, 'cerrar_parcial', operation_id, {'symbol': symbol, 'cantidad': cantidad}, {}, 'accept', {'retorno': retorno})
+					self._actualizar_capital_disponible(symbol)
                 else:
                     registrar_orden('partial')
                     log_decision(log, 'cerrar_parcial', operation_id, {'symbol': symbol, 'cantidad': cantidad}, {}, 'accept', {'parcial': True})
+					self._actualizar_capital_disponible(symbol, orden)
                 return True
             finally:
                 log.debug(f'🔓 Exit cerrar_parcial lock {symbol} id={order_id}')
