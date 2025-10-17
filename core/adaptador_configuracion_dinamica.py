@@ -11,6 +11,7 @@ from core.ajustador_riesgo import (
     es_modo_agresivo,
     RIESGO_MAXIMO_DIARIO_BASE,
 )
+from core.market_regime import detectar_regimen
 log = configurar_logger('adaptador_dinamico')
 
 
@@ -47,6 +48,7 @@ def _adaptar_configuracion_indicadores(symbol: str, df: pd.DataFrame, base_confi
         return {}
     base_config = base_config or {}
     df = df.tail(60).copy()
+    regimen = detectar_regimen(df)
     close_actual = df['close'].iloc[-1]
     rsi = get_rsi(df)
     if rsi is None:
@@ -107,7 +109,12 @@ def _adaptar_configuracion_indicadores(symbol: str, df: pd.DataFrame, base_confi
     tp_base = base_config.get('tp_ratio', 3.0)
     riesgo_base = base_config.get('riesgo_maximo_diario', RIESGO_MAXIMO_DIARIO_BASE)
     sl_ratio, tp_ratio, riesgo_maximo_diario = ajustar_sl_tp_riesgo(
-        atr_pct, slope_pct, riesgo_base, sl_base, tp_base
+        atr_pct,
+        slope_pct,
+        riesgo_base,
+        sl_base,
+        tp_base,
+        regime=regimen,
     )
     if round(riesgo_maximo_diario, 4) != round(riesgo_base, 4):
         log.info(
@@ -123,14 +130,20 @@ def _adaptar_configuracion_indicadores(symbol: str, df: pd.DataFrame, base_confi
     diversidad_minima = base_config.get('diversidad_minima', 2)
     if modo_agresivo or atr_pct < 0.012 or slope_pct > 0.003:
         diversidad_minima = max(1, diversidad_minima - 1)
-    config = {'modo_agresivo': modo_agresivo, 'factor_umbral': round(
-        factor_umbral, 2), 'tp_ratio': round(tp_ratio, 2), 'sl_ratio':
-        round(sl_ratio, 2), 'riesgo_maximo_diario': round(
-        riesgo_maximo_diario, 4), 'cooldown_tras_perdida': int(
-        cooldown_tras_perdida), 'diversidad_minima': int(diversidad_minima),
-        'min_slope': min_slope, 'max_rsi': max_rsi, 'min_volumen_relativo':
-        min_volumen_relativo}
+    config = {
+        'modo_agresivo': modo_agresivo,
+        'factor_umbral': round(factor_umbral, 2),
+        'tp_ratio': round(tp_ratio, 2),
+        'sl_ratio': round(sl_ratio, 2),
+        'riesgo_maximo_diario': round(riesgo_maximo_diario, 4),
+        'cooldown_tras_perdida': int(cooldown_tras_perdida),
+        'diversidad_minima': int(diversidad_minima),
+        'min_slope': min_slope,
+        'max_rsi': max_rsi,
+        'min_volumen_relativo': min_volumen_relativo,
+        'regimen_mercado': regimen,
+    }
     log.info(
-        f'[{symbol}] Config adaptada | ATR%={atr_pct:.4f} | RSI={rsi:.2f} | Slope%={slope_pct:.4f} | Aggresivo={modo_agresivo} | minSlope={min_slope} | maxRSI={max_rsi} | minVolRel={min_volumen_relativo}'
+        f'[{symbol}] Config adaptada | Regimen={regimen} | ATR%={atr_pct:.4f} | RSI={rsi:.2f} | Slope%={slope_pct:.4f} | Aggresivo={modo_agresivo} | minSlope={min_slope} | maxRSI={max_rsi} | minVolRel={min_volumen_relativo}'
         )
     return config

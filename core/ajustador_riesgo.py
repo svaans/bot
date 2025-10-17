@@ -96,8 +96,27 @@ def ajustar_sl_tp_riesgo(
     base_riesgo: float = RIESGO_MAXIMO_DIARIO_BASE,
     sl_ratio: float = 1.5,
     tp_ratio: float = 3.0,
+    *,
+    regime: str | None = None,
 ) -> tuple[float, float, float]:
-    """Calcula ratios de SL/TP y riesgo adaptativos."""
+    """Calcula ratios de SL/TP y riesgo adaptativos.
+
+    Parameters
+    ----------
+    volatilidad:
+        Medida de volatilidad relativa (ej. desviación estándar o ATR normalizado).
+    slope_pct:
+        Pendiente porcentual que refleja la direccionalidad reciente del precio.
+    base_riesgo:
+        Riesgo máximo diario base que se ajustará según contexto.
+    sl_ratio:
+        Ratio base para el ``stop loss`` expresado en múltiplos de ATR u otra métrica.
+    tp_ratio:
+        Ratio base para el ``take profit``.
+    regime:
+        Clasificación cualitativa del mercado (``alta_volatilidad``, ``tendencial`` o
+        ``lateral``). Si no se proporciona se mantiene el comportamiento previo.
+    """
 
     riesgo_inicial = base_riesgo
     # Ajuste por volatilidad
@@ -114,10 +133,38 @@ def ajustar_sl_tp_riesgo(
         tp_ratio *= 0.9
         sl_ratio *= 1.1
 
+    regime_key = (regime or "").strip().lower()
+    regime_aplicado = None
+    if regime_key:
+        if regime_key == "alta_volatilidad":
+            sl_ratio *= 1.1
+            tp_ratio *= 0.95
+            base_riesgo *= 0.7
+            regime_aplicado = regime_key
+        elif regime_key == "tendencial":
+            sl_ratio *= 0.95
+            tp_ratio *= 1.15
+            base_riesgo *= 1.05
+            regime_aplicado = regime_key
+        elif regime_key == "lateral":
+            tp_ratio *= 0.9
+            base_riesgo *= 0.9
+            regime_aplicado = regime_key
+        else:  # pragma: no cover - rutas defensivas
+            log.debug("Regimen de mercado desconocido: %s", regime)
+
     sl_ratio = min(max(sl_ratio, 0.5), 5.0)
     tp_ratio = max(tp_ratio, sl_ratio * 1.2)
     tp_ratio = min(max(tp_ratio, 1.0), 8.0)
     riesgo_maximo_diario = round(base_riesgo, 4)
+    if regime_aplicado:
+        log.info(
+            "Regimen '%s' aplicado | SL=%.2f | TP=%.2f | Riesgo=%.4f",
+            regime_aplicado,
+            round(sl_ratio, 2),
+            round(tp_ratio, 2),
+            riesgo_maximo_diario,
+        )
     if riesgo_maximo_diario != round(riesgo_inicial, 4):
         log.info(
             "Riesgo diario ajustado de %.4f a %.4f",

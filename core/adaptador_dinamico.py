@@ -144,6 +144,7 @@ def _adaptar_configuracion_base(symbol: str, df: pd.DataFrame, base_config: dict
             f'[{symbol}] ❌ Datos insuficientes para adaptar configuración.')
         return base_config
     config = base_config.copy()
+    regimen = detectar_regimen(df.tail(120) if len(df) > 120 else df)
     precios = df['close'].tail(11)
     simples = retornos_simples(precios)
     logs = retornos_log(precios)
@@ -162,7 +163,12 @@ def _adaptar_configuracion_base(symbol: str, df: pd.DataFrame, base_config: dict
     tp_base = base_config.get('tp_ratio', 3.0)
     riesgo_base = base_config.get('riesgo_maximo_diario', RIESGO_MAXIMO_DIARIO_BASE)
     sl_ratio, tp_ratio, riesgo_diario = ajustar_sl_tp_riesgo(
-        volatilidad, slope_pct, riesgo_base, sl_base, tp_base
+        volatilidad,
+        slope_pct,
+        riesgo_base,
+        sl_base,
+        tp_base,
+        regime=regimen,
     )
     if round(riesgo_diario, 4) != round(riesgo_base, 4):
         log.info(
@@ -200,8 +206,9 @@ def _adaptar_configuracion_base(symbol: str, df: pd.DataFrame, base_config: dict
     config['multiplicador_estrategias_recurrentes'] = round(min(3.0,
         base_mult * (1 + volatilidad)), 2)
     config['riesgo_maximo_diario'] = riesgo_diario
+    config['regimen_mercado'] = regimen
     log.info(
-        f"[{symbol}] Config adaptada | Volatilidad={volatilidad:.4f} | Slope={slope:.4f} | Factor Umbral={config['factor_umbral']} | SL={config['sl_ratio']} | TP={config['tp_ratio']} | PesoMin={config['peso_minimo_total']} | Diversidad={config['diversidad_minima']} | Cooldown={config['cooldown_tras_perdida']} | Riesgo Diario={config['riesgo_maximo_diario']} | Aggresivo={config['modo_agresivo']}"
+        f"[{symbol}] Config adaptada | Regimen={regimen} | Volatilidad={volatilidad:.4f} | Slope={slope:.4f} | Factor Umbral={config['factor_umbral']} | SL={config['sl_ratio']} | TP={config['tp_ratio']} | PesoMin={config['peso_minimo_total']} | Diversidad={config['diversidad_minima']} | Cooldown={config['cooldown_tras_perdida']} | Riesgo Diario={config['riesgo_maximo_diario']} | Aggresivo={config['modo_agresivo']}"
         )
     return config
 

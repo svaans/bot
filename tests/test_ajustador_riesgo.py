@@ -79,6 +79,26 @@ def test_es_modo_agresivo_lee_umbral_por_simbolo(monkeypatch):
     )
 
 
+@pytest.mark.parametrize(
+    "volatilidad, slope_pct, regime, esperado",
+    [
+        (0.018, 0.0005, "alta_volatilidad", (1.65, 2.85, 0.0420)),
+        (0.012, 0.003, "tendencial", (1.42, 3.79, 0.0630)),
+        (0.009, 0.0001, "lateral", (1.5, 2.7, 0.0540)),
+    ],
+)
+def test_ajustar_sl_tp_riesgo_considera_regimen(volatilidad, slope_pct, regime, esperado):
+    sl, tp, riesgo = ajustar_sl_tp_riesgo(
+        volatilidad,
+        slope_pct,
+        regime=regime,
+    )
+    sl_esperado, tp_esperado, riesgo_esperado = esperado
+    assert pytest.approx(sl, rel=1e-3) == sl_esperado
+    assert pytest.approx(tp, rel=1e-3) == tp_esperado
+    assert pytest.approx(riesgo, rel=1e-3) == riesgo_esperado
+
+
 def test_ajustar_sl_tp_riesgo_respeta_limites_extremos():
     sl, tp, riesgo = ajustar_sl_tp_riesgo(
         volatilidad=1.0,
@@ -92,4 +112,4 @@ def test_ajustar_sl_tp_riesgo_respeta_limites_extremos():
     assert math.isclose(tp, 6.0, rel_tol=1e-9)
     # El riesgo nunca se vuelve negativo y respeta redondeo.
     assert 0.0 <= riesgo <= 0.5
-    assert round(riesgo, 4) == riesgo
+    assert round(riesgo, 4) == pytest.approx(riesgo, rel=0)
