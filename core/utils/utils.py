@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import math
 import os
+import tempfile
 from datetime import datetime, timezone
 from decimal import ROUND_HALF_UP, Decimal
 from pathlib import Path
@@ -28,6 +29,10 @@ __all__ = [
 
 ESTADO_DIR = Path(os.getenv("ESTADO_DIR", "estado")).expanduser()
 ESTADO_DIR.mkdir(parents=True, exist_ok=True)
+
+_IO_FALLBACK_DIR = Path(tempfile.gettempdir()) / "bot_io_fallbacks"
+
+log = configurar_logger("utils_io")
 
 
 def leer_csv_seguro(path: str | os.PathLike[str], *, expected_cols: int | None = None, **kwargs: Any) -> pd.DataFrame:
@@ -169,10 +174,48 @@ def guardar_orden_real(symbol: str, data: Mapping[str, Any], *, carpeta: Path | 
     carpeta.mkdir(parents=True, exist_ok=True)
     fecha = datetime.now(timezone.utc).strftime("%Y%m%d")
     path = carpeta / f"{symbol.upper()}_{fecha}.jsonl"
-    with path.open("a", encoding="utf-8") as fh:
-        json.dump(dict(data), fh, ensure_ascii=False)
-        fh.write("\n")
-    return path
+    try:
+        with path.open("a", encoding="utf-8") as fh:
+            json.dump(dict(data), fh, ensure_ascii=False)
+            fh.write("\n")
+        return path
+    except PermissionError as exc:
+        log.error(
+            "❌ Permiso denegado al escribir orden real",
+            extra={"path": str(path), "error": str(exc)},
+        )
+        fallback = _IO_FALLBACK_DIR / path.name
+        fallback.parent.mkdir(parents=True, exist_ok=True)
+        with fallback.open("a", encoding="utf-8") as fh:
+            json.dump(dict(data), fh, ensure_ascii=False)
+            fh.write("\n")
+        log.warning(
+            "⚠️ Orden persistida en directorio temporal",
+            extra={"path": str(fallback)},
+        )
+        return fallback
+    except OSError as exc:
+        log.error(
+            "❌ Error de E/S al escribir orden real",
+            extra={"path": str(path), "error": str(exc)},
+        )
+        fallback = _IO_FALLBACK_DIR / path.name
+        fallback.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            with fallback.open("a", encoding="utf-8") as fh:
+                json.dump(dict(data), fh, ensure_ascii=False)
+                fh.write("\n")
+        except (OSError, PermissionError) as inner_exc:
+            log.error(
+                "❌ No fue posible persistir la orden",
+                extra={"path": str(fallback), "error": str(inner_exc)},
+            )
+            raise
+        log.warning(
+            "⚠️ Orden persistida en fallback por error de E/S",
+            extra={"path": str(fallback), "error_original": str(exc)},
+        )
+        return fallback
 
 
 def round_decimal(valor: float | Decimal, digits: int = 8) -> float:
