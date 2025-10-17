@@ -1807,7 +1807,7 @@ class OrderManager:
             except Exception:  # pragma: no cover - defensivo
                 continue
 
-	def actualizar_mark_to_market(self, symbol: str, precio_actual: float) -> None:
+    def actualizar_mark_to_market(self, symbol: str, precio_actual: float) -> None:
         """Recalcula el PnL latente de ``symbol`` con el precio más reciente."""
 
         orden = self.ordenes.get(symbol)
