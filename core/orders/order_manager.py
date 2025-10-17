@@ -1259,7 +1259,7 @@ class OrderManager:
                 orden.entradas = []
             orden.entradas.append({'precio': precio, 'cantidad': cantidad})
             orden.precio_ultima_piramide = precio
-			self._actualizar_capital_disponible(symbol, orden)
+            self._actualizar_capital_disponible(symbol, orden)
             return True
 
     async def cerrar_async(self, symbol: str, precio: float, motivo: str) -> bool:
