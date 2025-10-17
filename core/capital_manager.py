@@ -130,6 +130,20 @@ class CapitalManager:
             return float(self.capital_por_simbolo.get(clave, 0.0))
         return float(self._disponible_global)
 
+    def exposure_asignada(self, symbol: str | None = None) -> float:
+        """Return the configured exposure for ``symbol`` or globally if ``None``."""
+
+        if symbol is None:
+            if self._state.total > 0:
+                return float(self._state.total)
+            return float(sum(self._state.por_symbol.values()))
+        clave = _normalizar_symbol(symbol)
+        if clave in self._state.por_symbol:
+            return float(self._state.por_symbol[clave])
+        if self._state.default_por_symbol > 0:
+            return float(self._state.default_por_symbol)
+        return 0.0
+
     def actualizar_exposure(self, symbol: str, disponible: float) -> None:
         """Update the available exposure for ``symbol`` and refresh caches."""
 
