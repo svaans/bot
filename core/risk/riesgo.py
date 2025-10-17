@@ -201,6 +201,25 @@ def actualizar_perdida(simbolo: str, perdida: float) -> None:
     _obtener_persistencia().registrar_perdida(simbolo, perdida)
 
 
+def evaluar_alerta_capital(capital_total: float, limite_alerta: float) -> tuple[bool, float]:
+    """Determina si la pérdida acumulada se acerca al capital disponible."""
+
+    if capital_total <= 0:
+        return False, 0.0
+    estado = _obtener_persistencia().estado_actual()
+    hoy = datetime.now(UTC).date().isoformat()
+    if estado.get('fecha') != hoy:
+        return False, 0.0
+    try:
+        perdida = float(estado.get('perdida_acumulada', 0.0) or 0.0)
+    except (TypeError, ValueError):
+        perdida = 0.0
+    ratio = perdida / capital_total if capital_total > 0 else 0.0
+    if limite_alerta <= 0:
+        return False, ratio
+    return ratio >= limite_alerta, ratio
+
+
 def riesgo_superado(umbral: float, capital_total: float) ->bool:
     """Evalúa si el umbral de pérdida diaria ha sido superado."""
     estado = _obtener_persistencia().estado_actual()
