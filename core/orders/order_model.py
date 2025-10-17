@@ -94,7 +94,8 @@ class Order:
     sl_emergencia: float | None = None
     cerrando: bool = False
     fee_total: float = 0.0
-    pnl_operaciones: float = 0.0
+    pnl_realizado: float = 0.0
+    pnl_latente: float = 0.0
     registro_pendiente: bool = False
     operation_id: str | None = None
 
@@ -129,8 +130,10 @@ class Order:
         data.setdefault('intentos_cierre', 0)
         data.setdefault('sl_emergencia', None)
         data.setdefault('cerrando', False)
+        legacy_pnl = data.pop('pnl_operaciones', None)
         data.setdefault('fee_total', 0.0)
-        data.setdefault('pnl_operaciones', 0.0)
+        data.setdefault('pnl_realizado', legacy_pnl if legacy_pnl is not None else 0.0)
+        data.setdefault('pnl_latente', 0.0)
         data.setdefault('registro_pendiente', False)
         data.setdefault('operation_id', None)
         return Order(**data)
@@ -144,3 +147,16 @@ class Order:
             data['estrategias_activas'] = json.dumps(data[
                 'estrategias_activas'])
         return data
+
+    @property
+    def pnl_operaciones(self) -> float:
+        """Compatibilidad retro: suma de PnL realizado y latente."""
+
+        return float(self.pnl_realizado) + float(self.pnl_latente)
+
+    @pnl_operaciones.setter
+    def pnl_operaciones(self, value: float) -> None:
+        """Mantiene compatibilidad asignando al PnL realizado."""
+
+        self.pnl_realizado = float(value)
+        self.pnl_latente = 0.0
