@@ -234,7 +234,8 @@ async def test_cerrar_parcial_no_fill_reenqueues_without_side_effects(
         cantidad=1.0,
         direccion='long',
         fee_total=0.0,
-        pnl_operaciones=0.0,
+        pnl_realizado=0.0,
+        pnl_latente=0.0,
     )
     manager.ordenes['BTCUSDT'] = orden
 
@@ -265,7 +266,8 @@ async def test_cerrar_parcial_no_fill_reenqueues_without_side_effects(
     assert result is False
     assert orden.cantidad_abierta == pytest.approx(1.0)
     assert orden.fee_total == pytest.approx(0.0)
-    assert orden.pnl_operaciones == pytest.approx(0.0)
+    assert orden.pnl_realizado == pytest.approx(0.0)
+    assert getattr(orden, 'pnl_latente', 0.0) == pytest.approx(0.0)
     assert registrar_calls == []
     assert capital_updates == []
 
