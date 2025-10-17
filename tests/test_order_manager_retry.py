@@ -6,6 +6,7 @@ import logging
 import sqlite3
 import sys
 import types
+from typing import Any
 
 import pytest
 
@@ -35,6 +36,7 @@ if 'indicators' not in sys.modules:
     sys.modules['indicators.rsi'] = types.ModuleType('indicators.rsi')
 
 from core.orders.order_manager import OrderManager
+from core.orders.market_retry_executor import ExecutionResult
 from core.orders import order_manager as order_manager_module
 
 
@@ -203,3 +205,75 @@ async def test_schedule_registro_retry_on_persistence_failure(monkeypatch: pytes
     assert {"InitialError", "OperationalError"}.issubset(reasons)
     assert order.registro_pendiente is False
     assert manager._registro_retry_attempts.get(symbol) is None
+
+
+@pytest.mark.asyncio
+async def test_cerrar_parcial_no_fill_reenqueues_without_side_effects(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _DummyBus:
+        def __init__(self) -> None:
+            self.published: list[tuple[str, dict[str, Any]]] = []
+            self.subscriptions: list[tuple[str, Any]] = []
+
+        def subscribe(self, event: str, callback: Any) -> None:  # pragma: no cover - trivial
+            self.subscriptions.append((event, callback))
+
+        async def publish(self, event: str, payload: dict[str, Any]) -> None:
+            self.published.append((event, dict(payload)))
+
+    bus = _DummyBus()
+    manager = OrderManager(modo_real=True, bus=None)
+    manager.bus = bus
+    manager._market_executor.update_bus(bus)
+    manager._partial_close_retry_delay = 0.0  # type: ignore[attr-defined]
+
+    orden = types.SimpleNamespace(
+        cantidad_abierta=1.0,
+        precio_entrada=10.0,
+        cantidad=1.0,
+        direccion='long',
+        fee_total=0.0,
+        pnl_operaciones=0.0,
+    )
+    manager.ordenes['BTCUSDT'] = orden
+
+    async def fake_execute_real_order(*_args: Any, **_kwargs: Any) -> ExecutionResult:
+        return ExecutionResult(0.0, 0.0, 0.0, 'REJECTED', remaining=1.0)
+
+    monkeypatch.setattr(manager, '_execute_real_order', fake_execute_real_order)
+    monkeypatch.setattr(manager, '_generar_operation_id', lambda _symbol: 'op-1')
+
+    registrar_calls: list[str] = []
+
+    def fake_registrar_orden(*_args: Any, **_kwargs: Any) -> None:
+        registrar_calls.append('called')
+
+    monkeypatch.setattr(order_manager_module, 'registrar_orden', fake_registrar_orden)
+
+    capital_updates: list[tuple[Any, Any]] = []
+
+    def fake_actualizar_capital(
+        self: OrderManager, symbol: str, orden_arg: Any | None = None
+    ) -> None:  # pragma: no cover - simple stub
+        capital_updates.append((symbol, orden_arg))
+
+    monkeypatch.setattr(OrderManager, '_actualizar_capital_disponible', fake_actualizar_capital)
+
+    result = await manager.cerrar_parcial_async('BTCUSDT', 0.5, 100.0, 'rebalance')
+
+    assert result is False
+    assert orden.cantidad_abierta == pytest.approx(1.0)
+    assert orden.fee_total == pytest.approx(0.0)
+    assert orden.pnl_operaciones == pytest.approx(0.0)
+    assert registrar_calls == []
+    assert capital_updates == []
+
+    await asyncio.sleep(0.01)
+
+    requeued = [payload for evt, payload in bus.published if evt == 'cerrar_parcial']
+    assert requeued, 'El cierre parcial debe reenfilarse cuando no hay fills'
+    ultimo = requeued[-1]
+    assert ultimo['symbol'] == 'BTCUSDT'
+    assert ultimo['cantidad'] == pytest.approx(0.5)
+    assert ultimo['motivo'] == 'rebalance'
