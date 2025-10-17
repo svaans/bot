@@ -12,6 +12,7 @@ can be instantiated in unit tests without external dependencies.
 from __future__ import annotations
 import asyncio
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Dict, Mapping
 
 from config.config_manager import Config
@@ -48,15 +49,38 @@ class CapitalManager:
         capital_repository: CapitalRepository | None = None,
     ) -> None:
         self.config = config
-        self._state = self._build_state(config, exposure_limits, exposure_total)
+        self._repository = capital_repository or CapitalRepository()
+
+        repo_path = getattr(self._repository, "path", None)
+        repo_path_obj = Path(repo_path) if repo_path else None
+        file_exists = repo_path_obj.exists() if repo_path_obj else False
+
+        snapshot = self._repository.load()
+        snapshot_capital = dict(snapshot.capital_por_simbolo)
+        snapshot_disponible = max(0.0, float(snapshot.disponible_global))
+        overrides: Dict[str, float] = {}
+        if exposure_limits:
+            overrides.update(dict(exposure_limits))
+        if snapshot.capital_por_simbolo:
+            overrides.update(snapshot.capital_por_simbolo)
+
+        self._state = self._build_state(
+            config,
+            overrides if overrides else None,
+            exposure_total,
+        )
         self.capital_por_simbolo = dict(self._state.por_symbol)
         self._kelly_base = float(getattr(config, "risk_kelly_base", 0.1) or 0.1)
         self.fraccion_kelly = self._kelly_base
         self._recalcular_disponible_global()
         self._event_bus: Any | None = None
-        self._repository = capital_repository or CapitalRepository()
-        self._load_persisted_state()
-        self._persist_state()
+        self._apply_persisted_state(snapshot)
+        if (
+            not file_exists
+            or self.capital_por_simbolo != snapshot_capital
+            or self._disponible_global != snapshot_disponible
+        ):
+            self._persist_state()
 
     # ------------------------------------------------------------------
     # Construction helpers
@@ -192,7 +216,7 @@ class CapitalManager:
     # ------------------------------------------------------------------
     # Persistencia
     # ------------------------------------------------------------------
-    def _load_persisted_state(self) -> None:
+    def _apply_persisted_state(self, snapshot: CapitalSnapshot) -> None:
         snapshot: CapitalSnapshot = self._repository.load()
         overrides = snapshot.capital_por_simbolo
         if overrides:
