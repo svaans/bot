@@ -88,3 +88,18 @@ def test_actualizar_perdida_ignora_ganancias(tmp_path: Path) -> None:
 def test_riesgo_superado_fecha_antigua(tmp_path: Path) -> None:
     riesgo.guardar_estado_riesgo_seguro({"fecha": "2000-01-01", "perdida_acumulada": 100.0})
     assert riesgo.riesgo_superado(0.01, 1.0) is False
+
+def test_evaluar_alerta_capital_activa(tmp_path: Path) -> None:
+    fecha = datetime.now(UTC).date().isoformat()
+    riesgo.guardar_estado_riesgo_seguro({"fecha": fecha, "perdida_acumulada": 50.0})
+    activa, ratio = riesgo.evaluar_alerta_capital(100.0, 0.4)
+    assert activa is True
+    assert pytest.approx(ratio, rel=1e-9) == 0.5
+
+
+def test_evaluar_alerta_capital_capital_cero(tmp_path: Path) -> None:
+    fecha = datetime.now(UTC).date().isoformat()
+    riesgo.guardar_estado_riesgo_seguro({"fecha": fecha, "perdida_acumulada": 50.0})
+    activa, ratio = riesgo.evaluar_alerta_capital(0.0, 0.5)
+    assert activa is False
+    assert ratio == 0.0
