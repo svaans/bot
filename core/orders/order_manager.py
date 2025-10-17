@@ -1095,7 +1095,7 @@ class OrderManager:
                         # actualiza con lo realmente ejecutado
                         cantidad = float(execution.executed)
                         orden.fee_total = getattr(orden, 'fee_total', 0.0) + execution.fee
-                        orden.pnl_operaciones = getattr(orden, 'pnl_operaciones', 0.0) + execution.pnl
+                        orden.pnl_realizado = getattr(orden, 'pnl_realizado', 0.0) + execution.pnl
                         if cantidad <= 0:
                             if self.bus:
                                 await self.bus.publish(
@@ -1131,7 +1131,7 @@ class OrderManager:
                             )
                     else:
                         # Simulado: el “coste” inicial lo cargamos como PnL negativo hasta el cierre
-                        orden.pnl_operaciones = getattr(orden, 'pnl_operaciones', 0.0) - (precio * cantidad)
+                        orden.pnl_realizado = getattr(orden, 'pnl_realizado', 0.0) - (precio * cantidad)
 
                     if cantidad > 0:
                         if self.modo_real:
@@ -1302,7 +1302,7 @@ class OrderManager:
                         )
                         cantidad = execution.executed
                         orden.fee_total = getattr(orden, 'fee_total', 0.0) + execution.fee
-                        orden.pnl_operaciones = getattr(orden, 'pnl_operaciones', 0.0) + execution.pnl
+                        orden.pnl_realizado = getattr(orden, 'pnl_realizado', 0.0) + execution.pnl
                 except Exception as e:
                     log.error(f'❌ No se pudo agregar posición real para {symbol}: {e}')
                     if self.bus:
@@ -1317,7 +1317,7 @@ class OrderManager:
                     return False
             else:
                 # Simulado: costea la compra al PnL
-                orden.pnl_operaciones = getattr(orden, 'pnl_operaciones', 0.0) - (precio * cantidad)
+                orden.pnl_realizado = getattr(orden, 'pnl_realizado', 0.0) - (precio * cantidad)
 
             total_prev = orden.cantidad_abierta
             orden.cantidad_abierta += cantidad
@@ -1374,7 +1374,7 @@ class OrderManager:
 
                             if execution.executed > 0:
                                 orden.fee_total = getattr(orden, 'fee_total', 0.0) + execution.fee
-                                orden.pnl_operaciones = getattr(orden, 'pnl_operaciones', 0.0) + execution.pnl
+                                orden.pnl_realizado = getattr(orden, 'pnl_realizado', 0.0) + execution.pnl
 
                             if restante > 0 and not remainder_executable(symbol, precio, restante):
                                 log.info(f'♻️ Resto no ejecutable para {symbol}: {restante}')
@@ -1400,7 +1400,7 @@ class OrderManager:
                     diff = (precio - orden.precio_entrada) * orden.cantidad
                     if orden.direccion in ('short', 'venta'):
                         diff = -diff
-                    orden.pnl_operaciones = getattr(orden, 'pnl_operaciones', 0.0) + diff
+                    orden.pnl_realizado = getattr(orden, 'pnl_realizado', 0.0) + diff
 
                 # Si la venta no fue exitosa, no alteramos estado de cierre ni borramos la orden
                 if not venta_exitosa:
@@ -1419,9 +1419,10 @@ class OrderManager:
                 orden.precio_cierre = precio
                 orden.fecha_cierre = datetime.now(UTC).isoformat()
                 orden.motivo_cierre = motivo
+				orden.pnl_latente = 0.0
 
                 base = orden.precio_entrada * orden.cantidad if orden.cantidad else 0.0
-                retorno = (orden.pnl_operaciones / base) if base else 0.0
+                retorno = (orden.pnl_realizado / base) if base else 0.0
                 orden.retorno_total = retorno
 
                 self.historial.setdefault(symbol, []).append(orden.to_dict())
@@ -1551,7 +1552,7 @@ class OrderManager:
                             )
                             return False
                         cantidad = executed_qty
-                        orden.fee_total = getattr(orden, 'fee_total', 0.0) + execution.fee
+                        orden.pnl_realizado = getattr(orden, 'pnl_realizado', 0.0) + execution.pnl
                         orden.pnl_operaciones = getattr(orden, 'pnl_operaciones', 0.0) + execution.pnl
                     except Exception as e:
                         log.error(
@@ -1566,9 +1567,10 @@ class OrderManager:
                     diff = (precio - orden.precio_entrada) * cantidad
                     if orden.direccion in ('short', 'venta'):
                         diff = -diff
-                    orden.pnl_operaciones = getattr(orden, 'pnl_operaciones', 0.0) + diff
+                    orden.pnl_realizado = getattr(orden, 'pnl_realizado', 0.0) + diff
 
                 orden.cantidad_abierta -= cantidad
+				self.actualizar_mark_to_market(symbol, precio)
 
                 log.info(f'📤 Cierre parcial de {symbol}: {cantidad} @ {precio:.2f} | {motivo}')
                 if self.bus:
@@ -1579,8 +1581,9 @@ class OrderManager:
                     orden.precio_cierre = precio
                     orden.fecha_cierre = datetime.now(UTC).isoformat()
                     orden.motivo_cierre = motivo
+					orden.pnl_latente = 0.0
                     base = orden.precio_entrada * orden.cantidad if orden.cantidad else 0.0
-                    retorno = (orden.pnl_operaciones / base) if base else 0.0
+                    retorno = (orden.pnl_realizado / base) if base else 0.0
                     orden.retorno_total = retorno
                     self.historial.setdefault(symbol, []).append(orden.to_dict())
                     if len(self.historial[symbol]) > self.max_historial:
@@ -1803,3 +1806,30 @@ class OrderManager:
                 setattr(orden, key, value)
             except Exception:  # pragma: no cover - defensivo
                 continue
+
+	def actualizar_mark_to_market(self, symbol: str, precio_actual: float) -> None:
+        """Recalcula el PnL latente de ``symbol`` con el precio más reciente."""
+
+        orden = self.ordenes.get(symbol)
+        if orden is None:
+            return
+
+        if not is_valid_number(precio_actual):
+            return
+
+        precio = float(precio_actual)
+        if precio <= 0.0:
+            orden.pnl_latente = 0.0
+            return
+
+        cantidad = getattr(orden, "cantidad_abierta", None)
+        if not is_valid_number(cantidad):
+            cantidad = getattr(orden, "cantidad", 0.0)
+        cantidad_float = float(cantidad or 0.0)
+        if cantidad_float <= 0.0:
+            orden.pnl_latente = 0.0
+            return
+
+        direccion = str(getattr(orden, "direccion", "long")).lower()
+        signo = -1.0 if direccion in {"short", "venta"} else 1.0
+        orden.pnl_latente = signo * precio * cantidad_float
