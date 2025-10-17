@@ -1570,7 +1570,7 @@ class OrderManager:
                     orden.pnl_realizado = getattr(orden, 'pnl_realizado', 0.0) + diff
 
                 orden.cantidad_abierta -= cantidad
-				self.actualizar_mark_to_market(symbol, precio)
+                self.actualizar_mark_to_market(symbol, precio)
 
                 log.info(f'📤 Cierre parcial de {symbol}: {cantidad} @ {precio:.2f} | {motivo}')
                 if self.bus:
