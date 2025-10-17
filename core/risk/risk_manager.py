@@ -11,11 +11,13 @@ import numpy as np
 from core.event_bus import EventBus
 from core.reporting import reporter_diario
 from core.risk.riesgo import actualizar_perdida
+from core.risk.riesgo import evaluar_alerta_capital
 from core.risk.riesgo import riesgo_superado as _riesgo_superado
 from core.registro_metrico import registro_metrico
 from core.utils.feature_flags import is_flag_enabled
 from core.utils.metrics_compat import Gauge
 from core.utils.utils import configurar_logger
+from config.config import RISK_ALERTA_CAPITAL_PCT
 
 if TYPE_CHECKING:  # pragma: no cover - solo para tipado
     from core.capital_manager import CapitalManager
@@ -29,6 +31,10 @@ COOLDOWN_ACTIVO_GAUGE = Gauge(
     'risk_cooldown_active',
     'Indicador binario de cooldown global en el gestor de riesgo',
 )
+CAPITAL_ALERTA_GAUGE = Gauge(
+    'risk_capital_alert',
+    'Indicador binario de alerta preventiva por capital diario',
+)
 
 
 class RiskManager:
@@ -39,6 +45,7 @@ class RiskManager:
         umbral: float,
         bus: EventBus | None = None,
         capital_manager: "CapitalManager" | None = None,
+        alerta_capital_pct: float | None = None,
         cooldown_pct: float = 0.1,
         correlacion_ttl: int = 1800,
         cooldown_duracion: int = 300,
@@ -48,6 +55,9 @@ class RiskManager:
         self._bus: EventBus | None = None
         self.bus = bus
         self.capital_manager = capital_manager
+        if alerta_capital_pct is None:
+            alerta_capital_pct = RISK_ALERTA_CAPITAL_PCT
+        self.alerta_capital_pct = max(0.0, float(alerta_capital_pct))
         self.cooldown_pct = cooldown_pct
         self.cooldown_duracion = cooldown_duracion
         self.correlacion_ttl = timedelta(seconds=max(0, correlacion_ttl))
@@ -56,12 +66,18 @@ class RiskManager:
         self.correlaciones: Dict[str, Dict[str, tuple[float, datetime]]] = {}
         self._fecha_riesgo = datetime.now(UTC).date()
         self.riesgo_diario = 0.0
+        self._capital_alerta_activa = False
+        self._capital_alerta_fecha: datetime | None = None
+        self._ultimo_ratio_capital = 0.0
         self._ultimo_factor_kelly = 1.0
         self._capital_guard_enabled = is_flag_enabled(
             "risk.capital_manager.enabled", default=False
         )
         if bus:
             self.subscribe(bus)
+        RIESGO_CONSUMIDO_GAUGE.set(0.0)
+        COOLDOWN_ACTIVO_GAUGE.set(0.0)
+        CAPITAL_ALERTA_GAUGE.set(0.0)
 
     @property
     def bus(self) -> EventBus | None:
@@ -92,6 +108,18 @@ class RiskManager:
         """Indica si el capital perdido supera el umbral configurado."""
         return _riesgo_superado(self.umbral, capital_total)
 
+    @property
+    def alerta_capital_activa(self) -> bool:
+        """Retorna ``True`` cuando la alerta preventiva de capital está activa."""
+
+        return self._capital_alerta_activa
+
+    @property
+    def ratio_alerta_capital(self) -> float:
+        """Último ratio ``pérdida/capital`` evaluado para la alerta."""
+
+        return float(self._ultimo_ratio_capital)
+
     def registrar_perdida(self, symbol: str, perdida: float) ->None:
         """Registra una pérdida para ``symbol``."""
         if perdida < 0:
@@ -100,6 +128,7 @@ class RiskManager:
                 self._fecha_riesgo = hoy
                 self.riesgo_diario = 0.0
                 RIESGO_CONSUMIDO_GAUGE.set(self.riesgo_diario)
+                self._reset_alerta_capital()
             perdida_abs = abs(perdida)
             self.riesgo_diario += perdida_abs
             RIESGO_CONSUMIDO_GAUGE.set(self.riesgo_diario)
@@ -128,8 +157,77 @@ class RiskManager:
                     self.bus.emit("risk.cooldown_activated", payload)
             elif self._cooldown_fin is None:
                 COOLDOWN_ACTIVO_GAUGE.set(0.0)
+            capital_total = 0.0
+            if self.capital_manager:
+                obtener_exposure = getattr(self.capital_manager, "exposure_disponible", None)
+                if callable(obtener_exposure):
+                    try:
+                        capital_total = float(obtener_exposure())
+                    except TypeError:
+                        capital_total = float(obtener_exposure(None))  # type: ignore[call-arg]
+                    except Exception:
+                        log.warning(
+                            '⚠️ Error consultando exposición disponible global',
+                            exc_info=True,
+                        )
+                        capital_total = 0.0
+            self._evaluar_alerta_capital(capital_total)
 
     # --- Gestión de correlaciones entre posiciones ---
+    def _reset_alerta_capital(self) -> None:
+        self._capital_alerta_activa = False
+        self._capital_alerta_fecha = None
+        self._ultimo_ratio_capital = 0.0
+        CAPITAL_ALERTA_GAUGE.set(0.0)
+
+    def _activar_alerta_capital(self, capital_total: float, ratio: float) -> None:
+        hoy = datetime.now(UTC).date()
+        if self._capital_alerta_activa and self._capital_alerta_fecha == hoy:
+            return
+        self._capital_alerta_activa = True
+        self._capital_alerta_fecha = hoy
+        CAPITAL_ALERTA_GAUGE.set(1.0)
+        extra = {
+            "ratio": float(ratio),
+            "perdida_acumulada": float(self.riesgo_diario),
+            "capital_disponible": float(capital_total),
+            "umbral_alerta": float(self.alerta_capital_pct),
+        }
+        log.warning("risk.capital_alert", extra=extra)
+        if self.bus:
+            payload = dict(extra)
+            self.bus.emit("risk.capital_alert", payload)
+
+    def _desactivar_alerta_capital(self, *, emitir_evento: bool = True) -> None:
+        if not self._capital_alerta_activa:
+            self._reset_alerta_capital()
+            return
+        if emitir_evento and self.bus:
+            payload = {
+                "ratio": float(self._ultimo_ratio_capital),
+                "perdida_acumulada": float(self.riesgo_diario),
+                "umbral_alerta": float(self.alerta_capital_pct),
+            }
+            self.bus.emit("risk.capital_alert_cleared", payload)
+        self._reset_alerta_capital()
+
+    def _evaluar_alerta_capital(self, capital_total: float) -> None:
+        if self.alerta_capital_pct <= 0:
+            if self._capital_alerta_activa:
+                self._desactivar_alerta_capital(emitir_evento=False)
+            else:
+                self._reset_alerta_capital()
+            return
+        activa, ratio = evaluar_alerta_capital(capital_total, self.alerta_capital_pct)
+        self._ultimo_ratio_capital = float(ratio)
+        if activa:
+            self._activar_alerta_capital(capital_total, ratio)
+        elif self._capital_alerta_activa:
+            self._desactivar_alerta_capital()
+        else:
+            if ratio == 0.0:
+                self._reset_alerta_capital()
+                
     def abrir_posicion(self, symbol: str) -> None:
         """Marca ``symbol`` como posición abierta."""
         self.posiciones_abiertas.add(symbol)
