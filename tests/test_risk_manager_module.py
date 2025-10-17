@@ -23,6 +23,11 @@ class DummyCapitalManager:
 
     def hay_capital_libre(self) -> bool:
         return self._libre
+
+    def exposure_disponible(self, symbol: str | None = None) -> float:
+        if symbol:
+            return float(self.capital_por_simbolo.get(symbol, 0.0))
+        return float(sum(self.capital_por_simbolo.values()))
     
     def aplicar_multiplicador_kelly(self, factor: float) -> float:
         self.aplicados.append(factor)
@@ -36,6 +41,11 @@ def patch_dependencies(monkeypatch: pytest.MonkeyPatch) -> None:
         return None
 
     monkeypatch.setattr("core.risk.risk_manager.actualizar_perdida", fake_actualizar)
+
+    def fake_alerta(_: float, __: float) -> tuple[bool, float]:
+        return (False, 0.0)
+
+    monkeypatch.setattr("core.risk.risk_manager.evaluar_alerta_capital", fake_alerta)
 
     dummy_reporter = SimpleNamespace(ultimas_operaciones={})
     monkeypatch.setattr("core.risk.risk_manager.reporter_diario", dummy_reporter)
@@ -55,11 +65,13 @@ def _reset_flags() -> Generator[None, None, None]:
 def reset_gauges() -> Generator[None, None, None]:
     risk_module.RIESGO_CONSUMIDO_GAUGE.set(0.0)
     risk_module.COOLDOWN_ACTIVO_GAUGE.set(0.0)
+    risk_module.CAPITAL_ALERTA_GAUGE.set(0.0)
     try:
         yield
     finally:
         risk_module.RIESGO_CONSUMIDO_GAUGE.set(0.0)
         risk_module.COOLDOWN_ACTIVO_GAUGE.set(0.0)
+        risk_module.CAPITAL_ALERTA_GAUGE.set(0.0)
 
 
 def test_registrar_perdida_activa_cooldown() -> None:
@@ -92,6 +104,50 @@ def test_registrar_perdida_publica_evento_cooldown() -> None:
     evento, payload = bus.events[0]
     assert evento == "risk.cooldown_activated"
     assert payload["symbol"] == "BTCUSDT"
+
+
+def test_alerta_capital_se_activa_y_se_libera(monkeypatch: pytest.MonkeyPatch) -> None:
+    class DummyBus:
+        def __init__(self) -> None:
+            self.events: list[tuple[str, Any | None]] = []
+
+        def subscribe(self, *_: Any, **__: Any) -> None:
+            return None
+
+        def emit(self, event_type: str, data: Any | None = None) -> None:
+            self.events.append((event_type, data))
+
+    bus = DummyBus()
+    capital = DummyCapitalManager({"BTCUSDT": 100.0})
+    manager = RiskManager(
+        0.05,
+        bus=bus,
+        capital_manager=capital,
+        alerta_capital_pct=0.8,
+    )
+
+    def alerta_activa(_: float, __: float) -> tuple[bool, float]:
+        return (True, 0.9)
+
+    monkeypatch.setattr(risk_module, "evaluar_alerta_capital", alerta_activa)
+
+    manager.registrar_perdida("BTCUSDT", -20.0)
+
+    assert manager.alerta_capital_activa is True
+    assert pytest.approx(manager.ratio_alerta_capital, rel=1e-9) == 0.9
+    assert bus.events[-1][0] == "risk.capital_alert"
+    assert pytest.approx(risk_module.CAPITAL_ALERTA_GAUGE._value, rel=1e-9) == 1.0
+
+    def alerta_inactiva(_: float, __: float) -> tuple[bool, float]:
+        return (False, 0.2)
+
+    monkeypatch.setattr(risk_module, "evaluar_alerta_capital", alerta_inactiva)
+
+    manager._evaluar_alerta_capital(100.0)
+
+    assert manager.alerta_capital_activa is False
+    assert pytest.approx(risk_module.CAPITAL_ALERTA_GAUGE._value, rel=1e-9) == 0.0
+    assert any(evento == "risk.capital_alert_cleared" for evento, _ in bus.events)
 
 
 def test_registrar_perdida_actualiza_metricas_y_resetea_dia(monkeypatch: pytest.MonkeyPatch) -> None:
