@@ -39,6 +39,11 @@ class PositionManager:
 
     async def cerrar_parcial_async(self, *args, **kwargs):
         return await self._manager.cerrar_parcial_async(*args, **kwargs)
+
+    def actualizar_mark_to_market(self, symbol: str, precio_actual: float) -> None:
+        """Actualiza el PnL latente del símbolo indicado."""
+
+        self._manager.actualizar_mark_to_market(symbol, precio_actual)
     
     def configurar_capital_manager(self, capital_manager: Any | None) -> None:
         """Inyecta ``capital_manager`` en el :class:`OrderManager` interno.
