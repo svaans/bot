@@ -132,7 +132,7 @@ class OrderManager:
         self._registro_retry_attempts: Dict[str, int] = {}
         self._registro_retry_tasks: Dict[str, asyncio.Task] = {}
         self._registro_retry_error_keywords = _PERSISTENCE_ERROR_KEYWORDS
-		self._partial_close_retry_delay = max(
+        self._partial_close_retry_delay = max(
             0.0, float(os.getenv("ORDERS_PARTIAL_CLOSE_RETRY_DELAY", "1.0"))
         )
         self.capital_manager: Any | None = None
