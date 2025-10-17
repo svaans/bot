@@ -1491,7 +1491,7 @@ class OrderManager:
 
                 cantidad = min(cantidad, orden.cantidad_abierta)
 
-				entrada_log = {
+                entrada_log = {
                     "symbol": symbol,
                     "cantidad": cantidad,
                     "precio": precio,
