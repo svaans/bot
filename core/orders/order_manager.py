@@ -1384,7 +1384,7 @@ class OrderManager:
                 self.ordenes.pop(symbol, None)
                 limpiar_registro_pendiente(symbol)
                 self._registro_pendiente_paused.discard(symbol)
-				self._actualizar_capital_disponible(symbol)
+                self._actualizar_capital_disponible(symbol)
                 return True
 
             finally:
