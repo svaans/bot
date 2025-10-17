@@ -1505,7 +1505,7 @@ class OrderManager:
                 else:
                     registrar_orden('partial')
                     log_decision(log, 'cerrar_parcial', operation_id, {'symbol': symbol, 'cantidad': cantidad}, {}, 'accept', {'parcial': True})
-					self._actualizar_capital_disponible(symbol, orden)
+                    self._actualizar_capital_disponible(symbol, orden)
                 return True
             finally:
                 log.debug(f'🔓 Exit cerrar_parcial lock {symbol} id={order_id}')
