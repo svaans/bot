@@ -477,7 +477,7 @@ class OrderManager:
                 exc_info=True,
             )
 
-	def _requeue_partial_close(
+    def _requeue_partial_close(
         self,
         symbol: str,
         cantidad: float,
