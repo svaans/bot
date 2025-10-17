@@ -4,7 +4,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 
 UTC = timezone.utc
-from typing import Any, Dict, Set, TYPE_CHECKING
+from typing import Any, Dict, Set, TYPE_CHECKING, Mapping
 
 import numpy as np
 
@@ -73,6 +73,7 @@ class RiskManager:
         self._capital_guard_enabled = is_flag_enabled(
             "risk.capital_manager.enabled", default=False
         )
+        self._exposure_comprometido: Dict[str, float] = {}
         if bus:
             self.subscribe(bus)
         RIESGO_CONSUMIDO_GAUGE.set(0.0)
@@ -227,6 +228,58 @@ class RiskManager:
         else:
             if ratio == 0.0:
                 self._reset_alerta_capital()
+
+    def _resolver_capital_asignado(self, symbol: str, comprometido: float) -> float:
+        if self.capital_manager is None:
+            return 0.0
+        obtener_asignado = getattr(self.capital_manager, "exposure_asignada", None)
+        if callable(obtener_asignado):
+            try:
+                return float(obtener_asignado(symbol))
+            except TypeError:
+                return float(obtener_asignado(symbol=symbol))  # type: ignore[call-arg]
+            except Exception:
+                pass
+        disponible_actual = 0.0
+        exposure_fn = getattr(self.capital_manager, "exposure_disponible", None)
+        if callable(exposure_fn):
+            try:
+                disponible_actual = float(exposure_fn(symbol))
+            except TypeError:
+                disponible_actual = float(exposure_fn(symbol=symbol))  # type: ignore[call-arg]
+            except Exception:
+                disponible_actual = 0.0
+        else:
+            capital_map = getattr(self.capital_manager, "capital_por_simbolo", {})
+            if isinstance(capital_map, Mapping):
+                disponible_actual = float(
+                    capital_map.get(symbol, capital_map.get(symbol.upper(), 0.0))
+                )
+        previo = self._exposure_comprometido.get(symbol.upper(), 0.0)
+        return max(disponible_actual + max(previo, comprometido), 0.0)
+
+    def sincronizar_exposure(self, symbol: str, comprometido: float) -> None:
+        if self.capital_manager is None:
+            return
+        actualizar = getattr(self.capital_manager, "actualizar_exposure", None)
+        if not callable(actualizar):
+            return
+        comprometido_val = max(0.0, float(comprometido))
+        clave = symbol.upper()
+        if comprometido_val > 0:
+            self._exposure_comprometido[clave] = comprometido_val
+        else:
+            self._exposure_comprometido.pop(clave, None)
+        asignado = self._resolver_capital_asignado(symbol, comprometido_val)
+        disponible = max(asignado - comprometido_val, 0.0)
+        try:
+            actualizar(symbol, disponible)
+        except Exception:
+            log.warning(
+                "risk.capital_update_failed",
+                extra={"symbol": symbol, "comprometido": comprometido_val},
+                exc_info=True,
+            )
                 
     def abrir_posicion(self, symbol: str) -> None:
         """Marca ``symbol`` como posición abierta."""
@@ -238,6 +291,7 @@ class RiskManager:
         self.correlaciones.pop(symbol, None)
         for otros in self.correlaciones.values():
             otros.pop(symbol, None)
+        self.sincronizar_exposure(symbol, 0.0)
 
     def registrar_correlaciones(self, symbol: str, correlaciones: dict[str, float]) -> None:
         """Registra correlaciones de ``symbol`` con otras posiciones abiertas."""
