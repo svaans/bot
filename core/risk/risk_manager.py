@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+import math
 
 UTC = timezone.utc
 from typing import Any, Dict, Set, TYPE_CHECKING, Mapping
@@ -74,6 +75,8 @@ class RiskManager:
             "risk.capital_manager.enabled", default=False
         )
         self._exposure_comprometido: Dict[str, float] = {}
+        self._pnl_state: Dict[str, Dict[str, float]] = {}
+        self._latent_stop_triggered: Set[str] = set()
         if bus:
             self.subscribe(bus)
         RIESGO_CONSUMIDO_GAUGE.set(0.0)
@@ -101,9 +104,67 @@ class RiskManager:
 
     def subscribe(self, bus: EventBus) -> None:
         bus.subscribe('registrar_perdida', self._on_registrar_perdida)
+        bus.subscribe('orders.pnl_update', self._on_pnl_update)
 
     async def _on_registrar_perdida(self, data: Any) -> None:
         self.registrar_perdida(data.get('symbol'), data.get('perdida', 0.0))
+
+    async def _on_pnl_update(self, payload: Any) -> None:
+        if not isinstance(payload, Mapping):
+            return
+        symbol_val = payload.get('symbol')
+        if symbol_val is None:
+            return
+        symbol = str(symbol_val).upper().strip()
+        if not symbol:
+            return
+        realized = self._coerce_float(payload.get('pnl_realizado'))
+        latent = self._coerce_float(payload.get('pnl_latente'))
+        total_value = payload.get('pnl_total')
+        total = self._coerce_float(total_value if total_value is not None else realized + latent)
+        self._pnl_state[symbol] = {
+            'pnl_realizado': realized,
+            'pnl_latente': latent,
+            'pnl_total': total,
+        }
+        registro_metrico.registrar(
+            'risk.pnl_state',
+            {
+                'symbol': symbol,
+                'pnl_realizado': realized,
+                'pnl_latente': latent,
+                'pnl_total': total,
+            },
+        )
+        precio_mark_raw = payload.get('precio_mark')
+        stop_loss_raw = payload.get('stop_loss')
+        if precio_mark_raw is None or stop_loss_raw is None:
+            self._latent_stop_triggered.discard(symbol)
+            return
+        precio_mark = self._coerce_float(precio_mark_raw)
+        stop_loss = self._coerce_float(stop_loss_raw)
+        if stop_loss <= 0.0:
+            self._latent_stop_triggered.discard(symbol)
+            return
+        direccion = str(payload.get('direccion', 'long')).lower()
+        crossed = False
+        if direccion in {'short', 'venta'}:
+            crossed = precio_mark >= stop_loss
+        else:
+            crossed = precio_mark <= stop_loss
+        if crossed:
+            if symbol not in self._latent_stop_triggered:
+                self._latent_stop_triggered.add(symbol)
+                self._emit_latent_stop_event(
+                    symbol,
+                    payload,
+                    pnl_latente=latent,
+                    precio_mark=precio_mark,
+                    stop_loss=stop_loss,
+                    pnl_total=total,
+                )
+        else:
+            self._latent_stop_triggered.discard(symbol)
 
     def riesgo_superado(self, capital_total: float) ->bool:
         """Indica si el capital perdido supera el umbral configurado."""
@@ -173,6 +234,46 @@ class RiskManager:
                         )
                         capital_total = 0.0
             self._evaluar_alerta_capital(capital_total)
+
+    @staticmethod
+    def _coerce_float(value: Any) -> float:
+        try:
+            result = float(value)
+        except (TypeError, ValueError):
+            return 0.0
+        if not math.isfinite(result):
+            return 0.0
+        return result
+
+    def _emit_latent_stop_event(
+        self,
+        symbol: str,
+        payload: Mapping[str, Any],
+        *,
+        pnl_latente: float,
+        precio_mark: float,
+        stop_loss: float,
+        pnl_total: float,
+    ) -> None:
+        data = {
+            'symbol': symbol,
+            'pnl_latente': float(pnl_latente),
+            'pnl_total': float(pnl_total),
+            'precio_mark': float(precio_mark),
+            'stop_loss': float(stop_loss),
+        }
+        pnl_realizado = payload.get('pnl_realizado')
+        data['pnl_realizado'] = self._coerce_float(pnl_realizado)
+        direccion = payload.get('direccion')
+        if isinstance(direccion, str):
+            data['direccion'] = direccion
+        timestamp = payload.get('timestamp')
+        if isinstance(timestamp, str):
+            data['timestamp'] = timestamp
+        registro_metrico.registrar('risk.latent_stop_triggered', data)
+        log.warning('risk.latent_stop_triggered', extra=data)
+        if self.bus:
+            self.bus.emit('risk.latent_stop_triggered', dict(data))
 
     # --- Gestión de correlaciones entre posiciones ---
     def _reset_alerta_capital(self) -> None:
