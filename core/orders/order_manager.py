@@ -1202,7 +1202,7 @@ class OrderManager:
                 'accept',
                 {'cantidad': cantidad},
             )
-			self._actualizar_capital_disponible(symbol, orden)
+            self._actualizar_capital_disponible(symbol, orden)
             return True
 				
     async def agregar_parcial_async(self, symbol: str, precio: float, cantidad: float) -> bool:
