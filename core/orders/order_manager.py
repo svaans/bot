@@ -1501,7 +1501,7 @@ class OrderManager:
                             log.error(f'❌ Error eliminando orden {symbol} de SQLite: {e}')
                     registrar_orden('closed')
                     log_decision(log, 'cerrar_parcial', operation_id, {'symbol': symbol, 'cantidad': cantidad}, {}, 'accept', {'retorno': retorno})
-					self._actualizar_capital_disponible(symbol)
+                    self._actualizar_capital_disponible(symbol)
                 else:
                     registrar_orden('partial')
                     log_decision(log, 'cerrar_parcial', operation_id, {'symbol': symbol, 'cantidad': cantidad}, {}, 'accept', {'parcial': True})
