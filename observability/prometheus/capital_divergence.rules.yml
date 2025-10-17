@@ -1,0 +1,12 @@
+groups:
+  - name: capital-divergence
+    rules:
+      - alert: CapitalRegisteredDivergence
+        expr: bot_capital_divergence_ratio > bot_capital_divergence_threshold
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Capital registrado diverge del configurado"
+          description: |
+            Divergencia relativa de {{ $value | humanizePercentage }} entre el capital registrado y el teórico.
