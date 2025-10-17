@@ -10,12 +10,13 @@ This module keeps that interface focused and backed by configuration data so it
 can be instantiated in unit tests without external dependencies.
 """
 from __future__ import annotations
+import asyncio
 from dataclasses import dataclass, field
 from typing import Any, Dict, Mapping
 
 from config.config_manager import Config
-import asyncio
 from core.utils.logger import configurar_logger
+from core.capital_repository import CapitalRepository, CapitalSnapshot
 
 log = configurar_logger("capital_manager", modo_silencioso=True)
 
@@ -44,6 +45,7 @@ class CapitalManager:
         *,
         exposure_limits: Mapping[str, float] | None = None,
         exposure_total: float | None = None,
+        capital_repository: CapitalRepository | None = None,
     ) -> None:
         self.config = config
         self._state = self._build_state(config, exposure_limits, exposure_total)
@@ -52,6 +54,9 @@ class CapitalManager:
         self.fraccion_kelly = self._kelly_base
         self._recalcular_disponible_global()
         self._event_bus: Any | None = None
+        self._repository = capital_repository or CapitalRepository()
+        self._load_persisted_state()
+        self._persist_state()
 
     # ------------------------------------------------------------------
     # Construction helpers
@@ -150,6 +155,7 @@ class CapitalManager:
         clave = _normalizar_symbol(symbol)
         self.capital_por_simbolo[clave] = max(0.0, float(disponible))
         self._recalcular_disponible_global()
+        self._persist_state()
 
     def aplicar_multiplicador_kelly(self, factor: float) -> float:
         """Adjust the Kelly fraction with ``factor`` keeping defensive bounds."""
@@ -182,4 +188,41 @@ class CapitalManager:
                     "No se pudo iniciar event_bus tras inyección en CapitalManager",
                     exc_info=True,
                 )
+
+    # ------------------------------------------------------------------
+    # Persistencia
+    # ------------------------------------------------------------------
+    def _load_persisted_state(self) -> None:
+        snapshot: CapitalSnapshot = self._repository.load()
+        overrides = snapshot.capital_por_simbolo
+        if overrides:
+            for symbol, value in overrides.items():
+                clave = _normalizar_symbol(symbol)
+                if not clave:
+                    continue
+                self.capital_por_simbolo[clave] = max(0.0, float(value))
+        stored_disponible = max(0.0, float(snapshot.disponible_global))
+        self._recalcular_disponible_global()
+        if stored_disponible > 0:
+            capped = min(stored_disponible, self._disponible_global)
+            if capped < self._disponible_global:
+                log.debug(
+                    "capital_manager.disponible_capped",
+                    extra={
+                        "stored": stored_disponible,
+                        "recalculated": self._disponible_global,
+                        "applied": capped,
+                    },
+                )
+            self._disponible_global = capped
+
+    def _persist_state(self) -> None:
+        try:
+            self._repository.save(self.capital_por_simbolo, self._disponible_global)
+        except Exception:
+            log.warning(
+                "capital_manager.persist_failed",
+                extra={"path": str(getattr(self._repository, "path", ""))},
+                exc_info=True,
+            )
 
