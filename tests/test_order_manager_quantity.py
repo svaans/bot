@@ -1,6 +1,8 @@
 import pytest
+from types import SimpleNamespace
 
 from core.event_bus import EventBus
+from core.capital_manager import CapitalManager
 from core.orders.order_manager import OrderManager
 
 
@@ -71,3 +73,46 @@ async def test_crear_fallback_event_bus() -> None:
     orden = manager.obtener("ETH/USDT")
     assert orden is not None
     assert orden.cantidad_abierta == pytest.approx(0.33)
+
+
+@pytest.mark.asyncio
+async def test_capital_manager_actualizado_con_fills() -> None:
+    config = SimpleNamespace(
+        symbols=["BTC/USDT"],
+        risk_capital_total=0.0,
+        risk_capital_default_per_symbol=0.0,
+        risk_capital_per_symbol={"BTC/USDT": 500.0},
+        min_order_eur=10.0,
+        risk_kelly_base=0.1,
+    )
+    capital = CapitalManager(config)
+    manager = OrderManager(modo_real=False, bus=None)
+    manager.capital_manager = capital
+
+    precio_entrada = 20_000.0
+    cantidad = 0.01
+
+    ok = await manager.abrir_async(
+        symbol="BTC/USDT",
+        precio=precio_entrada,
+        sl=19_000.0,
+        tp=21_000.0,
+        estrategias={},
+        tendencia="alcista",
+        direccion="long",
+        cantidad=cantidad,
+        puntaje=0.0,
+        umbral=0.0,
+        score_tecnico=0.0,
+    )
+
+    assert ok is True
+    asignado = capital.exposure_asignada("BTC/USDT")
+    comprometido = precio_entrada * cantidad
+    assert capital.exposure_disponible("BTC/USDT") == pytest.approx(
+        asignado - comprometido, rel=1e-9
+    )
+
+    cerrado = await manager.cerrar_async("BTC/USDT", precio=20_500.0, motivo="manual")
+    assert cerrado is True
+    assert capital.exposure_disponible("BTC/USDT") == pytest.approx(asignado, rel=1e-9)
