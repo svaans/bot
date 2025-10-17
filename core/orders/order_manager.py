@@ -238,7 +238,7 @@ class OrderManager:
             self.start_sync()
         self._ensure_background_tasks()
 
-	def _apply_realized_pnl_delta(
+    def _apply_realized_pnl_delta(
         self,
         symbol: str,
         orden: Order,
