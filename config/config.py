@@ -45,3 +45,4 @@ ORDERS_RECONCILE_ENABLED = cfg.orders_reconcile_enabled
 FUNDING_ENABLED = cfg.funding_enabled
 BACKFILL_VENTANA_ENABLED = cfg.backfill_ventana_enabled
 RISK_ALERTA_CAPITAL_PCT = getattr(cfg, "risk_alerta_capital_pct", 0.0)
+RISK_CAPITAL_DIVERGENCE_THRESHOLD = getattr(cfg, "risk_capital_divergence_threshold", 0.0)
