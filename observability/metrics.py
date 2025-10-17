@@ -17,6 +17,13 @@ __all__ = [
     "BOT_DATAFEED_WS_FAILURES_TOTAL",
     "BOT_LIMIT_ORDERS_SUBMITTED_TOTAL",
     "BOT_BACKFILL_WINDOW_RUNS_TOTAL",
+    "CAPITAL_REGISTERED_GAUGE",
+    "CAPITAL_CONFIGURED_GAUGE",
+    "CAPITAL_REGISTERED_TOTAL",
+    "CAPITAL_CONFIGURED_TOTAL",
+    "CAPITAL_DIVERGENCE_ABSOLUTE",
+    "CAPITAL_DIVERGENCE_RATIO",
+    "CAPITAL_DIVERGENCE_THRESHOLD",
 ]
 
 SIGNALS_CONFLICT = Counter(
@@ -94,4 +101,42 @@ BOT_BACKFILL_WINDOW_RUNS_TOTAL = Counter(
     "bot_backfill_window_runs_total",
     "Backfills ejecutados para recalentar ventanas de historial",
     ["symbol", "timeframe"],
+)
+
+
+CAPITAL_REGISTERED_GAUGE = Gauge(
+    "bot_capital_registered",
+    "Capital disponible registrado por símbolo tras sincronización",
+    ["symbol"],
+)
+
+CAPITAL_CONFIGURED_GAUGE = Gauge(
+    "bot_capital_configured",
+    "Capital teórico/configurado por símbolo",
+    ["symbol"],
+)
+
+CAPITAL_REGISTERED_TOTAL = Gauge(
+    "bot_capital_registered_total",
+    "Capital registrado total sumado entre símbolos",
+)
+
+CAPITAL_CONFIGURED_TOTAL = Gauge(
+    "bot_capital_configured_total",
+    "Capital teórico total configurado",
+)
+
+CAPITAL_DIVERGENCE_ABSOLUTE = Gauge(
+    "bot_capital_divergence_absolute",
+    "Diferencia absoluta entre capital registrado y teórico",
+)
+
+CAPITAL_DIVERGENCE_RATIO = Gauge(
+    "bot_capital_divergence_ratio",
+    "Relación absoluta (porcentaje) de divergencia total de capital",
+)
+
+CAPITAL_DIVERGENCE_THRESHOLD = Gauge(
+    "bot_capital_divergence_threshold",
+    "Umbral configurado para divergencia relativa de capital",
 )
