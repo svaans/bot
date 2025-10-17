@@ -8,7 +8,7 @@ import sqlite3
 from collections.abc import Mapping
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Mapping, Optional
 
 from core.orders.order_model import Order
 from core.utils.feature_flags import is_flag_enabled
@@ -35,6 +35,7 @@ from core.metrics import (
     registrar_registro_error,
     registrar_registro_pendiente,
     limpiar_registro_pendiente,
+	subscribe_order_pnl_metrics,
 )
 from core.registro_metrico import registro_metrico
 from binance_api.cliente import obtener_cliente
@@ -232,9 +233,89 @@ class OrderManager:
         bus.subscribe('abrir_orden', self._on_abrir)
         bus.subscribe('cerrar_orden', self._on_cerrar)
         bus.subscribe('cerrar_parcial', self._on_cerrar_parcial)
+		subscribe_order_pnl_metrics(bus)
         if self.modo_real:
             self.start_sync()
         self._ensure_background_tasks()
+
+	def _apply_realized_pnl_delta(
+        self,
+        symbol: str,
+        orden: Order,
+        delta: float,
+        *,
+        emit: bool = True,
+    ) -> None:
+        nuevo_valor = getattr(orden, 'pnl_realizado', 0.0) + float(delta)
+        orden.pnl_realizado = nuevo_valor
+        if emit:
+            self._emit_pnl_update(symbol, orden)
+
+    def _set_latent_pnl(
+        self,
+        symbol: str,
+        orden: Order,
+        value: float,
+        *,
+        emit: bool = True,
+        extra: Mapping[str, Any] | None = None,
+    ) -> None:
+        orden.pnl_latente = float(value)
+        if emit:
+            self._emit_pnl_update(symbol, orden, extra=extra)
+
+    def _emit_pnl_update(
+        self,
+        symbol: str,
+        orden: Order,
+        *,
+        extra: Mapping[str, Any] | None = None,
+    ) -> None:
+        if not self.bus:
+            return
+        payload: dict[str, Any] = {
+            'symbol': symbol,
+            'pnl_realizado': float(getattr(orden, 'pnl_realizado', 0.0)),
+            'pnl_latente': float(getattr(orden, 'pnl_latente', 0.0)),
+            'pnl_total': float(getattr(orden, 'pnl_realizado', 0.0))
+            + float(getattr(orden, 'pnl_latente', 0.0)),
+            'modo_real': bool(self.modo_real),
+            'timestamp': datetime.now(UTC).isoformat(),
+        }
+        numeric_fields = (
+            'precio_entrada',
+            'precio_cierre',
+            'stop_loss',
+            'take_profit',
+            'cantidad',
+            'cantidad_abierta',
+        )
+        for field in numeric_fields:
+            value = getattr(orden, field, None)
+            if is_valid_number(value):
+                payload[field] = float(value)
+        direccion = getattr(orden, 'direccion', None)
+        if isinstance(direccion, str):
+            payload['direccion'] = direccion
+        operation_id = getattr(orden, 'operation_id', None)
+        if isinstance(operation_id, str):
+            payload['operation_id'] = operation_id
+        retorno_total = getattr(orden, 'retorno_total', None)
+        if is_valid_number(retorno_total):
+            payload['retorno_total'] = float(retorno_total)
+        if extra:
+            for key, value in extra.items():
+                if value is None:
+                    continue
+                payload[key] = value
+        try:
+            self.bus.emit('orders.pnl_update', payload)
+        except Exception:  # pragma: no cover - defensivo
+            log.warning(
+                'orders.pnl_update.emit_failed',
+                extra=safe_extra({'symbol': symbol}),
+                exc_info=True,
+            )
 
     def _ensure_background_tasks(self) -> None:
         self._maybe_start_flush_task()
@@ -1095,7 +1176,7 @@ class OrderManager:
                         # actualiza con lo realmente ejecutado
                         cantidad = float(execution.executed)
                         orden.fee_total = getattr(orden, 'fee_total', 0.0) + execution.fee
-                        orden.pnl_realizado = getattr(orden, 'pnl_realizado', 0.0) + execution.pnl
+                        self._apply_realized_pnl_delta(symbol, orden, execution.pnl)
                         if cantidad <= 0:
                             if self.bus:
                                 await self.bus.publish(
@@ -1131,7 +1212,7 @@ class OrderManager:
                             )
                     else:
                         # Simulado: el “coste” inicial lo cargamos como PnL negativo hasta el cierre
-                        orden.pnl_realizado = getattr(orden, 'pnl_realizado', 0.0) - (precio * cantidad)
+                        self._apply_realized_pnl_delta(symbol, orden, -(precio * cantidad))
 
                     if cantidad > 0:
                         if self.modo_real:
@@ -1302,7 +1383,7 @@ class OrderManager:
                         )
                         cantidad = execution.executed
                         orden.fee_total = getattr(orden, 'fee_total', 0.0) + execution.fee
-                        orden.pnl_realizado = getattr(orden, 'pnl_realizado', 0.0) + execution.pnl
+                        self._apply_realized_pnl_delta(symbol, orden, execution.pnl)
                 except Exception as e:
                     log.error(f'❌ No se pudo agregar posición real para {symbol}: {e}')
                     if self.bus:
@@ -1317,7 +1398,7 @@ class OrderManager:
                     return False
             else:
                 # Simulado: costea la compra al PnL
-                orden.pnl_realizado = getattr(orden, 'pnl_realizado', 0.0) - (precio * cantidad)
+                self._apply_realized_pnl_delta(symbol, orden, -(precio * cantidad))
 
             total_prev = orden.cantidad_abierta
             orden.cantidad_abierta += cantidad
@@ -1374,7 +1455,12 @@ class OrderManager:
 
                             if execution.executed > 0:
                                 orden.fee_total = getattr(orden, 'fee_total', 0.0) + execution.fee
-                                orden.pnl_realizado = getattr(orden, 'pnl_realizado', 0.0) + execution.pnl
+                                self._apply_realized_pnl_delta(
+                                    symbol,
+                                    orden,
+                                    execution.pnl,
+                                    emit=False,
+                                )
 
                             if restante > 0 and not remainder_executable(symbol, precio, restante):
                                 log.info(f'♻️ Resto no ejecutable para {symbol}: {restante}')
@@ -1400,7 +1486,12 @@ class OrderManager:
                     diff = (precio - orden.precio_entrada) * orden.cantidad
                     if orden.direccion in ('short', 'venta'):
                         diff = -diff
-                    orden.pnl_realizado = getattr(orden, 'pnl_realizado', 0.0) + diff
+                    self._apply_realized_pnl_delta(
+                        symbol,
+                        orden,
+                        diff,
+                        emit=False,
+                    )
 
                 # Si la venta no fue exitosa, no alteramos estado de cierre ni borramos la orden
                 if not venta_exitosa:
@@ -1419,11 +1510,16 @@ class OrderManager:
                 orden.precio_cierre = precio
                 orden.fecha_cierre = datetime.now(UTC).isoformat()
                 orden.motivo_cierre = motivo
-                orden.pnl_latente = 0.0
+                self._set_latent_pnl(symbol, orden, 0.0, emit=False)
 
                 base = orden.precio_entrada * orden.cantidad if orden.cantidad else 0.0
                 retorno = (orden.pnl_realizado / base) if base else 0.0
                 orden.retorno_total = retorno
+				self._emit_pnl_update(
+                    symbol,
+                    orden,
+                    extra={'precio_mark': precio, 'motivo': motivo, 'retorno': retorno},
+                )
 
                 self.historial.setdefault(symbol, []).append(orden.to_dict())
                 if len(self.historial[symbol]) > self.max_historial:
@@ -1552,7 +1648,12 @@ class OrderManager:
                             )
                             return False
                         cantidad = executed_qty
-                        orden.pnl_realizado = getattr(orden, 'pnl_realizado', 0.0) + execution.pnl
+                        self._apply_realized_pnl_delta(
+                            symbol,
+                            orden,
+                            execution.pnl,
+                            emit=False,
+                        )
                         orden.pnl_operaciones = getattr(orden, 'pnl_operaciones', 0.0) + execution.pnl
                     except Exception as e:
                         log.error(
@@ -1567,7 +1668,12 @@ class OrderManager:
                     diff = (precio - orden.precio_entrada) * cantidad
                     if orden.direccion in ('short', 'venta'):
                         diff = -diff
-                    orden.pnl_realizado = getattr(orden, 'pnl_realizado', 0.0) + diff
+                    self._apply_realized_pnl_delta(
+                        symbol,
+                        orden,
+                        diff,
+                        emit=False,
+                    )
 
                 orden.cantidad_abierta -= cantidad
                 self.actualizar_mark_to_market(symbol, precio)
@@ -1581,10 +1687,15 @@ class OrderManager:
                     orden.precio_cierre = precio
                     orden.fecha_cierre = datetime.now(UTC).isoformat()
                     orden.motivo_cierre = motivo
-                    orden.pnl_latente = 0.0
+                    self._set_latent_pnl(symbol, orden, 0.0, emit=False)
                     base = orden.precio_entrada * orden.cantidad if orden.cantidad else 0.0
                     retorno = (orden.pnl_realizado / base) if base else 0.0
                     orden.retorno_total = retorno
+					self._emit_pnl_update(
+                        symbol,
+                        orden,
+                        extra={'precio_mark': precio, 'motivo': motivo, 'retorno': retorno},
+                    )
                     self.historial.setdefault(symbol, []).append(orden.to_dict())
                     if len(self.historial[symbol]) > self.max_historial:
                         self.historial[symbol] = self.historial[symbol][-self.max_historial:]
@@ -1819,7 +1930,7 @@ class OrderManager:
 
         precio = float(precio_actual)
         if precio <= 0.0:
-            orden.pnl_latente = 0.0
+            self._set_latent_pnl(symbol, orden, 0.0, extra={'precio_mark': precio})
             return
 
         cantidad = getattr(orden, "cantidad_abierta", None)
@@ -1827,9 +1938,14 @@ class OrderManager:
             cantidad = getattr(orden, "cantidad", 0.0)
         cantidad_float = float(cantidad or 0.0)
         if cantidad_float <= 0.0:
-            orden.pnl_latente = 0.0
+            self._set_latent_pnl(symbol, orden, 0.0, extra={'precio_mark': precio})
             return
 
         direccion = str(getattr(orden, "direccion", "long")).lower()
         signo = -1.0 if direccion in {"short", "venta"} else 1.0
-        orden.pnl_latente = signo * precio * cantidad_float
+        self._set_latent_pnl(
+            symbol,
+            orden,
+            signo * precio * cantidad_float,
+            extra={'precio_mark': precio},
+        )
