@@ -49,6 +49,9 @@ class Supervisor:
         watchdog_check_interval: int = 10,
         validate_factories: bool = False,
         factory_validator: Callable[[Callable[..., Awaitable]], None] | None = None,
+        circuit_breaker_failures: int = 5,
+        circuit_breaker_window: float = 180.0,
+        circuit_breaker_check: Callable[[str], bool] | None = None,
     ) -> None:
         self.on_event = on_event
         self.last_alive = datetime.now(UTC)
@@ -61,6 +64,9 @@ class Supervisor:
         self.task_expected_interval: Dict[str, int] = {}
         self.task_cooldown: Dict[str, datetime] = {}
         self.task_backoff: Dict[str, int] = defaultdict(int)
+        self.task_restart_history: Dict[str, Deque[datetime]] = defaultdict(deque)
+        self.task_circuit_open: Dict[str, datetime] = {}
+        self.task_circuit_config: Dict[str, tuple[int, float]] = {}
         # Data
         self.data_heartbeat: Dict[str, datetime] = {}
         self.TIMEOUT_SIN_DATOS = 300  # por defecto; ajústalo en tu app si quieres
@@ -79,6 +85,9 @@ class Supervisor:
         )
         if self._validate_factories and self._factory_validator is None:
             self._factory_validator = self._default_factory_validator
+        self._circuit_default_failures = max(0, int(circuit_breaker_failures))
+        self._circuit_default_window = max(1.0, float(circuit_breaker_window))
+        self._circuit_reset_check = circuit_breaker_check
 
     # --------------------- utilidades ---------------------
     def _emit(self, evento: str, data: dict) -> None:
@@ -90,6 +99,73 @@ class Supervisor:
 
     def _now(self) -> datetime:
         return datetime.now(UTC)
+    
+    def _get_circuit_config(self, task_name: str) -> tuple[int, float] | None:
+        config = self.task_circuit_config.get(task_name)
+        if config is None:
+            if self._circuit_default_failures <= 0:
+                return None
+            config = (self._circuit_default_failures, self._circuit_default_window)
+            self.task_circuit_config[task_name] = config
+        failures, window = config
+        if failures <= 0:
+            return None
+        return failures, max(1.0, float(window))
+
+    def _register_restart_failure(self, task_name: str, *, timestamp: datetime | None = None) -> bool:
+        config = self._get_circuit_config(task_name)
+        if not config:
+            return False
+        threshold, window = config
+        ts = timestamp or self._now()
+        cutoff = ts - timedelta(seconds=window)
+        history = self.task_restart_history[task_name]
+        history.append(ts)
+        while history and history[0] < cutoff:
+            history.popleft()
+        if len(history) >= threshold:
+            if task_name not in self.task_circuit_open:
+                self.task_circuit_open[task_name] = ts
+                self._emit(
+                    "task_circuit_open",
+                    {
+                        "name": task_name,
+                        "threshold": threshold,
+                        "window": window,
+                        "failures": len(history),
+                        "opened_at": ts.isoformat(),
+                    },
+                )
+            return True
+        return False
+
+    def _is_circuit_blocking_restart(self, task_name: str) -> bool:
+        if task_name not in self.task_circuit_open:
+            return False
+        if self._circuit_reset_check and self._circuit_reset_check(task_name):
+            self.reset_task_circuit(task_name)
+            return False
+        return True
+
+    def is_task_circuit_open(self, task_name: str) -> bool:
+        """Indica si la tarea tiene el circuito abierto."""
+
+        return task_name in self.task_circuit_open
+
+    def reset_task_circuit(self, task_name: str) -> bool:
+        """Cierra el circuito abierto y reinicia el historial de fallos."""
+
+        opened_at = self.task_circuit_open.pop(task_name, None)
+        was_open = opened_at is not None
+        if was_open:
+            self._emit(
+                "task_circuit_closed",
+                {"name": task_name, "opened_at": opened_at.isoformat() if hasattr(opened_at, "isoformat") else None},
+            )
+        self.task_restart_history.pop(task_name, None)
+        self.task_backoff[task_name] = 0
+        self.task_cooldown.pop(task_name, None)
+        return was_open
 
     def exception_handler(self, loop: asyncio.AbstractEventLoop, context: dict) -> None:
         exc = context.get("exception")
@@ -202,16 +278,19 @@ class Supervisor:
                     raise
                 except Exception:
                     self.beat(task_name, "error")
+                    intento = restarts + 1
                     backoff = min(120.0, (delay or 5) * (2 ** restarts))
-                    self._emit("task_error", {"name": task_name, "restarts": restarts + 1, "backoff": backoff})
-                    if restarts + 1 >= (limite if limite != float("inf") else 1e9):
+                    self._emit("task_error", {"name": task_name, "restarts": intento, "backoff": backoff})
+                    if self._register_restart_failure(task_name):
+                        break
+                    if intento >= (limite if limite != float("inf") else 1e9):
                         cooldown = min(300.0, (delay or 5) * 2 * (2 ** restarts))
                         self._emit("task_cooldown", {"name": task_name, "cooldown": cooldown})
                         await asyncio.sleep(cooldown)
                         restarts = 0
                         continue
                     await asyncio.sleep(backoff)
-                    restarts += 1
+                    restarts = intento
                     continue
         finally:
             if self.tasks.get(task_name) is task:
@@ -230,6 +309,10 @@ class Supervisor:
                 if self.tasks.get(task_name) is task:
                     self.tasks.pop(task_name, None)
         attempt = self.task_backoff[task_name]
+
+        if self._is_circuit_blocking_restart(task_name):
+            self._emit("task_restart_blocked", {"name": task_name, "reason": "circuit_open"})
+            return
 
         async def _starter() -> None:
             backoff = min(120.0, 5.0 * (2 ** attempt))
@@ -250,6 +333,8 @@ class Supervisor:
         delay: int = 5,
         max_restarts: int | None = None,
         expected_interval: int | None = None,
+        circuit_breaker_failures: int | None = None,
+        circuit_breaker_window: float | None = None,
     ) -> asyncio.Task:
         """Register a coroutine factory that can be restarted on failures.
 
@@ -271,6 +356,14 @@ class Supervisor:
         expected_interval:
             Intervalo esperado (en segundos) entre heartbeats/ticks de la tarea.
 
+        circuit_breaker_failures:
+            Número de fallas acumuladas dentro de la ventana que disparan la
+            apertura del circuito. Usa ``0`` para desactivar el circuito en la
+            tarea concreta.
+        circuit_breaker_window:
+            Ventana temporal (en segundos) empleada para contabilizar las
+            fallas antes de abrir el circuito.
+
         Returns
         -------
         asyncio.Task
@@ -285,6 +378,18 @@ class Supervisor:
         self._validate_factory(coro_factory, task_name)
         self.task_factories[task_name] = coro_factory
         self.task_backoff[task_name] = 0
+        self.task_restart_history.pop(task_name, None)
+        self.task_circuit_open.pop(task_name, None)
+        failures_cfg = (
+            self._circuit_default_failures
+            if circuit_breaker_failures is None
+            else max(0, int(circuit_breaker_failures))
+        )
+        if circuit_breaker_window is None:
+            window_cfg = self._circuit_default_window
+        else:
+            window_cfg = max(1.0, float(circuit_breaker_window))
+        self.task_circuit_config[task_name] = (failures_cfg, window_cfg)
         if expected_interval is not None:
             self.task_expected_interval[task_name] = expected_interval
         task = asyncio.create_task(
@@ -391,6 +496,8 @@ tick_data = _default_supervisor.tick_data
 set_watchdog_interval = _default_supervisor.set_watchdog_interval
 shutdown = _default_supervisor.shutdown
 registrar_ping = _default_supervisor.registrar_ping
+reset_task_circuit = _default_supervisor.reset_task_circuit
+is_task_circuit_open = _default_supervisor.is_task_circuit_open
 
 
 async def stop_supervision() -> None:
