@@ -11,6 +11,7 @@ import pytest
 
 import core.risk.risk_manager as risk_module
 from core.risk.risk_manager import RiskManager
+from core.capital_manager import CapitalManager
 from core.utils.feature_flags import reset_flag_cache
 
 
@@ -322,6 +323,26 @@ def test_capital_guard_exposure(monkeypatch: pytest.MonkeyPatch) -> None:
 
     capital.capital_por_simbolo["BTCUSDT"] = 50.0
     assert manager.permite_entrada("BTCUSDT", {}, 0.5) is True
+
+
+def test_sincronizar_exposure_actualiza_capital() -> None:
+    config = SimpleNamespace(
+        symbols=["BTCUSDT"],
+        risk_capital_total=0.0,
+        risk_capital_default_per_symbol=0.0,
+        risk_capital_per_symbol={"BTCUSDT": 400.0},
+        min_order_eur=10.0,
+        risk_kelly_base=0.1,
+    )
+    capital = CapitalManager(config)
+    manager = RiskManager(0.05, capital_manager=capital)
+
+    manager.sincronizar_exposure("BTCUSDT", 120.0)
+    assert capital.exposure_disponible("BTCUSDT") == pytest.approx(280.0)
+
+    manager.sincronizar_exposure("BTCUSDT", 0.0)
+    asignado = capital.exposure_asignada("BTCUSDT")
+    assert capital.exposure_disponible("BTCUSDT") == pytest.approx(asignado)
 
 
 @pytest.mark.asyncio
