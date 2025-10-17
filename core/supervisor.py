@@ -24,6 +24,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 import traceback
+from math import ldexp
 from collections import defaultdict, deque
 from datetime import datetime, timedelta, timezone
 from typing import Awaitable, Callable, Deque, Dict, Optional
@@ -49,6 +50,7 @@ class Supervisor:
         on_event: Callable[[str, dict], None] | None = None,
         *,
         cooldown_sec: float = 15.0,
+        cooldown_max_sec: float | None = 900.0,
         close_timeout: float = 5.0,
         watchdog_timeout: int = 120,
         watchdog_check_interval: int = 10,
@@ -84,6 +86,9 @@ class Supervisor:
         self._watchdog_interval = watchdog_check_interval
         self._watchdog_timeout = watchdog_timeout
         self.cooldown_sec = float(cooldown_sec)
+        self.cooldown_max_sec = (
+            None if cooldown_max_sec is None else max(0.0, float(cooldown_max_sec))
+        )
         self.close_timeout = float(close_timeout)
         self._validate_factories = bool(validate_factories or factory_validator)
         self._factory_validator: Optional[Callable[[Callable[..., Awaitable]], None]] = (
@@ -105,6 +110,22 @@ class Supervisor:
 
     def _now(self) -> datetime:
         return datetime.now(UTC)
+    
+    def _compute_task_cooldown_seconds(self, attempt: int) -> float:
+        """Compute the cooldown window after a restart attempt."""
+
+        base = max(0.0, float(self.cooldown_sec))
+        if base <= 0.0:
+            return 0.0
+        exponent = max(0, attempt)
+        if self.cooldown_max_sec is None:
+            exponent = min(exponent, 16)
+            cooldown = ldexp(base, exponent)
+            return cooldown
+        cooldown = ldexp(base, exponent)
+        if self.cooldown_max_sec > 0:
+            return min(cooldown, self.cooldown_max_sec)
+        return 0.0
     
     def _record_task_timeout_metric(self, task_name: str, timeout: float) -> None:
         if TASK_TIMEOUT_SECONDS is None:
@@ -359,7 +380,11 @@ class Supervisor:
             factory = self.task_factories.get(task_name)
             if factory:
                 self.supervised_task(factory, name=task_name)
-            self.task_cooldown[task_name] = self._now() + timedelta(seconds=self.cooldown_sec)
+            cooldown_seconds = self._compute_task_cooldown_seconds(attempt)
+            if cooldown_seconds <= 0:
+                self.task_cooldown.pop(task_name, None)
+            else:
+                self.task_cooldown[task_name] = self._now() + timedelta(seconds=cooldown_seconds)
         asyncio.create_task(_starter(), name=f"{task_name}_restart")
         self.task_backoff[task_name] = attempt + 1
         self._emit("task_restart", {"name": task_name, "attempt": attempt + 1})

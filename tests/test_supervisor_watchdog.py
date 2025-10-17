@@ -1,11 +1,13 @@
 from __future__ import annotations
 
-from datetime import timedelta
+import asyncio
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
 from core.metrics import TASK_TIMEOUT_SECONDS
 from core.supervisor import Supervisor
+import core.supervisor as supervisor_module
 
 
 @pytest.mark.asyncio
@@ -40,5 +42,75 @@ async def test_watchdog_records_timeout_metric() -> None:
 
         metric = TASK_TIMEOUT_SECONDS.labels("worker")
         assert metric._value == pytest.approx(90.0)
+    finally:
+        await supervisor.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_restart_task_scales_cooldown(monkeypatch: pytest.MonkeyPatch) -> None:
+    supervisor = Supervisor(cooldown_sec=7, cooldown_max_sec=20)
+    try:
+        current_time = {"value": datetime(2024, 1, 1, tzinfo=timezone.utc)}
+
+        def fake_now() -> datetime:
+            return current_time["value"]
+
+        supervisor._now = fake_now  # type: ignore[assignment]
+        supervisor.task_factories["worker"] = lambda: None
+
+        orig_sleep = asyncio.sleep
+
+        async def fake_sleep(delay: float, *args, **kwargs) -> None:
+            await orig_sleep(0)
+
+        monkeypatch.setattr(supervisor_module.asyncio, "sleep", fake_sleep)
+
+        def fake_supervised_task(*args, **kwargs):
+            return None
+
+        supervisor.supervised_task = fake_supervised_task  # type: ignore[assignment]
+
+        previous_cooldown = supervisor.task_cooldown.get("worker")
+        await supervisor.restart_task("worker")
+        for _ in range(5):
+            await orig_sleep(0)
+            current_cooldown = supervisor.task_cooldown.get("worker")
+            if current_cooldown is not None and current_cooldown != previous_cooldown:
+                break
+        assigned_time = current_time["value"]
+        cooldown_1 = (
+            supervisor.task_cooldown["worker"] - assigned_time
+        ).total_seconds()
+        assert cooldown_1 == pytest.approx(7)
+
+        current_time["value"] = current_time["value"] + timedelta(seconds=1)
+        previous_cooldown = supervisor.task_cooldown.get("worker")
+        await supervisor.restart_task("worker")
+        for _ in range(5):
+            await orig_sleep(0)
+            current_cooldown = supervisor.task_cooldown.get("worker")
+            if current_cooldown is not None and current_cooldown != previous_cooldown:
+                break
+        assigned_time = current_time["value"]
+        cooldown_2 = (
+            supervisor.task_cooldown["worker"] - assigned_time
+        ).total_seconds()
+        assert cooldown_2 == pytest.approx(14)
+
+        current_time["value"] = current_time["value"] + timedelta(seconds=1)
+        previous_cooldown = supervisor.task_cooldown.get("worker")
+        await supervisor.restart_task("worker")
+        for _ in range(5):
+            await orig_sleep(0)
+            current_cooldown = supervisor.task_cooldown.get("worker")
+            if current_cooldown is not None and current_cooldown != previous_cooldown:
+                break
+        assigned_time = current_time["value"]
+        cooldown_3 = (
+            supervisor.task_cooldown["worker"] - assigned_time
+        ).total_seconds()
+        assert cooldown_3 == pytest.approx(20)
+
+        assert supervisor.task_backoff["worker"] == 3
     finally:
         await supervisor.shutdown()
