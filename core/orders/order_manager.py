@@ -389,7 +389,7 @@ class OrderManager:
 
         return await self._market_executor.ejecutar(side, symbol, cantidad, operation_id, entrada)
 
-	def _capital_comprometido(self, orden: Order | None) -> float:
+    def _capital_comprometido(self, orden: Order | None) -> float:
         if orden is None:
             return 0.0
         cantidad = getattr(orden, "cantidad_abierta", None)
