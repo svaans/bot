@@ -764,6 +764,7 @@ async def procesar_vela(trader: Any, vela: dict) -> None:
     gating_end: float | None = None
     strategy_end: float | None = None
     bus = getattr(trader, "event_bus", None) or getattr(trader, "bus", None)
+    orders = getattr(trader, "orders", None)
 
     def _mark_stage(stage: str, start_time: float | None) -> float:
         existing = stage_ends.get(stage)
@@ -780,6 +781,24 @@ async def procesar_vela(trader: Any, vela: dict) -> None:
         nonlocal parse_end, gating_end
         if parse_end is None:
             parse_end = _mark_stage("parse", t0)
+
+        if orders is not None and hasattr(orders, "actualizar_mark_to_market"):
+            close_value = vela.get("close")
+            if close_value is None:
+                close_value = vela.get("c")
+            try:
+                precio_mark = float(close_value) if close_value is not None else None
+            except (TypeError, ValueError):
+                precio_mark = None
+            if precio_mark is not None and precio_mark > 0:
+                try:
+                    orders.actualizar_mark_to_market(symbol, precio_mark)
+                except Exception:
+                    log.debug(
+                        "mark_to_market.error",
+                        extra={"symbol": symbol, "stage": "procesar_vela"},
+                        exc_info=True,
+                    )
         if gating_end is None:
             gating_end = _mark_stage("gating", parse_end)
         return gating_end
@@ -1100,7 +1119,6 @@ async def procesar_vela(trader: Any, vela: dict) -> None:
             return
 
         # 8) Apertura de orden
-        orders = getattr(trader, "orders", None)
         if orders is None or not hasattr(orders, "crear"):
             safe_inc(
                 ENTRADAS_RECHAZADAS_V2,
