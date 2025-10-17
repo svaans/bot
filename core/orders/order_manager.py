@@ -1515,7 +1515,7 @@ class OrderManager:
                 base = orden.precio_entrada * orden.cantidad if orden.cantidad else 0.0
                 retorno = (orden.pnl_realizado / base) if base else 0.0
                 orden.retorno_total = retorno
-				self._emit_pnl_update(
+                self._emit_pnl_update(
                     symbol,
                     orden,
                     extra={'precio_mark': precio, 'motivo': motivo, 'retorno': retorno},
