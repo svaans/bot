@@ -5,7 +5,7 @@ from types import SimpleNamespace
 from core.event_bus import EventBus
 from core.capital_manager import CapitalManager
 from core.capital_repository import CapitalRepository
-from core.orders.order_manager import OrderManager
+from core.orders.order_manager import OrderManager, OrderOpenStatus
 
 
 class _DummyCapitalManager:
@@ -31,7 +31,7 @@ async def test_crear_fallback_capital_manager() -> None:
     dummy = _DummyCapitalManager(0.25)
     manager.capital_manager = dummy
 
-    ok = await manager.crear(
+    status = await manager.crear(
         symbol="BTC/USDT",
         side="buy",
         precio=20_000.0,
@@ -40,7 +40,7 @@ async def test_crear_fallback_capital_manager() -> None:
         meta={},
     )
 
-    assert ok is True
+    assert status is OrderOpenStatus.OPENED
     assert dummy.calls == [("BTC/USDT", 20_000.0, 0.0, 19_000.0)]
     orden = manager.obtener("BTC/USDT")
     assert orden is not None
@@ -62,7 +62,7 @@ async def test_crear_fallback_event_bus() -> None:
 
     bus.subscribe("calcular_cantidad", _resolver_cantidad)
 
-    ok = await manager.crear(
+    status = await manager.crear(
         symbol="ETH/USDT",
         side="buy",
         precio=1_500.0,
@@ -71,7 +71,7 @@ async def test_crear_fallback_event_bus() -> None:
         meta={},
     )
 
-    assert ok is True
+    assert status is OrderOpenStatus.OPENED
     orden = manager.obtener("ETH/USDT")
     assert orden is not None
     assert orden.cantidad_abierta == pytest.approx(0.33)
@@ -95,7 +95,7 @@ async def test_capital_manager_actualizado_con_fills(tmp_path: Path) -> None:
     precio_entrada = 20_000.0
     cantidad = 0.01
 
-    ok = await manager.abrir_async(
+    status = await manager.abrir_async(
         symbol="BTC/USDT",
         precio=precio_entrada,
         sl=19_000.0,
@@ -109,7 +109,7 @@ async def test_capital_manager_actualizado_con_fills(tmp_path: Path) -> None:
         score_tecnico=0.0,
     )
 
-    assert ok is True
+    assert status is OrderOpenStatus.OPENED
     asignado = capital.exposure_asignada("BTC/USDT")
     comprometido = precio_entrada * cantidad
     assert capital.exposure_disponible("BTC/USDT") == pytest.approx(
