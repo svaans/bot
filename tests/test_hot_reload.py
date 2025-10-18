@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from pathlib import Path
 
 import pytest
@@ -97,6 +98,26 @@ def test_reloader_uses_destination_path_on_moves(tmp_path, patched_timer):
     assert patched_timer == [0.5]
     assert handler._last_path is not None
     assert handler._last_path.name == "module.py"
+
+
+def test_reloader_persists_state_before_restart(monkeypatch, tmp_path):
+    handler = _build_handler(tmp_path)
+
+    calls: dict[str, str | None] = {}
+
+    def fake_persist(*, reason=None):
+        calls["reason"] = reason
+
+    monkeypatch.setattr("core.hot_reload.persist_critical_state", fake_persist)
+    monkeypatch.setattr("core.hot_reload.os.execv", lambda *_, **__: (_ for _ in ()).throw(SystemExit(0)))
+
+    handler._last_event_ts = time.time() - 5
+    handler._last_path = tmp_path / "module.py"
+
+    with pytest.raises(SystemExit):
+        handler._maybe_restart()
+
+    assert calls["reason"] == "hot_reload"
 
 
 def test_configure_watchdog_logging_sets_warning_when_unset():

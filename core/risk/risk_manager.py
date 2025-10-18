@@ -11,6 +11,7 @@ import numpy as np
 
 from core.event_bus import EventBus
 from core.reporting import reporter_diario
+from core.state import register_state
 from core.risk.riesgo import actualizar_perdida
 from core.risk.riesgo import evaluar_alerta_capital
 from core.risk.riesgo import riesgo_superado as _riesgo_superado
@@ -82,6 +83,15 @@ class RiskManager:
         RIESGO_CONSUMIDO_GAUGE.set(0.0)
         COOLDOWN_ACTIVO_GAUGE.set(0.0)
         CAPITAL_ALERTA_GAUGE.set(0.0)
+        try:
+            register_state(
+                "risk_manager",
+                dump=self._export_critical_state,
+                load=self._load_critical_state,
+                priority=100,
+            )
+        except Exception:
+            log.debug("No se pudo registrar la persistencia del RiskManager", exc_info=True)
 
     @property
     def bus(self) -> EventBus | None:
@@ -648,6 +658,160 @@ class RiskManager:
             for otro, (_, timestamp) in list(otros.items()):
                 if timestamp < limite:
                     self._eliminar_correlacion(symbol, otro)
+
+    def _export_critical_state(self) -> dict[str, Any]:
+        correlaciones: dict[str, dict[str, tuple[float, str]]] = {}
+        for symbol, otros in self.correlaciones.items():
+            if not isinstance(symbol, str):
+                continue
+            restaurado: dict[str, tuple[float, str]] = {}
+            for otro, data in otros.items():
+                if not isinstance(otro, str) or not isinstance(data, tuple):
+                    continue
+                if len(data) != 2:
+                    continue
+                try:
+                    coef = float(data[0])
+                except (TypeError, ValueError):
+                    continue
+                timestamp = data[1]
+                if isinstance(timestamp, datetime):
+                    ts = timestamp.isoformat()
+                elif isinstance(timestamp, str):
+                    ts = timestamp
+                else:
+                    continue
+                restaurado[otro] = (coef, ts)
+            if restaurado:
+                correlaciones[symbol] = restaurado
+        pnl_state: dict[str, dict[str, float]] = {}
+        for symbol, valores in self._pnl_state.items():
+            if not isinstance(symbol, str) or not isinstance(valores, Mapping):
+                continue
+            pnl_state[symbol] = {
+                "pnl_realizado": self._coerce_float(valores.get("pnl_realizado")),
+                "pnl_latente": self._coerce_float(valores.get("pnl_latente")),
+                "pnl_total": self._coerce_float(valores.get("pnl_total")),
+            }
+        exposure = {str(k): float(v) for k, v in self._exposure_comprometido.items()}
+        state = {
+            "posiciones_abiertas": sorted(self.posiciones_abiertas),
+            "correlaciones": correlaciones,
+            "riesgo_diario": float(self.riesgo_diario),
+            "fecha_riesgo": self._fecha_riesgo.isoformat(),
+            "cooldown_fin": self._cooldown_fin.isoformat() if self._cooldown_fin else None,
+            "capital_alerta_activa": bool(self._capital_alerta_activa),
+            "capital_alerta_fecha": (
+                self._capital_alerta_fecha.isoformat() if self._capital_alerta_fecha else None
+            ),
+            "ultimo_ratio_capital": float(self._ultimo_ratio_capital),
+            "ultimo_factor_kelly": float(self._ultimo_factor_kelly),
+            "factor_kelly_prev": (
+                float(self._factor_kelly_prev)
+                if isinstance(self._factor_kelly_prev, (int, float))
+                else None
+            ),
+            "exposure_comprometido": exposure,
+            "pnl_state": pnl_state,
+            "latent_stop": sorted(self._latent_stop_triggered),
+        }
+        return state
+
+    def _load_critical_state(self, payload: Mapping[str, Any]) -> None:
+        if not isinstance(payload, Mapping):
+            return
+        posiciones = payload.get("posiciones_abiertas")
+        if isinstance(posiciones, list):
+            self.posiciones_abiertas = {str(sym).upper() for sym in posiciones if sym}
+        correlaciones_raw = payload.get("correlaciones")
+        if isinstance(correlaciones_raw, Mapping):
+            restaurado: Dict[str, Dict[str, tuple[float, datetime]]] = {}
+            for symbol, otros in correlaciones_raw.items():
+                if not isinstance(symbol, str) or not isinstance(otros, Mapping):
+                    continue
+                mapa: Dict[str, tuple[float, datetime]] = {}
+                for otro, data in otros.items():
+                    if isinstance(data, (list, tuple)) and len(data) == 2:
+                        coef_raw, ts_raw = data
+                    elif isinstance(data, Mapping):
+                        coef_raw = data.get("coef")
+                        ts_raw = data.get("timestamp")
+                    else:
+                        continue
+                    try:
+                        coef = float(coef_raw)
+                    except (TypeError, ValueError):
+                        continue
+                    dt: datetime | None = None
+                    if isinstance(ts_raw, str):
+                        try:
+                            dt = datetime.fromisoformat(ts_raw)
+                        except ValueError:
+                            dt = None
+                    if dt is None:
+                        dt = datetime.now(UTC)
+                    if dt.tzinfo is None:
+                        dt = dt.replace(tzinfo=UTC)
+                    mapa[str(otro)] = (coef, dt)
+                if mapa:
+                    restaurado[str(symbol)] = mapa
+            if restaurado:
+                self.correlaciones = restaurado
+        riesgo_diario = payload.get("riesgo_diario")
+        self.riesgo_diario = self._coerce_float(riesgo_diario)
+        fecha_riesgo = payload.get("fecha_riesgo")
+        if isinstance(fecha_riesgo, str):
+            try:
+                self._fecha_riesgo = datetime.fromisoformat(fecha_riesgo).date()
+            except ValueError:
+                pass
+        cooldown = payload.get("cooldown_fin")
+        self._cooldown_fin = self._parse_datetime(cooldown)
+        self._capital_alerta_activa = bool(payload.get("capital_alerta_activa", False))
+        capital_fecha = payload.get("capital_alerta_fecha")
+        capital_dt = self._parse_datetime(capital_fecha)
+        self._capital_alerta_fecha = capital_dt.date() if capital_dt else None
+        self._ultimo_ratio_capital = self._coerce_float(payload.get("ultimo_ratio_capital"))
+        self._ultimo_factor_kelly = self._coerce_float(payload.get("ultimo_factor_kelly")) or 1.0
+        factor_prev = payload.get("factor_kelly_prev")
+        self._factor_kelly_prev = (
+            float(factor_prev)
+            if isinstance(factor_prev, (int, float)) and math.isfinite(float(factor_prev))
+            else None
+        )
+        exposure_payload = payload.get("exposure_comprometido")
+        if isinstance(exposure_payload, Mapping):
+            self._exposure_comprometido = {
+                str(k): self._coerce_float(v) for k, v in exposure_payload.items()
+            }
+        pnl_payload = payload.get("pnl_state")
+        if isinstance(pnl_payload, Mapping):
+            restaurado_pnl: Dict[str, Dict[str, float]] = {}
+            for symbol, valores in pnl_payload.items():
+                if not isinstance(symbol, str) or not isinstance(valores, Mapping):
+                    continue
+                restaurado_pnl[str(symbol)] = {
+                    "pnl_realizado": self._coerce_float(valores.get("pnl_realizado")),
+                    "pnl_latente": self._coerce_float(valores.get("pnl_latente")),
+                    "pnl_total": self._coerce_float(valores.get("pnl_total")),
+                }
+            if restaurado_pnl:
+                self._pnl_state = restaurado_pnl
+        latent_payload = payload.get("latent_stop")
+        if isinstance(latent_payload, list):
+            self._latent_stop_triggered = {str(sym).upper() for sym in latent_payload if sym}
+
+    @staticmethod
+    def _parse_datetime(value: Any) -> datetime | None:
+        if isinstance(value, datetime):
+            return value if value.tzinfo else value.replace(tzinfo=UTC)
+        if isinstance(value, str):
+            try:
+                dt = datetime.fromisoformat(value)
+            except ValueError:
+                return None
+            return dt if dt.tzinfo else dt.replace(tzinfo=UTC)
+        return None
     
     async def kill_switch(
         self,

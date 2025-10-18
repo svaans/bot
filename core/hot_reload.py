@@ -10,6 +10,8 @@ import logging
 from pathlib import Path
 from typing import Iterable, Optional, Sequence, Set
 
+from core.state import persist_critical_state
+
 try:
     from watchdog.events import (
         FileSystemEventHandler,
@@ -262,6 +264,12 @@ class _DebouncedReloader(PatternMatchingEventHandler):
         # Reinicio de proceso: reemplaza el binario actual y preserva argv/env
         python = sys.executable
         argv = [python] + sys.argv
+        try:
+            persist_critical_state(reason="hot_reload")
+        except Exception:
+            logging.getLogger("hot_reload").exception(
+                "No se pudo persistir el estado crítico antes del reinicio"
+            )
         # Asegura flush de stdout/stderr
         try:
             sys.stdout.flush()

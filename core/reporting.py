@@ -4,12 +4,13 @@ import atexit
 from concurrent.futures import ProcessPoolExecutor
 from datetime import datetime, timezone
 from math import isclose
-from typing import Iterable
+from typing import Any, Iterable, Mapping
 
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_pdf import PdfPages
+from core.state import register_state
 from core.utils.io_metrics import observe_disk_write, report_generation_timer
 from core.utils.utils import configurar_logger
 from core.utils.utils import leer_csv_seguro
@@ -76,6 +77,17 @@ class ReporterDiario:
         self._cargar_estadisticas()
         self.ultimas_operaciones = {}
         self.max_operaciones = max_operaciones
+        try:
+            register_state(
+                "reporter_diario",
+                dump=self._export_critical_state,
+                load=self._restore_critical_state,
+                priority=10,
+            )
+        except Exception:
+            self.log.debug(
+                "No se pudo registrar la persistencia de reporter_diario", exc_info=True
+            )
 
     def _cargar_estadisticas(self):
         columnas = ['symbol', 'operaciones', 'wins', 'retorno_acumulado',
@@ -184,6 +196,51 @@ class ReporterDiario:
                 REPORT_IO_ERRORS_TOTAL.labels(operation="report_async_submit").inc()
                 self.log.exception('Error al generar informe en proceso separado')
             self.fecha_actual = fecha
+
+    def _export_critical_state(self) -> dict[str, Any]:
+        if not self.ultimas_operaciones:
+            return {
+                "ultimas_operaciones": {},
+                "fecha_actual": self.fecha_actual.isoformat(),
+            }
+        datos: dict[str, list[dict[str, Any]]] = {}
+        for symbol, operaciones in self.ultimas_operaciones.items():
+            if not isinstance(symbol, str) or not isinstance(operaciones, list):
+                continue
+            registros: list[dict[str, Any]] = []
+            for item in operaciones[-self.max_operaciones :]:
+                if isinstance(item, dict):
+                    registros.append({str(k): v for k, v in item.items()})
+            if registros:
+                datos[symbol] = registros
+        return {
+            "ultimas_operaciones": datos,
+            "fecha_actual": self.fecha_actual.isoformat(),
+        }
+
+    def _restore_critical_state(self, payload: Mapping[str, Any]) -> None:
+        if not isinstance(payload, Mapping):
+            return
+        ultimas = payload.get("ultimas_operaciones")
+        if isinstance(ultimas, Mapping):
+            restaurado: dict[str, list[dict[str, Any]]] = {}
+            for symbol, operaciones in ultimas.items():
+                if not isinstance(symbol, str) or not isinstance(operaciones, list):
+                    continue
+                registros: list[dict[str, Any]] = []
+                for item in operaciones[: self.max_operaciones]:
+                    if isinstance(item, Mapping):
+                        registros.append({str(k): v for k, v in item.items()})
+                if registros:
+                    restaurado[symbol] = registros
+            if restaurado:
+                self.ultimas_operaciones.update(restaurado)
+        fecha = payload.get("fecha_actual")
+        if isinstance(fecha, str):
+            try:
+                self.fecha_actual = datetime.fromisoformat(fecha).date()
+            except ValueError:
+                pass
 
     def generar_informe(self, fecha):
         archivo = os.path.join(self.carpeta, f'{fecha}.csv')

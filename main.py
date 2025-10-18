@@ -48,6 +48,7 @@ from core.notification_manager import crear_notification_manager_desde_env
 from core.diag.phase_logger import phase
 from core.startup_manager import StartupManager
 from core.metrics import iniciar_exporter
+from core.state import restore_critical_state
 
 
 # --- Utilidades internas ---
@@ -137,6 +138,7 @@ async def main():
 
     # 1) Arranque del bot
     try:
+        restore_critical_state()
         startup = StartupManager()
         # El timeout global de arranque debe contemplar los plazos internos del
         # StartupManager (warmup, espera de feeds, etc.). Utilizamos la
