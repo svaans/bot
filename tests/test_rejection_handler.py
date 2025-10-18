@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import time
 from pathlib import Path
 from typing import List
@@ -11,6 +12,7 @@ import pandas as pd
 import pytest
 
 from core.rejection_handler import RejectionHandler
+from core.rejection_catalog import resolve_rejection
 
 
 def _rechazos_csv(log_dir: Path) -> List[Path]:
@@ -217,3 +219,54 @@ def test_circuit_breaker_auditoria(tmp_path: Path, monkeypatch) -> None:
 
     assert set(auditoria_exitos) == {'BTCUSDT', 'ETHUSDT'}
     assert handler._audit_dead_letter == []
+
+
+def test_registrar_emite_evento_estructurado(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    log_dir = tmp_path / 'logs'
+    handler = RejectionHandler(log_dir=str(log_dir), batch_size=5)
+
+    logger = logging.getLogger('rechazos')
+    logger.addHandler(caplog.handler)
+    try:
+        with caplog.at_level(logging.INFO, logger='rechazos'):
+            handler.registrar(
+                'BTCUSDT',
+                'cooldown 5m restante',
+                puntaje=0.25,
+                peso_total=1.5,
+                estrategias=['swing'],
+                capital=1234.5,
+                reason_code='COOLDOWN_ACTIVE',
+                metadata={'cooldown_fin': '2024-01-01T00:05:00Z'},
+            )
+    finally:
+        logger.removeHandler(caplog.handler)
+
+    registros = [rec for rec in caplog.records if rec.msg == 'order_rejection']
+    assert registros, 'debe emitir evento order_rejection'
+    evento = registros[-1]
+    assert evento.reason_code == 'COOLDOWN_ACTIVE'
+    assert evento.reason_category == 'safeguard'
+    assert evento.reason_detail == 'cooldown 5m restante'
+    assert getattr(evento, 'score', None) == 0.25
+    assert getattr(evento, 'weight', None) == 1.5
+    assert getattr(evento, 'strategies', []) == ['swing']
+    assert getattr(evento, 'capital', None) == pytest.approx(1234.5)
+    metadata = getattr(evento, 'metadata', {})
+    assert metadata.get('cooldown_fin') == '2024-01-01T00:05:00Z'
+
+    assert handler._buffer
+    ultimo_registro = handler._buffer[-1]
+    assert ultimo_registro['reason_code'] == 'COOLDOWN_ACTIVE'
+    assert ultimo_registro['reason_message'] == 'Cooldown activo'
+    assert ultimo_registro['motivo'] == 'cooldown 5m restante'
+
+
+def test_resolve_rejection_personalizado() -> None:
+    resolved = resolve_rejection('motivo libre', code=None, locale='es')
+    assert resolved.code == 'UNKNOWN'
+    assert resolved.message == 'motivo libre'
+    assert resolved.detail == 'motivo libre'

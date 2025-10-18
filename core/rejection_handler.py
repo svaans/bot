@@ -10,13 +10,14 @@ from datetime import datetime, timezone
 
 from collections.abc import Mapping
 from numbers import Real
-from typing import Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Mapping, Optional
 
 import pandas as pd
 
 from core.utils.io_metrics import observe_disk_write
 from core.registro_metrico import registro_metrico
 from core.auditoria import AuditEvent, AuditResult, registrar_auditoria
+from core.rejection_catalog import ResolvedRejection, resolve_rejection
 from core.utils.utils import configurar_logger
 from core.supervisor import tick
 from observability.metrics import REPORT_IO_ERRORS_TOTAL
@@ -73,28 +74,54 @@ class RejectionHandler:
     def registrar(
         self,
         symbol: str,
-        motivo: str,
+        motivo: str | ResolvedRejection | None,
         puntaje: Optional[float] = None,
         peso_total: Optional[float] = None,
         estrategias: Optional[List[str] | Dict[str, float]] = None,
         capital: float = 0.0,
         config: Optional[dict] = None,
+        reason_code: str | None = None,
+        metadata: Mapping[str, Any] | None = None,
+        locale: str = 'es',
     ) -> None:
         """Centraliza los mensajes de rechazo de entradas."""
-        mensaje = f'🔴 RECHAZO: {symbol} | Causa: {motivo}'
-        if puntaje is not None:
-            mensaje += f' | Puntaje: {puntaje:.2f}'
-        if peso_total is not None:
-            mensaje += f' | Peso: {peso_total:.2f}'
+        resolved = (
+            motivo
+            if isinstance(motivo, ResolvedRejection)
+            else resolve_rejection(motivo, code=reason_code, locale=locale)
+        )
+        strategies_list: list[str] = []
         if estrategias:
-            estr = estrategias
-            if isinstance(estr, dict):
-                estr = list(estr.keys())
-            mensaje += f' | Estrategias: {estr}'
-        log.info(mensaje)
+            if isinstance(estrategias, dict):
+                strategies_list = [
+                    str(nombre)
+                    for nombre in estrategias.keys()
+                    if isinstance(nombre, str)
+                ]
+            else:
+                strategies_list = [str(nombre) for nombre in estrategias if isinstance(nombre, str)]
+
+        event_payload: Dict[str, Any] = {
+            'event_type': 'order_rejection',
+            'symbol': symbol,
+        }
+        event_payload.update(resolved.to_log_dict())
+        event_payload['capital'] = float(capital)
+        if puntaje is not None:
+            event_payload['score'] = float(puntaje)
+        if peso_total is not None:
+            event_payload['weight'] = float(peso_total)
+        if strategies_list:
+            event_payload['strategies'] = strategies_list
+        if config:
+            event_payload['config_snapshot'] = config
+        if metadata:
+            event_payload['metadata'] = {str(k): v for k, v in metadata.items()}
+
+        log.info('order_rejection', extra=event_payload)
         registro = {
             'symbol': symbol,
-            'motivo': motivo,
+            'motivo': resolved.detail or resolved.message,
             'puntaje': puntaje,
             'peso_total': peso_total,
             'estrategias': ','.join(
@@ -102,6 +129,11 @@ class RejectionHandler:
             )
             if estrategias
             else '',
+            'reason_code': resolved.code,
+            'reason_category': resolved.category,
+            'reason_severity': resolved.severity,
+            'reason_message': resolved.message,
+            'reason_locale': resolved.locale,
         }
         self._buffer.append(registro)
         if len(self._buffer) >= self._batch_size:
@@ -114,13 +146,25 @@ class RejectionHandler:
                 exc,
                 exc_info=exc,
             )
+        audit_reason: dict[str, Any] = {
+            'code': resolved.code,
+            'category': resolved.category,
+            'severity': resolved.severity,
+            'message': resolved.message,
+            'locale': resolved.locale,
+        }
+        if resolved.detail:
+            audit_reason['detail'] = resolved.detail
+        if metadata:
+            audit_reason['metadata'] = {str(k): v for k, v in metadata.items()}
+
         audit_payload = {
             'symbol': symbol,
             'evento': AuditEvent.REJECTION,
             'resultado': AuditResult.REJECTED,
             'estrategias_activas': estrategias,
             'score': puntaje,
-            'razon': motivo,
+            'razon': audit_reason,
             'capital_actual': capital,
             'config_usada': config or {},
             'source': 'risk.rejection_handler',
