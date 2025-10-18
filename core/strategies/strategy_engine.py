@@ -1,6 +1,11 @@
 """Motor de estrategias para el bot de trading."""
 from __future__ import annotations
 import asyncio
+import math
+import statistics
+from collections import deque
+from threading import Lock
+from time import monotonic
 from typing import TYPE_CHECKING, Any, Awaitable, Callable, Dict, Mapping, Optional
 import pandas as pd
 
@@ -74,6 +79,11 @@ class StrategyEngine:
         self._get_slope = slope_getter or get_slope
         self._metrics = metrics_module
         self._salida_evaluator = salida_evaluator or evaluar_salidas
+        self._synergy_cap = 0.5
+        self._synergy_history: deque[float] = deque(maxlen=240)
+        self._synergy_lock = Lock()
+        self._synergy_check_interval = 300.0
+        self._last_synergy_check = 0.0
 
 
     @staticmethod
@@ -204,7 +214,9 @@ class StrategyEngine:
         estrategias_activas = resultado.get("estrategias_activas", {})
         score_base = float(resultado.get("puntaje_total", 0.0))
         diversidad = int(resultado.get("diversidad", 0))
-        sinergia = min(float(resultado.get("sinergia", 0.0)), 0.5)
+        sinergia_raw = float(resultado.get("sinergia", 0.0))
+        self._registrar_sinergia(symbol, sinergia_raw)
+        sinergia = min(sinergia_raw, self._synergy_cap)
         score_total = score_base * (1 + sinergia)
 
         rsi_val = self._normalizar_valor(self._get_rsi(df))
@@ -307,6 +319,50 @@ class StrategyEngine:
             "contradicciones": contradiccion,
             "score_tecnico_detalle": score_breakdown,
         }
+    
+    def _registrar_sinergia(self, symbol: str, sinergia: float) -> None:
+        if not math.isfinite(sinergia) or sinergia < 0.0:
+            return
+        with self._synergy_lock:
+            self._synergy_history.append(min(sinergia, 1.0))
+            if len(self._synergy_history) < max(10, self._synergy_history.maxlen // 4):
+                return
+            ahora = monotonic()
+            if ahora - self._last_synergy_check < self._synergy_check_interval:
+                return
+            self._last_synergy_check = ahora
+            valores = sorted(self._synergy_history)
+        dispersion = statistics.pstdev(valores) if len(valores) > 1 else 0.0
+        index_90 = max(0, min(len(valores) - 1, math.ceil(0.9 * len(valores)) - 1))
+        p90 = valores[index_90]
+        saturaciones = sum(1 for valor in valores if valor >= self._synergy_cap * 0.98)
+        saturacion = saturaciones / len(valores)
+        try:
+            if hasattr(self._metrics, "SYNERGY_CAP_DISPERSION"):
+                self._metrics.SYNERGY_CAP_DISPERSION.set(dispersion)
+            if hasattr(self._metrics, "SYNERGY_CAP_SATURATION"):
+                self._metrics.SYNERGY_CAP_SATURATION.set(saturacion)
+            if hasattr(self._metrics, "SYNERGY_CAP_P90"):
+                self._metrics.SYNERGY_CAP_P90.set(p90)
+        except Exception:  # pragma: no cover - publicar métricas no debe interrumpir el flujo
+            log.exception("❌ Error actualizando métricas de sinergia")
+        if saturacion > 0.3:
+            log.warning(
+                "⚠️ [%s] Sinergia alcanza el cap %.2f en %.1f%% de evaluaciones (p90=%.2f, disp=%.3f)",
+                symbol,
+                self._synergy_cap,
+                saturacion * 100,
+                p90,
+                dispersion,
+            )
+        elif p90 < self._synergy_cap * 0.6 and dispersion < 0.1:
+            log.info(
+                "ℹ️ [%s] Sinergia muy por debajo del cap %.2f (p90=%.2f, disp=%.3f). Re-evaluar límite.",
+                symbol,
+                self._synergy_cap,
+                p90,
+                dispersion,
+            )
 
     def _resolver_conflicto(
         self,
