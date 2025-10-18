@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import gzip
+import hashlib
 import json
 import logging
 import shutil
@@ -89,8 +90,11 @@ _RESULT_ALIASES: Dict[str, AuditResult] = {
 }
 
 
+CURRENT_SCHEMA_VERSION = "1.1"
+
 AUDIT_COLUMNS: List[str] = [
     "timestamp",
+    "schema_version",
     "operation_id",
     "order_id",
     "symbol",
@@ -112,6 +116,7 @@ AUDIT_COLUMNS: List[str] = [
 SQLITE_SCHEMA = """
 CREATE TABLE IF NOT EXISTS auditoria (
     timestamp TEXT NOT NULL,
+    schema_version TEXT NOT NULL,
     operation_id TEXT NOT NULL,
     order_id TEXT,
     symbol TEXT NOT NULL,
@@ -127,6 +132,15 @@ CREATE TABLE IF NOT EXISTS auditoria (
     capital_actual REAL,
     config_usada TEXT,
     comentario TEXT
+)
+"""
+
+CHECKSUM_SCHEMA = """
+CREATE TABLE IF NOT EXISTS auditoria_checksums (
+    fecha TEXT PRIMARY KEY,
+    checksum TEXT NOT NULL,
+    total_registros INTEGER NOT NULL,
+    last_updated TEXT NOT NULL
 )
 """
 
@@ -288,6 +302,7 @@ def registrar_auditoria(
 def _crear_registro(**kwargs) -> Dict[str, object]:
     registro = {
         "timestamp": _current_utc().isoformat(),
+        "schema_version": CURRENT_SCHEMA_VERSION,
         "operation_id": _resolve_operation_id(kwargs.get("operation_id")),
         "order_id": _normalize_optional(kwargs.get("order_id")),
         "symbol": kwargs["symbol"],
@@ -341,11 +356,7 @@ def _append_jsonl(ruta_archivo: Path, registro: Dict[str, object]) -> None:
 def _append_sqlite(ruta_archivo: Path, registro: Dict[str, object]) -> None:
     with closing(sqlite3.connect(ruta_archivo)) as conn:
         conn.execute("PRAGMA journal_mode=WAL;")
-        conn.execute(SQLITE_SCHEMA)
-        conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_auditoria_symbol_timestamp "
-            "ON auditoria(symbol, timestamp)"
-        )
+        _ensure_sqlite_schema(conn)
         valores = [_coerce_sqlite_value(registro.get(col)) for col in AUDIT_COLUMNS]
         placeholders = ",".join(["?"] * len(AUDIT_COLUMNS))
         columnas = ",".join(AUDIT_COLUMNS)
@@ -354,6 +365,7 @@ def _append_sqlite(ruta_archivo: Path, registro: Dict[str, object]) -> None:
                 f"INSERT INTO auditoria ({columnas}) VALUES ({placeholders})",
                 valores,
             )
+            _update_daily_checksum(conn, registro)
             conn.commit()
 
 
@@ -361,3 +373,98 @@ def _coerce_sqlite_value(value: object) -> object:
     if isinstance(value, (dict, list)):
         return json.dumps(value, ensure_ascii=False)
     return value
+
+def _ensure_sqlite_schema(conn: sqlite3.Connection) -> None:
+    conn.execute(SQLITE_SCHEMA)
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_auditoria_symbol_timestamp "
+        "ON auditoria(symbol, timestamp)"
+    )
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(auditoria)")}
+    if "schema_version" not in columns:
+        conn.execute(
+            "ALTER TABLE auditoria ADD COLUMN schema_version TEXT NOT NULL DEFAULT '"
+            f"{CURRENT_SCHEMA_VERSION}'"
+        )
+    conn.execute(CHECKSUM_SCHEMA)
+
+
+def _update_daily_checksum(conn: sqlite3.Connection, registro: Dict[str, object]) -> None:
+    timestamp = registro["timestamp"]
+    fecha = timestamp[:10]
+    digest = _hash_registro(registro)
+    existing = conn.execute(
+        "SELECT checksum, total_registros FROM auditoria_checksums WHERE fecha = ?",
+        (fecha,),
+    ).fetchone()
+    if existing is None:
+        conn.execute(
+            "INSERT INTO auditoria_checksums (fecha, checksum, total_registros, last_updated) "
+            "VALUES (?, ?, ?, ?)",
+            (fecha, digest, 1, timestamp),
+        )
+        return
+    previous_checksum, total_registros = existing
+    acumulado = _combinar_checksums(str(previous_checksum), digest)
+    conn.execute(
+        "UPDATE auditoria_checksums SET checksum = ?, total_registros = ?, last_updated = ? "
+        "WHERE fecha = ?",
+        (acumulado, int(total_registros) + 1, timestamp, fecha),
+    )
+
+
+def _hash_registro(registro: Dict[str, object]) -> str:
+    serializado = json.dumps(registro, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(serializado.encode("utf-8")).hexdigest()
+
+
+def _combinar_checksums(valor_actual: str, nuevo: str) -> str:
+    return hashlib.sha256(f"{valor_actual}{nuevo}".encode("utf-8")).hexdigest()
+
+
+def verificar_integridad_sqlite(ruta_archivo: Path) -> bool:
+    """Verifica que los registros de auditoría coincidan con los checksums diarios."""
+
+    if not ruta_archivo.exists():
+        raise FileNotFoundError(ruta_archivo)
+    with closing(sqlite3.connect(ruta_archivo)) as conn:
+        conn.row_factory = sqlite3.Row
+        _ensure_sqlite_schema(conn)
+        almacenados = {
+            row["fecha"]: {
+                "checksum": str(row["checksum"]),
+                "total_registros": int(row["total_registros"]),
+            }
+            for row in conn.execute(
+                "SELECT fecha, checksum, total_registros FROM auditoria_checksums"
+            )
+        }
+        cursor = conn.execute(
+            f"SELECT {', '.join(AUDIT_COLUMNS)} FROM auditoria ORDER BY timestamp"
+        )
+        calculados: dict[str, dict[str, object]] = {}
+        for row in cursor:
+            registro = {col: row[col] for col in AUDIT_COLUMNS}
+            fecha = registro["timestamp"][:10]
+            digest = _hash_registro(registro)
+            existente = calculados.setdefault(fecha, {"checksum": None, "total": 0})
+            if existente["checksum"] is None:
+                existente["checksum"] = digest
+            else:
+                existente["checksum"] = _combinar_checksums(
+                    str(existente["checksum"]), digest
+                )
+            existente["total"] = int(existente["total"]) + 1
+        if not almacenados and not calculados:
+            return True
+        if set(almacenados) != set(calculados):
+            return False
+        for fecha, valores in calculados.items():
+            registro_almacenado = almacenados.get(fecha)
+            if registro_almacenado is None:
+                return False
+            if registro_almacenado["checksum"] != valores["checksum"]:
+                return False
+            if registro_almacenado["total_registros"] != valores["total"]:
+                return False
+        return True

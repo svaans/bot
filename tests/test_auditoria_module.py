@@ -6,7 +6,13 @@ from pathlib import Path
 
 import pandas as pd
 
-from core.auditoria import AuditEvent, AuditResult, registrar_auditoria
+from core.auditoria import (
+    AuditEvent,
+    AuditResult,
+    CURRENT_SCHEMA_VERSION,
+    registrar_auditoria,
+    verificar_integridad_sqlite,
+)
 
 
 def test_registrar_auditoria_without_directory(monkeypatch, tmp_path):
@@ -26,6 +32,7 @@ def test_registrar_auditoria_without_directory(monkeypatch, tmp_path):
     assert df.loc[0, "evento"] == AuditEvent.ENTRY.value
     assert df.loc[0, "resultado"] == AuditResult.SUCCESS.value
     assert df.loc[0, "source"] == "unknown"
+    assert str(df.loc[0, "schema_version"]) == CURRENT_SCHEMA_VERSION
     operation_id = df.loc[0, "operation_id"]
     uuid.UUID(operation_id)
 
@@ -45,14 +52,24 @@ def test_registrar_auditoria_sqlite(tmp_path, monkeypatch):
 
     assert os.path.exists(archivo)
     with sqlite3.connect(archivo) as conn:
+        conn.row_factory = sqlite3.Row
         cursor = conn.execute(
-            "SELECT symbol, evento, resultado, score, operation_id, source FROM auditoria"
+            "SELECT symbol, evento, resultado, score, operation_id, source, schema_version "
+            "FROM auditoria"
         )
         row = cursor.fetchone()
 
-    assert row[0:4] == ("ETHUSDT", AuditEvent.EXIT.value, AuditResult.FAILURE.value, 1.5)
-    uuid.UUID(row[4])
-    assert row[5] == "unknown"
+    assert row["symbol"] == "ETHUSDT"
+    assert row["evento"] == AuditEvent.EXIT.value
+    assert row["resultado"] == AuditResult.FAILURE.value
+    assert row["score"] == 1.5
+    uuid.UUID(row["operation_id"])
+    assert row["source"] == "unknown"
+    assert row["schema_version"] == CURRENT_SCHEMA_VERSION
+    checksum_row = conn.execute(
+        "SELECT total_registros FROM auditoria_checksums"
+    ).fetchone()
+    assert checksum_row[0] == 1
 
 
 def test_registrar_auditoria_daily_rotation(monkeypatch, tmp_path):
@@ -84,3 +101,24 @@ def test_registrar_auditoria_daily_rotation(monkeypatch, tmp_path):
     assert archivo_comprimido.exists()
     nuevo_archivo = Path("informes") / "20240102" / "auditoria_20240102.jsonl"
     assert nuevo_archivo.exists()
+
+
+def test_verificar_integridad_sqlite_detecta_manipulacion(monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    archivo = Path("auditoria.db")
+
+    registrar_auditoria(
+        symbol="SOLUSDT",
+        evento="entrada",
+        resultado="exitoso",
+        archivo=str(archivo),
+        formato="sqlite",
+    )
+
+    assert verificar_integridad_sqlite(archivo)
+
+    with sqlite3.connect(archivo) as conn:
+        conn.execute("UPDATE auditoria SET symbol = 'ALTERED'")
+        conn.commit()
+
+    assert not verificar_integridad_sqlite(archivo)
