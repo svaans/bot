@@ -4,27 +4,38 @@ from __future__ import annotations
 
 import asyncio
 import os
+import time
 from datetime import datetime, timezone
 
-UTC = timezone.utc
-from typing import Dict, List, Optional
+from typing import Callable, Dict, List, Optional
 
 import pandas as pd
 
 from core.utils.io_metrics import observe_disk_write
 from core.registro_metrico import registro_metrico
 from core.auditoria import AuditEvent, AuditResult, registrar_auditoria
-from core.auditoria import registrar_auditoria
 from core.utils.utils import configurar_logger
 from core.supervisor import tick
+from observability.metrics import REPORT_IO_ERRORS_TOTAL
 
 log = configurar_logger('rechazos')
+
+UTC = timezone.utc
 
 
 class RejectionHandler:
     """Encapsula la lógica de registro y almacenamiento de rechazos."""
 
-    def __init__(self, log_dir: str, registro_tecnico_csv: str | None = None, batch_size: int = 10) -> None:
+    def __init__(
+        self,
+        log_dir: str,
+        registro_tecnico_csv: str | None = None,
+        batch_size: int = 10,
+        flush_retry_attempts: int = 3,
+        flush_retry_base_delay: float = 0.5,
+        flush_retry_max_delay: float = 5.0,
+        fallback_handler: Callable[[List[dict]], None] | None = None,
+    ) -> None:
         self.log_dir = log_dir
         self.registro_tecnico_csv = registro_tecnico_csv
         os.makedirs(os.path.join(log_dir, 'rechazos'), exist_ok=True)
@@ -32,6 +43,11 @@ class RejectionHandler:
             os.makedirs(os.path.dirname(registro_tecnico_csv), exist_ok=True)
         self._buffer: List[dict] = []
         self._batch_size = batch_size
+        self._flush_retry_attempts = max(1, flush_retry_attempts)
+        self._flush_retry_base_delay = max(0.0, flush_retry_base_delay)
+        self._flush_retry_max_delay = max(self._flush_retry_base_delay, flush_retry_max_delay)
+        self._fallback_handler = fallback_handler
+        self._fallback_queue: List[dict] = []
 
     def registrar(
         self,
@@ -87,23 +103,25 @@ class RejectionHandler:
 
     def flush(self) -> None:
         buffer = [r for r in self._buffer if r]
-        if not buffer:
+        if not buffer and not self._fallback_queue:
             return
         fecha = datetime.now(UTC).strftime('%Y%m%d')
         archivo = os.path.join(self.log_dir, 'rechazos', f'{fecha}.csv')
-        df = pd.DataFrame(buffer)
-        modo = 'a' if os.path.exists(archivo) else 'w'
-        observe_disk_write(
-            'rechazos_csv',
-            archivo,
-            lambda: df.to_csv(
-                archivo,
-                mode=modo,
-                header=not os.path.exists(archivo),
-                index=False,
-            ),
-        )
+        payload = self._fallback_queue + buffer
+        df = pd.DataFrame(payload)
+        archivo_existe = os.path.exists(archivo)
+        modo = 'a' if archivo_existe else 'w'
+        header = not archivo_existe
+
+        if self._write_with_retries(archivo, df, modo, header):
+            self._buffer.clear()
+            self._fallback_queue.clear()
+            return
+
+        if buffer:
+            self._fallback_queue.extend(buffer)
         self._buffer.clear()
+        self._emit_fallback_metrics(len(buffer))
 
     async def flush_periodically(self, intervalo: int, stop_event: asyncio.Event) -> None:
         while not stop_event.is_set():
@@ -146,3 +164,53 @@ class RejectionHandler:
                 index=False,
             ),
         )
+
+    def _write_with_retries(
+        self,
+        archivo: str,
+        dataframe: pd.DataFrame,
+        modo: str,
+        header: bool,
+    ) -> bool:
+        delay = self._flush_retry_base_delay
+        for intento in range(1, self._flush_retry_attempts + 1):
+            try:
+                observe_disk_write(
+                    'rechazos_csv',
+                    archivo,
+                    lambda: dataframe.to_csv(
+                        archivo,
+                        mode=modo,
+                        header=header,
+                        index=False,
+                    ),
+                )
+                return True
+            except Exception as exc:  # pragma: no cover - logging path
+                REPORT_IO_ERRORS_TOTAL.labels(operation='rechazos_csv').inc()
+                log.error(
+                    '❌ Error escribiendo rechazos en %s (intento %s/%s): %s',
+                    archivo,
+                    intento,
+                    self._flush_retry_attempts,
+                    exc,
+                    exc_info=exc,
+                )
+                if intento >= self._flush_retry_attempts:
+                    break
+                time.sleep(delay)
+                delay = min(delay * 2, self._flush_retry_max_delay)
+        return False
+
+    def _emit_fallback_metrics(self, nuevos_rechazos: int) -> None:
+        if nuevos_rechazos:
+            log.warning(
+                '⚠️ Persistencia de rechazos degradada a almacenamiento alternativo (%s nuevos).',
+                nuevos_rechazos,
+            )
+        if not self._fallback_handler or not self._fallback_queue:
+            return
+        try:
+            self._fallback_handler(list(self._fallback_queue))
+        except Exception as exc:  # pragma: no cover - logging path
+            log.error('❌ Error al notificar fallback de rechazos: %s', exc, exc_info=exc)
