@@ -33,7 +33,7 @@ class MetricasTracker:
                     if isinstance(datos, dict):
                         self.data.update(datos)
             except Exception:
-                pass
+                log.exception("Error al cargar métricas semanales desde %s", self.archivo)
 
     def _guardar(self, intentos: int = 3) -> None:
         os.makedirs(os.path.dirname(self.archivo), exist_ok=True)

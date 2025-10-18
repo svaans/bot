@@ -144,6 +144,14 @@ class WarmupTrader:
             "score": -1.0,
         }
         return None
+    
+
+class RecordingBus:
+    def __init__(self) -> None:
+        self.emitted: list[tuple[str, Dict[str, Any]]] = []
+
+    def emit(self, name: str, payload: Dict[str, Any]) -> None:
+        self.emitted.append((name, dict(payload)))
 
 
 @pytest.fixture(autouse=True)
@@ -194,6 +202,44 @@ def _build_candle(close: float) -> dict[str, Any]:
         "close": close,
         "volume": 123.45,
     }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("timeframe", ["1m", "5m"])
+@pytest.mark.xfail(strict=True, reason="Las velas incompletas deberían ignorarse antes de evaluar")
+async def test_incomplete_candle_is_skipped_before_evaluation(timeframe: str) -> None:
+    trader = DummyTrader(side="long", generar_propuesta=False)
+    trader.config.intervalo_velas = timeframe
+    trader.config.min_bars = 1
+    trader.min_bars = 1  # type: ignore[attr-defined]
+
+    incomplete = _build_candle(101.0)
+    incomplete.update(
+        {
+            "timeframe": timeframe,
+            "is_closed": False,
+            "is_final": False,
+            "final": False,
+        }
+    )
+
+    await procesar_vela(trader, incomplete)
+
+    assert trader.evaluaciones == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.xfail(strict=True, reason="El pipeline debería registrar la etapa de estrategia en el bus de eventos")
+async def test_strategy_stage_latency_event_is_emitted() -> None:
+    trader = DummyTrader(side="long")
+    trader.config.min_bars = 1
+    trader.min_bars = 1  # type: ignore[attr-defined]
+    trader.bus = RecordingBus()
+
+    await procesar_vela(trader, _build_candle(102.0))
+
+    stages = [payload["stage"] for name, payload in trader.bus.emitted if name == "procesar_vela.latency"]
+    assert "strategy" in stages
 
 
 def test_buffer_manager_clear_specific_timeframe() -> None:
