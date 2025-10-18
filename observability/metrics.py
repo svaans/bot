@@ -33,6 +33,9 @@ __all__ = [
     "AUDITORIA_ERRORS_TOTAL",
     "AUDITORIA_LOCK_WAIT_SECONDS",
     "AUDITORIA_LOCK_CONTENTION_TOTAL",
+    "SYNERGY_CAP_SATURATION",
+    "SYNERGY_CAP_DISPERSION",
+    "SYNERGY_CAP_P90",
 ]
 
 SIGNALS_CONFLICT = Counter(
@@ -195,6 +198,22 @@ AUDITORIA_LOCK_CONTENTION_TOTAL = Counter(
     "auditoria_lock_contention_total",
     "Incidencias donde la adquisición del candado de auditoría excedió el umbral permitido",
     ["formato"],
+)
+
+
+SYNERGY_CAP_SATURATION = Gauge(
+    "strategy_synergy_cap_saturation",
+    "Fracción de evaluaciones de sinergia que alcanzan el cap configurado",
+)
+
+SYNERGY_CAP_DISPERSION = Gauge(
+    "strategy_synergy_cap_dispersion",
+    "Dispersión (desviación estándar poblacional) de sinergias observadas",
+)
+
+SYNERGY_CAP_P90 = Gauge(
+    "strategy_synergy_cap_p90",
+    "Percentil 90 de sinergia sin limitar observado en la ventana de seguimiento",
 )
 
 

@@ -3,6 +3,9 @@ from __future__ import annotations
 
 from typing import Any, Mapping
 
+import collections
+import statistics
+
 import pandas as pd
 import pytest
 
@@ -120,3 +123,56 @@ async def test_strategy_engine_normaliza_tendencia_desde_estado() -> None:
 
     assert resultado["permitido"] is True
     assert resultado["side"] == "long"
+
+
+class _DummyGauge:
+    def __init__(self) -> None:
+        self.value: float | None = None
+
+    def set(self, value: float) -> None:
+        self.value = value
+
+
+class _DummyMetrics:
+    def __init__(self) -> None:
+        self.SYNERGY_CAP_SATURATION = _DummyGauge()
+        self.SYNERGY_CAP_DISPERSION = _DummyGauge()
+        self.SYNERGY_CAP_P90 = _DummyGauge()
+
+
+def _build_engine_with_metrics(metrics: Any) -> StrategyEngine:
+    return StrategyEngine(
+        peso_provider=lambda symbol: {"estrategia_ema": 1.0},
+        strategy_evaluator=lambda symbol, frame, tendencia: {
+            "estrategias_activas": {"estrategia_ema": True},
+            "puntaje_total": 3.0,
+            "diversidad": 1,
+            "sinergia": 0.2,
+        },
+        tendencia_detector=lambda symbol, frame: ("alcista", {}),
+        threshold_calculator=lambda symbol, frame, contexto: 1.0,
+        technical_scorer=lambda *_args: (2.0, {}),
+        rsi_getter=lambda frame: 55.0,
+        momentum_getter=lambda frame: 0.01,
+        slope_getter=lambda frame: 0.02,
+        metrics_module=metrics,
+    )
+
+
+def test_strategy_engine_registra_sinergia_y_actualiza_metricas() -> None:
+    """Debe exponer métricas que permitan auditar la validez del cap de sinergia."""
+
+    metrics = _DummyMetrics()
+    engine = _build_engine_with_metrics(metrics)
+    engine._synergy_history = collections.deque(maxlen=20)  # type: ignore[attr-defined]
+    engine._synergy_check_interval = 0.0  # type: ignore[attr-defined]
+
+    valores = [0.52] * 7 + [0.3] * 3
+    for valor in valores:
+        engine._registrar_sinergia("BTCUSDT", valor)
+
+    dispersion_esperada = statistics.pstdev(sorted(valores))
+
+    assert metrics.SYNERGY_CAP_SATURATION.value == pytest.approx(0.7)
+    assert metrics.SYNERGY_CAP_P90.value == pytest.approx(0.52)
+    assert metrics.SYNERGY_CAP_DISPERSION.value == pytest.approx(dispersion_esperada)
