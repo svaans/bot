@@ -13,6 +13,7 @@ import pandas as pd
 
 from core.utils.io_metrics import observe_disk_write
 from core.registro_metrico import registro_metrico
+from core.auditoria import AuditEvent, AuditResult, registrar_auditoria
 from core.auditoria import registrar_auditoria
 from core.utils.utils import configurar_logger
 from core.supervisor import tick
@@ -72,13 +73,14 @@ class RejectionHandler:
         try:
             registrar_auditoria(
                 symbol=symbol,
-                evento='Entrada rechazada',
-                resultado='rechazo',
+                evento=AuditEvent.REJECTION,
+                resultado=AuditResult.REJECTED,
                 estrategias_activas=estrategias,
                 score=puntaje,
                 razon=motivo,
                 capital_actual=capital,
                 config_usada=config or {},
+                source="risk.rejection_handler",
             )
         except Exception as e:
             log.debug(f'No se pudo registrar auditoría de rechazo: {e}')

@@ -42,6 +42,8 @@ from typing import Any, Awaitable, Callable, Optional
 
 UTC = timezone.utc
 
+from core.auditoria import AuditEvent, AuditResult
+
 # Tipos simples para anotar colaboradores (duck typing)
 class _Bus:
     async def publish(self, evento: str, payload: dict) -> None: ...
@@ -181,14 +183,30 @@ class GestorOrdenes:
             return False
         # Reporte
         info = getattr(orden, "to_dict", lambda: {})()
+        operation_id = getattr(orden, "operation_id", None)
+        order_id = getattr(orden, "order_id", None) or getattr(orden, "id", None)
         info.update({
             "symbol": symbol,
             "precio_cierre": float(precio),
             "fecha_cierre": datetime.now(UTC).isoformat(),
             "motivo_cierre": motivo,
+            "operation_id": operation_id,
+            "order_id": order_id,
         })
         await self._reportar(info)
-        await self._auditar(symbol=symbol, evento=motivo, resultado="cierre", **info)
+        audit_payload = dict(info)
+        audit_payload.pop("operation_id", None)
+        audit_payload.pop("order_id", None)
+        await self._auditar(
+            symbol=symbol,
+            evento=AuditEvent.EXIT,
+            resultado=AuditResult.SUCCESS,
+            operation_id=operation_id,
+            order_id=order_id,
+            source="orders.gestor_ordenes",
+            razon=motivo,
+            **audit_payload,
+        )
         self._emit("orden_cerrada", {"symbol": symbol, "motivo": motivo})
         return True
 
@@ -205,15 +223,31 @@ class GestorOrdenes:
             return False
         # reporting simple
         info = getattr(orden, "to_dict", lambda: {})()
+        operation_id = getattr(orden, "operation_id", None)
+        order_id = getattr(orden, "order_id", None) or getattr(orden, "id", None)
         info.update({
             "symbol": symbol,
             "precio_cierre": float(precio),
             "cantidad_cerrada": float(cantidad),
             "fecha_cierre": datetime.now(UTC).isoformat(),
             "motivo_cierre": motivo,
+            "operation_id": operation_id,
+            "order_id": order_id,
         })
         await self._reportar(info)
-        await self._auditar(symbol=symbol, evento=motivo, resultado="cierre_parcial", **info)
+        audit_payload = dict(info)
+        audit_payload.pop("operation_id", None)
+        audit_payload.pop("order_id", None)
+        await self._auditar(
+            symbol=symbol,
+            evento=AuditEvent.PARTIAL_EXIT,
+            resultado=AuditResult.PARTIAL,
+            operation_id=operation_id,
+            order_id=order_id,
+            source="orders.gestor_ordenes",
+            razon=motivo,
+            **audit_payload,
+        )
         self._emit("orden_cierre_parcial", {"symbol": symbol, "cantidad": cantidad})
         return True
 

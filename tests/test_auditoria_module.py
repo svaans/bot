@@ -1,9 +1,10 @@
 import os
 import sqlite3
+import uuid
 
 import pandas as pd
 
-from core.auditoria import registrar_auditoria
+from core.auditoria import AuditEvent, AuditResult, registrar_auditoria
 
 
 def test_registrar_auditoria_without_directory(monkeypatch, tmp_path):
@@ -20,7 +21,11 @@ def test_registrar_auditoria_without_directory(monkeypatch, tmp_path):
     assert os.path.exists(archivo)
     df = pd.read_csv(archivo)
     assert df.loc[0, "symbol"] == "BTCUSDT"
-    assert df.loc[0, "evento"] == "apertura"
+    assert df.loc[0, "evento"] == AuditEvent.ENTRY.value
+    assert df.loc[0, "resultado"] == AuditResult.SUCCESS.value
+    assert df.loc[0, "source"] == "unknown"
+    operation_id = df.loc[0, "operation_id"]
+    uuid.UUID(operation_id)
 
 
 def test_registrar_auditoria_sqlite(tmp_path, monkeypatch):
@@ -38,7 +43,11 @@ def test_registrar_auditoria_sqlite(tmp_path, monkeypatch):
 
     assert os.path.exists(archivo)
     with sqlite3.connect(archivo) as conn:
-        cursor = conn.execute("SELECT symbol, evento, resultado, score FROM auditoria")
+        cursor = conn.execute(
+            "SELECT symbol, evento, resultado, score, operation_id, source FROM auditoria"
+        )
         row = cursor.fetchone()
 
-    assert row == ("ETHUSDT", "cierre", "fallido", 1.5)
+    assert row[0:4] == ("ETHUSDT", AuditEvent.EXIT.value, AuditResult.FAILURE.value, 1.5)
+    uuid.UUID(row[4])
+    assert row[5] == "unknown"
