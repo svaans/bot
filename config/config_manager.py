@@ -206,6 +206,8 @@ class Config:
     indicadores_normalize_default: bool = True
     indicadores_cache_max_entries: int = 128
     indicadores_incremental_enabled: bool = False
+    momentum_activation_threshold: float = 0.001
+    momentum_threshold_overrides: Dict[str, float] = field(default_factory=dict)
     orders_retry_persistencia_enabled: bool = False
     trader_purge_historial_enabled: bool = False
     metrics_extended_enabled: bool = False
@@ -363,6 +365,27 @@ class ConfigManager:
             'INDICATORS_INCREMENTAL_ENABLED',
             getattr(defaults, 'indicadores_incremental_enabled', False),
         )
+
+        momentum_activation_threshold = _cargar_float(
+            'MOMENTUM_THRESHOLD', getattr(defaults, 'momentum_activation_threshold', 0.001)
+        )
+        if momentum_activation_threshold < 0:
+            log.warning(
+                '⚠️ Valor negativo para MOMENTUM_THRESHOLD: %s. Usando valor absoluto.',
+                momentum_activation_threshold,
+            )
+            momentum_activation_threshold = abs(momentum_activation_threshold)
+        defaults_momentum_overrides = getattr(defaults, 'momentum_threshold_overrides', {})
+        momentum_threshold_overrides: Dict[str, float] = {}
+        if isinstance(defaults_momentum_overrides, dict):
+            for sym, value in defaults_momentum_overrides.items():
+                try:
+                    momentum_threshold_overrides[str(sym).upper()] = float(value)
+                except (TypeError, ValueError):
+                    continue
+        overrides_from_env = _parse_float_mapping('MOMENTUM_THRESHOLD_OVERRIDES')
+        if overrides_from_env:
+            momentum_threshold_overrides.update(overrides_from_env)
 
         orders_retry_persistencia_enabled = _env_bool(
             'ORDERS_RETRY_PERSISTENCIA_ENABLED',
@@ -535,6 +558,8 @@ class ConfigManager:
             indicadores_normalize_default=indicadores_normalize_default,
             indicadores_cache_max_entries=indicadores_cache_max_entries,
             indicadores_incremental_enabled=indicadores_incremental_enabled,
+            momentum_activation_threshold=momentum_activation_threshold,
+            momentum_threshold_overrides=momentum_threshold_overrides,
             orders_retry_persistencia_enabled=orders_retry_persistencia_enabled,
             trader_purge_historial_enabled=trader_purge_historial_enabled,
             metrics_extended_enabled=metrics_extended_enabled,

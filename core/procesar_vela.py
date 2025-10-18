@@ -208,6 +208,19 @@ def _attach_timeframe(df: pd.DataFrame, timeframe: Optional[str]) -> None:
             df.attrs["tf"] = timeframe
 
 
+def _attach_symbol(df: pd.DataFrame, symbol: Optional[str]) -> None:
+    """Expone el símbolo asociado al ``DataFrame`` mediante ``attrs``."""
+
+    if not symbol:
+        return
+
+    normalized = str(symbol).upper()
+    try:
+        object.__setattr__(df, "symbol", normalized)
+    except Exception:
+        with contextlib.suppress(Exception):
+            df.attrs["symbol"] = normalized
+
 def _resolve_min_bars(trader: Any, default: int = DEFAULT_MIN_BARS) -> int:
     """Determina el mínimo de velas requerido para evaluar estrategias."""
 
@@ -672,9 +685,12 @@ class BufferManager:
     def dataframe(self, symbol: str, timeframe: Optional[str] = None) -> Optional[pd.DataFrame]:
         st, _tf_key, tf_label = self._get_state(symbol, timeframe)
         h = _hash_buffer(st.buffer)
+        normalized_symbol = self._normalize_symbol(symbol)
+
         if h == st.last_hash and st.last_df is not None:
             if tf_label:
                 _attach_timeframe(st.last_df, tf_label)
+            _attach_symbol(st.last_df, normalized_symbol)
             return st.last_df
 
         if not st.buffer:
@@ -715,6 +731,7 @@ class BufferManager:
 
         _attach_timeframe(df, tf_label)
         st.last_df = df
+        _attach_symbol(df, normalized_symbol)
         st.last_hash = h
         return df
 

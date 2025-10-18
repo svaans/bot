@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from functools import lru_cache
 from typing import Any
 
@@ -18,6 +18,8 @@ class IndicatorSettings:
 
     sanitize_normalize_default: bool = True
     cache_max_entries: int = 128
+    momentum_activation_threshold: float = 0.001
+    momentum_threshold_overrides: dict[str, float] = field(default_factory=dict)
 
 
 @lru_cache(maxsize=1)
@@ -37,6 +39,23 @@ def get_indicator_settings() -> IndicatorSettings:
             'off',
         }
     cache_max_entries = getattr(cfg, 'indicadores_cache_max_entries', 128)
+
+    momentum_threshold = getattr(cfg, 'momentum_activation_threshold', 0.001)
+    try:
+        momentum_threshold = float(momentum_threshold)
+    except (TypeError, ValueError):
+        momentum_threshold = 0.001
+    momentum_threshold = max(momentum_threshold, 0.0)
+
+    overrides_raw = getattr(cfg, 'momentum_threshold_overrides', {})
+    overrides: dict[str, float] = {}
+    if isinstance(overrides_raw, dict):
+        for key, value in overrides_raw.items():
+            try:
+                overrides[str(key).upper()] = max(float(value), 0.0)
+            except (TypeError, ValueError):
+                continue
+
     try:
         cache_max_entries = int(cache_max_entries)
     except (TypeError, ValueError):
@@ -45,6 +64,8 @@ def get_indicator_settings() -> IndicatorSettings:
     return IndicatorSettings(
         sanitize_normalize_default=bool(normalize_default),
         cache_max_entries=int(cache_max_entries),
+        momentum_activation_threshold=float(momentum_threshold),
+        momentum_threshold_overrides=overrides,
     )
 
 

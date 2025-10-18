@@ -229,6 +229,25 @@ def get_momentum(df: pd.DataFrame, periodo: int = 10):
     return _cached_value(df, key, lambda d: calcular_momentum(d, periodo))
 
 
+def resolve_momentum_threshold(symbol: str | None = None) -> float:
+    """Resuelve el umbral mínimo de activación para la señal de momentum."""
+
+    settings = get_indicator_settings()
+    threshold = max(float(getattr(settings, "momentum_activation_threshold", 0.0)), 0.0)
+    if not symbol:
+        return threshold
+
+    overrides = getattr(settings, "momentum_threshold_overrides", {})
+    if isinstance(overrides, dict):
+        override = overrides.get(str(symbol).upper())
+        if override is not None:
+            try:
+                return max(float(override), 0.0)
+            except (TypeError, ValueError):
+                return threshold
+    return threshold
+
+
 def get_atr(df: pd.DataFrame, periodo: int = 14):
     """Obtiene el ATR con cache simple."""
     key = ('atr', periodo)

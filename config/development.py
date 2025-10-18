@@ -95,3 +95,5 @@ class DevelopmentConfig:
     risk_capital_per_symbol: Dict[str, float] = field(default_factory=dict)
     risk_kelly_base: float = 0.1
     risk_capital_divergence_threshold: float = 0.1
+    momentum_activation_threshold: float = 0.001
+    momentum_threshold_overrides: Dict[str, float] = field(default_factory=dict)
