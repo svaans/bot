@@ -86,7 +86,14 @@ class RejectionHandler:
         self._buffer.append(registro)
         if len(self._buffer) >= self._batch_size:
             self.flush()
-        registro_metrico.registrar('rechazo', registro)
+        try:
+            registro_metrico.registrar('rechazo', registro)
+        except Exception as exc:  # pragma: no cover - logging path
+            log.warning(
+                'No se pudo emitir métrica de rechazo: %s',
+                exc,
+                exc_info=exc,
+            )
         try:
             registrar_auditoria(
                 symbol=symbol,

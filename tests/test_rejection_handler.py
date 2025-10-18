@@ -4,6 +4,8 @@ import asyncio
 from pathlib import Path
 from typing import List
 
+from types import SimpleNamespace
+
 import pandas as pd
 import pytest
 
@@ -115,3 +117,27 @@ async def test_flush_periodically_survives_exceptions(tmp_path: Path, monkeypatc
     assert handler._flush_failures == 1
     assert call_sequence == ['call', 'call', 'call']
     assert ticks == ['rechazos_flush', 'rechazos_flush']
+
+
+def test_registrar_no_falla_si_metricas_rompen(tmp_path: Path, monkeypatch) -> None:
+    log_dir = tmp_path / 'logs'
+    handler = RejectionHandler(log_dir=str(log_dir), batch_size=5)
+
+    eventos_auditoria: list[dict] = []
+
+    def dummy_auditoria(**kwargs):  # type: ignore[no-untyped-def]
+        eventos_auditoria.append(kwargs)
+
+    def boom_metrics(*args, **kwargs):  # type: ignore[no-untyped-def]
+        raise RuntimeError('metrics offline')
+
+    monkeypatch.setattr('core.rejection_handler.registrar_auditoria', dummy_auditoria)
+    monkeypatch.setattr(
+        'core.rejection_handler.registro_metrico',
+        SimpleNamespace(registrar=boom_metrics),
+    )
+
+    handler.registrar('BTCUSDT', 'risk check failed', puntaje=0.1, peso_total=1.0)
+
+    assert len(handler._buffer) == 1
+    assert eventos_auditoria and eventos_auditoria[-1]['symbol'] == 'BTCUSDT'
