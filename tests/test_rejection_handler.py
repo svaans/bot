@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 from typing import List
 
 import pandas as pd
+import pytest
 
 from core.rejection_handler import RejectionHandler
 
@@ -81,3 +83,35 @@ def test_flush_fallback_on_persistent_failure(tmp_path: Path, monkeypatch) -> No
     df = pd.read_csv(archivos[0])
     assert df['symbol'].tolist() == ['ETHUSDT']
     assert handler._fallback_queue == []
+
+
+@pytest.mark.asyncio
+async def test_flush_periodically_survives_exceptions(tmp_path: Path, monkeypatch) -> None:
+    log_dir = tmp_path / 'logs'
+    handler = RejectionHandler(log_dir=str(log_dir), batch_size=1)
+
+    call_sequence: List[str] = []
+
+    def flaky_flush() -> None:
+        call_sequence.append('call')
+        if len(call_sequence) == 1:
+            raise RuntimeError('boom')
+
+    monkeypatch.setattr(handler, 'flush', flaky_flush)
+
+    ticks: List[str] = []
+    monkeypatch.setattr('core.rejection_handler.tick', lambda name: ticks.append(name))
+
+    stop_event = asyncio.Event()
+    task = asyncio.create_task(handler.flush_periodically(0.01, stop_event))
+
+    while len(call_sequence) < 2:
+        await asyncio.sleep(0.005)
+
+    stop_event.set()
+    await asyncio.sleep(0.02)
+    await task
+
+    assert handler._flush_failures == 1
+    assert call_sequence == ['call', 'call', 'call']
+    assert ticks == ['rechazos_flush', 'rechazos_flush']

@@ -48,6 +48,7 @@ class RejectionHandler:
         self._flush_retry_max_delay = max(self._flush_retry_base_delay, flush_retry_max_delay)
         self._fallback_handler = fallback_handler
         self._fallback_queue: List[dict] = []
+        self._flush_failures: int = 0
 
     def registrar(
         self,
@@ -124,10 +125,40 @@ class RejectionHandler:
         self._emit_fallback_metrics(len(buffer))
 
     async def flush_periodically(self, intervalo: int, stop_event: asyncio.Event) -> None:
-        while not stop_event.is_set():
-            await asyncio.sleep(intervalo)
-            self.flush()
-            tick('rechazos_flush')
+        """Vacía el buffer de rechazos a intervalos regulares manejando fallos transitorios."""
+
+        cancelled = False
+        try:
+            while not stop_event.is_set():
+                try:
+                    await asyncio.wait_for(stop_event.wait(), timeout=intervalo)
+                except asyncio.TimeoutError:
+                    pass
+
+                if stop_event.is_set():
+                    break
+
+                try:
+                    self.flush()
+                except Exception as exc:  # pragma: no cover - logging path
+                    self._flush_failures += 1
+                    log.error('❌ Error al hacer flush periódico de rechazos: %s', exc, exc_info=exc)
+                    continue
+
+                tick('rechazos_flush')
+        except asyncio.CancelledError:
+            cancelled = True
+        finally:
+            try:
+                self.flush()
+            except Exception as exc:  # pragma: no cover - logging path
+                self._flush_failures += 1
+                log.error('❌ Error al ejecutar flush final de rechazos: %s', exc, exc_info=exc)
+            else:
+                tick('rechazos_flush')
+
+            if cancelled:
+                raise
 
     def registrar_tecnico(
         self,
