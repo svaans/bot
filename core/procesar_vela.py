@@ -251,6 +251,29 @@ def _is_num(x: Any) -> bool:
         return not (x is None or isinstance(x, bool) or math.isnan(float(x)) or math.isinf(float(x)))
     except Exception:
         return False
+    
+
+def _normalize_flag(value: Any) -> Optional[bool]:
+    """Convierte un valor potencialmente heterogéneo a booleano."""
+
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        # Algunos feeds utilizan 0/1 o 0.0/1.0 para indicar cierre
+        if math.isnan(float(value)):
+            return None
+        return bool(int(value))
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"", "none"}:
+            return None
+        if normalized in {"true", "1", "yes", "y", "closed", "final"}:
+            return True
+        if normalized in {"false", "0", "no", "n", "open", "partial"}:
+            return False
+    return None
 
 
 def _validar_candle(c: dict) -> Tuple[bool, str]:
@@ -260,6 +283,11 @@ def _validar_candle(c: dict) -> Tuple[bool, str]:
             return False, f"missing_{k}"
         if not _is_num(c[k]):
             return False, f"nan_{k}"
+    # Estado de cierre (no evaluar velas incompletas)
+    for flag_name in ("is_closed", "is_final", "final"):
+        flag_value = _normalize_flag(c.get(flag_name))
+        if flag_value is False:
+            return False, "incomplete"
     # Orden temporal
     if int(c["timestamp"]) <= 0:
         return False, "bad_ts"
@@ -1073,7 +1101,10 @@ async def procesar_vela(trader: Any, vela: dict) -> None:
         except Exception:
             pass
         _ensure_gating_end()
-        propuesta = await trader.evaluar_condiciones_de_entrada(symbol, df, estado_symbol)
+        try:
+            propuesta = await trader.evaluar_condiciones_de_entrada(symbol, df, estado_symbol)
+        finally:
+            _ensure_strategy_end()
         _ensure_gating_end()
         skip_reason = getattr(trader, "_last_eval_skip_reason", None)
         skip_details = getattr(trader, "_last_eval_skip_details", None)

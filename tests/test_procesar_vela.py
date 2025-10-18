@@ -206,7 +206,6 @@ def _build_candle(close: float) -> dict[str, Any]:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("timeframe", ["1m", "5m"])
-@pytest.mark.xfail(strict=True, reason="Las velas incompletas deberían ignorarse antes de evaluar")
 async def test_incomplete_candle_is_skipped_before_evaluation(timeframe: str) -> None:
     trader = DummyTrader(side="long", generar_propuesta=False)
     trader.config.intervalo_velas = timeframe
@@ -229,7 +228,6 @@ async def test_incomplete_candle_is_skipped_before_evaluation(timeframe: str) ->
 
 
 @pytest.mark.asyncio
-@pytest.mark.xfail(strict=True, reason="El pipeline debería registrar la etapa de estrategia en el bus de eventos")
 async def test_strategy_stage_latency_event_is_emitted() -> None:
     trader = DummyTrader(side="long")
     trader.config.min_bars = 1
