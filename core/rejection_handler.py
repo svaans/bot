@@ -35,6 +35,12 @@ class RejectionHandler:
         flush_retry_base_delay: float = 0.5,
         flush_retry_max_delay: float = 5.0,
         fallback_handler: Callable[[List[dict]], None] | None = None,
+        *,
+        audit_retry_attempts: int = 3,
+        audit_retry_base_delay: float = 0.5,
+        audit_retry_max_delay: float = 5.0,
+        audit_circuit_breaker_threshold: int = 5,
+        audit_circuit_breaker_reset: float = 60.0,
     ) -> None:
         self.log_dir = log_dir
         self.registro_tecnico_csv = registro_tecnico_csv
@@ -49,6 +55,16 @@ class RejectionHandler:
         self._fallback_handler = fallback_handler
         self._fallback_queue: List[dict] = []
         self._flush_failures: int = 0
+        self._audit_retry_attempts = max(1, audit_retry_attempts)
+        self._audit_retry_base_delay = max(0.0, audit_retry_base_delay)
+        self._audit_retry_max_delay = max(
+            self._audit_retry_base_delay, audit_retry_max_delay
+        )
+        self._audit_circuit_breaker_threshold = max(1, audit_circuit_breaker_threshold)
+        self._audit_circuit_breaker_reset = max(0.0, audit_circuit_breaker_reset)
+        self._audit_failures_streak: int = 0
+        self._audit_circuit_breaker_open_until: float | None = None
+        self._audit_dead_letter: List[dict] = []
 
     def registrar(
         self,
@@ -94,20 +110,20 @@ class RejectionHandler:
                 exc,
                 exc_info=exc,
             )
-        try:
-            registrar_auditoria(
-                symbol=symbol,
-                evento=AuditEvent.REJECTION,
-                resultado=AuditResult.REJECTED,
-                estrategias_activas=estrategias,
-                score=puntaje,
-                razon=motivo,
-                capital_actual=capital,
-                config_usada=config or {},
-                source="risk.rejection_handler",
-            )
-        except Exception as e:
-            log.debug(f'No se pudo registrar auditoría de rechazo: {e}')
+        audit_payload = {
+            'symbol': symbol,
+            'evento': AuditEvent.REJECTION,
+            'resultado': AuditResult.REJECTED,
+            'estrategias_activas': estrategias,
+            'score': puntaje,
+            'razon': motivo,
+            'capital_actual': capital,
+            'config_usada': config or {},
+            'source': 'risk.rejection_handler',
+        }
+        audit_success = self._enviar_auditoria_con_resiliencia(audit_payload)
+        if audit_success:
+            self.reenviar_auditorias_pendientes()
 
     def flush(self) -> None:
         buffer = [r for r in self._buffer if r]
@@ -166,6 +182,21 @@ class RejectionHandler:
 
             if cancelled:
                 raise
+
+    def reenviar_auditorias_pendientes(self) -> None:
+        """Reintenta la entrega de auditorías previamente rechazadas."""
+
+        if not self._audit_dead_letter:
+            return
+
+        pendientes = list(self._audit_dead_letter)
+        self._audit_dead_letter.clear()
+        for payload in pendientes:
+            exito = self._enviar_auditoria_con_resiliencia(payload)
+            if exito:
+                continue
+            if self._circuit_breaker_activo():
+                break
 
     def registrar_tecnico(
         self,
@@ -252,3 +283,89 @@ class RejectionHandler:
             self._fallback_handler(list(self._fallback_queue))
         except Exception as exc:  # pragma: no cover - logging path
             log.error('❌ Error al notificar fallback de rechazos: %s', exc, exc_info=exc)
+
+    def _enviar_auditoria_con_resiliencia(self, payload: dict) -> bool:
+        if self._circuit_breaker_activo():
+            log.error(
+                'Circuit breaker de auditoría activo; evento encolado para reintento',
+                extra={'symbol': payload.get('symbol'), 'evento': payload.get('evento')},
+            )
+            self._audit_dead_letter.append(payload)
+            return False
+
+        attempts = 0
+        last_exc: Exception | None = None
+        while attempts < self._audit_retry_attempts:
+            attempts += 1
+            try:
+                registrar_auditoria(**payload)
+            except Exception as exc:  # pragma: no cover - logging path exercised in tests
+                last_exc = exc
+                log.warning(
+                    'Intento %d/%d falló al registrar auditoría: %s',
+                    attempts,
+                    self._audit_retry_attempts,
+                    exc,
+                    exc_info=exc if attempts == self._audit_retry_attempts else False,
+                    extra={'symbol': payload.get('symbol')},
+                )
+                if attempts >= self._audit_retry_attempts:
+                    break
+                espera = min(
+                    self._audit_retry_base_delay * (2 ** (attempts - 1)),
+                    self._audit_retry_max_delay,
+                )
+                self._sleep(espera)
+            else:
+                if self._audit_failures_streak:
+                    log.info(
+                        'Auditoría recuperada tras %d fallos consecutivos',
+                        self._audit_failures_streak,
+                        extra={'symbol': payload.get('symbol')},
+                    )
+                self._audit_failures_streak = 0
+                return True
+
+        self._audit_failures_streak += 1
+        if last_exc is not None:
+            log.error(
+                'No se pudo registrar auditoría tras %d intentos: %s',
+                self._audit_retry_attempts,
+                last_exc,
+                exc_info=last_exc,
+                extra={'symbol': payload.get('symbol')},
+            )
+        self._abrir_circuit_breaker_si_corresponde()
+        self._audit_dead_letter.append(payload)
+        return False
+
+    def _abrir_circuit_breaker_si_corresponde(self) -> None:
+        if self._audit_failures_streak < self._audit_circuit_breaker_threshold:
+            return
+        if self._audit_circuit_breaker_reset <= 0:
+            self._audit_circuit_breaker_open_until = float('inf')
+        else:
+            self._audit_circuit_breaker_open_until = (
+                time.monotonic() + self._audit_circuit_breaker_reset
+            )
+        log.error(
+            'Circuit breaker de auditoría activado tras %d fallos consecutivos',
+            self._audit_failures_streak,
+        )
+
+    def _circuit_breaker_activo(self) -> bool:
+        if self._audit_circuit_breaker_open_until is None:
+            return False
+        if self._audit_circuit_breaker_open_until == float('inf'):
+            return True
+        if time.monotonic() >= self._audit_circuit_breaker_open_until:
+            self._audit_circuit_breaker_open_until = None
+            self._audit_failures_streak = 0
+            log.info('Circuit breaker de auditoría restablecido tras periodo de enfriamiento')
+            return False
+        return True
+
+    def _sleep(self, segundos: float) -> None:
+        if segundos <= 0:
+            return
+        time.sleep(segundos)

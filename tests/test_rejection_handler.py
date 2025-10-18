@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from pathlib import Path
 from typing import List
 
@@ -141,3 +142,78 @@ def test_registrar_no_falla_si_metricas_rompen(tmp_path: Path, monkeypatch) -> N
 
     assert len(handler._buffer) == 1
     assert eventos_auditoria and eventos_auditoria[-1]['symbol'] == 'BTCUSDT'
+
+
+def test_registrar_auditoria_reintenta_en_caso_de_error(tmp_path: Path, monkeypatch) -> None:
+    log_dir = tmp_path / 'logs'
+    handler = RejectionHandler(
+        log_dir=str(log_dir),
+        batch_size=5,
+        audit_retry_attempts=3,
+        audit_retry_base_delay=0.0,
+        audit_retry_max_delay=0.0,
+    )
+
+    llamadas = {'total': 0}
+
+    def flaky_auditoria(**kwargs):  # type: ignore[no-untyped-def]
+        llamadas['total'] += 1
+        if llamadas['total'] < 2:
+            raise RuntimeError('auditoria temporalmente indisponible')
+
+    monkeypatch.setattr('core.rejection_handler.registrar_auditoria', flaky_auditoria)
+    monkeypatch.setattr(handler, '_sleep', lambda *_args, **_kwargs: None)
+
+    handler.registrar('BTCUSDT', 'retry audit path', puntaje=0.2, peso_total=1.0)
+
+    assert llamadas['total'] == 2
+    assert handler._audit_failures_streak == 0
+    assert handler._audit_dead_letter == []
+
+
+def test_circuit_breaker_auditoria(tmp_path: Path, monkeypatch) -> None:
+    log_dir = tmp_path / 'logs'
+    handler = RejectionHandler(
+        log_dir=str(log_dir),
+        batch_size=5,
+        audit_retry_attempts=1,
+        audit_retry_base_delay=0.0,
+        audit_retry_max_delay=0.0,
+        audit_circuit_breaker_threshold=1,
+        audit_circuit_breaker_reset=60.0,
+    )
+
+    intentos = {'total': 0}
+
+    def failing_auditoria(**kwargs):  # type: ignore[no-untyped-def]
+        intentos['total'] += 1
+        raise RuntimeError('auditoria fuera de servicio')
+
+    monkeypatch.setattr('core.rejection_handler.registrar_auditoria', failing_auditoria)
+    monkeypatch.setattr(handler, '_sleep', lambda *_args, **_kwargs: None)
+
+    handler.registrar('BTCUSDT', 'primer fallo', puntaje=0.0, peso_total=1.0)
+
+    assert intentos['total'] == 1
+    assert handler._audit_failures_streak == 1
+    assert handler._audit_dead_letter and handler._audit_dead_letter[-1]['symbol'] == 'BTCUSDT'
+    assert handler._audit_circuit_breaker_open_until is not None
+
+    handler.registrar('ETHUSDT', 'circuit abierto', puntaje=0.0, peso_total=1.0)
+
+    assert intentos['total'] == 1
+    assert handler._audit_dead_letter[-1]['symbol'] == 'ETHUSDT'
+
+    handler._audit_circuit_breaker_open_until = time.monotonic() - 1
+
+    auditoria_exitos = []
+
+    def success_auditoria(**kwargs):  # type: ignore[no-untyped-def]
+        auditoria_exitos.append(kwargs['symbol'])
+
+    monkeypatch.setattr('core.rejection_handler.registrar_auditoria', success_auditoria)
+
+    handler.reenviar_auditorias_pendientes()
+
+    assert set(auditoria_exitos) == {'BTCUSDT', 'ETHUSDT'}
+    assert handler._audit_dead_letter == []
