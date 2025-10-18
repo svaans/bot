@@ -1,6 +1,8 @@
 import os
 import sqlite3
 import uuid
+from datetime import datetime, timezone
+from pathlib import Path
 
 import pandas as pd
 
@@ -51,3 +53,34 @@ def test_registrar_auditoria_sqlite(tmp_path, monkeypatch):
     assert row[0:4] == ("ETHUSDT", AuditEvent.EXIT.value, AuditResult.FAILURE.value, 1.5)
     uuid.UUID(row[4])
     assert row[5] == "unknown"
+
+
+def test_registrar_auditoria_daily_rotation(monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    primera_fecha = datetime(2024, 1, 1, 12, tzinfo=timezone.utc)
+    monkeypatch.setattr("core.auditoria._current_utc", lambda: primera_fecha)
+
+    registrar_auditoria(
+        symbol="BNBUSDT",
+        evento=AuditEvent.ENTRY,
+        resultado=AuditResult.SUCCESS,
+    )
+
+    carpeta_esperada = Path("informes") / "20240101"
+    archivo_esperado = carpeta_esperada / "auditoria_20240101.jsonl"
+    assert archivo_esperado.exists()
+
+    segunda_fecha = datetime(2024, 1, 2, 6, tzinfo=timezone.utc)
+    monkeypatch.setattr("core.auditoria._current_utc", lambda: segunda_fecha)
+
+    registrar_auditoria(
+        symbol="BNBUSDT",
+        evento=AuditEvent.EXIT,
+        resultado=AuditResult.SUCCESS,
+    )
+
+    assert not archivo_esperado.exists()
+    archivo_comprimido = archivo_esperado.with_suffix(".jsonl.gz")
+    assert archivo_comprimido.exists()
+    nuevo_archivo = Path("informes") / "20240102" / "auditoria_20240102.jsonl"
+    assert nuevo_archivo.exists()

@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import gzip
 import json
+import logging
+import shutil
 import sqlite3
 from contextlib import closing
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from enum import StrEnum
 from pathlib import Path
 from threading import Lock
@@ -12,6 +15,9 @@ from uuid import uuid4
 
 UTC = timezone.utc
 _lock = Lock()
+_AUDIT_BASE_DIR = Path("informes")
+
+log = logging.getLogger(__name__)
 
 
 class AuditEvent(StrEnum):
@@ -125,6 +131,59 @@ CREATE TABLE IF NOT EXISTS auditoria (
 """
 
 
+def _current_utc() -> datetime:
+    """Retorna ``datetime`` timezone-aware para reutilización y pruebas."""
+
+    return datetime.now(UTC)
+
+
+def _resolver_ruta_archivo(
+    archivo: str | None, formato_normalizado: str, momento_actual: datetime
+) -> Path:
+    if archivo:
+        return Path(archivo)
+    if formato_normalizado == "jsonl":
+        fecha = momento_actual.strftime("%Y%m%d")
+        return _AUDIT_BASE_DIR / fecha / f"auditoria_{fecha}.jsonl"
+    if formato_normalizado == "sqlite":
+        return _AUDIT_BASE_DIR / "auditoria.db"
+    raise ValueError(
+        f"Formato no soportado para auditoría: {formato_normalizado}. "
+        "Use 'jsonl' o 'sqlite'."
+    )
+
+
+def _comprimir_auditoria_del_dia_anterior(momento_actual: datetime) -> None:
+    fecha_anterior = (momento_actual - timedelta(days=1)).strftime("%Y%m%d")
+    carpeta = _AUDIT_BASE_DIR / fecha_anterior
+    archivo = carpeta / f"auditoria_{fecha_anterior}.jsonl"
+    if not archivo.exists():
+        return
+    destino = archivo.with_suffix(".jsonl.gz")
+    if destino.exists():
+        try:
+            archivo.unlink()
+        except OSError as error:
+            log.debug("No se pudo eliminar auditoría previa ya comprimida: %s", error)
+        _limpiar_carpeta_si_vacia(carpeta)
+        return
+    try:
+        with archivo.open("rb") as origen, gzip.open(destino, "wb") as salida:
+            shutil.copyfileobj(origen, salida)
+        archivo.unlink()
+        _limpiar_carpeta_si_vacia(carpeta)
+    except OSError as error:
+        log.warning("No fue posible comprimir %s: %s", archivo, error)
+
+
+def _limpiar_carpeta_si_vacia(carpeta: Path) -> None:
+    try:
+        if carpeta.exists() and not any(carpeta.iterdir()):
+            carpeta.rmdir()
+    except OSError as error:
+        log.debug("No se pudo limpiar carpeta de auditoría %s: %s", carpeta, error)
+
+
 def _normalize_value(
     value: str | StrEnum | None,
     aliases: Dict[str, StrEnum],
@@ -176,15 +235,17 @@ def registrar_auditoria(
     capital_actual=None,
     config_usada=None,
     comentario=None,
-    archivo: str = "informes/auditoria_bot.jsonl",
+    archivo: str | None = None,
     formato: str = "jsonl",
 ) -> None:
     """Persiste decisiones críticas del bot utilizando escrituras incrementales.
 
     El formato ``jsonl`` produce archivos compatibles con herramientas de
-    streaming (``jq``, ``pandas``) sin perder estructuras anidadas. Para
-    escenarios de mayor volumen, el formato ``sqlite`` permite inserciones
-    ``INSERT`` transaccionales y consultas posteriores sin sobrecargar memoria.
+    streaming (``jq``, ``pandas``) sin perder estructuras anidadas. Cuando no se
+    indica ``archivo`` se rota automáticamente a ``informes/YYYYMMDD`` y se
+    comprime el día previo en ``.gz``. Para escenarios de mayor volumen, el
+    formato ``sqlite`` permite inserciones ``INSERT`` transaccionales y consultas
+    posteriores sin sobrecargar memoria.
     """
 
     registro = _crear_registro(
@@ -204,12 +265,15 @@ def registrar_auditoria(
         config_usada=config_usada,
         comentario=comentario,
     )
-    ruta_archivo = Path(archivo)
+    formato_normalizado = formato.strip().lower()
+    momento_actual = _current_utc()
+    ruta_archivo = _resolver_ruta_archivo(archivo, formato_normalizado, momento_actual)
     if ruta_archivo.parent not in (Path(""), Path(".")):
         ruta_archivo.parent.mkdir(parents=True, exist_ok=True)
-    formato_normalizado = formato.strip().lower()
     if formato_normalizado == "jsonl":
         with _lock:
+            if archivo is None:
+                _comprimir_auditoria_del_dia_anterior(momento_actual)
             _append_jsonl(ruta_archivo, registro)
     elif formato_normalizado == "sqlite":
         with _lock:
@@ -223,7 +287,7 @@ def registrar_auditoria(
 
 def _crear_registro(**kwargs) -> Dict[str, object]:
     registro = {
-        "timestamp": datetime.now(UTC).isoformat(),
+        "timestamp": _current_utc().isoformat(),
         "operation_id": _resolve_operation_id(kwargs.get("operation_id")),
         "order_id": _normalize_optional(kwargs.get("order_id")),
         "symbol": kwargs["symbol"],
