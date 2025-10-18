@@ -4,9 +4,12 @@ from __future__ import annotations
 
 import asyncio
 import os
+import shutil
 import time
 from datetime import datetime, timezone
 
+from collections.abc import Mapping
+from numbers import Real
 from typing import Callable, Dict, List, Optional
 
 import pandas as pd
@@ -54,6 +57,7 @@ class RejectionHandler:
         self._flush_retry_max_delay = max(self._flush_retry_base_delay, flush_retry_max_delay)
         self._fallback_handler = fallback_handler
         self._fallback_queue: List[dict] = []
+        self._registro_tecnico_fallback: List[dict] = []
         self._flush_failures: int = 0
         self._audit_retry_attempts = max(1, audit_retry_attempts)
         self._audit_retry_base_delay = max(0.0, audit_retry_base_delay)
@@ -202,36 +206,56 @@ class RejectionHandler:
         self,
         symbol: str,
         score: float,
-        puntos: Dict[str, float],
+        puntos: Mapping[str, Real],
         tendencia: str,
         precio: float,
         motivo: str,
-        estrategias: Dict[str, float] | None = None,
+        estrategias: Mapping[str, Real] | None = None,
     ) -> None:
         """Guarda detalles de rechazos técnicos en un CSV separado."""
         if not self.registro_tecnico_csv:
             return
-        fila = {
-            'timestamp': datetime.now(UTC).isoformat(),
-            'symbol': symbol,
-            'puntaje_total': score,
-            'indicadores_fallidos': ','.join([k for k, v in puntos.items() if not v]),
-            'estado_mercado': tendencia,
-            'precio': precio,
-            'motivo': motivo,
-            'estrategias': ','.join(estrategias.keys()) if estrategias else '',
-        }
-        df = pd.DataFrame([fila])
-        modo = 'a' if os.path.exists(self.registro_tecnico_csv) else 'w'
-        observe_disk_write(
-            'rechazos_tecnicos_csv',
+        fila = self._build_registro_tecnico_row(
+            symbol=symbol,
+            score=score,
+            puntos=puntos,
+            tendencia=tendencia,
+            precio=precio,
+            motivo=motivo,
+            estrategias=estrategias,
+        )
+        if fila is None:
+            return
+        if not self._ensure_storage_available(self.registro_tecnico_csv):
+            self._registro_tecnico_fallback.append(fila)
+            self._emit_fallback_metrics(
+                1,
+                queue=self._registro_tecnico_fallback,
+                tipo='rechazos técnicos',
+            )
+            return
+
+        payload = [*self._registro_tecnico_fallback, fila]
+        dataframe = pd.DataFrame(payload)
+        archivo_existe = os.path.exists(self.registro_tecnico_csv)
+        modo = 'a' if archivo_existe else 'w'
+        header = not archivo_existe
+
+        if self._write_with_retries(
             self.registro_tecnico_csv,
-            lambda: df.to_csv(
-                self.registro_tecnico_csv,
-                mode=modo,
-                header=not os.path.exists(self.registro_tecnico_csv),
-                index=False,
-            ),
+            dataframe,
+            modo,
+            header,
+            operation='rechazos_tecnicos_csv',
+        ):
+            self._registro_tecnico_fallback.clear()
+            return
+
+        self._registro_tecnico_fallback.append(fila)
+        self._emit_fallback_metrics(
+            1,
+            queue=self._registro_tecnico_fallback,
+            tipo='rechazos técnicos',
         )
 
     def _write_with_retries(
@@ -240,12 +264,14 @@ class RejectionHandler:
         dataframe: pd.DataFrame,
         modo: str,
         header: bool,
+        *,
+        operation: str = 'rechazos_csv',
     ) -> bool:
         delay = self._flush_retry_base_delay
         for intento in range(1, self._flush_retry_attempts + 1):
             try:
                 observe_disk_write(
-                    'rechazos_csv',
+                    operation,
                     archivo,
                     lambda: dataframe.to_csv(
                         archivo,
@@ -256,9 +282,10 @@ class RejectionHandler:
                 )
                 return True
             except Exception as exc:  # pragma: no cover - logging path
-                REPORT_IO_ERRORS_TOTAL.labels(operation='rechazos_csv').inc()
+                REPORT_IO_ERRORS_TOTAL.labels(operation=operation).inc()
                 log.error(
-                    '❌ Error escribiendo rechazos en %s (intento %s/%s): %s',
+                    '❌ Error escribiendo %s en %s (intento %s/%s): %s',
+                    operation,
                     archivo,
                     intento,
                     self._flush_retry_attempts,
@@ -271,16 +298,149 @@ class RejectionHandler:
                 delay = min(delay * 2, self._flush_retry_max_delay)
         return False
 
-    def _emit_fallback_metrics(self, nuevos_rechazos: int) -> None:
+    def _build_registro_tecnico_row(
+        self,
+        *,
+        symbol: str,
+        score: float,
+        puntos: Mapping[str, Real],
+        tendencia: str,
+        precio: float,
+        motivo: str,
+        estrategias: Mapping[str, Real] | None,
+    ) -> dict | None:
+        try:
+            puntaje_total = float(score)
+        except (TypeError, ValueError) as exc:
+            log.error(
+                '❌ Puntaje técnico inválido para %s: %s',
+                symbol,
+                score,
+                exc_info=exc,
+            )
+            return None
+
+        if not isinstance(puntos, Mapping):
+            log.error(
+                '❌ Indicadores técnicos inválidos para %s: se esperaba mapping y se recibió %s',
+                symbol,
+                type(puntos).__name__,
+            )
+            return None
+
+        indicadores_normalizados: dict[str, float] = {}
+        indicadores_invalidos: list[str] = []
+        for indicador, valor in puntos.items():
+            if not isinstance(indicador, str):
+                indicadores_invalidos.append(str(indicador))
+                continue
+            try:
+                indicadores_normalizados[indicador] = float(valor)
+            except (TypeError, ValueError):
+                indicadores_invalidos.append(indicador)
+
+        if indicadores_invalidos:
+            log.warning(
+                '⚠️ Indicadores técnicos descartados para %s: %s',
+                symbol,
+                indicadores_invalidos,
+            )
+
+        indicadores_fallidos = [
+            nombre
+            for nombre, valor in indicadores_normalizados.items()
+            if not bool(valor)
+        ]
+
+        try:
+            precio_normalizado = float(precio)
+        except (TypeError, ValueError) as exc:
+            log.error(
+                '❌ Precio inválido para %s: %s',
+                symbol,
+                precio,
+                exc_info=exc,
+            )
+            return None
+
+        tendencia_val = tendencia if isinstance(tendencia, str) else str(tendencia)
+        motivo_val = motivo if isinstance(motivo, str) else str(motivo)
+
+        estrategias_val = ''
+        if estrategias:
+            if not isinstance(estrategias, Mapping):
+                log.warning(
+                    '⚠️ Estrategias inválidas para %s: se esperaba mapping y se recibió %s',
+                    symbol,
+                    type(estrategias).__name__,
+                )
+            else:
+                estrategias_val = ','.join(
+                    [nombre for nombre in estrategias.keys() if isinstance(nombre, str)]
+                )
+
+        return {
+            'timestamp': datetime.now(UTC).isoformat(),
+            'symbol': symbol,
+            'puntaje_total': puntaje_total,
+            'indicadores_fallidos': ','.join(indicadores_fallidos),
+            'estado_mercado': tendencia_val,
+            'precio': precio_normalizado,
+            'motivo': motivo_val,
+            'estrategias': estrategias_val,
+        }
+
+    def _ensure_storage_available(self, path: str) -> bool:
+        directorio = os.path.dirname(path) or '.'
+        try:
+            os.makedirs(directorio, exist_ok=True)
+        except Exception as exc:  # pragma: no cover - logging path
+            log.error(
+                '❌ No se pudo garantizar el directorio %s para registros técnicos: %s',
+                directorio,
+                exc,
+                exc_info=exc,
+            )
+            return False
+
+        try:
+            uso = shutil.disk_usage(directorio)
+        except Exception as exc:  # pragma: no cover - logging path
+            log.warning(
+                '⚠️ No se pudo determinar el espacio disponible en %s: %s',
+                directorio,
+                exc,
+                exc_info=exc,
+            )
+            return True
+
+        if uso.free <= 0:
+            log.error(
+                '❌ Sin espacio disponible en %s para registrar rechazos técnicos',
+                directorio,
+            )
+            return False
+
+        return True
+
+    def _emit_fallback_metrics(
+        self,
+        nuevos_rechazos: int,
+        *,
+        queue: List[dict] | None = None,
+        tipo: str = 'rechazos',
+    ) -> None:
         if nuevos_rechazos:
             log.warning(
-                '⚠️ Persistencia de rechazos degradada a almacenamiento alternativo (%s nuevos).',
+                '⚠️ Persistencia de %s degradada a almacenamiento alternativo (%s nuevos).',
+                tipo,
                 nuevos_rechazos,
             )
-        if not self._fallback_handler or not self._fallback_queue:
+        target_queue = queue if queue is not None else self._fallback_queue
+        if not self._fallback_handler or not target_queue:
             return
         try:
-            self._fallback_handler(list(self._fallback_queue))
+            self._fallback_handler(list(target_queue))
         except Exception as exc:  # pragma: no cover - logging path
             log.error('❌ Error al notificar fallback de rechazos: %s', exc, exc_info=exc)
 
