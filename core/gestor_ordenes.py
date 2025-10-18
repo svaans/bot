@@ -200,7 +200,8 @@ class GestorOrdenes:
         await self._auditar(
             symbol=symbol,
             evento=AuditEvent.EXIT,
-            resultado=AuditResult.SUCCESS,
+            resultado="cierre",
+            resultado_normalizado=AuditResult.SUCCESS,
             operation_id=operation_id,
             order_id=order_id,
             source="orders.gestor_ordenes",
@@ -241,7 +242,8 @@ class GestorOrdenes:
         await self._auditar(
             symbol=symbol,
             evento=AuditEvent.PARTIAL_EXIT,
-            resultado=AuditResult.PARTIAL,
+            resultado="cierre_parcial",
+            resultado_normalizado=AuditResult.PARTIAL,
             operation_id=operation_id,
             order_id=order_id,
             source="orders.gestor_ordenes",

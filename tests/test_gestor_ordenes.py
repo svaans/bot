@@ -5,6 +5,7 @@ from typing import Any, Iterable
 
 import pytest
 
+from core.auditoria import AuditEvent, AuditResult
 from core.gestor_ordenes import GestorOrdenes
 
 
@@ -218,7 +219,8 @@ async def test_cerrar_operacion_exitosa_registra_reporte() -> None:
     assert ok is True
     assert bus.published[-1][0] == "cerrar_orden"
     assert reporter.records[0]["symbol"] == "BTCUSDT"
-    assert auditoria[0]["resultado"] == "cierre"
+    assert auditoria[0]["evento"] == AuditEvent.EXIT
+    assert auditoria[0]["resultado"] == AuditResult.SUCCESS
     assert eventos[-1][0] == "orden_cerrada"
     assert orden.cerrando is True
 
@@ -316,7 +318,8 @@ async def test_cerrar_parcial_exitosa_registra_eventos() -> None:
     assert ok is True
     assert bus.published[-1][0] == "cerrar_parcial"
     assert reporter.records[0]["cantidad_cerrada"] == pytest.approx(0.2)
-    assert auditoria[0]["resultado"] == "cierre_parcial"
+    assert auditoria[0]["evento"] == AuditEvent.PARTIAL_EXIT
+    assert auditoria[0]["resultado"] == AuditResult.PARTIAL
     assert eventos[-1][0] == "orden_cierre_parcial"
 
 

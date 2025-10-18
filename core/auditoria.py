@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import csv
 import json
 import sqlite3
 from contextlib import closing
@@ -126,15 +125,6 @@ CREATE TABLE IF NOT EXISTS auditoria (
 """
 
 
-def _serializar(valor):
-    if isinstance(valor, (dict, list)):
-        try:
-            return json.dumps(valor, ensure_ascii=False)
-        except Exception:
-            return str(valor)
-    return valor
-
-
 def _normalize_value(
     value: str | StrEnum | None,
     aliases: Dict[str, StrEnum],
@@ -186,15 +176,15 @@ def registrar_auditoria(
     capital_actual=None,
     config_usada=None,
     comentario=None,
-    archivo: str = "informes/auditoria_bot.csv",
-    formato: str = "csv",
+    archivo: str = "informes/auditoria_bot.jsonl",
+    formato: str = "jsonl",
 ) -> None:
     """Persiste decisiones críticas del bot utilizando escrituras incrementales.
 
-    El formato ``csv`` utiliza ``csv.DictWriter`` para evitar lecturas completas
-    de archivos en cada inserción. Para escenarios de mayor volumen, el formato
-    ``sqlite`` permite inserciones ``INSERT`` transaccionales y consultas
-    posteriores sin sobrecargar memoria.
+    El formato ``jsonl`` produce archivos compatibles con herramientas de
+    streaming (``jq``, ``pandas``) sin perder estructuras anidadas. Para
+    escenarios de mayor volumen, el formato ``sqlite`` permite inserciones
+    ``INSERT`` transaccionales y consultas posteriores sin sobrecargar memoria.
     """
 
     registro = _crear_registro(
@@ -218,16 +208,16 @@ def registrar_auditoria(
     if ruta_archivo.parent not in (Path(""), Path(".")):
         ruta_archivo.parent.mkdir(parents=True, exist_ok=True)
     formato_normalizado = formato.strip().lower()
-    if formato_normalizado == "csv":
+    if formato_normalizado == "jsonl":
         with _lock:
-            _append_csv(ruta_archivo, registro)
+            _append_jsonl(ruta_archivo, registro)
     elif formato_normalizado == "sqlite":
         with _lock:
             _append_sqlite(ruta_archivo, registro)
     else:
         raise ValueError(
             f"Formato no soportado para auditoría: {formato_normalizado}. "
-            "Use 'csv' o 'sqlite'."
+            "Use 'jsonl' o 'sqlite'."
         )
 
 
@@ -240,14 +230,14 @@ def _crear_registro(**kwargs) -> Dict[str, object]:
         "evento": normalize_event(kwargs["evento"]).value,
         "resultado": normalize_result(kwargs["resultado"]).value,
         "source": _normalize_source(kwargs.get("source")),
-        "estrategias_activas": _serializar(kwargs.get("estrategias_activas")),
+        "estrategias_activas": kwargs.get("estrategias_activas"),
         "score": kwargs.get("score"),
         "rsi": kwargs.get("rsi"),
         "volumen_relativo": kwargs.get("volumen_relativo"),
         "tendencia": kwargs.get("tendencia"),
-        "razon": _serializar(kwargs.get("razon")),
+        "razon": kwargs.get("razon"),
         "capital_actual": kwargs.get("capital_actual"),
-        "config_usada": _serializar(kwargs.get("config_usada")),
+        "config_usada": kwargs.get("config_usada"),
         "comentario": kwargs.get("comentario"),
     }
     return registro
@@ -278,21 +268,32 @@ def _resolve_operation_id(operation_id: str | None) -> str:
     return candidate or str(uuid4())
 
 
-def _append_csv(ruta_archivo: Path, registro: Dict[str, object]) -> None:
-    archivo_existente = ruta_archivo.exists()
-    with ruta_archivo.open("a", newline="", encoding="utf-8") as csvfile:
-        writer = csv.DictWriter(csvfile, fieldnames=AUDIT_COLUMNS)
-        if not archivo_existente:
-            writer.writeheader()
-        writer.writerow({col: registro.get(col) for col in AUDIT_COLUMNS})
+def _append_jsonl(ruta_archivo: Path, registro: Dict[str, object]) -> None:
+    with ruta_archivo.open("a", encoding="utf-8") as jsonfile:
+        json_record = json.dumps(registro, ensure_ascii=False)
+        jsonfile.write(json_record + "\n")
 
 
 def _append_sqlite(ruta_archivo: Path, registro: Dict[str, object]) -> None:
     with closing(sqlite3.connect(ruta_archivo)) as conn:
         conn.execute("PRAGMA journal_mode=WAL;")
         conn.execute(SQLITE_SCHEMA)
-        valores = [registro.get(col) for col in AUDIT_COLUMNS]
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_auditoria_symbol_timestamp "
+            "ON auditoria(symbol, timestamp)"
+        )
+        valores = [_coerce_sqlite_value(registro.get(col)) for col in AUDIT_COLUMNS]
         placeholders = ",".join(["?"] * len(AUDIT_COLUMNS))
         columnas = ",".join(AUDIT_COLUMNS)
-        conn.execute(f"INSERT INTO auditoria ({columnas}) VALUES ({placeholders})", valores)
-        conn.commit()
+        with conn:
+            conn.execute(
+                f"INSERT INTO auditoria ({columnas}) VALUES ({placeholders})",
+                valores,
+            )
+            conn.commit()
+
+
+def _coerce_sqlite_value(value: object) -> object:
+    if isinstance(value, (dict, list)):
+        return json.dumps(value, ensure_ascii=False)
+    return value

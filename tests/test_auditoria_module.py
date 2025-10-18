@@ -9,7 +9,7 @@ from core.auditoria import AuditEvent, AuditResult, registrar_auditoria
 
 def test_registrar_auditoria_without_directory(monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
-    archivo = "auditoria_registro.csv"
+    archivo = "auditoria_registro.jsonl"
 
     registrar_auditoria(
         symbol="BTCUSDT",
@@ -19,7 +19,7 @@ def test_registrar_auditoria_without_directory(monkeypatch, tmp_path):
     )
 
     assert os.path.exists(archivo)
-    df = pd.read_csv(archivo)
+    df = pd.read_json(archivo, lines=True)
     assert df.loc[0, "symbol"] == "BTCUSDT"
     assert df.loc[0, "evento"] == AuditEvent.ENTRY.value
     assert df.loc[0, "resultado"] == AuditResult.SUCCESS.value
