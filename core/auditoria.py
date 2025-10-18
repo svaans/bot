@@ -11,11 +11,21 @@ from datetime import datetime, timedelta, timezone
 from enum import StrEnum
 from pathlib import Path
 from threading import Lock
-from typing import Dict, List
+from time import perf_counter
+from typing import Callable, Dict, List
 from uuid import uuid4
+
+from observability.metrics import (
+    AUDITORIA_ERRORS_TOTAL,
+    AUDITORIA_LOCK_CONTENTION_TOTAL,
+    AUDITORIA_LOCK_WAIT_SECONDS,
+    AUDITORIA_WRITE_LATENCY_SECONDS,
+    AUDITORIA_WRITES_TOTAL,
+)
 
 UTC = timezone.utc
 _lock = Lock()
+_LOCK_CONTENTION_THRESHOLD_SECONDS = 0.05
 _AUDIT_BASE_DIR = Path("informes")
 
 log = logging.getLogger(__name__)
@@ -285,17 +295,52 @@ def registrar_auditoria(
     if ruta_archivo.parent not in (Path(""), Path(".")):
         ruta_archivo.parent.mkdir(parents=True, exist_ok=True)
     if formato_normalizado == "jsonl":
-        with _lock:
+        def _jsonl_operation() -> None:
             if archivo is None:
                 _comprimir_auditoria_del_dia_anterior(momento_actual)
             _append_jsonl(ruta_archivo, registro)
+        _persist_with_lock(formato_normalizado, _jsonl_operation)
     elif formato_normalizado == "sqlite":
-        with _lock:
-            _append_sqlite(ruta_archivo, registro)
+        _persist_with_lock(
+            formato_normalizado, lambda: _append_sqlite(ruta_archivo, registro)
+        )
     else:
         raise ValueError(
             f"Formato no soportado para auditoría: {formato_normalizado}. "
             "Use 'jsonl' o 'sqlite'."
+        )
+    
+
+
+def _persist_with_lock(formato: str, operation: Callable[[], None]) -> None:
+    """Ejecuta ``operation`` protegiendo el acceso concurrente y registrando métricas."""
+
+    espera_inicio = perf_counter()
+    _lock.acquire()
+    espera = max(perf_counter() - espera_inicio, 0.0)
+    _registrar_espera_lock(formato, espera)
+    try:
+        inicio = perf_counter()
+        operation()
+    except Exception:
+        AUDITORIA_ERRORS_TOTAL.labels(formato=formato).inc()
+        raise
+    else:
+        duracion = max(perf_counter() - inicio, 0.0)
+        AUDITORIA_WRITE_LATENCY_SECONDS.labels(formato=formato).observe(duracion)
+        AUDITORIA_WRITES_TOTAL.labels(formato=formato).inc()
+    finally:
+        _lock.release()
+
+
+def _registrar_espera_lock(formato: str, espera: float) -> None:
+    AUDITORIA_LOCK_WAIT_SECONDS.labels(formato=formato).observe(espera)
+    if espera >= _LOCK_CONTENTION_THRESHOLD_SECONDS:
+        AUDITORIA_LOCK_CONTENTION_TOTAL.labels(formato=formato).inc()
+        log.debug(
+            "Contención elevada del lock de auditoría (formato=%s espera=%.6fs)",
+            formato,
+            espera,
         )
 
 

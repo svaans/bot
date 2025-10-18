@@ -28,6 +28,11 @@ __all__ = [
     "CAPITAL_DIVERGENCE_THRESHOLD",
     "METRIC_WRITE_LATENCY_SECONDS",
     "REPORT_GENERATION_DURATION_SECONDS",
+    "AUDITORIA_WRITES_TOTAL",
+    "AUDITORIA_WRITE_LATENCY_SECONDS",
+    "AUDITORIA_ERRORS_TOTAL",
+    "AUDITORIA_LOCK_WAIT_SECONDS",
+    "AUDITORIA_LOCK_CONTENTION_TOTAL",
 ]
 
 SIGNALS_CONFLICT = Counter(
@@ -157,6 +162,39 @@ CAPITAL_DIVERGENCE_RATIO = Gauge(
 CAPITAL_DIVERGENCE_THRESHOLD = Gauge(
     "bot_capital_divergence_threshold",
     "Umbral configurado para divergencia relativa de capital",
+)
+
+
+AUDITORIA_WRITES_TOTAL = Counter(
+    "auditoria_writes_total",
+    "Total de escrituras de auditoría persistidas por formato",
+    ["formato"],
+)
+
+AUDITORIA_WRITE_LATENCY_SECONDS = Histogram(
+    "auditoria_write_latency_seconds",
+    "Latencia de persistencia de registros de auditoría por formato",
+    ["formato"],
+    buckets=(0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0),
+)
+
+AUDITORIA_ERRORS_TOTAL = Counter(
+    "auditoria_errors_total",
+    "Errores registrados al intentar persistir auditorías por formato",
+    ["formato"],
+)
+
+AUDITORIA_LOCK_WAIT_SECONDS = Histogram(
+    "auditoria_lock_wait_seconds",
+    "Tiempo de espera para adquirir el candado de persistencia de auditoría",
+    ["formato"],
+    buckets=(0.0005, 0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0),
+)
+
+AUDITORIA_LOCK_CONTENTION_TOTAL = Counter(
+    "auditoria_lock_contention_total",
+    "Incidencias donde la adquisición del candado de auditoría excedió el umbral permitido",
+    ["formato"],
 )
 
 

@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import pandas as pd
+import pytest
 
 from core.auditoria import (
     AuditEvent,
@@ -12,6 +13,13 @@ from core.auditoria import (
     CURRENT_SCHEMA_VERSION,
     registrar_auditoria,
     verificar_integridad_sqlite,
+)
+from observability.metrics import (
+    AUDITORIA_ERRORS_TOTAL,
+    AUDITORIA_LOCK_CONTENTION_TOTAL,
+    AUDITORIA_LOCK_WAIT_SECONDS,
+    AUDITORIA_WRITE_LATENCY_SECONDS,
+    AUDITORIA_WRITES_TOTAL,
 )
 
 
@@ -122,3 +130,57 @@ def test_verificar_integridad_sqlite_detecta_manipulacion(monkeypatch, tmp_path)
         conn.commit()
 
     assert not verificar_integridad_sqlite(archivo)
+
+
+def _counter_value(metric, formato: str) -> float:
+    return metric.labels(formato=formato)._value
+
+
+def _histogram_count(metric, formato: str) -> int:
+    return len(metric.labels(formato=formato)._observations)
+
+
+def test_auditoria_metrics_registran_escritura(monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    formato = "jsonl"
+    inicial_writes = _counter_value(AUDITORIA_WRITES_TOTAL, formato)
+    inicial_errors = _counter_value(AUDITORIA_ERRORS_TOTAL, formato)
+    inicial_latency = _histogram_count(AUDITORIA_WRITE_LATENCY_SECONDS, formato)
+    inicial_wait = _histogram_count(AUDITORIA_LOCK_WAIT_SECONDS, formato)
+    inicial_contention = _counter_value(AUDITORIA_LOCK_CONTENTION_TOTAL, formato)
+
+    registrar_auditoria(
+        symbol="XRPUSDT",
+        evento=AuditEvent.ENTRY,
+        resultado=AuditResult.SUCCESS,
+    )
+
+    assert _counter_value(AUDITORIA_WRITES_TOTAL, formato) == inicial_writes + 1
+    assert _counter_value(AUDITORIA_ERRORS_TOTAL, formato) == inicial_errors
+    assert _histogram_count(AUDITORIA_WRITE_LATENCY_SECONDS, formato) == inicial_latency + 1
+    assert _histogram_count(AUDITORIA_LOCK_WAIT_SECONDS, formato) == inicial_wait + 1
+    assert _counter_value(AUDITORIA_LOCK_CONTENTION_TOTAL, formato) >= inicial_contention
+
+
+def test_auditoria_metrics_registran_errores(monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    formato = "jsonl"
+    inicial_writes = _counter_value(AUDITORIA_WRITES_TOTAL, formato)
+    inicial_errors = _counter_value(AUDITORIA_ERRORS_TOTAL, formato)
+    inicial_latency = _histogram_count(AUDITORIA_WRITE_LATENCY_SECONDS, formato)
+
+    def _boom(*args, **kwargs):
+        raise OSError("boom")
+
+    monkeypatch.setattr("core.auditoria._append_jsonl", _boom)
+
+    with pytest.raises(OSError):
+        registrar_auditoria(
+            symbol="ADAUSDT",
+            evento=AuditEvent.EXIT,
+            resultado=AuditResult.FAILURE,
+        )
+
+    assert _counter_value(AUDITORIA_WRITES_TOTAL, formato) == inicial_writes
+    assert _counter_value(AUDITORIA_ERRORS_TOTAL, formato) == inicial_errors + 1
+    assert _histogram_count(AUDITORIA_WRITE_LATENCY_SECONDS, formato) == inicial_latency
