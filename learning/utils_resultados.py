@@ -89,13 +89,22 @@ def _normalizar_valor_peso(valor: Any) -> float | None:
         except ValueError:
             return None
     if isinstance(valor, dict):
+        activo = valor.get("activo", valor.get("active"))
+        if isinstance(activo, bool):
+            if not activo:
+                return None
+        elif isinstance(activo, (int, float)):
+            if activo <= 0:
+                return None
         for key in ("peso", "weight", "score", "valor", "value"):
             if key in valor:
                 try:
-                    return float(valor[key])
+                    peso_val = float(valor[key])
                 except (TypeError, ValueError):
                     continue
-        activo = valor.get("activo") or valor.get("active")
+                if peso_val <= 0:
+                    continue
+                return peso_val
         if isinstance(activo, bool):
             return 1.0 if activo else None
         if isinstance(activo, (int, float)):

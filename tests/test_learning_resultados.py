@@ -2,8 +2,8 @@ import json
 import pandas as pd
 import pytest
 from learning.analisis_resultados import analizar_estrategias_en_ordenes
-from learning.entrenador_estrategias import evaluar_estrategias
-from learning.utils_resultados import distribuir_retorno_por_estrategia
+from learning.entrenador_estrategias import calcular_pesos_suavizados, evaluar_estrategias
+from learning.utils_resultados import distribuir_retorno_por_estrategia, extraer_pesos_estrategias
 
 
 def test_distribuir_retorno_por_pesos():
@@ -57,3 +57,39 @@ def test_analizar_estrategias_usa_retorno_total(tmp_path):
     assert trend["retorno_total"] == pytest.approx(-0.1)
     assert trend["total"] == 2
     assert rsi["retorno_total"] == pytest.approx(0.5)
+
+
+def test_extraer_pesos_ignora_inactivos():
+    estrategias = {
+        "ema": {"activo": False, "score": 2.0},
+        "macd": {"activo": True, "score": 1.0},
+    }
+
+    pesos = extraer_pesos_estrategias(estrategias)
+
+    assert "ema" not in pesos
+    assert pesos["macd"] == pytest.approx(1.0)
+
+
+def test_calcular_pesos_suavizados_penaliza_por_validacion():
+    train_df = pd.DataFrame([
+        {"estrategias_activas": {"ema": True}, "retorno_total": 1.0},
+        {"estrategias_activas": {"ema": True}, "retorno_total": 0.8},
+    ])
+    test_df = pd.DataFrame([
+        {"estrategias_activas": {"ema": True}, "retorno_total": -0.6},
+        {"estrategias_activas": {"ema": True}, "retorno_total": -0.4},
+    ])
+
+    pesos_actuales = {"ema": 0.5}
+    pesos, metricas = calcular_pesos_suavizados(
+        train_df,
+        test_df,
+        pesos_actuales,
+        factor_suavizado=0.1,
+        minimo_operaciones=2,
+    )
+
+    assert pesos is not None
+    assert pesos["ema"] == pytest.approx(0.5 * (1 - 0.1))
+    assert metricas["ema"]["promedio"] < 0

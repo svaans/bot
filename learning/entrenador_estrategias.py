@@ -2,6 +2,7 @@ import os
 import time
 import pandas as pd
 from collections import defaultdict
+from typing import Dict, Iterable, Mapping, Tuple
 from dotenv import dotenv_values
 from core.strategies.pesos import gestor_pesos
 from core.utils.utils import configurar_logger
@@ -30,6 +31,86 @@ def evaluar_estrategias(ordenes: pd.DataFrame):
 def normalizar_scores(scores):
     max_score = max(scores.values(), default=1)
     return {k: (v / max_score) for k, v in scores.items()}
+
+
+def _resumir_metricas(retornos: Iterable[float]) -> Dict[str, float]:
+    retornos = list(retornos)
+    if not retornos:
+        return {'n': 0, 'promedio': 0.0, 'winrate': 0.0}
+    n = len(retornos)
+    promedio = sum(retornos) / n
+    winrate = sum(1 for r in retornos if r > 0) / n
+    return {'n': n, 'promedio': promedio, 'winrate': winrate}
+
+
+def calcular_pesos_suavizados(
+    train_df: pd.DataFrame,
+    test_df: pd.DataFrame,
+    pesos_actuales: Mapping[str, float],
+    factor_suavizado: float,
+    minimo_operaciones: int = MIN_OPERACIONES,
+) -> Tuple[Dict[str, float] | None, Dict[str, Dict[str, float]]]:
+    """Calcula pesos suavizados con penalización basada en validación.
+
+    Retorna una tupla ``(pesos_actualizados, metricas_test)`` donde
+    ``pesos_actualizados`` puede ser ``None`` si no se producen cambios.
+    ``metricas_test`` expone las métricas agregadas por estrategia en el
+    conjunto de validación.
+    """
+
+    datos_estrategias = evaluar_estrategias(train_df)
+    nuevos_scores = {}
+    for estrategia, retornos in datos_estrategias.items():
+        if len(retornos) < minimo_operaciones:
+            continue
+        promedio = sum(retornos) / len(retornos)
+        winrate = sum(1 for r in retornos if r > 0) / len(retornos)
+        score = promedio * winrate * 100
+        if score > 0:
+            nuevos_scores[estrategia] = score
+
+    metricas_test = {
+        estrategia: _resumir_metricas(retornos)
+        for estrategia, retornos in evaluar_estrategias(test_df).items()
+        if retornos
+    }
+
+    if not nuevos_scores and not metricas_test:
+        return None, metricas_test
+
+    nuevos_scores_normalizados = normalizar_scores(nuevos_scores) if nuevos_scores else {}
+    umbral_validacion = max(1, minimo_operaciones // 2)
+    pesos_suavizados: Dict[str, float] = dict(pesos_actuales)
+    cambios = False
+
+    for estrategia, score in nuevos_scores_normalizados.items():
+        peso_actual = float(pesos_actuales.get(estrategia, 0.5))
+        metrica_test = metricas_test.get(estrategia)
+        if (
+            metrica_test
+            and metrica_test['n'] >= umbral_validacion
+            and metrica_test['promedio'] <= 0
+        ):
+            peso_nuevo = peso_actual * (1 - factor_suavizado)
+        else:
+            peso_nuevo = peso_actual * (1 - factor_suavizado) + score * factor_suavizado
+        if abs(peso_nuevo - peso_actual) > 1e-9:
+            cambios = True
+        pesos_suavizados[estrategia] = peso_nuevo
+
+    # Penaliza estrategias existentes con mal desempeño en validación aunque no hayan generado score nuevo.
+    for estrategia, metrica_test in metricas_test.items():
+        if estrategia in nuevos_scores_normalizados:
+            continue
+        if metrica_test['n'] < umbral_validacion or metrica_test['promedio'] > 0:
+            continue
+        peso_actual = float(pesos_actuales.get(estrategia, 0.5))
+        peso_nuevo = peso_actual * (1 - factor_suavizado)
+        if abs(peso_nuevo - peso_actual) > 1e-9:
+            cambios = True
+        pesos_suavizados[estrategia] = peso_nuevo
+
+    return (pesos_suavizados if cambios else None), metricas_test
 
 
 def dividir_train_test(df: pd.DataFrame, test_ratio: float=0.2):
@@ -69,40 +150,30 @@ def actualizar_pesos_estrategias_symbol(symbol: str):
     else:
         vol_ret = 0.0
     FACTOR_SUAVIZADO = max(0.01, min(0.05, 0.02 + vol_ret * 0.1))
-    datos_estrategias = evaluar_estrategias(train_df)
-    nuevos_scores = {}
-    for estrategia, retornos in datos_estrategias.items():
-        if len(retornos) < MIN_OPERACIONES:
-            continue
-        promedio = sum(retornos) / len(retornos)
-        winrate = sum(1 for r in retornos if r > 0) / len(retornos)
-        score = promedio * winrate * 100
-        if score > 0:
-            nuevos_scores[estrategia] = score
-    if not nuevos_scores:
-        log.info(f'⚠️ No se generaron scores válidos para {symbol}.')
-        return
-    nuevos_scores_normalizados = normalizar_scores(nuevos_scores)
     pesos_totales = gestor_pesos.pesos
     pesos_actuales = pesos_totales.get(symbol, {})
-    pesos_suavizados = pesos_actuales.copy()
-    for estrategia, score in nuevos_scores_normalizados.items():
-        peso_actual = pesos_actuales.get(estrategia, 0.5)
-        peso_nuevo = peso_actual * (1 - FACTOR_SUAVIZADO
-            ) + score * FACTOR_SUAVIZADO
-        pesos_suavizados[estrategia] = peso_nuevo
+    pesos_suavizados, metricas_test = calcular_pesos_suavizados(
+        train_df,
+        test_df,
+        pesos_actuales,
+        FACTOR_SUAVIZADO,
+        minimo_operaciones=MIN_OPERACIONES,
+    )
+    if pesos_suavizados is None:
+        log.info(f'⚠️ No se generaron ajustes para {symbol}.')
+        return
     pesos_totales[symbol] = pesos_suavizados
-    gestor_pesos.guardar(pesos_totales)
+    gestor_pesos.pesos = pesos_totales
+    gestor_pesos.guardar()
     print(
         f"✅ Pesos suavizados para {symbol} en modo {'REAL' if MODO_REAL else 'SIMULADO'}:"
         )
     for estrategia, peso in pesos_suavizados.items():
         print(f'  - {estrategia}: {peso:.3f}')
-    datos_test = evaluar_estrategias(test_df)
-    resultados = [r for lst in datos_test.values() for r in lst]
-    if resultados:
-        promedio = sum(resultados) / len(resultados)
-        winrate = sum(1 for r in resultados if r > 0) / len(resultados)
-        log.info(
-            f'📊 Validación {symbol}: retorno medio {promedio:.3f}, winrate {winrate * 100:.2f}%'
+    if metricas_test:
+        resumen = []
+        for estrategia, metricas in metricas_test.items():
+            resumen.append(
+                f"{estrategia}: retorno={metricas['promedio']:.3f}, winrate={metricas['winrate'] * 100:.1f}% (n={metricas['n']})"
             )
+        log.info(f"📊 Validación {symbol}: {'; '.join(resumen)}")
