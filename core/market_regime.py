@@ -20,6 +20,18 @@ ATR_RANGE_THRESHOLD = 0.006
 ATR_CONFIRM_PERIOD = 14
 
 
+@dataclass(frozen=True)
+class RegimeThresholds:
+    """Conjunto de umbrales configurables para clasificación de régimen."""
+
+    alta_volatilidad: float = ALTA_VOL_THRESHOLD
+    slope_upper: float = SLOPE_UPPER_THRESHOLD
+    slope_lower: float = SLOPE_LOWER_THRESHOLD
+    min_ema_spread: float = MIN_EMA_SPREAD
+    atr_trend: float = ATR_TREND_THRESHOLD
+    atr_range: float = ATR_RANGE_THRESHOLD
+
+
 @dataclass
 class _RegimeState:
     """Mantiene el régimen previo para aplicar histéresis por símbolo."""
@@ -150,7 +162,9 @@ def _resample(df: pd.DataFrame, rule: str) -> Optional[pd.DataFrame]:
     return result if not result.empty else None
 
 
-def _ema_confirmation(df: pd.DataFrame, slope_pct: float) -> Optional[bool]:
+def _ema_confirmation(
+    df: pd.DataFrame, slope_pct: float, thresholds: RegimeThresholds
+) -> Optional[bool]:
     """Confirma tendencia con EMAs 50/200 en 1H si hay datos suficientes."""
 
     resampled = _resample(df, "1H")
@@ -166,7 +180,7 @@ def _ema_confirmation(df: pd.DataFrame, slope_pct: float) -> Optional[bool]:
     if isclose(ema200_last, 0.0, abs_tol=1e-12):
         return None
     spread = (ema50_last - ema200_last) / abs(ema200_last)
-    if abs(spread) < MIN_EMA_SPREAD:
+    if abs(spread) < thresholds.min_ema_spread:
         return False
     direction = 1 if slope_pct >= 0 else -1
     if direction >= 0:
@@ -174,7 +188,9 @@ def _ema_confirmation(df: pd.DataFrame, slope_pct: float) -> Optional[bool]:
     return ema50_last < ema200_last
 
 
-def _atr_confirmation(df: pd.DataFrame) -> Optional[bool]:
+def _atr_confirmation(
+    df: pd.DataFrame, thresholds: RegimeThresholds
+) -> Optional[bool]:
     """Utiliza ATR en 15m para validar si el mercado está dinámico."""
 
     resampled = _resample(df, "15T")
@@ -187,21 +203,23 @@ def _atr_confirmation(df: pd.DataFrame) -> Optional[bool]:
     if isclose(cierre, 0.0, abs_tol=1e-12):
         return None
     ratio = float(atr) / cierre
-    if ratio >= ATR_TREND_THRESHOLD:
+    if ratio >= thresholds.atr_trend:
         return True
-    if ratio <= ATR_RANGE_THRESHOLD:
+    if ratio <= thresholds.atr_range:
         return False
     return None
 
 
-def _multi_horizon_confirmation(df: pd.DataFrame, slope_pct: float) -> Optional[bool]:
+def _multi_horizon_confirmation(
+    df: pd.DataFrame, slope_pct: float, thresholds: RegimeThresholds
+) -> Optional[bool]:
     """Combina las confirmaciones de EMA 1H y ATR 15m."""
 
     confirmaciones = []
-    ema_conf = _ema_confirmation(df, slope_pct)
+    ema_conf = _ema_confirmation(df, slope_pct, thresholds)
     if ema_conf is not None:
         confirmaciones.append(ema_conf)
-    atr_conf = _atr_confirmation(df)
+    atr_conf = _atr_confirmation(df, thresholds)
     if atr_conf is not None:
         confirmaciones.append(atr_conf)
     if not confirmaciones:
@@ -211,38 +229,46 @@ def _multi_horizon_confirmation(df: pd.DataFrame, slope_pct: float) -> Optional[
     return True
 
 
-def _resolver_regimen(state: _RegimeState, slope_pct: float, tendencia_confirmada: Optional[bool]) -> str:
+def _resolver_regimen(
+    state: _RegimeState,
+    slope_pct: float,
+    tendencia_confirmada: Optional[bool],
+    thresholds: RegimeThresholds,
+) -> str:
     """Aplica histéresis sobre el ``slope`` para clasificar el régimen."""
 
     abs_slope = abs(slope_pct)
     if tendencia_confirmada is False:
         return "lateral"
     if state.last_regime == "tendencial":
-        if abs_slope <= SLOPE_LOWER_THRESHOLD:
+        if abs_slope <= thresholds.slope_lower:
             return "lateral"
         return "tendencial"
-    if abs_slope >= SLOPE_UPPER_THRESHOLD and tendencia_confirmada in (None, True):
+    if abs_slope >= thresholds.slope_upper and tendencia_confirmada in (None, True):
         return "tendencial"
     return "lateral"
 
 
-def detectar_regimen(df: pd.DataFrame) ->str:
+def detectar_regimen(
+    df: pd.DataFrame, *, thresholds: RegimeThresholds | None = None
+) -> str:
     """Clasifica el régimen de mercado con histéresis y confirmaciones."""
 
     symbol = _extract_symbol(df)
     state = _get_state(symbol)
+    params = thresholds or RegimeThresholds()
     vol_realizada = medir_volatilidad(df)
     vol_impl = _extract_implied_vol(df)
     atr_ratio = _atr_ratio_actual(df)
     vol_total = max(vol_realizada, vol_impl, atr_ratio)
     slope_pct = pendiente_medias(df)
-    if vol_total >= ALTA_VOL_THRESHOLD:
+    if vol_total >= params.alta_volatilidad:
         state.last_regime = "alta_volatilidad"
         state.last_slope = slope_pct
         state.last_direction = 1 if slope_pct > 0 else -1 if slope_pct < 0 else 0
         return "alta_volatilidad"
-    confirmacion = _multi_horizon_confirmation(df, slope_pct)
-    nuevo_regimen = _resolver_regimen(state, slope_pct, confirmacion)
+    confirmacion = _multi_horizon_confirmation(df, slope_pct, params)
+    nuevo_regimen = _resolver_regimen(state, slope_pct, confirmacion, params)
     state.last_regime = nuevo_regimen
     state.last_slope = slope_pct
     state.last_direction = 1 if slope_pct > 0 else -1 if slope_pct < 0 else 0
