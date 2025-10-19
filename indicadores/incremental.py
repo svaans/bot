@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections import deque
+from math import isclose, isfinite
 from typing import Any
 
 import pandas as pd
@@ -56,6 +57,97 @@ def _resolve_df(estado: Any, df: pd.DataFrame | None) -> pd.DataFrame | None:
     return None
 
 
+def _normalize_timestamp(value: Any) -> float | None:
+    """Normaliza timestamps en segundos (acepta milisegundos)."""
+
+    if value is None:
+        return None
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not isfinite(numeric) or numeric <= 0:
+        return None
+    if numeric >= 1e11:
+        return numeric / 1000.0
+    return numeric
+
+
+def _extract_progress_markers(df: pd.DataFrame) -> tuple[float | None, float | None]:
+    """Obtiene los marcadores (timestamp, close) de la última vela disponible."""
+
+    if df.empty:
+        return (None, None)
+
+    ts_value = None
+    close_value = None
+    if "timestamp" in df.columns:
+        try:
+            ts_value = df.iloc[-1]["timestamp"]
+        except Exception:
+            ts_value = None
+    if "close" in df.columns:
+        try:
+            close_value = float(df.iloc[-1]["close"])
+        except Exception:
+            close_value = None
+    ts = _normalize_timestamp(ts_value)
+    if close_value is None or not isfinite(close_value):
+        close = None
+    else:
+        close = float(close_value)
+    return (ts, close)
+
+
+def _resolve_incremental_cache(
+    estado: Any,
+    df: pd.DataFrame | None,
+) -> dict[str, Any]:
+    """Devuelve el cache incremental asegurando coherencia con la última vela."""
+
+    cache = _ensure_state_cache(estado)
+    df_util = df if isinstance(df, pd.DataFrame) and not df.empty else None
+    meta = cache.get("_meta")
+    if not isinstance(meta, dict):
+        meta = {}
+
+    reset_needed = bool(meta.get("invalidated"))
+    ts = None
+    close = None
+    if df_util is not None:
+        ts, close = _extract_progress_markers(df_util)
+
+    last_ts = meta.get("last_timestamp") if isinstance(meta.get("last_timestamp"), (int, float)) else None
+    last_close = meta.get("last_close") if isinstance(meta.get("last_close"), (int, float)) else None
+
+    if ts is not None and last_ts is not None:
+        if ts < last_ts:
+            reset_needed = True
+        elif ts == last_ts and close is not None and last_close is not None:
+            if not isclose(close, float(last_close), rel_tol=1e-9, abs_tol=1e-9):
+                reset_needed = True
+
+    if reset_needed:
+        cache.clear()
+        meta = {}
+        cache["_meta"] = meta
+    else:
+        cache["_meta"] = meta
+
+    if ts is not None:
+        meta["last_timestamp"] = float(ts)
+    elif reset_needed:
+        meta.pop("last_timestamp", None)
+
+    if close is not None:
+        meta["last_close"] = float(close)
+    elif reset_needed:
+        meta.pop("last_close", None)
+
+    meta.pop("invalidated", None)
+    return cache
+
+
 def actualizar_rsi_incremental(
     estado: Any,
     df: pd.DataFrame | None = None,
@@ -66,19 +158,24 @@ def actualizar_rsi_incremental(
     df_resuelto = _resolve_df(estado, df)
     if df_resuelto is None:
         return None
+    
+    cache_global = _resolve_incremental_cache(estado, df_resuelto)
 
     serie = serie_cierres(df_resuelto)
     if serie is None or len(serie) < periodo + 1:
         return None
 
     serie = serie.astype(float)
-    cache_global = _ensure_state_cache(estado)
     datos_rsi = cache_global.get("rsi")
-    ultimo_cierre = float(df["close"].iloc[-1])
+    ultimo_cierre = float(serie.iloc[-1])
 
-    if not datos_rsi or datos_rsi.get("periodo") != periodo or len(df) <= periodo:
+    if (
+        not datos_rsi
+        or datos_rsi.get("periodo") != periodo
+        or len(df_resuelto) <= periodo
+    ):
         # Inicialización: calcular RSI completo y promedios
-        delta = df["close"].diff()
+        delta = df_resuelto["close"].diff()
         ganancia = delta.clip(lower=0)
         perdida = -delta.clip(upper=0)
         avg_gain = (
@@ -131,13 +228,14 @@ def actualizar_momentum_incremental(
     df_resuelto = _resolve_df(estado, df)
     if df_resuelto is None:
         return 0.0
+    
+    cache_global = _resolve_incremental_cache(estado, df_resuelto)
 
     serie = serie_cierres(df_resuelto)
     if serie is None or len(serie) < periodo + 1:
         return 0.0
 
     serie = serie.astype(float)
-    cache_global = _ensure_state_cache(estado)
     datos = cache_global.get("momentum")
     ultimo_cierre = float(serie.iloc[-1])
 
@@ -194,7 +292,7 @@ def actualizar_atr_incremental(
     if len(df_filtrado) < periodo + 1:
         return None
 
-    cache_global = _ensure_state_cache(estado)
+    cache_global = _resolve_incremental_cache(estado, df_filtrado)
     datos = cache_global.get("atr")
     h = float(df_filtrado["high"].iloc[-1])
     l = float(df_filtrado["low"].iloc[-1])

@@ -731,6 +731,13 @@ class BufferManager:
             st.last_df = None
             st.last_hash = (0, 0)
             st.indicators_state.clear()
+            if drop_state:
+                meta = st.indicators_state.get("_meta")
+                if not isinstance(meta, dict):
+                    meta = {}
+                meta.clear()
+                meta["invalidated"] = True
+                st.indicators_state["_meta"] = meta
             metric_tf = st.timeframe or (key if key != "default" else "unknown")
             try:
                 safe_set(BUFFER_SIZE_V2, 0, timeframe=metric_tf)
