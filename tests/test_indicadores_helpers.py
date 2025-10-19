@@ -86,3 +86,45 @@ def test_indicator_cache_is_thread_safe(monkeypatch):
         assert call_count['value'] == 1
     finally:
         _reset_indicator_settings_cache_for_tests()
+
+
+def test_cache_key_depends_on_dataframe_fingerprint(monkeypatch):
+    monkeypatch.setenv('INDICADORES_CACHE_MAX_ENTRIES', '4')
+    _reset_indicator_settings_cache_for_tests()
+
+    df1 = pd.DataFrame(
+        {
+            'timestamp': [1_000, 2_000],
+            'close': [10.0, 11.0],
+        }
+    )
+    df1.attrs['_indicators_cache_fingerprint'] = (len(df1), 2_000)
+
+    compute_calls = {'value': 0}
+
+    def compute(_df: pd.DataFrame) -> float:
+        compute_calls['value'] += 1
+        return float(_df['close'].iloc[-1])
+
+    try:
+        valor_inicial = helpers._cached_value(df1, ('foo', 1), compute)
+        assert valor_inicial == 11.0
+
+        cache_obj = df1.attrs.get('_indicators_cache')
+        assert cache_obj is not None
+
+        df2 = pd.concat(
+            [
+                df1,
+                pd.DataFrame({'timestamp': [3_000], 'close': [12.0]}),
+            ],
+            ignore_index=True,
+        )
+        df2.attrs['_indicators_cache'] = cache_obj
+        df2.attrs['_indicators_cache_fingerprint'] = (len(df2), 3_000)
+
+        valor_actualizado = helpers._cached_value(df2, ('foo', 1), compute)
+        assert valor_actualizado == 12.0
+        assert compute_calls['value'] == 2
+    finally:
+        _reset_indicator_settings_cache_for_tests()

@@ -184,6 +184,17 @@ def _ensure_cache(df: pd.DataFrame) -> _IndicatorsCache:
     return cache
 
 
+def _normalize_cache_key(
+    df: pd.DataFrame, key: tuple[Hashable, ...]
+) -> tuple[Hashable, ...]:
+    """Adjunta la huella del ``DataFrame`` al ``key`` para evitar *stale cache*."""
+
+    fingerprint = df.attrs.get('_indicators_cache_fingerprint')
+    if isinstance(fingerprint, Hashable):
+        return key + (("__fp__", fingerprint),)
+    return key
+
+
 def _cached_value(
     df: pd.DataFrame, key: tuple[Hashable, ...], compute: Callable[[pd.DataFrame], Any]
 ) -> Any:
@@ -194,7 +205,8 @@ def _cached_value(
         return compute(df)
 
     cache = _ensure_cache(df)
-    return cache.get_or_compute(key, lambda: compute(df))
+    normalized_key = _normalize_cache_key(df, key)
+    return cache.get_or_compute(normalized_key, lambda: compute(df))
 
 
 def clear_cache(df: pd.DataFrame) -> None:
@@ -212,7 +224,8 @@ def set_cached_value(df: pd.DataFrame, key: tuple[Hashable, ...], value: Any) ->
         return value
 
     cache = _ensure_cache(df)
-    return cache.set(key, value)
+    normalized_key = _normalize_cache_key(df, key)
+    return cache.set(normalized_key, value)
 
 
 def get_rsi(data, periodo: int = 14, serie_completa: bool = False):

@@ -305,6 +305,32 @@ def _hash_buffer(items: Deque[dict]) -> Tuple[int, int]:
     return (len(items), int(items[-1].get("timestamp", 0)))
 
 
+def _dataframe_fingerprint(df: Optional[pd.DataFrame]) -> Tuple[int, int]:
+    """Genera una huella ligera basada en len/timestamp para invalidar caches."""
+
+    if df is None:
+        return (0, 0)
+
+    length = len(df)
+    if length == 0:
+        return (0, 0)
+
+    if "timestamp" not in df.columns:
+        return (length, 0)
+
+    try:
+        last_value = df["timestamp"].iloc[-1]
+    except Exception:
+        return (length, 0)
+
+    try:
+        last_ts = int(float(last_value))
+    except (TypeError, ValueError):
+        last_ts = 0
+
+    return (length, last_ts)
+
+
 def _get_fastpath_mode(state: Any) -> str:
     """Obtiene el modo de fastpath almacenado en el estado del trader."""
 
@@ -728,6 +754,8 @@ class BufferManager:
         st, _tf_key, tf_label = self._get_state(symbol, timeframe)
         h = _hash_buffer(st.buffer)
         normalized_symbol = self._normalize_symbol(symbol)
+        prev_df = st.last_df if isinstance(st.last_df, pd.DataFrame) else None
+        prev_fp = _dataframe_fingerprint(prev_df)
 
         if h == st.last_hash and st.last_df is not None:
             if tf_label:
@@ -770,6 +798,19 @@ class BufferManager:
             df = df.sort_values("timestamp", kind="mergesort")
         except Exception:
             pass
+
+        fingerprint = _dataframe_fingerprint(df)
+        df.attrs["_indicators_cache_fingerprint"] = fingerprint
+
+        if prev_df is not None:
+            prev_cache = prev_df.attrs.get("_indicators_cache")
+            appended_only = (
+                prev_fp[0] > 0
+                and fingerprint[0] == prev_fp[0] + 1
+                and fingerprint[1] >= prev_fp[1]
+            )
+            if appended_only and hasattr(prev_cache, "get_or_compute") and hasattr(prev_cache, "set"):
+                df.attrs["_indicators_cache"] = prev_cache
 
         _attach_timeframe(df, tf_label)
         st.last_df = df
