@@ -19,7 +19,7 @@ from indicadores.rsi import calcular_rsi
 @dataclass
 class DummyConfig:
     symbols: list[str]
-    intervalo_velas: str = "5m"
+    intervalo_velas: str = "1m"
     modo_real: bool = False
     modo_operativo: OperationalMode = OperationalMode.PAPER_TRADING
     trader_fastpath_enabled: bool = False
