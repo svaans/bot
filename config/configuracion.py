@@ -102,6 +102,7 @@ def backup_json(path: str) -> None:
                     "motivo": "permission_error",
                 },
             )
+            _emit_recurrent_permission_alert(src)
         except (OSError, PermissionError) as inner_exc:
             log.error(
                 '❌ No fue posible crear el backup',
