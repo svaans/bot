@@ -127,3 +127,18 @@ def test_buffer_manager_clear_invalidates_incremental_context() -> None:
     assert isinstance(meta, dict)
     assert meta.get("invalidated") is True
     assert "foo" not in cache_ref
+
+
+def test_buffer_manager_get_indicator_value_returns_expected_payload() -> None:
+    manager = BufferManager(maxlen=5)
+    state = manager.state("BTCUSDT", "1h")
+    payload = {"valor": 55.5, "periodo": 14}
+    state.indicators_state["rsi"] = payload
+
+    assert manager.get_indicator_value("BTCUSDT", "1h", "rsi") == 55.5
+    assert manager.get_indicator_value("BTCUSDT", "1h", "RSI") == 55.5
+    assert manager.get_indicator_value("BTCUSDT", "1h", "rsi", value_key=None) is payload
+    assert (
+        manager.get_indicator_value("BTCUSDT", "1h", "momentum", default=None)
+        is None
+    )

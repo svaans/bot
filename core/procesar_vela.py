@@ -756,6 +756,56 @@ class BufferManager:
 
         st, _tf_key, _tf_label = self._get_state(symbol, timeframe)
         return st
+    
+    def get_indicator_value(
+        self,
+        symbol: str,
+        timeframe: Optional[str],
+        indicator: str,
+        *,
+        value_key: str = "valor",
+        default: Any = None,
+    ) -> Any:
+        """Obtiene un valor incremental almacenado en el ``SymbolState``.
+
+        Args:
+            symbol: Par de trading cuyo estado se desea consultar.
+            timeframe: Intervalo asociado al cálculo incremental. Utiliza
+                ``None`` para el timeframe por defecto.
+            indicator: Nombre del indicador almacenado en ``indicators_state``.
+            value_key: Clave a devolver del diccionario del indicador. Por
+                defecto ``"valor"`` para mantener compatibilidad con los
+                incrementales actuales.
+            default: Valor a devolver cuando no exista información
+                almacenada.
+
+        Returns:
+            El valor solicitado o ``default`` si no se encuentra.
+        """
+
+        if not indicator:
+            return default
+
+        state = self.state(symbol, timeframe)
+        store = state.indicators_state
+
+        indicator_key = str(indicator)
+        entry = store.get(indicator_key)
+        if entry is None and indicator_key.lower() != indicator_key:
+            entry = store.get(indicator_key.lower())
+        if entry is None and indicator_key.upper() != indicator_key:
+            entry = store.get(indicator_key.upper())
+
+        if entry is None:
+            return default
+
+        if value_key is None:
+            return entry
+
+        if isinstance(entry, dict) and value_key in entry:
+            return entry[value_key]
+
+        return default
 
     def dataframe(self, symbol: str, timeframe: Optional[str] = None) -> Optional[pd.DataFrame]:
         st, _tf_key, tf_label = self._get_state(symbol, timeframe)
