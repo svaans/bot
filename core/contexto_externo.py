@@ -2,21 +2,25 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import ssl
-from datetime import datetime, timezone
-from typing import Awaitable, Callable, Dict, Iterable
 import time
+from datetime import datetime, timezone
 from math import isclose
+from typing import Awaitable, Callable, Dict, Iterable
+
 import websockets
 
 # ❌ Eliminado: keepalive manual para evitar doble ping/pong
 # from binance_api.websocket import _keepalive
 
-from core.utils.utils import configurar_logger
+from binance_api.cliente import BinanceClient, fetch_ohlcv_async, obtener_cliente
+from core.utils.utils import configurar_logger, intervalo_a_segundos
 from core.supervisor import supervised_task, tick
 from core.utils.backoff import calcular_backoff
 from core.registro_metrico import registro_metrico
+from core.contexto_storage import PuntajeStore
 
 UTC = timezone.utc
 
@@ -64,6 +68,13 @@ class StreamContexto:
         backoff_cap: float = 60.0,
         circuit_breaker: float = 300.0,
         ssl_context: ssl.SSLContext | bool | None = None,
+        *,
+        rest_poll_interval: int = 120,
+        rest_timeframe: str = "5m",
+        rest_freeze_tolerance: int | None = None,
+        rest_client: BinanceClient | None = None,
+        puntajes_store: PuntajeStore | None = None,
+        puntajes_ttl: int | None = None,
     ) -> None:
         self.url_template = url_template or CONTEXT_WS_URL
         self.monitor_interval = max(1, monitor_interval)
@@ -81,14 +92,187 @@ class StreamContexto:
         self._tasks: Dict[str, asyncio.Task] = {}
         self._last: Dict[str, datetime] = {}
         self._last_monotonic: Dict[str, float] = {}
+        self._last_event_ts: Dict[str, int] = {}
         self._monitor_task: asyncio.Task | None = None
+        self._rest_task: asyncio.Task | None = None
         self._handler_actual: Callable[[str, float], Awaitable[None]] | None = None
         self._running = False
         self._symbols: list[str] = []
+        self._rest_poll_interval = max(0, int(rest_poll_interval))
+        self._rest_timeframe = rest_timeframe
+        self._rest_interval_ms = max(1, intervalo_a_segundos(rest_timeframe)) * 1000
+        self._rest_freeze_tolerance_ms = (
+            int(rest_freeze_tolerance) * 1000
+            if rest_freeze_tolerance is not None and rest_freeze_tolerance > 0
+            else inactivity_timeout * 1000
+        )
+        self._rest_client: BinanceClient | None = rest_client
+        self._own_rest_client = rest_client is None
+        ttl = puntajes_ttl if puntajes_ttl is not None else max(int(inactivity_timeout), 60)
+        self._puntajes_store = puntajes_store or PuntajeStore(ttl_seconds=ttl)
+        self._puntajes_loaded = False
+        self._puntaje_lock = asyncio.Lock()
 
     def actualizar_datos_externos(self, symbol: str, datos: dict) -> None:
         actual = _DATOS_EXTERNOS.setdefault(symbol, {})
         actual.update(datos)
+
+    async def _hydrate_puntajes(self) -> None:
+        if self._puntajes_loaded:
+            return
+        try:
+            snapshots = await self._puntajes_store.load_all()
+        except Exception as exc:
+            log.warning(f'⚠️ No se pudieron cargar puntajes persistidos: {exc}')
+            self._puntajes_loaded = True
+            return
+        async with self._puntaje_lock:
+            for sym, snapshot in snapshots.items():
+                _PUNTAJES[sym] = float(snapshot.value)
+                metadata = dict(snapshot.metadata)
+                metadata.setdefault('source', metadata.get('source', 'store'))
+                metadata.setdefault('timeframe', metadata.get('timeframe', self._rest_timeframe))
+                self.actualizar_datos_externos(sym, metadata)
+                event_time = metadata.get('event_time') or metadata.get('close_time')
+                if isinstance(event_time, (int, float)):
+                    self._last_event_ts[sym] = int(event_time)
+        self._puntajes_loaded = True
+
+    async def _ensure_rest_client(self) -> BinanceClient | None:
+        if self._rest_client is None and self._own_rest_client:
+            try:
+                self._rest_client = obtener_cliente()
+            except Exception as exc:
+                log.warning(f'⚠️ No fue posible inicializar cliente REST: {exc}')
+                return None
+        return self._rest_client
+
+    async def _update_puntaje(
+        self,
+        symbol: str,
+        puntaje: float,
+        *,
+        source: str,
+        metadata: dict | None = None,
+        notify: bool = False,
+    ) -> None:
+        sym = symbol.upper()
+        meta = dict(metadata or {})
+        meta.setdefault('source', source)
+        meta.setdefault('timeframe', meta.get('timeframe', self._rest_timeframe))
+        event_time = meta.get('event_time') or meta.get('close_time')
+        if isinstance(event_time, (int, float)):
+            self._last_event_ts[sym] = int(event_time)
+        async with self._puntaje_lock:
+            _PUNTAJES[sym] = float(puntaje)
+            self.actualizar_datos_externos(sym, meta)
+        try:
+            await self._puntajes_store.set(sym, float(puntaje), meta)
+        except Exception as exc:
+            log.warning(f'⚠️ No se pudo persistir puntaje {sym}: {exc}')
+        if notify and self._handler_actual is not None:
+            try:
+                await self._handler_actual(sym, float(puntaje))
+                tick('context_stream' if source == 'ws' else 'context_rest_probe')
+            except Exception as exc:
+                log.warning(f'⚠️ Handler contexto {sym} falló: {exc}')
+
+    async def _apply_rest_snapshot(self, symbol: str, snapshot: dict) -> None:
+        open_price = float(snapshot.get('open') or 0.0)
+        volume = float(snapshot.get('volume') or 0.0)
+        if open_price <= 0.0 or volume < 1e-08:
+            return
+        close_price = float(snapshot.get('close') or 0.0)
+        puntaje = ((close_price - open_price) / open_price) * volume
+        await self._update_puntaje(
+            symbol,
+            puntaje,
+            source='rest',
+            metadata=snapshot,
+            notify=True,
+        )
+        event_reference = snapshot.get('event_time') or snapshot.get('close_time')
+        if isinstance(event_reference, (int, float)):
+            await self._handle_freeze_detection(symbol, int(event_reference))
+
+    async def _handle_freeze_detection(self, symbol: str, reference_ts: int) -> None:
+        tolerance = self._rest_freeze_tolerance_ms
+        if tolerance is None or reference_ts <= 0:
+            return
+        last_event = self._last_event_ts.get(symbol.upper())
+        if last_event is None or (reference_ts - last_event) <= tolerance:
+            return
+        log.warning(
+            "🔄 Stream contexto %s detectado desfasado (%sms); reiniciando", symbol, reference_ts - last_event
+        )
+        await self._restart_stream(symbol, reason='rest_freeze')
+
+    async def _restart_stream(self, symbol: str, *, reason: str) -> None:
+        task = self._tasks.get(symbol)
+        if task is None:
+            return
+        log.warning(f'🔁 Reiniciando stream contexto {symbol} (razón: {reason})')
+        task.cancel()
+        with contextlib.suppress(asyncio.TimeoutError, asyncio.CancelledError, Exception):
+            await asyncio.wait_for(task, timeout=self.cancel_timeout)
+        if not self._running or self._handler_actual is None:
+            return
+        await asyncio.sleep(self.connection_delay)
+        self._tasks[symbol] = supervised_task(
+            lambda sym=symbol: self._stream(sym, self._handler_actual),
+            name=f"context_stream_{symbol}",
+        )
+        ahora = datetime.now(UTC)
+        self._last[symbol] = ahora
+        self._last_monotonic[symbol] = time.monotonic()
+
+    async def _rest_probe_loop(self) -> None:
+        while self._running:
+            if self._rest_poll_interval <= 0:
+                await asyncio.sleep(self.monitor_interval)
+                continue
+            await asyncio.sleep(self._rest_poll_interval)
+            if not self._running:
+                break
+            cliente = await self._ensure_rest_client()
+            if cliente is None:
+                continue
+            symbols = list(self._symbols)
+            for sym in symbols:
+                try:
+                    candles = await fetch_ohlcv_async(
+                        cliente,
+                        sym,
+                        self._rest_timeframe,
+                        limit=1,
+                    )
+                except Exception as exc:
+                    log.warning(f'⚠️ Error consultando REST para {sym}: {exc}')
+                    continue
+                if not candles:
+                    continue
+                candle = candles[-1]
+                open_time = int(float(candle[0]))
+                open_price = float(candle[1])
+                high = float(candle[2])
+                low = float(candle[3])
+                close_price = float(candle[4])
+                volume = float(candle[5])
+                snapshot = {
+                    'source': 'rest',
+                    'open_time': open_time,
+                    'close_time': open_time + self._rest_interval_ms,
+                    'event_time': open_time + self._rest_interval_ms,
+                    'open': open_price,
+                    'close': close_price,
+                    'high': high,
+                    'low': low,
+                    'volume': volume,
+                    'timeframe': self._rest_timeframe,
+                }
+                await self._apply_rest_snapshot(sym, snapshot)
+            with contextlib.suppress(Exception):
+                await self._puntajes_store.purge_expired()
 
     async def _stream(
         self, symbol: str, handler: Callable[[str, float], Awaitable[None]]
@@ -139,7 +323,20 @@ class StreamContexto:
                                     continue
                                 variacion_pct = (close - open_) / open_
                                 puntaje = variacion_pct * vol
-                                _PUNTAJES[symbol] = puntaje
+                                open_time = int(float(vela.get('t') or 0))
+                                close_time = int(float(vela.get('T') or vela.get('close_time') or 0))
+                                event_time = int(float(data.get('E') or vela.get('E') or close_time or 0))
+                                metadata = {
+                                    'source': 'ws',
+                                    'open': open_,
+                                    'close': close,
+                                    'volume': vol,
+                                    'open_time': open_time,
+                                    'close_time': close_time,
+                                    'event_time': event_time or close_time,
+                                    'timeframe': str(vela.get('i') or self._rest_timeframe),
+                                }
+                                await self._update_puntaje(symbol, puntaje, source='ws', metadata=metadata, notify=False)
                                 try:
                                     await handler(symbol, puntaje)
                                     tick('context_stream')
@@ -237,8 +434,12 @@ class StreamContexto:
         self._handler_actual = handler
         self._symbols = list(symbols)
         self._running = True
+        await self._hydrate_puntajes()
         if self._monitor_task is None or self._monitor_task.done():
             self._monitor_task = asyncio.create_task(self._monitor_inactividad())
+        if self._rest_poll_interval > 0:
+            if self._rest_task is None or self._rest_task.done():
+                self._rest_task = supervised_task(self._rest_probe_loop, name="context_rest_probe")
         for sym in self._symbols:
             if sym in self._tasks:
                 log.warning(f'⚠️ Stream duplicado para {sym}. Ignorando.')
@@ -257,6 +458,11 @@ class StreamContexto:
 
     async def detener(self) -> None:
         """Cancela todos los streams en ejecución."""
+        if self._rest_task and not self._rest_task.done():
+            self._rest_task.cancel()
+            with contextlib.suppress(asyncio.TimeoutError, asyncio.CancelledError, Exception):
+                await asyncio.wait_for(self._rest_task, timeout=self.cancel_timeout)
+        self._rest_task = None
         if self._monitor_task and not self._monitor_task.done():
             self._monitor_task.cancel()
             try:
@@ -280,6 +486,10 @@ class StreamContexto:
                 pass
         self._tasks.clear()
         self._symbols = []
+        if self._own_rest_client and self._rest_client is not None:
+            with contextlib.suppress(Exception):
+                await self._rest_client.close()
+            self._rest_client = None
 
 
 __all__ = [

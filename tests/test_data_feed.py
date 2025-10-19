@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import time
 from datetime import datetime, timezone
 from typing import Any, Callable
 
@@ -242,7 +243,34 @@ async def test_handle_candle_normalizes_binance_payload() -> None:
     assert queued["event_time"] == base_close
     assert queued["close"] == pytest.approx(101.5)
     assert queued["is_closed"] is True
+    
 
+@pytest.mark.asyncio
+async def test_handle_candle_rejects_excessive_event_delay(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("DF_MAX_EVENT_DELAY_SEC", "1")
+    events: list[tuple[str, dict[str, Any]]] = []
+    feed = make_feed(events=events)
+    symbol = "SOLUSDT"
+    feed._queues[symbol] = asyncio.Queue()
+
+    now_ms = int(time.time() * 1000)
+    aligned = now_ms - (now_ms % 60_000)
+    old_timestamp = aligned - 60_000
+    candle = {
+        "symbol": symbol,
+        "timestamp": old_timestamp,
+        "open": 10.0,
+        "close": 10.5,
+        "volume": 100.0,
+        "is_closed": True,
+        "event_time": old_timestamp,
+    }
+
+    await feed._handle_candle(symbol, candle)
+
+    assert feed._queues[symbol].empty()
+    assert feed._stats[symbol]["event_delay_dropped"] == 1
+    assert any(evt == "candle_event_delay" for evt, _ in events)
 
 @pytest.mark.asyncio
 async def test_handle_candle_ignores_misaligned_timestamp() -> None:

@@ -346,6 +346,33 @@ async def handle_candle(
         if metrics_enabled:
             registrar_vela_rechazada(symbol_label, "timestamp_unaligned", timeframe_label)
         return
+    
+    event_time_raw = candle.get("event_time") or candle.get("eventTime") or candle.get("E")
+    event_time = _to_int(event_time_raw)
+    if event_time is None:
+        event_time = _to_int(candle.get("close_time")) or _to_int(candle.get("closeTime"))
+    if event_time is not None:
+        candle["event_time"] = event_time
+        max_delay_ms = getattr(feed, "_max_event_delay_ms", None)
+        if max_delay_ms and not _from_backfill:
+            now_ms = int(time.time() * 1000)
+            delay_ms = max(0, now_ms - int(event_time))
+            feed._stats[symbol]["event_delay_ms"] = delay_ms
+            if delay_ms > max_delay_ms:
+                feed._stats[symbol]["event_delay_dropped"] += 1
+                if metrics_enabled:
+                    registrar_vela_rechazada(symbol_label, "event_delay", timeframe_label)
+                payload = {
+                    "symbol": symbol,
+                    "tf": feed.intervalo,
+                    "delay_ms": delay_ms,
+                    "max_delay_ms": max_delay_ms,
+                    "event_time": int(event_time),
+                    "timestamp": ts,
+                }
+                log.warning("candle.event_delay_exceeded", extra=safe_extra(payload))
+                events.emit_event(feed, "candle_event_delay", payload)
+                return
 
     candle["timestamp"] = ts
     candle.setdefault("timeframe", feed.intervalo)

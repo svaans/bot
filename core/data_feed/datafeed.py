@@ -45,6 +45,7 @@ class DataFeed:
         max_reconnect_time: float | None = None,
         queue_autotune: bool | None = None,
         queue_burst_factor: float | None = None,
+        max_event_delay_seconds: float | None = None,
     ) -> None:
         self.intervalo = intervalo
         self.intervalo_segundos = intervalo_a_segundos(intervalo)
@@ -156,6 +157,14 @@ class DataFeed:
         )
         self.ws_backoff_jitter = max(0.0, _safe_float(os.getenv("DF_WS_BACKOFF_JITTER", "0.25"), 0.25))
 
+        if max_event_delay_seconds is None:
+            max_event_delay_seconds = _safe_float(os.getenv("DF_MAX_EVENT_DELAY_SEC", "0"), 0.0)
+        self._max_event_delay_ms: float | None
+        if max_event_delay_seconds is None or max_event_delay_seconds <= 0:
+            self._max_event_delay_ms = None
+        else:
+            self._max_event_delay_ms = float(max_event_delay_seconds) * 1000.0
+            
         self._monitor_inactividad_task: asyncio.Task | None = None
         self._monitor_consumers_task: asyncio.Task | None = None
 
