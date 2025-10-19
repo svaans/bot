@@ -66,7 +66,6 @@ def _emit_recurrent_permission_alert(src: Path) -> None:
                 "umbral": FALLBACK_ALERT_THRESHOLD,
             },
         )
-        _emit_recurrent_permission_alert(src)
 
 
 def backup_json(path: str) -> None:
