@@ -12,6 +12,8 @@ import pytest
 from ta.momentum import RSIIndicator
 from ta.trend import MACD
 
+from indicadores.atr_breakout import calcular_atr_breakout
+from indicadores.estocastico import calcular_cruce_estocastico
 from indicadores.ichimoku import calcular_ichimoku_breakout
 from indicadores.macd import calcular_macd
 from indicadores.rsi import calcular_rsi, calcular_rsi_fast
@@ -101,3 +103,79 @@ def test_indicadores_retornan_none_con_historial_insuficiente() -> None:
     assert calcular_rsi(df_corto, periodo=14) is None
     assert calcular_rsi_fast(df_corto, periodo=14) is None
     assert calcular_ichimoku_breakout(df_corto, tenkan_period=9, kijun_period=26) == (None, None)
+    assert not calcular_cruce_estocastico(df_corto, k_period=5, d_period=3)
+    assert not calcular_atr_breakout(df_corto, periodo=9)
+
+
+def test_calcular_ichimoku_breakout_ignora_velas_abiertas() -> None:
+    df = _sample_dataframe(60)
+    df.loc[df.index[-1], 'is_closed'] = False
+    tenkan, kijun = calcular_ichimoku_breakout(df, tenkan_period=9, kijun_period=26)
+
+    df_cerrado = df[df['is_closed']]
+    expected_tenkan = (df_cerrado['high'].rolling(9).max() + df_cerrado['low'].rolling(9).min()) / 2
+    expected_kijun = (df_cerrado['high'].rolling(26).max() + df_cerrado['low'].rolling(26).min()) / 2
+
+    assert tenkan == pytest.approx(expected_tenkan.iloc[-1])
+    assert kijun == pytest.approx(expected_kijun.iloc[-1])
+
+
+def test_calcular_ichimoku_breakout_columnas_faltantes() -> None:
+    df = _sample_dataframe(40).drop(columns=['high'])
+    assert calcular_ichimoku_breakout(df, tenkan_period=9, kijun_period=26) == (None, None)
+
+
+def test_calcular_cruce_estocastico_detecta_cruce_alcista() -> None:
+    df = pd.DataFrame(
+        {
+            'high': [10, 12, 14, 16, 18, 20],
+            'low': [5, 5, 5, 5, 5, 5],
+            'close': [5, 7, 6, 8, 7, 9],
+            'is_closed': True,
+        }
+    )
+
+    assert calcular_cruce_estocastico(df, k_period=3, d_period=3)
+
+
+def test_calcular_cruce_estocastico_sin_cruce_o_datos() -> None:
+    df = pd.DataFrame(
+        {
+            'high': [10, 12, 14, 16, 18, 20],
+            'low': [5, 5, 5, 5, 5, 5],
+            'close': [9, 8, 7, 6, 5, 4],
+            'is_closed': True,
+        }
+    )
+
+    assert not calcular_cruce_estocastico(df, k_period=3, d_period=3)
+    assert not calcular_cruce_estocastico(df.iloc[:4], k_period=3, d_period=3)
+    assert not calcular_cruce_estocastico(df.drop(columns=['low']), k_period=3, d_period=3)
+
+
+def test_calcular_atr_breakout_detecta_breakout() -> None:
+    df = pd.DataFrame(
+        {
+            'high': [10, 11, 12, 13, 14, 16, 18, 20, 22, 25],
+            'low': [9, 9.5, 10, 11, 12, 13, 15, 17, 19, 22],
+            'close': [9.5, 10, 11, 12, 13, 14, 16, 18, 20, 24],
+            'is_closed': True,
+        }
+    )
+
+    assert calcular_atr_breakout(df, periodo=5)
+
+
+def test_calcular_atr_breakout_condiciones_fallidas() -> None:
+    df = pd.DataFrame(
+        {
+            'high': [10, 11, 12, 13, 14, 15],
+            'low': [9, 10, 11, 12, 13, 14],
+            'close': [9.5, 10.5, 11.5, 12.5, 13.5, 13.6],
+            'is_closed': True,
+        }
+    )
+
+    assert not calcular_atr_breakout(df, periodo=5)
+    assert not calcular_atr_breakout(df.iloc[:4], periodo=5)
+    assert not calcular_atr_breakout(df.drop(columns=['high']), periodo=5)
