@@ -6,6 +6,7 @@ from __future__ import annotations
 import ast
 import errno
 import importlib
+import json
 import logging
 import os
 import sys
@@ -399,6 +400,7 @@ class _DebouncedReloader(PatternMatchingEventHandler):
         self._lock = threading.Lock()
         self._last_event_ts: float = 0.0
         self._last_path: Optional[Path] = None
+        self._logger = logging.getLogger("hot_reload")
 
     # ---- Watchdog callbacks ----
 
@@ -453,7 +455,8 @@ class _DebouncedReloader(PatternMatchingEventHandler):
             return
 
         with self._lock:
-            self._last_event_ts = time.time()
+            now = time.time()
+            self._last_event_ts = now
             self._last_path = selected_path
 
             if self._timer and self._timer.is_alive():
@@ -471,17 +474,22 @@ class _DebouncedReloader(PatternMatchingEventHandler):
                     if str(selected_path).startswith(str(self.root))
                     else selected_path
                 )
-                print(
-                    f"👀 Cambio detectado: {rel} (reinicio en {self.debounce:.2f}s)"
-                )
-                sys.stdout.flush()
+                payload = {
+                    "event": "hot_reload_change_detected",
+                    "path": str(rel),
+                    "debounce": round(self.debounce, 3),
+                    "restart_scheduled_in": round(self.debounce, 3),
+                    "ts": now,
+                }
+                self._logger.info(json.dumps(payload))
 
     # ---- Internals ----
 
     def _maybe_restart(self) -> None:
         with self._lock:
             # Si hubo otra modificación durante la espera, reprograma
-            delta = time.time() - self._last_event_ts
+            now = time.time()
+            delta = now - self._last_event_ts
             if delta < self.debounce * 0.5:
                 # ruido; reintentar
                 self._timer = threading.Timer(self.debounce, self._maybe_restart)
@@ -495,8 +503,15 @@ class _DebouncedReloader(PatternMatchingEventHandler):
                 rel = trig.relative_to(self.root)
             except Exception:
                 rel = trig
-            print(f"♻️  Hot-reload: reiniciando por cambio en {rel}")
-            sys.stdout.flush()
+            payload = {
+                "event": "hot_reload_restart_triggered",
+                "path": str(rel),
+                "restart_reason": "file_change",
+                "debounce": round(self.debounce, 3),
+                "duration_since_change": round(delta, 3),
+                "ts": now,
+            }
+            self._logger.info(json.dumps(payload))
 
         if trig is not None and self._reload_handler is not None:
             try:
@@ -723,10 +738,17 @@ def start_hot_reload(
         except OSError as exc:
             if getattr(exc, "errno", None) == errno.ENOSPC:
                 if verbose:
-                    print(
-                        "⚠️  Límite de inotify alcanzado; cambiando a modo polling.",
+                    logging.getLogger("hot_reload").info(
+                        json.dumps(
+                            {
+                                "event": "hot_reload_backend_switch",
+                                "mode": "polling",
+                                "restart_reason": "inotify_limit",
+                                "path": str(root),
+                                "debounce": round(debounce_seconds, 3),
+                            }
+                        )
                     )
-                    sys.stdout.flush()
                 observer_cls = PollingObserver
                 observer = _start(observer_cls)
             else:
@@ -734,11 +756,19 @@ def start_hot_reload(
 
 
     if verbose:
-        excludes_str = ", ".join(sorted(excludes))
         mode = "polling" if observer_cls is PollingObserver else "native"
-        print(f"🔄 Hot-reload iniciado en {root} (modo {mode}, debounce={debounce_seconds}s)")
-        print(f"   Excluyendo: {excludes_str}")
-        sys.stdout.flush()
+        logger = logging.getLogger("hot_reload")
+        logger.info(
+            json.dumps(
+                {
+                    "event": "hot_reload_started",
+                    "mode": mode,
+                    "path": str(root),
+                    "debounce": round(debounce_seconds, 3),
+                    "excludes": sorted(excludes),
+                }
+            )
+        )
 
     return observer
 
