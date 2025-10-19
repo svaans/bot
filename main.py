@@ -42,7 +42,7 @@ from pathlib import Path
 from typing import Any, Optional, Tuple
 
 # Dependencias internas (protegidas en tiempo de uso)
-from core.hot_reload import start_hot_reload, stop_hot_reload
+from core.hot_reload import ModularReloadRule, start_hot_reload, stop_hot_reload
 from core.supervisor import start_supervision, stop_supervision
 from core.notification_manager import crear_notification_manager_desde_env
 from core.diag.phase_logger import phase
@@ -185,8 +185,15 @@ async def main():
             watch_paths=(
                 "core",
                 "data_feed",
+                "indicadores",
                 "trader_modular.py",
                 "main.py",
+            ),
+            modular_reload=(
+                ModularReloadRule(
+                    module="indicadores",
+                    aliases=("indicators",),
+                ),
             ),
         )
     except Exception:

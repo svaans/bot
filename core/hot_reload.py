@@ -1,14 +1,20 @@
 # core/hot_reload.py
 from __future__ import annotations
 
+from __future__ import annotations
+
+import ast
 import errno
+import importlib
+import logging
 import os
 import sys
-import time
 import threading
-import logging
+import time
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable, Optional, Sequence, Set
+from types import ModuleType
+from typing import Callable, Iterable, Optional, Sequence, Set
 
 from core.state import persist_critical_state
 
@@ -88,6 +94,235 @@ _NOISY_WATCHDOG_LOGGERS: tuple[str, ...] = (
 )
 
 
+@dataclass(slots=True, frozen=True)
+class ModularReloadRule:
+    """Describe un paquete o módulo elegible para recarga modular."""
+
+    module: str
+    recursive: bool = True
+    aliases: Sequence[str] = ()
+
+
+class ModularReloadController:
+    """Aplica recargas modulares seguras en módulos puros."""
+
+    def __init__(
+        self,
+        *,
+        root: Path,
+        rules: Sequence[ModularReloadRule],
+        logger: logging.Logger | None = None,
+    ) -> None:
+        self._root = root.resolve()
+        self._rules = list(rules)
+        self._logger = logger or logging.getLogger("hot_reload.modular")
+        self._lock = threading.Lock()
+
+    def handle_change(
+        self,
+        path: Path,
+        *,
+        restart_callback: Callable[[], None],
+    ) -> bool:
+        resolved = self._safe_resolve(path)
+        if resolved is None:
+            return False
+
+        for rule in self._rules:
+            if not self._matches_rule(rule, resolved):
+                continue
+
+            modules = self._collect_modules(rule)
+            if not modules:
+                return False
+
+            if not self._validate_modules(modules, rule):
+                return False
+
+            self._spawn_reload_thread(modules, restart_callback)
+            return True
+
+        return False
+
+    # ---- helpers ----
+
+    def _safe_resolve(self, path: Path) -> Path | None:
+        try:
+            return path.resolve()
+        except FileNotFoundError:
+            return path.absolute()
+
+    def _matches_rule(self, rule: ModularReloadRule, path: Path) -> bool:
+        try:
+            module = importlib.import_module(rule.module)
+        except Exception:
+            return False
+
+        module_path = self._module_path(module)
+        if module_path is None:
+            return False
+
+        if path == module_path:
+            return True
+
+        if not rule.recursive:
+            return False
+
+        return self._is_relative_to(path, module_path.parent)
+
+    def _collect_modules(self, rule: ModularReloadRule) -> list[str]:
+        prefixes = {rule.module, *rule.aliases}
+        modules: set[str] = set()
+        with self._lock:
+            for name, module in list(sys.modules.items()):
+                if module is None:
+                    continue
+                if any(name == prefix or name.startswith(f"{prefix}.") for prefix in prefixes):
+                    modules.add(name)
+            if rule.module not in sys.modules:
+                try:
+                    importlib.import_module(rule.module)
+                except Exception:
+                    return []
+                modules.add(rule.module)
+        return sorted(modules)
+
+    def _validate_modules(self, modules: Sequence[str], rule: ModularReloadRule) -> bool:
+        allowed_prefixes = {rule.module, *rule.aliases}
+        for module_name in modules:
+            module = sys.modules.get(module_name)
+            if module is None:
+                continue
+            module_path = self._module_path(module)
+            if module_path is None or not module_path.exists():
+                continue
+            try:
+                source = module_path.read_text(encoding="utf-8")
+            except Exception:
+                return False
+            for imported in self._iter_imports(source, module_name):
+                if imported is None:
+                    continue
+                if any(
+                    imported == prefix or imported.startswith(f"{prefix}.")
+                    for prefix in allowed_prefixes
+                ):
+                    continue
+                if not self._is_local_module(imported):
+                    continue
+                self._logger.debug(
+                    "Recarga modular denegada",
+                    extra={"module_name": module_name, "dependency": imported},
+                )
+                return False
+        return True
+
+    def _spawn_reload_thread(
+        self,
+        modules: Sequence[str],
+        restart_callback: Callable[[], None],
+    ) -> None:
+        def _runner() -> None:
+            try:
+                self._logger.info(
+                    "Iniciando recarga modular",
+                    extra={"modules": list(modules)},
+                )
+                for name in modules:
+                    module = sys.modules.get(name)
+                    if module is None:
+                        module = importlib.import_module(name)
+                    importlib.reload(module)
+                self._logger.info(
+                    "Recarga modular completada",
+                    extra={"modules": list(modules)},
+                )
+            except Exception:
+                self._logger.exception(
+                    "Recarga modular fallida",
+                    extra={"modules": list(modules)},
+                )
+                restart_callback()
+
+        threading.Thread(
+            target=_runner,
+            name="modular-reload",
+            daemon=True,
+        ).start()
+
+    def _module_path(self, module: ModuleType) -> Path | None:
+        filename = getattr(module, "__file__", None)
+        if not filename:
+            return None
+        path = Path(filename)
+        try:
+            path = path.resolve()
+        except FileNotFoundError:
+            path = path.absolute()
+        if path.suffix == ".pyc":
+            path = path.with_suffix(".py")
+        return path
+
+    def _iter_imports(self, source: str, module_name: str) -> Set[str | None]:
+        try:
+            tree = ast.parse(source)
+        except SyntaxError:
+            return set()
+
+        imports: Set[tuple[str | None, int]] = set()
+
+        class _Visitor(ast.NodeVisitor):
+            def visit_Import(self, node: ast.Import) -> None:  # type: ignore[override]
+                for alias in node.names:
+                    imports.add((alias.name, 0))
+
+            def visit_ImportFrom(self, node: ast.ImportFrom) -> None:  # type: ignore[override]
+                imports.add((node.module, node.level))
+
+        _Visitor().visit(tree)
+
+        resolved: Set[str | None] = set()
+        for name, level in imports:
+            resolved.add(self._resolve_import(module_name, name, level))
+        return resolved
+
+    def _resolve_import(
+        self,
+        current_module: str,
+        name: str | None,
+        level: int,
+    ) -> str | None:
+        if level == 0:
+            return name
+
+        package = current_module.rsplit(".", 1)[0] if "." in current_module else ""
+        parts = package.split(".") if package else []
+        if level - 1 > len(parts):
+            return None
+        if level > 0:
+            parts = parts[: len(parts) - (level - 1)]
+        if name:
+            parts.extend(name.split("."))
+        joined = ".".join(filter(None, parts))
+        return joined or None
+
+    def _is_local_module(self, module_name: str) -> bool:
+        parts = module_name.split(".")
+        candidate = self._root.joinpath(*parts)
+        if candidate.with_suffix(".py").exists():
+            return True
+        if candidate.is_dir() and (candidate / "__init__.py").exists():
+            return True
+        return False
+
+    def _is_relative_to(self, path: Path, base: Path) -> bool:
+        try:
+            path.relative_to(base)
+            return True
+        except ValueError:
+            return False
+
+
 def _configure_watchdog_logging(*, min_level: int = logging.WARNING) -> None:
     """Eleva el nivel de logging de watchdog para evitar ruido en DEBUG.
 
@@ -143,6 +378,7 @@ class _DebouncedReloader(PatternMatchingEventHandler):
         verbose: bool = True,
         watch_whitelist: Optional[Sequence[Path]] = None,
         ignore_patterns: Optional[Iterable[str]] = None,
+        reload_handler: Callable[[Path, Callable[[], None]], bool] | None = None,
     ) -> None:
         super().__init__(
             patterns=("*.py",),
@@ -157,6 +393,7 @@ class _DebouncedReloader(PatternMatchingEventHandler):
         self._watch_whitelist: tuple[Path, ...] = tuple(
             Path(p).resolve() for p in (watch_whitelist or ())
         )
+        self._reload_handler = reload_handler
 
         self._timer: Optional[threading.Timer] = None
         self._lock = threading.Lock()
@@ -261,6 +498,22 @@ class _DebouncedReloader(PatternMatchingEventHandler):
             print(f"♻️  Hot-reload: reiniciando por cambio en {rel}")
             sys.stdout.flush()
 
+        if trig is not None and self._reload_handler is not None:
+            try:
+                handled = self._reload_handler(trig, self._perform_restart)
+            except Exception:
+                logging.getLogger("hot_reload").exception(
+                    "Falló el manejador de recarga modular",
+                    extra={"path": str(trig)},
+                )
+            else:
+                if handled:
+                    return
+
+        self._perform_restart()
+
+    def _perform_restart(self) -> None:
+
         # Reinicio de proceso: reemplaza el binario actual y preserva argv/env
         python = sys.executable
         argv = [python] + sys.argv
@@ -283,6 +536,7 @@ class _DebouncedReloader(PatternMatchingEventHandler):
             os.execv(python, argv)
         except Exception:
             import subprocess
+
             subprocess.Popen(argv, env=os.environ.copy(), close_fds=False)
             os._exit(0)
 
@@ -325,6 +579,7 @@ def start_hot_reload(
     ignore_patterns: Optional[Iterable[str]] = None,
     verbose: bool = True,
     watch_paths: Optional[Iterable[Path | str]] = None,
+    modular_reload: Optional[Sequence[ModularReloadRule]] = None,
 ):
     """
     Inicia el observador de hot-reload. Devuelve el observer para detenerlo luego.
@@ -409,6 +664,18 @@ def start_hot_reload(
     if ignore_patterns:
         ignore_patterns_set.update(str(p) for p in ignore_patterns)
     ignore_patterns_set.update(NOISY_FILE_PATTERNS)
+
+    modular_controller: ModularReloadController | None = None
+    if modular_reload:
+        modular_controller = ModularReloadController(
+            root=root,
+            rules=tuple(modular_reload),
+        )
+
+    def _reload_handler(path: Path, restart_cb: Callable[[], None]) -> bool:
+        if modular_controller is None:
+            return False
+        return modular_controller.handle_change(path, restart_callback=restart_cb)
     
     handler = _DebouncedReloader(
         root,
@@ -417,6 +684,7 @@ def start_hot_reload(
         verbose=verbose,
         watch_whitelist=watch_whitelist,
         ignore_patterns=ignore_patterns_set,
+        reload_handler=_reload_handler if modular_controller else None,
     )
 
     # Heurística para elegir backend
