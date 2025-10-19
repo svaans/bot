@@ -39,6 +39,7 @@ __all__ = [
     "HOT_RELOAD_RESTARTS_TOTAL",
     "HOT_RELOAD_DEBOUNCE_SECONDS",
     "HOT_RELOAD_BACKEND",
+    "HOT_RELOAD_SCAN_DURATION_SECONDS",
     "HOT_RELOAD_ERRORS_TOTAL",
 ]
 
@@ -236,6 +237,12 @@ HOT_RELOAD_DEBOUNCE_SECONDS = Counter(
 HOT_RELOAD_BACKEND = Counter(
     "hot_reload_backend",
     "Veces que se inició el observador de hot reload por tipo de backend",
+    ["mode"],
+)
+
+HOT_RELOAD_SCAN_DURATION_SECONDS = Histogram(
+    "hot_reload_scan_duration_seconds",
+    "Duración observada al programar escaneos iniciales por backend",
     ["mode"],
 )
 

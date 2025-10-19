@@ -23,6 +23,7 @@ from observability.metrics import (
     HOT_RELOAD_DEBOUNCE_SECONDS,
     HOT_RELOAD_ERRORS_TOTAL,
     HOT_RELOAD_RESTARTS_TOTAL,
+    HOT_RELOAD_SCAN_DURATION_SECONDS,
 )
 
 try:
@@ -607,27 +608,58 @@ def _schedule_observer(
     path: Path,
     *,
     ignore_patterns: Iterable[str] | None = None,
-) -> None:
-    """Helper to schedule the observer with optional ignore patterns."""
+    mode: str,
+) -> float:
+    """Helper to schedule the observer with optional ignore patterns.
+
+    Returns the elapsed seconds spent scheduling so callers can log/aggregate.
+    """
+
+    logger = logging.getLogger("hot_reload")
 
     extra_kwargs = {}
+    filters_applied = False
     if ignore_patterns:
         patterns = sorted(set(ignore_patterns))
         if patterns:
+            filters_applied = True
             extra_kwargs = {
                 "ignore_patterns": patterns,
                 "ignore_directories": True,
             }
 
+    duration = 0.0
+
+    def _timed_schedule(**kwargs) -> float:
+        start = time.perf_counter()
+        observer.schedule(handler, str(path), recursive=True, **kwargs)
+        return time.perf_counter() - start
+
     if extra_kwargs:
         try:
-            observer.schedule(handler, str(path), recursive=True, **extra_kwargs)
-            return
+            duration = _timed_schedule(**extra_kwargs)
         except TypeError:
             # Backend no soporta ignore_patterns; reintenta sin filtros.
-            pass
+            filters_applied = False
+            duration = _timed_schedule()
+    else:
+        duration = _timed_schedule()
 
-    observer.schedule(handler, str(path), recursive=True)
+    HOT_RELOAD_SCAN_DURATION_SECONDS.labels(mode=mode).observe(duration)
+
+    logger.info(
+        json.dumps(
+            {
+                "event": "hot_reload_scan_scheduled",
+                "mode": mode,
+                "path": str(path),
+                "duration_seconds": round(duration, 6),
+                "filters_applied": filters_applied,
+            }
+        )
+    )
+
+    return duration
 
 
 def start_hot_reload(
@@ -765,23 +797,46 @@ def start_hot_reload(
             return cls(timeout=1.0)  # type: ignore[call-arg]
         except TypeError:
             return cls()  # type: ignore[call-arg]
+        
+    logger = logging.getLogger("hot_reload")
 
     def _start(cls):
         observer_instance = _instantiate(cls)
         scheduled: Set[str] = set()
+        total_duration = 0.0
+        mode_label = "polling" if cls is PollingObserver else "native"
         for target in schedule_targets:
             target_path = target.resolve()
             key = str(target_path)
             if key in scheduled:
                 continue
             scheduled.add(key)
-            _schedule_observer(
+            total_duration += _schedule_observer(
                 observer_instance,
                 handler,
                 target_path,
                 ignore_patterns=ignore_patterns_set,
+                mode=mode_label,
             )
-        observer_instance.start()
+
+        status = "started"
+        try:
+            observer_instance.start()
+        except Exception:
+            status = "error"
+            raise
+        finally:
+            logger.info(
+                json.dumps(
+                    {
+                        "event": "hot_reload_observer_prepared",
+                        "mode": mode_label,
+                        "scheduled_targets": len(scheduled),
+                        "scan_duration_seconds": round(total_duration, 6),
+                        "status": status,
+                    }
+                )
+            )
         return observer_instance
 
     if observer_cls is PollingObserver:
@@ -813,9 +868,20 @@ def start_hot_reload(
     mode = "polling" if observer_cls is PollingObserver else "native"
     HOT_RELOAD_BACKEND.labels(mode=mode).inc()
 
+    logger.info(
+        json.dumps(
+            {
+                "event": "hot_reload_backend_selected",
+                "mode": mode,
+                "observer_class": f"{observer_cls.__module__}.{observer_cls.__name__}",
+                "targets": len(schedule_targets),
+                "polling_forced": force_poll,
+            }
+        )
+    )
+
 
     if verbose:
-        logger = logging.getLogger("hot_reload")
         logger.info(
             json.dumps(
                 {
