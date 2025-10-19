@@ -18,6 +18,14 @@ def _ensure_state_cache(estado: Any) -> dict[str, Any]:
             cache = {}
             estado["indicadores_cache"] = cache
         return cache
+    
+    cache = getattr(estado, "indicators_state", None)
+    if isinstance(cache, dict):
+        try:
+            setattr(estado, "indicadores_cache", cache)
+        except Exception:
+            pass
+        return cache
 
     cache = getattr(estado, "indicadores_cache", None)
     if not isinstance(cache, dict):
@@ -36,7 +44,13 @@ def _resolve_df(estado: Any, df: pd.DataFrame | None) -> pd.DataFrame | None:
         candidato = estado.get("df")
         if isinstance(candidato, pd.DataFrame):
             return candidato
+        candidato = estado.get("last_df")
+        if isinstance(candidato, pd.DataFrame):
+            return candidato
     candidato = getattr(estado, "df", None)
+    if isinstance(candidato, pd.DataFrame):
+        return candidato
+    candidato = getattr(estado, "last_df", None)
     if isinstance(candidato, pd.DataFrame):
         return candidato
     return None

@@ -571,6 +571,13 @@ class SymbolState:
     last_hash: Tuple[int, int] = (0, 0)
     last_df: Optional[pd.DataFrame] = None
     timeframe: Optional[str] = None
+    indicators_state: dict[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        # Alias para compatibilidad con consumidores previos que esperan
+        # ``indicadores_cache`` en el estado incremental.
+        if not hasattr(self, "indicadores_cache"):
+            object.__setattr__(self, "indicadores_cache", self.indicators_state)
 
 
 class BufferManager:
@@ -697,6 +704,7 @@ class BufferManager:
             st.buffer.clear()
             st.last_df = None
             st.last_hash = (0, 0)
+            st.indicators_state.clear()
             metric_tf = st.timeframe or (key if key != "default" else "unknown")
             try:
                 safe_set(BUFFER_SIZE_V2, 0, timeframe=metric_tf)
@@ -709,6 +717,12 @@ class BufferManager:
 
         if drop_state and not estados_symbol:
             self._estados.pop(sym, None)
+
+    def state(self, symbol: str, timeframe: Optional[str] = None) -> SymbolState:
+        """Devuelve el ``SymbolState`` asociado al símbolo/timeframe indicado."""
+
+        st, _tf_key, _tf_label = self._get_state(symbol, timeframe)
+        return st
 
     def dataframe(self, symbol: str, timeframe: Optional[str] = None) -> Optional[pd.DataFrame]:
         st, _tf_key, tf_label = self._get_state(symbol, timeframe)
@@ -940,12 +954,17 @@ async def procesar_vela(trader: Any, vela: dict) -> None:
         async with lock:
             _buffers.append(symbol, vela, timeframe=buffer_timeframe)
             df = _buffers.dataframe(symbol, timeframe=buffer_timeframe)
+            symbol_state = _buffers.state(symbol, timeframe=buffer_timeframe)
 
         if df is None or df.empty:
             _ensure_gating_end()
             safe_inc(CANDLES_IGNORADAS, reason="empty_df")
             _mark_skip(vela, "empty_df")
             return
+        
+        # Compartir el estado del buffer con el resto del pipeline.
+        if "buffer_state" not in vela:
+            vela["buffer_state"] = symbol_state
         
         timeframe = getattr(df, "tf", None)
         if timeframe:
@@ -977,11 +996,19 @@ async def procesar_vela(trader: Any, vela: dict) -> None:
             getattr(cfg, "indicadores_incremental_enabled", False)
             or getattr(trader, "indicadores_incremental_enabled", False)
         )
-        if incremental_enabled and estado_symbol is not None:
+        if incremental_enabled:
+            incremental_cache = symbol_state.indicators_state
+            if isinstance(estado_symbol, dict):
+                estado_symbol["indicadores_cache"] = incremental_cache
+            elif estado_symbol is not None:
+                try:
+                    setattr(estado_symbol, "indicadores_cache", incremental_cache)
+                except Exception:
+                    pass
             try:
-                actualizar_rsi_incremental(estado_symbol, df=df)
-                actualizar_momentum_incremental(estado_symbol, df=df)
-                actualizar_atr_incremental(estado_symbol, df=df)
+                actualizar_rsi_incremental(symbol_state, df=df)
+                actualizar_momentum_incremental(symbol_state, df=df)
+                actualizar_atr_incremental(symbol_state, df=df)
             except Exception as exc:
                 log.debug(
                     "incremental_indicators_failed",
