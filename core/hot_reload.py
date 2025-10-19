@@ -18,6 +18,12 @@ from types import ModuleType
 from typing import Callable, Iterable, Optional, Sequence, Set
 
 from core.state import persist_critical_state
+from observability.metrics import (
+    HOT_RELOAD_BACKEND,
+    HOT_RELOAD_DEBOUNCE_SECONDS,
+    HOT_RELOAD_ERRORS_TOTAL,
+    HOT_RELOAD_RESTARTS_TOTAL,
+)
 
 try:
     from watchdog.events import (
@@ -467,6 +473,7 @@ class _DebouncedReloader(PatternMatchingEventHandler):
             self._timer = threading.Timer(self.debounce, self._maybe_restart)
             self._timer.daemon = True
             self._timer.start()
+            HOT_RELOAD_DEBOUNCE_SECONDS.labels(kind="scheduled").inc(self.debounce)
 
             if self.verbose:
                 rel = (
@@ -495,6 +502,7 @@ class _DebouncedReloader(PatternMatchingEventHandler):
                 self._timer = threading.Timer(self.debounce, self._maybe_restart)
                 self._timer.daemon = True
                 self._timer.start()
+                HOT_RELOAD_DEBOUNCE_SECONDS.labels(kind="rescheduled").inc(self.debounce)
                 return
             trig = self._last_path
 
@@ -513,10 +521,13 @@ class _DebouncedReloader(PatternMatchingEventHandler):
             }
             self._logger.info(json.dumps(payload))
 
+        HOT_RELOAD_DEBOUNCE_SECONDS.labels(kind="elapsed").inc(delta)
+
         if trig is not None and self._reload_handler is not None:
             try:
                 handled = self._reload_handler(trig, self._perform_restart)
             except Exception:
+                HOT_RELOAD_ERRORS_TOTAL.labels(stage="modular_handler").inc()
                 logging.getLogger("hot_reload").exception(
                     "Falló el manejador de recarga modular",
                     extra={"path": str(trig)},
@@ -524,7 +535,8 @@ class _DebouncedReloader(PatternMatchingEventHandler):
             else:
                 if handled:
                     return
-
+                
+        HOT_RELOAD_RESTARTS_TOTAL.labels(reason="file_change").inc()
         self._perform_restart()
 
     def _perform_restart(self) -> None:
@@ -535,6 +547,7 @@ class _DebouncedReloader(PatternMatchingEventHandler):
         try:
             persist_critical_state(reason="hot_reload")
         except Exception:
+            HOT_RELOAD_ERRORS_TOTAL.labels(stage="persist_state").inc()
             logging.getLogger("hot_reload").exception(
                 "No se pudo persistir el estado crítico antes del reinicio"
             )
@@ -550,6 +563,7 @@ class _DebouncedReloader(PatternMatchingEventHandler):
         try:
             os.execv(python, argv)
         except Exception:
+            HOT_RELOAD_ERRORS_TOTAL.labels(stage="execv").inc()
             import subprocess
 
             subprocess.Popen(argv, env=os.environ.copy(), close_fds=False)
@@ -752,11 +766,15 @@ def start_hot_reload(
                 observer_cls = PollingObserver
                 observer = _start(observer_cls)
             else:
+                HOT_RELOAD_ERRORS_TOTAL.labels(stage="backend_start").inc()
                 raise
 
 
+    mode = "polling" if observer_cls is PollingObserver else "native"
+    HOT_RELOAD_BACKEND.labels(mode=mode).inc()
+
+
     if verbose:
-        mode = "polling" if observer_cls is PollingObserver else "native"
         logger = logging.getLogger("hot_reload")
         logger.info(
             json.dumps(

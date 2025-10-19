@@ -36,6 +36,10 @@ __all__ = [
     "SYNERGY_CAP_SATURATION",
     "SYNERGY_CAP_DISPERSION",
     "SYNERGY_CAP_P90",
+    "HOT_RELOAD_RESTARTS_TOTAL",
+    "HOT_RELOAD_DEBOUNCE_SECONDS",
+    "HOT_RELOAD_BACKEND",
+    "HOT_RELOAD_ERRORS_TOTAL",
 ]
 
 SIGNALS_CONFLICT = Counter(
@@ -214,6 +218,31 @@ SYNERGY_CAP_DISPERSION = Gauge(
 SYNERGY_CAP_P90 = Gauge(
     "strategy_synergy_cap_p90",
     "Percentil 90 de sinergia sin limitar observado en la ventana de seguimiento",
+)
+
+
+HOT_RELOAD_RESTARTS_TOTAL = Counter(
+    "hot_reload_restarts_total",
+    "Reinicios solicitados por el mecanismo de hot reload por motivo",
+    ["reason"],
+)
+
+HOT_RELOAD_DEBOUNCE_SECONDS = Counter(
+    "hot_reload_debounce_seconds",
+    "Segundos acumulados en ventanas de espera (debounce) del hot reload",
+    ["kind"],
+)
+
+HOT_RELOAD_BACKEND = Counter(
+    "hot_reload_backend",
+    "Veces que se inició el observador de hot reload por tipo de backend",
+    ["mode"],
+)
+
+HOT_RELOAD_ERRORS_TOTAL = Counter(
+    "hot_reload_errors_total",
+    "Errores detectados en el flujo del mecanismo de hot reload",
+    ["stage"],
 )
 
 

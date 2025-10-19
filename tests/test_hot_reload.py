@@ -19,6 +19,11 @@ from core.hot_reload import (
     _NOISY_WATCHDOG_LOGGERS,
     _configure_watchdog_logging,
 )
+from observability.metrics import (
+    HOT_RELOAD_DEBOUNCE_SECONDS,
+    HOT_RELOAD_ERRORS_TOTAL,
+    HOT_RELOAD_RESTARTS_TOTAL,
+)
 
 
 class _DummyTimer:
@@ -76,6 +81,18 @@ def _build_handler(tmp_path: Path, **kwargs) -> _DebouncedReloader:
     return _DebouncedReloader(tmp_path, **params)
 
 
+def _reset_metric(metric) -> None:
+    if hasattr(metric, "_value"):
+        metric._value = 0.0
+    children = getattr(metric, "_children", None)
+    if not children:
+        return
+    for child in children.values():
+        if hasattr(child, "_value"):
+            child._value = 0.0
+    children.clear()
+
+
 def test_reloader_triggers_only_for_real_python_files(tmp_path, patched_timer):
     handler = _build_handler(tmp_path)
 
@@ -127,6 +144,46 @@ def test_reloader_persists_state_before_restart(monkeypatch, tmp_path):
         handler._maybe_restart()
 
     assert calls["reason"] == "hot_reload"
+
+
+def test_hot_reload_metrics_recorded(monkeypatch, tmp_path, patched_timer):
+    handler = _build_handler(tmp_path)
+
+    for metric in (
+        HOT_RELOAD_DEBOUNCE_SECONDS,
+        HOT_RELOAD_RESTARTS_TOTAL,
+        HOT_RELOAD_ERRORS_TOTAL,
+    ):
+        _reset_metric(metric)
+
+    source = tmp_path / "module.py"
+    source.write_text("print('test')\n", encoding="utf-8")
+
+    handler.dispatch(FileModifiedEvent(str(source)))
+
+    scheduled = HOT_RELOAD_DEBOUNCE_SECONDS.labels(kind="scheduled")._value
+    assert scheduled == pytest.approx(handler.debounce)
+
+    monkeypatch.setattr("core.hot_reload.persist_critical_state", lambda **_: None)
+
+    monkeypatch.setattr(
+        "core.hot_reload.os.execv",
+        lambda *_, **__: (_ for _ in ()).throw(SystemExit(0)),
+    )
+
+    handler._last_event_ts = time.time() - handler.debounce
+    handler._last_path = source
+
+    with pytest.raises(SystemExit):
+        handler._maybe_restart()
+
+    elapsed = HOT_RELOAD_DEBOUNCE_SECONDS.labels(kind="elapsed")._value
+    assert elapsed == pytest.approx(handler.debounce, rel=1e-2, abs=1e-2)
+
+    restarts = HOT_RELOAD_RESTARTS_TOTAL.labels(reason="file_change")._value
+    assert restarts == pytest.approx(1.0)
+
+    assert HOT_RELOAD_ERRORS_TOTAL._children == {}
 
 
 def test_modular_reload_controller_reloads_pure_package(monkeypatch, tmp_path):
