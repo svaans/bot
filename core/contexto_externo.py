@@ -5,10 +5,12 @@ import asyncio
 import contextlib
 import json
 import ssl
+import statistics
 import time
+from collections import defaultdict, deque
 from datetime import datetime, timezone
 from math import isclose
-from typing import Awaitable, Callable, Dict, Iterable
+from typing import Awaitable, Callable, DefaultDict, Deque, Dict, Iterable
 
 import websockets
 
@@ -21,6 +23,34 @@ from core.supervisor import supervised_task, tick
 from core.utils.backoff import calcular_backoff
 from core.registro_metrico import registro_metrico
 from core.contexto_storage import PuntajeStore
+
+try:  # pragma: no cover - métricas opcionales
+    from observability.metrics import (
+        CONTEXT_LAST_UPDATE_SECONDS,
+        CONTEXT_PARSING_ERRORS_TOTAL,
+        CONTEXT_SCORE_DISTRIBUTION,
+        CONTEXT_UPDATE_LATENCY_SECONDS,
+        CONTEXT_VOLUME_EXTREME_TOTAL,
+    )
+except Exception:  # pragma: no cover - fallback cuando prometheus no está disponible
+    class _NullMetric:
+        def labels(self, *_args, **_kwargs):  # type: ignore[override]
+            return self
+
+        def set(self, *_args, **_kwargs) -> None:
+            return None
+
+        def observe(self, *_args, **_kwargs) -> None:
+            return None
+
+        def inc(self, *_args, **_kwargs) -> None:
+            return None
+
+    CONTEXT_LAST_UPDATE_SECONDS = _NullMetric()  # type: ignore[assignment]
+    CONTEXT_SCORE_DISTRIBUTION = _NullMetric()  # type: ignore[assignment]
+    CONTEXT_UPDATE_LATENCY_SECONDS = _NullMetric()  # type: ignore[assignment]
+    CONTEXT_PARSING_ERRORS_TOTAL = _NullMetric()  # type: ignore[assignment]
+    CONTEXT_VOLUME_EXTREME_TOTAL = _NullMetric()  # type: ignore[assignment]
 
 UTC = timezone.utc
 
@@ -75,6 +105,9 @@ class StreamContexto:
         rest_client: BinanceClient | None = None,
         puntajes_store: PuntajeStore | None = None,
         puntajes_ttl: int | None = None,
+        volume_window: int = 50,
+        volume_baseline_min: int = 5,
+        volume_extreme_multiplier: float = 8.0,
     ) -> None:
         self.url_template = url_template or CONTEXT_WS_URL
         self.monitor_interval = max(1, monitor_interval)
@@ -112,6 +145,12 @@ class StreamContexto:
         self._puntajes_store = puntajes_store or PuntajeStore(ttl_seconds=ttl)
         self._puntajes_loaded = False
         self._puntaje_lock = asyncio.Lock()
+        self._volume_window = max(3, int(volume_window))
+        self._volume_baseline_min = max(1, int(volume_baseline_min))
+        self._volume_extreme_multiplier = max(1.0, float(volume_extreme_multiplier))
+        self._volume_history: DefaultDict[str, Deque[float]] = defaultdict(
+            lambda: deque(maxlen=self._volume_window)
+        )
 
     def actualizar_datos_externos(self, symbol: str, datos: dict) -> None:
         actual = _DATOS_EXTERNOS.setdefault(symbol, {})
@@ -166,6 +205,7 @@ class StreamContexto:
         async with self._puntaje_lock:
             _PUNTAJES[sym] = float(puntaje)
             self.actualizar_datos_externos(sym, meta)
+        self._record_context_metrics(sym, source, float(puntaje), meta)
         try:
             await self._puntajes_store.set(sym, float(puntaje), meta)
         except Exception as exc:
@@ -347,6 +387,7 @@ class StreamContexto:
                                 raise
                             except Exception as e:
                                 log.warning(f'⚠️ Error procesando contexto de {symbol}: {e}')
+                                self._record_parsing_error(symbol, stage="ws_message", exc=e)
                     finally:
                         # if keeper:
                         #     keeper.cancel()
@@ -386,6 +427,57 @@ class StreamContexto:
                     await asyncio.sleep(backoff)
             else:
                 break
+
+    def _record_context_metrics(
+        self,
+        symbol: str,
+        source: str,
+        puntaje: float,
+        metadata: dict,
+    ) -> None:
+        """Actualiza métricas de frescura, distribución y volumen."""
+
+        sym = symbol.upper()
+        event_reference = metadata.get('event_time') or metadata.get('close_time')
+        now = time.time()
+        if isinstance(event_reference, (int, float)):
+            event_ts = float(event_reference) / 1000.0
+        else:
+            event_ts = now
+        CONTEXT_LAST_UPDATE_SECONDS.labels(sym).set(event_ts)
+        latency = max(now - event_ts, 0.0)
+        CONTEXT_UPDATE_LATENCY_SECONDS.labels(sym, source).observe(latency)
+        CONTEXT_SCORE_DISTRIBUTION.labels(sym).observe(float(puntaje))
+        volume = metadata.get('volume')
+        try:
+            volume_value = float(volume)
+        except (TypeError, ValueError):
+            volume_value = 0.0
+        self._update_volume_statistics(sym, source, volume_value)
+
+    def _update_volume_statistics(self, symbol: str, source: str, volume: float) -> None:
+        """Evalúa si ``volume`` es extremo y actualiza las métricas correspondientes."""
+
+        if volume <= 0.0:
+            return
+        history = self._volume_history[symbol]
+        if len(history) >= self._volume_baseline_min:
+            mediana = statistics.median(history)
+            if mediana > 0.0 and volume >= mediana * self._volume_extreme_multiplier:
+                CONTEXT_VOLUME_EXTREME_TOTAL.labels(symbol, source).inc()
+                log.warning(
+                    "📈 Volumen extremo detectado en %s: %.6f (mediana reciente %.6f)",
+                    symbol,
+                    volume,
+                    mediana,
+                )
+        history.append(volume)
+
+    def _record_parsing_error(self, symbol: str, stage: str, exc: Exception | str) -> None:
+        """Incrementa las métricas asociadas a errores de parseo."""
+
+        CONTEXT_PARSING_ERRORS_TOTAL.labels(symbol.upper(), stage).inc()
+        log.debug("Context parsing error [%s - %s]: %s", symbol, stage, exc)
 
     async def _monitor_inactividad(self) -> None:
         """Vigila la actividad de los streams y los reinicia al quedar inactivos."""

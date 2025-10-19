@@ -41,6 +41,11 @@ __all__ = [
     "HOT_RELOAD_BACKEND",
     "HOT_RELOAD_SCAN_DURATION_SECONDS",
     "HOT_RELOAD_ERRORS_TOTAL",
+    "CONTEXT_LAST_UPDATE_SECONDS",
+    "CONTEXT_SCORE_DISTRIBUTION",
+    "CONTEXT_UPDATE_LATENCY_SECONDS",
+    "CONTEXT_PARSING_ERRORS_TOTAL",
+    "CONTEXT_VOLUME_EXTREME_TOTAL",
 ]
 
 SIGNALS_CONFLICT = Counter(
@@ -250,6 +255,59 @@ HOT_RELOAD_ERRORS_TOTAL = Counter(
     "hot_reload_errors_total",
     "Errores detectados en el flujo del mecanismo de hot reload",
     ["stage"],
+)
+
+
+CONTEXT_LAST_UPDATE_SECONDS = Gauge(
+    "context_last_update_seconds",
+    "Timestamp del último evento de contexto recibido por símbolo",
+    ["symbol"],
+)
+
+_CONTEXT_SCORE_BUCKETS = (
+    -10.0,
+    -5.0,
+    -2.5,
+    -1.0,
+    -0.5,
+    -0.25,
+    -0.1,
+    -0.05,
+    0.0,
+    0.05,
+    0.1,
+    0.25,
+    0.5,
+    1.0,
+    2.5,
+    5.0,
+    10.0,
+)
+
+CONTEXT_SCORE_DISTRIBUTION = Histogram(
+    "context_score_distribution",
+    "Distribución de puntajes de contexto observados por símbolo",
+    ["symbol"],
+    buckets=_CONTEXT_SCORE_BUCKETS,
+)
+
+CONTEXT_UPDATE_LATENCY_SECONDS = Histogram(
+    "context_update_latency_seconds",
+    "Latencia entre el timestamp del evento y su procesamiento por fuente",
+    ["symbol", "source"],
+    buckets=(0.01, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0, 60.0),
+)
+
+CONTEXT_PARSING_ERRORS_TOTAL = Counter(
+    "context_parsing_errors_total",
+    "Errores detectados durante el parseo de mensajes de contexto",
+    ["symbol", "stage"],
+)
+
+CONTEXT_VOLUME_EXTREME_TOTAL = Counter(
+    "context_volume_extreme_total",
+    "Eventos donde el volumen se consideró extremo según la mediana reciente",
+    ["symbol", "source"],
 )
 
 
