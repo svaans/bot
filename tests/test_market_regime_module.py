@@ -16,9 +16,9 @@ if "indicators" not in sys.modules:
 market_regime = importlib.import_module("core.market_regime")
 
 
-def make_df(close_values: list[float]) -> pd.DataFrame:
+def make_df(close_values: list[float], *, symbol: str = "BTCUSDT") -> pd.DataFrame:
     size = len(close_values)
-    return pd.DataFrame(
+    df = pd.DataFrame(
         {
             "close": close_values,
             "high": [c * 1.01 for c in close_values],
@@ -26,6 +26,13 @@ def make_df(close_values: list[float]) -> pd.DataFrame:
             "volume": [1.0] * size,
         }
     )
+    df.attrs["symbol"] = symbol
+    return df
+
+
+@pytest.fixture(autouse=True)
+def _reset_state() -> None:
+    market_regime.reset_regimen_cache()
 
 
 def test_medir_volatilidad_sin_atr(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -73,6 +80,8 @@ def test_pendiente_medias_usa_sma(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_detectar_regimen_alta_vol(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(market_regime, "medir_volatilidad", lambda *_: 0.05)
     monkeypatch.setattr(market_regime, "pendiente_medias", lambda *_: 0.0005)
+    monkeypatch.setattr(market_regime, "_multi_horizon_confirmation", lambda *_: None)
+    monkeypatch.setattr(market_regime, "_atr_ratio_actual", lambda *_: 0.01)
     df = make_df([100.0] * 40)
     assert market_regime.detectar_regimen(df) == "alta_volatilidad"
 
@@ -80,6 +89,8 @@ def test_detectar_regimen_alta_vol(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_detectar_regimen_tendencial_alcista(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(market_regime, "medir_volatilidad", lambda *_: 0.01)
     monkeypatch.setattr(market_regime, "pendiente_medias", lambda *_: 0.004)
+    monkeypatch.setattr(market_regime, "_multi_horizon_confirmation", lambda *_: True)
+    monkeypatch.setattr(market_regime, "_atr_ratio_actual", lambda *_: 0.01)
     df = make_df([100.0] * 40)
     assert market_regime.detectar_regimen(df) == "tendencial"
 
@@ -87,6 +98,8 @@ def test_detectar_regimen_tendencial_alcista(monkeypatch: pytest.MonkeyPatch) ->
 def test_detectar_regimen_tendencial_bajista(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(market_regime, "medir_volatilidad", lambda *_: 0.01)
     monkeypatch.setattr(market_regime, "pendiente_medias", lambda *_: -0.004)
+    monkeypatch.setattr(market_regime, "_multi_horizon_confirmation", lambda *_: True)
+    monkeypatch.setattr(market_regime, "_atr_ratio_actual", lambda *_: 0.01)
     df = make_df([100.0] * 40)
     assert market_regime.detectar_regimen(df) == "tendencial"
 
@@ -94,5 +107,42 @@ def test_detectar_regimen_tendencial_bajista(monkeypatch: pytest.MonkeyPatch) ->
 def test_detectar_regimen_lateral(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(market_regime, "medir_volatilidad", lambda *_: 0.01)
     monkeypatch.setattr(market_regime, "pendiente_medias", lambda *_: 0.0005)
+    monkeypatch.setattr(market_regime, "_multi_horizon_confirmation", lambda *_: None)
+    monkeypatch.setattr(market_regime, "_atr_ratio_actual", lambda *_: 0.004)
     df = make_df([100.0] * 40)
+    assert market_regime.detectar_regimen(df) == "lateral"
+
+
+def test_histeresis_mantiene_tendencia(monkeypatch: pytest.MonkeyPatch) -> None:
+    df = make_df([100.0] * 400)
+    monkeypatch.setattr(market_regime, "medir_volatilidad", lambda *_: 0.01)
+    monkeypatch.setattr(market_regime, "_multi_horizon_confirmation", lambda *_: True)
+    monkeypatch.setattr(market_regime, "_atr_ratio_actual", lambda *_: 0.01)
+
+    monkeypatch.setattr(market_regime, "pendiente_medias", lambda *_: 0.004)
+    assert market_regime.detectar_regimen(df) == "tendencial"
+
+    monkeypatch.setattr(market_regime, "pendiente_medias", lambda *_: 0.002)
+    assert market_regime.detectar_regimen(df) == "tendencial"
+
+    monkeypatch.setattr(market_regime, "pendiente_medias", lambda *_: 0.0005)
+    assert market_regime.detectar_regimen(df) == "lateral"
+
+
+def test_implied_volatility_eleva_a_alta_vol(monkeypatch: pytest.MonkeyPatch) -> None:
+    df = make_df([100.0] * 40)
+    df.attrs["implied_volatility"] = 0.03
+    monkeypatch.setattr(market_regime, "medir_volatilidad", lambda *_: 0.01)
+    monkeypatch.setattr(market_regime, "pendiente_medias", lambda *_: 0.0005)
+    monkeypatch.setattr(market_regime, "_multi_horizon_confirmation", lambda *_: None)
+    monkeypatch.setattr(market_regime, "_atr_ratio_actual", lambda *_: 0.005)
+    assert market_regime.detectar_regimen(df) == "alta_volatilidad"
+
+
+def test_confirmacion_multi_horizonte_bloquea_tendencia(monkeypatch: pytest.MonkeyPatch) -> None:
+    df = make_df([100.0] * 200)
+    monkeypatch.setattr(market_regime, "medir_volatilidad", lambda *_: 0.01)
+    monkeypatch.setattr(market_regime, "pendiente_medias", lambda *_: 0.004)
+    monkeypatch.setattr(market_regime, "_multi_horizon_confirmation", lambda *_: False)
+    monkeypatch.setattr(market_regime, "_atr_ratio_actual", lambda *_: 0.01)
     assert market_regime.detectar_regimen(df) == "lateral"
