@@ -1,11 +1,11 @@
 import os
-import json
 import time
 import pandas as pd
 from collections import defaultdict
 from dotenv import dotenv_values
 from core.strategies.pesos import gestor_pesos
 from core.utils.utils import configurar_logger
+from .utils_resultados import distribuir_retorno_por_estrategia, obtener_retorno_total_registro
 CONFIG = dotenv_values('config/claves.env')
 MODO_REAL = CONFIG.get('MODO_REAL', 'False') == 'True'
 CARPETA_ORDENES = 'ordenes_reales' if MODO_REAL else 'ordenes_simuladas'
@@ -19,17 +19,11 @@ log = configurar_logger('entrenador_estrategias')
 def evaluar_estrategias(ordenes: pd.DataFrame):
     datos = defaultdict(list)
     for _, orden in ordenes.iterrows():
-        estrategias = orden.get('estrategias_activas', {})
-        if isinstance(estrategias, str):
-            try:
-                estrategias = json.loads(estrategias.replace("'", '"'))
-            except Exception as e:
-                print(f'⚠️ Error al parsear estrategias: {e}')
-                continue
-        retorno = orden.get('retorno_total', 0.0)
-        for estrategia, activa in estrategias.items():
-            if activa:
-                datos[estrategia].append(retorno)
+        retorno = obtener_retorno_total_registro(orden)
+        contribuciones = distribuir_retorno_por_estrategia(retorno, orden.get(
+            'estrategias_activas', {}))
+        for estrategia, retorno_parcial in contribuciones.items():
+            datos[estrategia].append(retorno_parcial)
     return datos
 
 

@@ -1,5 +1,4 @@
 import os
-import json
 import pandas as pd
 from collections import defaultdict
 from dotenv import dotenv_values
@@ -8,6 +7,8 @@ from core.adaptador_umbral import calcular_umbral_adaptativo
 from core.adaptador_dinamico import calcular_tp_sl_adaptativos
 from config.configuracion import cargar_configuracion_simbolo, guardar_configuracion_simbolo
 from core.utils.utils import configurar_logger
+from .utils_resultados import (distribuir_retorno_por_estrategia,
+    obtener_retorno_total_registro, parsear_estrategias_activas)
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CARPETA_OPERACIONES = os.path.join(BASE_DIR, 'ultimas_operaciones')
 RUTA_PESOS = 'config/estrategias_pesos.json'
@@ -32,14 +33,8 @@ def registrar_resultado_trade(symbol: str, orden: dict, ganancia: float):
             print(
                 f'⚠️ Archivo dañado: {archivo} — se sobrescribirá. Error: {e}')
             historial = []
-    estrategias_activas = orden.get('estrategias_activas', {})
-    if isinstance(estrategias_activas, str):
-        try:
-            estrategias_activas = json.loads(estrategias_activas.replace(
-                "'", '"'))
-        except Exception as e:
-            print(f'❌ Error al parsear estrategias activas de {symbol}: {e}')
-            estrategias_activas = {}
+    estrategias_activas = parsear_estrategias_activas(orden.get(
+        'estrategias_activas', {}))
     nueva_operacion = {'retorno_total': ganancia, 'estrategias_activas':
         estrategias_activas}
     historial.append(nueva_operacion)
@@ -62,16 +57,11 @@ def actualizar_pesos_dinamicos(symbol: str, historial: list):
     datos = defaultdict(list)
     pesos_actuales = gestor_pesos.obtener_pesos_symbol(symbol)
     for orden in historial:
-        estrategias = orden.get('estrategias_activas', {})
-        if isinstance(estrategias, str):
-            try:
-                estrategias = json.loads(estrategias.replace("'", '"'))
-            except:
-                continue
-        retorno = orden.get('retorno_total', 0.0)
-        for estrategia, activa in estrategias.items():
-            if activa:
-                datos[estrategia].append(retorno)
+        retorno = obtener_retorno_total_registro(orden)
+        contribuciones = distribuir_retorno_por_estrategia(retorno, orden.get(
+            'estrategias_activas', {}))
+        for estrategia, retorno_parcial in contribuciones.items():
+            datos[estrategia].append(retorno_parcial)
     nuevos_pesos = pesos_actuales.copy()
     for estrategia, retornos in datos.items():
         if len(retornos) < MIN_OPERACIONES:
@@ -89,9 +79,8 @@ def actualizar_pesos_dinamicos(symbol: str, historial: list):
         print(f'  - {estrategia}: {peso:.3f}')
     try:
         df_fake = pd.DataFrame(historial)
-        estrategias = df_fake.iloc[-1].get('estrategias_activas', {})
-        if isinstance(estrategias, str):
-            estrategias = json.loads(estrategias.replace("'", '"'))
+        estrategias = parsear_estrategias_activas(df_fake.iloc[-1].get(
+            'estrategias_activas', {}))
         if estrategias:
             umbral = calcular_umbral_adaptativo(symbol, df_fake)
             print(f'📈 Umbral estimado para {symbol}: {umbral:.2f}')

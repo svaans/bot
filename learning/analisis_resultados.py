@@ -1,6 +1,8 @@
-import json
+
 import pandas as pd
 from collections import defaultdict
+from .utils_resultados import (distribuir_retorno_por_estrategia,
+    obtener_retorno_total_registro, parsear_estrategias_activas)
 
 
 def analizar_estrategias_en_ordenes(path_ordenes: str, dias: (int | None)=None
@@ -21,20 +23,26 @@ def analizar_estrategias_en_ordenes(path_ordenes: str, dias: (int | None)=None
         ts = pd.to_datetime(df['timestamp'], unit='s', errors='coerce'
             ).dt.tz_localize(None)
         df = df[ts >= limite]
-    conteo = defaultdict(lambda : {'ganadas': 0, 'perdidas': 0, 'total': 0,
+    conteo = defaultdict(lambda: {'ganadas': 0, 'perdidas': 0, 'total': 0,
         'retorno': 0.0})
     for _, fila in df.iterrows():
-        estrategias_activas = json.loads(fila.get('estrategias_activas', '{}'))
-        retorno = fila.get('retorno', 0)
-        resultado = fila.get('resultado', '')
-        for estrategia, activa in estrategias_activas.items():
-            if activa:
-                conteo[estrategia]['total'] += 1
-                conteo[estrategia]['retorno'] += retorno
-                if resultado == 'ganancia':
-                    conteo[estrategia]['ganadas'] += 1
-                elif resultado == 'perdida':
-                    conteo[estrategia]['perdidas'] += 1
+        estrategias_activas = parsear_estrategias_activas(fila.get(
+            'estrategias_activas', {}))
+        retorno_total = obtener_retorno_total_registro(fila)
+        resultado = str(fila.get('resultado', '')).lower()
+        contribuciones = distribuir_retorno_por_estrategia(retorno_total,
+            estrategias_activas)
+        for estrategia, retorno_parcial in contribuciones.items():
+            conteo[estrategia]['total'] += 1
+            conteo[estrategia]['retorno'] += retorno_parcial
+            if resultado == 'ganancia' or (
+                not resultado and retorno_parcial > 0
+                ):
+                conteo[estrategia]['ganadas'] += 1
+            elif resultado == 'perdida' or (
+                not resultado and retorno_parcial < 0
+                ):
+                conteo[estrategia]['perdidas'] += 1
     datos = []
     for estrategia, stats in conteo.items():
         winrate = stats['ganadas'] / stats['total'] * 100 if stats['total'
