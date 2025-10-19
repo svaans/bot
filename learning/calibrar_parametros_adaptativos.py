@@ -112,6 +112,14 @@ def calibrar_pesos(
     )
     cfg = _cargar_config(path_config)
     cfg['pesos_contexto'] = pesos
+    cfg['metricas_pesos_contexto'] = {
+        'train_mse': train_mse,
+        'validation_mse': val_mse,
+        'n_train': resultado.n_train,
+        'n_validation': resultado.n_validation,
+        'validation_fraction': validation_fraction,
+        'regularization': resultado.regularization,
+    }
     _guardar_config(cfg, path_config)
     return resultado
 
