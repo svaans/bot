@@ -8,6 +8,7 @@ from dataclasses import replace, is_dataclass
 from typing import Any, Optional
 
 from config.config_manager import ConfigManager
+from core.operational_mode import OperationalMode
 from core.trader_modular import Trader
 
 from .types import Config
@@ -73,15 +74,22 @@ class ConfigMixin:
         """Desactiva el modo real cuando la verificación de reloj falla."""
         if self.config is not None:
             if is_dataclass(self.config):
-                self.config = replace(self.config, modo_real=False)
+                kwargs = {"modo_real": False}
+                if "modo_operativo" in self.config.__dataclass_fields__:
+                    kwargs["modo_operativo"] = OperationalMode.PAPER_TRADING
+                self.config = replace(self.config, **kwargs)
             else:
                 with suppress(Exception):
                     setattr(self.config, "modo_real", False)
+                with suppress(Exception):
+                    setattr(self.config, "modo_operativo", OperationalMode.PAPER_TRADING)
         if hasattr(self.trader, "config"):
             with suppress(Exception):
                 self.trader.config = self.config
         with suppress(Exception):
             setattr(self.trader, "modo_real", False)
+        with suppress(Exception):
+            setattr(self.trader, "operational_mode", OperationalMode.PAPER_TRADING)
         with suppress(Exception):
             setattr(self.trader, "cliente", None)
 

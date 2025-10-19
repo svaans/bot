@@ -7,6 +7,8 @@ from typing import Any, Mapping
 
 UTC = timezone.utc
 import pandas as pd
+
+from core.operational_mode import OperationalMode
 from core.utils.io_metrics import observe_disk_write
 from core.utils.logger import configurar_logger
 from observability.metrics import METRIC_EXPORT_FAILURES_TOTAL
@@ -59,7 +61,11 @@ class RegistroMetrico:
         order_type_default = os.getenv('METRIC_DEFAULT_ORDER_TYPE', 'n/a')
         modo_env = os.getenv('METRIC_DEFAULT_MODO')
         if modo_env is None:
-            modo_env = 'real' if os.getenv('MODO_REAL', 'true').lower() == 'true' else 'paper'
+            raw_mode = os.getenv('MODO_OPERATIVO') or os.getenv('BOT_MODE')
+            if raw_mode:
+                modo_env = OperationalMode.parse(raw_mode, default=OperationalMode.PAPER_TRADING).value
+            else:
+                modo_env = OperationalMode.REAL.value if os.getenv('MODO_REAL', 'true').lower() == 'true' else OperationalMode.PAPER_TRADING.value
         latencia_default = self._coerce_latencia(os.getenv('METRIC_DEFAULT_LATENCIA_MS'), 0.0)
 
         return {

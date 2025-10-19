@@ -1,11 +1,14 @@
 from dataclasses import dataclass, field
 from typing import List, Dict
 
+from core.operational_mode import OperationalMode
+
 
 @dataclass(frozen=True)
 class DevelopmentConfig:
     """Valores por defecto para el entorno de desarrollo."""
     modo_real: bool = False
+    modo_operativo: OperationalMode = OperationalMode.PAPER_TRADING
     intervalo_velas: str = '5m'
     symbols: List[str] = field(default_factory=lambda : ['BTC/EUR',
         'ETH/EUR', 'ADA/EUR', 'SOL/EUR', 'BNB/EUR'])

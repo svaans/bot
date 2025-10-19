@@ -8,6 +8,9 @@ __all__ = [
     "SIGNALS_CONFLICT_RESOLVED",
     "NOTIFICATIONS_TOTAL",
     "NOTIFICATIONS_RETRY",
+    "BOT_OPERATIONAL_MODE",
+    "BOT_OPERATIONAL_MODE_TRANSITIONS_TOTAL",
+    "BOT_MODO_REAL",
     "EMOTIONAL_STATE_SCORE",
     "EMOTIONAL_STATE_TRANSITIONS",
     "EMOTIONAL_RISK_GAUGE",
@@ -47,6 +50,23 @@ __all__ = [
     "CONTEXT_PARSING_ERRORS_TOTAL",
     "CONTEXT_VOLUME_EXTREME_TOTAL",
 ]
+
+BOT_OPERATIONAL_MODE = Gauge(
+    "bot_operational_mode",
+    "Estado actual del modo operativo (1=activo)",
+    ["mode"],
+)
+
+BOT_OPERATIONAL_MODE_TRANSITIONS_TOTAL = Counter(
+    "bot_operational_mode_transitions_total",
+    "Total de transiciones entre modos operativos",
+    ["from_mode", "to_mode", "trigger"],
+)
+
+BOT_MODO_REAL = Gauge(
+    "bot_modo_real",
+    "Indicador binario del modo real activo",
+)
 
 SIGNALS_CONFLICT = Counter(
     "strategy_signals_conflict_total",

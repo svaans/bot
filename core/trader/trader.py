@@ -15,6 +15,7 @@ from typing import Any, Awaitable, Callable, Dict, Optional, TYPE_CHECKING
 
 import pandas as pd
 
+from core.operational_mode import OperationalMode
 from core.streams.candle_filter import CandleFilter
 
 from core.utils.feature_flags import is_flag_enabled
@@ -251,6 +252,7 @@ class Trader(TraderLite):
             strict_components=strict_components,
         )
         self.modo_real = bool(getattr(config, "modo_real", False))
+        self.operational_mode = getattr(config, "modo_operativo", OperationalMode.from_bool(self.modo_real))
         self.cliente = self._cliente
         self.data_feed = self.feed
         max_historial = int(getattr(config, "historial_cierres_max_per_symbol", 720) or 720)

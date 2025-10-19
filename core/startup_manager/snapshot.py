@@ -70,6 +70,7 @@ class SnapshotMixin:
         if not isinstance(symbols, list):
             symbols = [symbols] if symbols is not None else []
         modo_real = bool(snapshot.get('modo_real', False))
+        modo_operativo = snapshot.get('modo_operativo')
         timestamp = snapshot.get('timestamp')
         age: float | None
         if isinstance(timestamp, (int, float)):
@@ -80,6 +81,7 @@ class SnapshotMixin:
         log_payload = {
             'symbols': symbols,
             'modo_real': modo_real,
+            'modo_operativo': modo_operativo,
             'age_seconds': age,
         }
         self.log.info(
@@ -103,6 +105,7 @@ class SnapshotMixin:
         data = {
             'symbols': getattr(self.config, 'symbols', []),
             'modo_real': getattr(self.config, 'modo_real', False),
+            'modo_operativo': getattr(self.config, 'modo_operativo', None),
             'timestamp': time.time(),
         }
         trader = self.trader

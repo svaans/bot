@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Callable
 
+from core.operational_mode import OperationalMode
 
 class DummySupervisor:
     """Supervisor ligero para verificar interacciones del trader."""
@@ -66,6 +67,7 @@ class DummyConfig:
         self.intervalo_velas = "1m"
         self.modo_real = False
         self.max_spread_ratio = 0.0
+        self.modo_operativo = OperationalMode.from_bool(self.modo_real)
         self.spread_dynamic = False
         self.spread_guard_window = 50
         self.spread_guard_hysteresis = 0.15
@@ -99,3 +101,11 @@ class DummyConfig:
         self.backfill_max_candles = 1000
         for key, value in overrides.items():
             setattr(self, key, value)
+        if 'modo_operativo' in overrides:
+            if not isinstance(self.modo_operativo, OperationalMode):
+                self.modo_operativo = OperationalMode.parse(
+                    str(self.modo_operativo),
+                    default=OperationalMode.from_bool(bool(getattr(self, 'modo_real', False))),
+                )
+        else:
+            self.modo_operativo = OperationalMode.from_bool(bool(getattr(self, 'modo_real', False)))

@@ -4,6 +4,7 @@ cfg = ConfigManager.load_from_env()
 API_KEY = cfg.api_key
 API_SECRET = cfg.api_secret
 MODO_REAL = cfg.modo_real
+MODO_OPERATIVO = cfg.modo_operativo
 INTERVALO_VELAS = cfg.intervalo_velas
 SYMBOLS = cfg.symbols
 UMBRAL_RIESGO_DIARIO = cfg.umbral_riesgo_diario

@@ -5,6 +5,8 @@ from types import SimpleNamespace
 
 import pytest
 
+from core.operational_mode import OperationalMode
+
 from core.backfill_service import BackfillService
 from core.metrics import (
     BACKFILL_DURATION_SECONDS,
@@ -26,7 +28,9 @@ class DummyConfig(SimpleNamespace):
 
 @pytest.mark.asyncio
 async def test_traderlite_backfill_mode_b_blocks_until_ready(monkeypatch: pytest.MonkeyPatch) -> None:
-    config = DummyConfig(symbols=["BTC/EUR"], intervalo_velas="5m", modo_real=False)
+    config = DummyConfig(
+        symbols=["BTC/EUR"], intervalo_velas="5m", modo_real=False, modo_operativo=OperationalMode.PAPER_TRADING
+    )
     processed: list[int] = []
 
     async def handler(candle: dict) -> None:

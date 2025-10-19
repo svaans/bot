@@ -45,6 +45,7 @@ from typing import Any, Optional, Tuple
 from core.hot_reload import ModularReloadRule, start_hot_reload, stop_hot_reload
 from core.supervisor import start_supervision, stop_supervision
 from core.notification_manager import crear_notification_manager_desde_env
+from core.operational_mode import OperationalModeService
 from core.diag.phase_logger import phase
 from core.startup_manager import StartupManager
 from core.metrics import iniciar_exporter
@@ -135,6 +136,7 @@ async def main():
     bot = None
     tarea_bot: Optional[asyncio.Task] = None
     config = None
+    mode_service: OperationalModeService | None = None
 
     # 1) Arranque del bot
     try:
@@ -164,6 +166,14 @@ async def main():
                 tarea_bot = asyncio.create_task(tarea_bot)  # type: ignore
             else:
                 raise RuntimeError("tarea_bot no es Task ni coroutine")
+        try:
+            if bot is not None and config is not None:
+                bus = getattr(bot, "event_bus", None) or getattr(bot, "bus", None)
+                mode_service = OperationalModeService(config=config, trader=bot, event_bus=bus)
+                mode_service.start()
+        except Exception as exc:
+            print(f"⚠️ No se pudo iniciar el servicio de modos operativos: {exc}")
+            mode_service = None
     except Exception as e:
         msg = str(e)
         if 'Storage no disponible' in msg:
@@ -305,6 +315,9 @@ async def main():
                     await asyncio.sleep(delay)
                     print('🔄 Reiniciando bot…')
                     try:
+                        if mode_service is not None:
+                            await mode_service.stop()
+                            mode_service = None
                         startup = StartupManager()
                         triple = await startup.run()
                         if not isinstance(triple, tuple) or len(triple) != 3:
@@ -319,6 +332,13 @@ async def main():
                                 raise RuntimeError("tarea_bot no es Task ni coroutine")
                         if bot and hasattr(bot, 'notificador'):
                             setattr(bot, 'notificador', notificador)
+                        try:
+                            if bot is not None and config is not None:
+                                bus = getattr(bot, "event_bus", None) or getattr(bot, "bus", None)
+                                mode_service = OperationalModeService(config=config, trader=bot, event_bus=bus)
+                                mode_service.start()
+                        except Exception as exc:
+                            print(f"⚠️ No se pudo reiniciar el servicio de modos operativos: {exc}")
                     except Exception as e:
                         print(f"❌ Error reiniciando bot: {e}")
                         traceback.print_exc()
@@ -368,6 +388,12 @@ async def main():
                 stop_hot_reload(observer)
         except Exception as e:
             print(f"⚠️ Error deteniendo hot-reload: {e}")
+
+        if mode_service is not None:
+            try:
+                await mode_service.stop()
+            except Exception as exc:
+                print(f"⚠️ Error deteniendo servicio de modos: {exc}")
 
         # 5) Cierre del bot con timeout
         await _safe_acall(bot, 'cerrar', timeout=15)

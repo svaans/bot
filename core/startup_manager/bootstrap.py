@@ -8,6 +8,7 @@ import os
 from typing import Any
 
 from core.data.bootstrap import warmup_inicial
+from core.operational_mode import OperationalMode
 from core.diag.phase_logger import phase
 
 
@@ -42,7 +43,11 @@ class BootstrapMixin:
 
     async def _validate_feeds(self) -> None:
         assert self.trader is not None and self.config is not None
-        if getattr(self.config, "modo_real", False) and not getattr(self.trader, "cliente", None):
+        require_client = bool(getattr(self.config, "modo_real", False))
+        mode = getattr(self.config, "modo_operativo", None)
+        if isinstance(mode, OperationalMode):
+            require_client = mode.is_real or mode.uses_testnet
+        if require_client and not getattr(self.trader, "cliente", None):
             msg = (
                 "Cliente Binance no inicializado. "
                 "Verifica las claves API y las variables de entorno "

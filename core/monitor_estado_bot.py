@@ -11,6 +11,7 @@ import inspect
 from binance_api.cliente import BinanceClient, fetch_balance_async
 from config import config as app_config
 from ccxt.base.errors import AuthenticationError, NetworkError
+from core.operational_mode import OperationalMode
 from core.utils.utils import configurar_logger
 from core.orders import real_orders
 from core.reporting import reporter_diario
@@ -42,7 +43,8 @@ def obtener_orden_abierta():
     if os.path.exists(ORDENES_DB_PATH):
         try:
             ordenes = real_orders.cargar_ordenes()
-            if not ordenes and app_config.MODO_REAL:
+            modo = getattr(app_config, 'MODO_OPERATIVO', OperationalMode.from_bool(app_config.MODO_REAL))
+            if not ordenes and (modo.is_real or modo.uses_testnet):
                 ordenes = real_orders.sincronizar_ordenes_binance(
                     config=app_config.cfg
                 )
@@ -122,7 +124,13 @@ async def monitorear_estado_bot(
         log.info(
             f"🕒 Hora actual: {datetime.now(UTC).strftime('%Y-%m-%d %H:%M:%S')} UTC"
             )
-        etiqueta_saldo = '💶 Saldo disponible (EUR)' if app_config.MODO_REAL else '💶 Saldo simulado (EUR)'
+        modo = getattr(app_config, 'MODO_OPERATIVO', OperationalMode.from_bool(app_config.MODO_REAL))
+        if modo.is_real:
+            etiqueta_saldo = '💶 Saldo disponible (EUR)'
+        elif modo.uses_testnet:
+            etiqueta_saldo = '💶 Saldo staging (EUR)'
+        else:
+            etiqueta_saldo = '💶 Saldo simulado (EUR)'
         log.info(f'{etiqueta_saldo}: {euros:.2f}')
         if orden_abierta:
             for symbol, orden in orden_abierta.items():

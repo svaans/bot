@@ -1,5 +1,7 @@
 from dataclasses import dataclass
 
+from core.operational_mode import OperationalMode
+
 
 @dataclass
 class DummyConfig:
@@ -7,6 +9,16 @@ class DummyConfig:
     api_secret: str | None = "demo-secret"
     modo_real: bool = True
     binance_testnet: bool = False
+    modo_operativo: OperationalMode | None = None
+
+    def __post_init__(self) -> None:
+        if self.modo_operativo is None:
+            self.modo_operativo = OperationalMode.from_bool(self.modo_real)
+        elif not isinstance(self.modo_operativo, OperationalMode):
+            self.modo_operativo = OperationalMode.parse(
+                str(self.modo_operativo),
+                default=OperationalMode.from_bool(self.modo_real),
+            )
 
 
 def test_crear_cliente_config_activa_modo_real(monkeypatch):

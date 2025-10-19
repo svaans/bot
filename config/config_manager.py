@@ -6,6 +6,7 @@ from pathlib import Path
 
 from config.development import DevelopmentConfig
 from config.production import ProductionConfig
+from core.operational_mode import OperationalMode
 from core.utils.utils import configurar_logger
 from core.utils.log_utils import safe_extra
 
@@ -125,6 +126,7 @@ class Config:
     """Configuración inmutable cargada desde el entorno."""
     api_key: Optional[str]
     api_secret: Optional[str]
+    modo_operativo: OperationalMode
     modo_real: bool
     intervalo_velas: str
     symbols: List[str]
@@ -271,8 +273,17 @@ class ConfigManager:
             log.error('❌ Faltan símbolos (SYMBOLS)')
             raise ValueError('Faltan datos de configuración: SYMBOLS')
 
-        # Flags globales
-        modo_real = os.getenv('MODO_REAL', str(defaults.modo_real)).lower() == 'true'
+        default_mode = getattr(defaults, 'modo_operativo', OperationalMode.from_bool(defaults.modo_real))
+        modo_env = os.getenv('MODO_OPERATIVO') or os.getenv('BOT_MODE')
+        if modo_env:
+            modo_operativo = OperationalMode.parse(modo_env, default=default_mode)
+        else:
+            modo_real_env = os.getenv('MODO_REAL')
+            if modo_real_env is None:
+                modo_operativo = default_mode
+            else:
+                modo_operativo = OperationalMode.REAL if modo_real_env.strip().lower() == 'true' else OperationalMode.PAPER_TRADING
+        modo_real = modo_operativo.is_real
 
         # Claves API (solo si modo_real)
         api_key = os.environ.get('BINANCE_API_KEY')
@@ -287,6 +298,12 @@ class ConfigManager:
                 datos = ', '.join(missing)
                 log.error(f'❌ Faltan variables de entorno requeridas: {datos}')
                 raise ValueError(f'Faltan datos de configuración: {datos}')
+            
+        if modo_operativo.uses_testnet:
+            rest = os.getenv('BINANCE_STAGING_REST_URL')
+            ws = os.getenv('BINANCE_STAGING_WS_URL')
+            if not rest or not ws:
+                raise ValueError('Faltan endpoints de staging: BINANCE_STAGING_REST_URL/BINANCE_STAGING_WS_URL')
 
         # Capital
         capital_currency = os.getenv('CAPITAL_CURRENCY')
@@ -473,20 +490,38 @@ class ConfigManager:
             'RISK_CAPITAL_DIVERGENCE_THRESHOLD',
             getattr(defaults, 'risk_capital_divergence_threshold', 0.0),
         )
+
+        umbral_riesgo_diario = _cargar_float('UMBRAL_RIESGO_DIARIO', defaults.umbral_riesgo_diario)
+        if umbral_riesgo_diario <= 0:
+            raise ValueError('UMBRAL_RIESGO_DIARIO debe ser mayor a 0')
+        min_order_eur = _cargar_float('MIN_ORDER_EUR', defaults.min_order_eur)
+        diversidad_minima = _cargar_int('DIVERSIDAD_MINIMA', defaults.diversidad_minima)
+        persistencia_minima = _cargar_int('PERSISTENCIA_MINIMA', defaults.persistencia_minima)
+        peso_extra_persistencia = _cargar_float('PESO_EXTRA_PERSISTENCIA', defaults.peso_extra_persistencia)
+        modo_capital_bajo = os.getenv('MODO_CAPITAL_BAJO', str(defaults.modo_capital_bajo)).lower() == 'true'
+
+        if risk_capital_total < 0:
+            raise ValueError('RISK_CAPITAL_TOTAL no puede ser negativo')
+        if risk_capital_default_per_symbol < 0:
+            raise ValueError('RISK_CAPITAL_DEFAULT_PER_SYMBOL no puede ser negativo')
+        for sym, amount in risk_capital_per_symbol.items():
+            if amount < 0:
+                raise ValueError(f'RISK_CAPITAL_PER_SYMBOL[{sym}] no puede ser negativo')
         
         config = Config(
             api_key=api_key,
             api_secret=api_secret,
+            modo_operativo=modo_operativo,
             modo_real=modo_real,
             intervalo_velas=os.getenv('INTERVALO_VELAS', defaults.intervalo_velas),
             symbols=symbols,
-            umbral_riesgo_diario=_cargar_float('UMBRAL_RIESGO_DIARIO', defaults.umbral_riesgo_diario),
-            min_order_eur=_cargar_float('MIN_ORDER_EUR', defaults.min_order_eur),
-            diversidad_minima=_cargar_int('DIVERSIDAD_MINIMA', defaults.diversidad_minima),
+            umbral_riesgo_diario=umbral_riesgo_diario,
+            min_order_eur=min_order_eur,
+            diversidad_minima=diversidad_minima,
             capital_currency=capital_currency,
-            persistencia_minima=_cargar_int('PERSISTENCIA_MINIMA', defaults.persistencia_minima),
-            peso_extra_persistencia=_cargar_float('PESO_EXTRA_PERSISTENCIA', defaults.peso_extra_persistencia),
-            modo_capital_bajo=os.getenv('MODO_CAPITAL_BAJO', str(defaults.modo_capital_bajo)).lower() == 'true',
+            persistencia_minima=persistencia_minima,
+            peso_extra_persistencia=peso_extra_persistencia,
+            modo_capital_bajo=modo_capital_bajo,
             risk_capital_total=risk_capital_total,
             risk_capital_default_per_symbol=risk_capital_default_per_symbol,
             risk_capital_per_symbol=risk_capital_per_symbol,

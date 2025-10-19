@@ -23,6 +23,7 @@ except Exception:  # pragma: no cover
     _crear_cliente_impl = None  # type: ignore
 
 from core import trader as _trader
+from core.operational_mode import OperationalMode
 
 TraderLite = _trader.TraderLite
 Trader = _trader.Trader
@@ -86,8 +87,11 @@ def crear_cliente(*args: Any, **kwargs: Any) -> Any:
                     prefer_sim = getattr(config, "binance_simulated", None)
                 if prefer_sim is None:
                     prefer_sim = getattr(config, "simulated", None)
+                mode = getattr(config, "modo_operativo", None)
                 if prefer_sim is not None:
                     simulated = bool(prefer_sim)
+                elif isinstance(mode, OperationalMode):
+                    simulated = mode is OperationalMode.PAPER_TRADING
                 else:
                     simulated = not bool(getattr(config, "modo_real", False))
 
@@ -96,8 +100,11 @@ def crear_cliente(*args: Any, **kwargs: Any) -> Any:
                 prefer_testnet = getattr(config, "binance_testnet", None)
                 if prefer_testnet is None:
                     prefer_testnet = getattr(config, "testnet", None)
+                mode = getattr(config, "modo_operativo", None)
                 if prefer_testnet is not None:
                     testnet = bool(prefer_testnet)
+                elif isinstance(mode, OperationalMode):
+                    testnet = mode is OperationalMode.STAGING
                 else:
                     testnet = False
 

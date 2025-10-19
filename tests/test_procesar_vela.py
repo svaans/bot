@@ -10,6 +10,7 @@ import pytest
 
 from core import procesar_vela as procesar_vela_mod
 from core.procesar_vela import procesar_vela
+from core.operational_mode import OperationalMode
 from indicadores.atr import calcular_atr
 from indicadores.momentum import calcular_momentum
 from indicadores.rsi import calcular_rsi
@@ -18,7 +19,9 @@ from indicadores.rsi import calcular_rsi
 @dataclass
 class DummyConfig:
     symbols: list[str]
-    intervalo_velas: str = "1m"
+    intervalo_velas: str = "5m"
+    modo_real: bool = False
+    modo_operativo: OperationalMode = OperationalMode.PAPER_TRADING
     trader_fastpath_enabled: bool = False
     trader_fastpath_threshold: int = 400
     trader_fastpath_resume_threshold: int = 350

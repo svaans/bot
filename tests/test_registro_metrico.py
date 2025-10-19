@@ -16,6 +16,7 @@ def _clear_metric_env(monkeypatch) -> None:
         "METRIC_DEFAULT_MODO",
         "METRIC_DEFAULT_LATENCIA_MS",
         "MODO_REAL",
+        "MODO_OPERATIVO",
     ):
         monkeypatch.delenv(var, raising=False)
 
@@ -32,13 +33,13 @@ def test_registro_metrico_aplica_defaults(tmp_path, monkeypatch) -> None:
     assert stored["estrategia"] == "default"
     assert stored["exchange"] == "binance"
     assert stored["order_type"] == "n/a"
-    assert stored["modo"] == "paper"
+    assert stored["modo"] == "paper_trading"
     assert stored["latencia_ms"] == 0.0
 
 
 def test_registro_metrico_acepta_aliases(tmp_path, monkeypatch) -> None:
     _clear_metric_env(monkeypatch)
-    monkeypatch.setenv("METRIC_DEFAULT_MODO", "paper")
+    monkeypatch.setenv("METRIC_DEFAULT_MODO", "paper_trading")
     registro = RegistroMetrico(carpeta=os.fspath(tmp_path))
 
     registro.registrar(
@@ -57,7 +58,7 @@ def test_registro_metrico_acepta_aliases(tmp_path, monkeypatch) -> None:
     assert stored["estrategia"] == "scalp"
     assert stored["exchange"] == "binance-futures"
     assert stored["order_type"] == "LIMIT"
-    assert stored["modo"] == "paper"
+    assert stored["modo"] == "paper_trading"
     assert stored["latencia_ms"] == 12.5
 
 
