@@ -4,6 +4,8 @@ from typing import Any, Iterator
 
 import pytest
 
+import math
+
 import core.contexto_externo as contexto
 from core.contexto_externo import StreamContexto, obtener_puntaje_contexto
 from core.contexto_storage import PuntajeStore
@@ -98,7 +100,8 @@ async def test_stream_contexto_aplica_rest_snapshot(tmp_path: Any) -> None:
             "timeframe": "5m",
         }
         await stream._apply_rest_snapshot("BTCUSDT", snapshot)
-        assert obtener_puntaje_contexto("BTCUSDT") == pytest.approx(((102.0 - 100.0) / 100.0) * 25.0)
+        expected = math.log(snapshot["close"] / snapshot["open"]) * math.log1p(1.0)
+        assert obtener_puntaje_contexto("BTCUSDT") == pytest.approx(expected)
         stored = store.load_all_sync()
         assert "BTCUSDT" in stored
         assert updates and updates[0][0] == "BTCUSDT"
@@ -135,7 +138,8 @@ async def test_stream_contexto_actualiza_metricas(tmp_path: Any) -> None:
         assert gauge._value == pytest.approx(1_700_000_300.0)  # type: ignore[attr-defined]
         hist = CONTEXT_SCORE_DISTRIBUTION.labels("BTCUSDT")
         assert hist._observations  # type: ignore[attr-defined]
-        assert hist._observations[-1] == pytest.approx(((102.0 - 100.0) / 100.0) * 25.0)  # type: ignore[attr-defined]
+        expected = math.log(snapshot["close"] / snapshot["open"]) * math.log1p(1.0)
+        assert hist._observations[-1] == pytest.approx(expected)  # type: ignore[attr-defined]
         latency = CONTEXT_UPDATE_LATENCY_SECONDS.labels("BTCUSDT", "rest")
         assert latency._observations  # type: ignore[attr-defined]
         assert latency._observations[-1] >= 0  # type: ignore[attr-defined]

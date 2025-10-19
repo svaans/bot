@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import math
 import ssl
 import statistics
 import time
@@ -108,6 +109,8 @@ class StreamContexto:
         volume_window: int = 50,
         volume_baseline_min: int = 5,
         volume_extreme_multiplier: float = 8.0,
+        score_window: int = 240,
+        score_baseline_min: int = 20,
     ) -> None:
         self.url_template = url_template or CONTEXT_WS_URL
         self.monitor_interval = max(1, monitor_interval)
@@ -150,6 +153,11 @@ class StreamContexto:
         self._volume_extreme_multiplier = max(1.0, float(volume_extreme_multiplier))
         self._volume_history: DefaultDict[str, Deque[float]] = defaultdict(
             lambda: deque(maxlen=self._volume_window)
+        )
+        self._score_window = max(10, int(score_window))
+        self._score_baseline_min = max(5, int(score_baseline_min))
+        self._score_history: DefaultDict[str, Deque[float]] = defaultdict(
+            lambda: deque(maxlen=self._score_window)
         )
 
     def actualizar_datos_externos(self, symbol: str, datos: dict) -> None:
@@ -223,12 +231,15 @@ class StreamContexto:
         if open_price <= 0.0 or volume < 1e-08:
             return
         close_price = float(snapshot.get('close') or 0.0)
-        puntaje = ((close_price - open_price) / open_price) * volume
+        resultado = self._calcular_puntaje_stream(symbol, open_price, close_price, volume)
+        if resultado is None:
+            return
+        puntaje, calculo_meta = resultado
         await self._update_puntaje(
             symbol,
             puntaje,
             source='rest',
-            metadata=snapshot,
+            metadata={**snapshot, **calculo_meta},
             notify=True,
         )
         event_reference = snapshot.get('event_time') or snapshot.get('close_time')
@@ -361,8 +372,10 @@ class StreamContexto:
                                 vol = float(vela.get('v', 0.0))
                                 if isclose(open_, 0.0, rel_tol=1e-12, abs_tol=1e-12) or vol < 1e-08:
                                     continue
-                                variacion_pct = (close - open_) / open_
-                                puntaje = variacion_pct * vol
+                                resultado = self._calcular_puntaje_stream(symbol, open_, close, vol)
+                                if resultado is None:
+                                    continue
+                                puntaje, calculo_meta = resultado
                                 open_time = int(float(vela.get('t') or 0))
                                 close_time = int(float(vela.get('T') or vela.get('close_time') or 0))
                                 event_time = int(float(data.get('E') or vela.get('E') or close_time or 0))
@@ -376,6 +389,7 @@ class StreamContexto:
                                     'event_time': event_time or close_time,
                                     'timeframe': str(vela.get('i') or self._rest_timeframe),
                                 }
+                                metadata.update(calculo_meta)
                                 await self._update_puntaje(symbol, puntaje, source='ws', metadata=metadata, notify=False)
                                 try:
                                     await handler(symbol, puntaje)
@@ -472,6 +486,68 @@ class StreamContexto:
                     mediana,
                 )
         history.append(volume)
+
+    def _obtener_volumen_base(self, symbol: str, volume: float) -> float:
+        """Determina un volumen de referencia robusto para el símbolo dado."""
+
+        history = self._volume_history[symbol]
+        if len(history) >= self._volume_baseline_min:
+            base = statistics.median(history)
+        elif history:
+            base = statistics.fmean(history)
+        else:
+            base = volume
+        if base <= 0.0:
+            base = volume if volume > 0.0 else 1.0
+        return float(base)
+
+    def _calcular_puntaje_stream(
+        self,
+        symbol: str,
+        open_price: float,
+        close_price: float,
+        volume: float,
+    ) -> tuple[float, dict[str, float]] | None:
+        """Calcula el puntaje normalizado (z-score) para el stream del símbolo."""
+
+        if (
+            open_price <= 0.0
+            or close_price <= 0.0
+            or math.isclose(open_price, 0.0, rel_tol=1e-12, abs_tol=1e-12)
+            or volume < 1e-08
+        ):
+            return None
+
+        try:
+            retorno_log = math.log(close_price / open_price)
+        except ValueError:
+            return None
+
+        base_volume = self._obtener_volumen_base(symbol, volume)
+        volume_ratio = volume / base_volume if base_volume > 0.0 else 1.0
+        volume_ratio = max(volume_ratio, 1e-09)
+        weight = math.log1p(volume_ratio)
+        weighted_return = retorno_log * weight
+
+        history = self._score_history[symbol]
+        puntaje = weighted_return
+        if len(history) >= self._score_baseline_min:
+            media = statistics.fmean(history)
+            dispersion = statistics.pstdev(history)
+            if dispersion > 1e-12:
+                puntaje = (weighted_return - media) / dispersion
+            else:
+                puntaje = 0.0
+
+        history.append(weighted_return)
+
+        metadata = {
+            'retorno_log': float(retorno_log),
+            'volume_ratio': float(volume_ratio),
+            'weight': float(weight),
+            'weighted_return': float(weighted_return),
+        }
+        return float(puntaje), metadata
 
     def _record_parsing_error(self, symbol: str, stage: str, exc: Exception | str) -> None:
         """Incrementa las métricas asociadas a errores de parseo."""

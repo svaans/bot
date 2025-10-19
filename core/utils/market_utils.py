@@ -1,6 +1,8 @@
 """Funciones auxiliares relacionadas al análisis de mercado."""
 from __future__ import annotations
 
+import math
+
 import numpy as np
 import pandas as pd
 
@@ -18,12 +20,20 @@ def calcular_slope_pct(valores: pd.Series | pd.Index | np.ndarray | list[float])
     if len(serie) < 2:
         return 0.0
     y = serie.astype(float).values
-    x = np.arange(len(y), dtype=float)
-    slope, _ = np.polyfit(x, y, 1)
-    base = float(y[-1])
-    if base == 0.0:
+    y = y[np.isfinite(y)]
+    if len(y) < 2:
         return 0.0
-    return float(slope / base)
+    if np.any(y <= 0):
+        x = np.arange(len(y), dtype=float)
+        slope, _ = np.polyfit(x, y, 1)
+        base = float(y[-1])
+        if base == 0.0:
+            return 0.0
+        return float(slope / base)
+    x = np.arange(len(y), dtype=float)
+    log_values = np.log(y)
+    slope, _ = np.polyfit(x, log_values, 1)
+    return float(math.expm1(slope))
 
 
 def calcular_atr_pct(df: pd.DataFrame, periodo: int = 14) -> float:
