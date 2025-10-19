@@ -122,6 +122,9 @@ def test_calibrar_umbrales_por_activo_identifica_umbral_optimo() -> None:
     assert btc_res.thresholds.slope_upper == pytest.approx(0.004)
     assert btc_res.thresholds.alta_volatilidad == pytest.approx(0.015)
     assert btc_res.confusion_matrix == {"tendencial": {"tendencial": btc_res.total}}
+    assert btc_res.validation_available is True
+    assert btc_res.train_total > btc_res.total
+    assert btc_res.train_accuracy == pytest.approx(1.0)
 
     eth_res = resultados["ETHUSDT"]
     assert eth_res.total > 0
@@ -131,3 +134,6 @@ def test_calibrar_umbrales_por_activo_identifica_umbral_optimo() -> None:
     assert eth_res.confusion_matrix == {
         "alta_volatilidad": {"alta_volatilidad": eth_res.total}
     }
+    assert eth_res.validation_available is True
+    assert eth_res.train_total > eth_res.total
+    assert eth_res.train_accuracy == pytest.approx(1.0)
