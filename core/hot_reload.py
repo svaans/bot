@@ -386,9 +386,20 @@ class _DebouncedReloader(PatternMatchingEventHandler):
         watch_whitelist: Optional[Sequence[Path]] = None,
         ignore_patterns: Optional[Iterable[str]] = None,
         reload_handler: Callable[[Path, Callable[[], None]], bool] | None = None,
+        extra_extensions: Optional[Iterable[str]] = None,
+        restart_cooldown_seconds: float | None = None,
     ) -> None:
+        extensions = {".py"}
+        if extra_extensions:
+            for ext in extra_extensions:
+                if not ext:
+                    continue
+                normalized = ext if ext.startswith(".") else f".{ext}"
+                extensions.add(normalized.lower())
+
+        patterns = tuple(f"*{ext}" for ext in sorted(extensions)) or ("*.py",)
         super().__init__(
-            patterns=("*.py",),
+            patterns=patterns,
             ignore_patterns=tuple(ignore_patterns or ()),
             ignore_directories=True,
             case_sensitive=False,
@@ -401,11 +412,21 @@ class _DebouncedReloader(PatternMatchingEventHandler):
             Path(p).resolve() for p in (watch_whitelist or ())
         )
         self._reload_handler = reload_handler
+        self._extensions: Set[str] = set(extensions)
+
+        cooldown = 0.0
+        if restart_cooldown_seconds is not None:
+            try:
+                cooldown = float(restart_cooldown_seconds)
+            except (TypeError, ValueError):
+                cooldown = 0.0
+        self._restart_cooldown = max(0.0, cooldown)
 
         self._timer: Optional[threading.Timer] = None
         self._lock = threading.Lock()
         self._last_event_ts: float = 0.0
         self._last_path: Optional[Path] = None
+        self._last_restart_ts: float = 0.0
         self._logger = logging.getLogger("hot_reload")
 
     # ---- Watchdog callbacks ----
@@ -438,7 +459,8 @@ class _DebouncedReloader(PatternMatchingEventHandler):
             except Exception:
                 continue
 
-            if p.suffix.lower() != ".py":
+            suffix = p.suffix.lower()
+            if suffix not in self._extensions:
                 continue
             if _path_is_excluded(p, self.exclude):
                 continue
@@ -504,6 +526,15 @@ class _DebouncedReloader(PatternMatchingEventHandler):
                 self._timer.start()
                 HOT_RELOAD_DEBOUNCE_SECONDS.labels(kind="rescheduled").inc(self.debounce)
                 return
+            if self._restart_cooldown > 0:
+                elapsed_since_restart = now - self._last_restart_ts
+                if elapsed_since_restart < self._restart_cooldown:
+                    wait = self._restart_cooldown - elapsed_since_restart
+                    self._timer = threading.Timer(wait, self._maybe_restart)
+                    self._timer.daemon = True
+                    self._timer.start()
+                    HOT_RELOAD_DEBOUNCE_SECONDS.labels(kind="cooldown_wait").inc(wait)
+                    return
             trig = self._last_path
 
         if self.verbose and trig is not None:
@@ -535,7 +566,8 @@ class _DebouncedReloader(PatternMatchingEventHandler):
             else:
                 if handled:
                     return
-                
+        
+        self._last_restart_ts = time.time()
         HOT_RELOAD_RESTARTS_TOTAL.labels(reason="file_change").inc()
         self._perform_restart()
 
@@ -609,6 +641,8 @@ def start_hot_reload(
     verbose: bool = True,
     watch_paths: Optional[Iterable[Path | str]] = None,
     modular_reload: Optional[Sequence[ModularReloadRule]] = None,
+    extra_extensions: Optional[Iterable[str]] = None,
+    restart_cooldown_seconds: float | None = None,
 ):
     """
     Inicia el observador de hot-reload. Devuelve el observer para detenerlo luego.
@@ -632,6 +666,10 @@ def start_hot_reload(
         Mostrar logs en consola.
     watch_paths : Iterable[Path | str] | None
         Subconjunto de rutas dentro de `path` a vigilar. Si se omite, se observa todo el árbol.
+        extra_extensions : Iterable[str] | None
+        Extensiones adicionales (incluyendo el punto) a monitorear además de ``.py``.
+    restart_cooldown_seconds : float | None
+        Ventana mínima entre reinicios consecutivos del proceso tras aplicar cambios.
     """
     _configure_watchdog_logging()
     
@@ -714,6 +752,8 @@ def start_hot_reload(
         watch_whitelist=watch_whitelist,
         ignore_patterns=ignore_patterns_set,
         reload_handler=_reload_handler if modular_controller else None,
+        extra_extensions=extra_extensions,
+        restart_cooldown_seconds=restart_cooldown_seconds,
     )
 
     # Heurística para elegir backend

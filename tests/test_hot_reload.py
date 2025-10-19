@@ -102,6 +102,9 @@ def test_reloader_triggers_only_for_real_python_files(tmp_path, patched_timer):
     handler.dispatch(FileModifiedEvent(str(tmp_path / "module.pyc")))
     assert patched_timer == [0.5]
 
+    handler.dispatch(FileModifiedEvent(str(tmp_path / "config.yaml")))
+    assert patched_timer == [0.5]
+
 
 def test_reloader_ignores_excluded_directories(tmp_path, patched_timer):
     handler = _build_handler(tmp_path, exclude={"__pycache__", "data"})
@@ -124,6 +127,16 @@ def test_reloader_uses_destination_path_on_moves(tmp_path, patched_timer):
     assert patched_timer == [0.5]
     assert handler._last_path is not None
     assert handler._last_path.name == "module.py"
+
+
+def test_reloader_accepts_extra_extensions(tmp_path, patched_timer):
+    handler = _build_handler(tmp_path)
+    handler.dispatch(FileModifiedEvent(str(tmp_path / "settings.yaml")))
+    assert patched_timer == []
+
+    handler = _build_handler(tmp_path, extra_extensions=[".yaml"])
+    handler.dispatch(FileModifiedEvent(str(tmp_path / "settings.yaml")))
+    assert patched_timer == [0.5]
 
 
 def test_reloader_persists_state_before_restart(monkeypatch, tmp_path):
@@ -184,6 +197,47 @@ def test_hot_reload_metrics_recorded(monkeypatch, tmp_path, patched_timer):
     assert restarts == pytest.approx(1.0)
 
     assert HOT_RELOAD_ERRORS_TOTAL._children == {}
+
+
+def test_restart_cooldown_defers_consecutive_restarts(monkeypatch, tmp_path, patched_timer):
+    handler = _build_handler(tmp_path, restart_cooldown_seconds=2.0)
+
+    for metric in (
+        HOT_RELOAD_DEBOUNCE_SECONDS,
+        HOT_RELOAD_RESTARTS_TOTAL,
+    ):
+        _reset_metric(metric)
+
+    monkeypatch.setattr("core.hot_reload.persist_critical_state", lambda **_: None)
+    monkeypatch.setattr(
+        "core.hot_reload.os.execv",
+        lambda *_, **__: (_ for _ in ()).throw(SystemExit(0)),
+    )
+
+    source = tmp_path / "module.py"
+    source.write_text("print('test')\n", encoding="utf-8")
+
+    handler.dispatch(FileModifiedEvent(str(source)))
+    handler._last_event_ts = time.time() - handler.debounce
+    handler._last_path = source
+
+    with pytest.raises(SystemExit):
+        handler._maybe_restart()
+
+    assert HOT_RELOAD_RESTARTS_TOTAL.labels(reason="file_change")._value == pytest.approx(1.0)
+
+    handler.dispatch(FileModifiedEvent(str(source)))
+    handler._last_event_ts = time.time() - handler.debounce
+    handler._last_path = source
+
+    previous_timer_count = len(patched_timer)
+    handler._maybe_restart()
+
+    assert len(patched_timer) == previous_timer_count + 1
+    cooldown_interval = patched_timer[-1]
+    assert cooldown_interval == pytest.approx(2.0, rel=0.3)
+    assert HOT_RELOAD_RESTARTS_TOTAL.labels(reason="file_change")._value == pytest.approx(1.0)
+    assert HOT_RELOAD_DEBOUNCE_SECONDS.labels(kind="cooldown_wait")._value >= 0.0
 
 
 def test_modular_reload_controller_reloads_pure_package(monkeypatch, tmp_path):
