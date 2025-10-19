@@ -40,6 +40,33 @@ CONFIG_BASE = {
 }
 
 FALLBACK_DIR = Path(tempfile.gettempdir()) / "bot_config_fallbacks"
+FALLBACK_ALERT_THRESHOLD = int(os.getenv('FALLBACK_PERMISSION_ALERT_THRESHOLD', '3'))
+
+
+def _emit_recurrent_permission_alert(src: Path) -> None:
+    """Emite una alerta cuando los fallos de permisos son reiterados."""
+
+    if FALLBACK_ALERT_THRESHOLD <= 0:
+        return
+
+    # ``glob`` no crea el directorio si no existe; garantizamos su presencia
+    FALLBACK_DIR.mkdir(parents=True, exist_ok=True)
+    pattern = f"{src.name}.bak_*"
+    fallbacks = list(FALLBACK_DIR.glob(pattern))
+    total_backups = len(fallbacks)
+    if total_backups < FALLBACK_ALERT_THRESHOLD:
+        return
+    if total_backups == FALLBACK_ALERT_THRESHOLD or total_backups % FALLBACK_ALERT_THRESHOLD == 0:
+        log.error(
+            '🚨 Permisos denegados recurrentes al crear backup',
+            extra={
+                "path_origen": str(src),
+                "fallback_dir": str(FALLBACK_DIR),
+                "total_backups": total_backups,
+                "umbral": FALLBACK_ALERT_THRESHOLD,
+            },
+        )
+        _emit_recurrent_permission_alert(src)
 
 
 def backup_json(path: str) -> None:
