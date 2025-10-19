@@ -7,6 +7,8 @@ def calcular_atr(df: pd.DataFrame, periodo: int = 14) -> float | None:
     Limpia los atributos de las series intermedias para evitar que pandas
     intente compararlos cuando se concatena con el caché de indicadores.
     """
+    if "is_closed" in df.columns:
+        df = df[df["is_closed"]]
     columnas = {"high", "low", "close"}
     if not columnas.issubset(df.columns) or len(df) < periodo + 1:
         return None
