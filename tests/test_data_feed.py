@@ -9,7 +9,12 @@ from typing import Any, Callable
 import pytest
 
 from core.utils.feature_flags import reset_flag_cache
-from core.data_feed import DataFeed
+from core.data_feed import (
+    ConsumerStreamSnapshot,
+    DataFeed,
+    TaskSnapshot,
+    snapshot_consumer_stream,
+)
 from core.event_bus import EventBus
 
 
@@ -701,3 +706,52 @@ async def test_consumer_enables_debug_wrapper_with_flag(monkeypatch: pytest.Monk
 
     assert getattr(feed._handler, "__df_debug_wrapper__", False)
     reset_flag_cache()
+
+
+@pytest.mark.asyncio
+async def test_snapshot_consumer_stream_detects_both_tasks() -> None:
+    blocker_event = asyncio.Event()
+
+    async def blocker() -> None:
+        await blocker_event.wait()
+
+    consumer = asyncio.create_task(blocker(), name="consumer_ADAUSDT")
+    stream = asyncio.create_task(blocker(), name="stream_ADAUSDT")
+
+    snapshot = snapshot_consumer_stream("ADAUSDT")
+
+    assert isinstance(snapshot, ConsumerStreamSnapshot)
+    assert isinstance(snapshot.consumer, TaskSnapshot)
+    assert snapshot.consumer.pending is True
+    assert isinstance(snapshot.stream, TaskSnapshot)
+    assert snapshot.stream.pending is True
+    assert snapshot.pending["consumer_ADAUSDT"] is True
+    assert snapshot.pending["stream_ADAUSDT"] is True
+
+    consumer.cancel()
+    stream.cancel()
+    blocker_event.set()
+    with contextlib.suppress(asyncio.CancelledError):
+        await consumer
+        await stream
+
+
+@pytest.mark.asyncio
+async def test_snapshot_consumer_stream_detects_missing_stream() -> None:
+    blocker_event = asyncio.Event()
+
+    async def blocker() -> None:
+        await blocker_event.wait()
+
+    consumer = asyncio.create_task(blocker(), name="consumer_SOLUSDT")
+
+    snapshot = snapshot_consumer_stream("SOLUSDT")
+
+    assert snapshot.consumer is not None
+    assert snapshot.stream is None
+    assert "consumer_SOLUSDT" in snapshot.pending
+
+    consumer.cancel()
+    blocker_event.set()
+    with contextlib.suppress(asyncio.CancelledError):
+        await consumer
