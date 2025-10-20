@@ -141,6 +141,7 @@ async def escuchar_velas_combinado(
     )
 
 from .datafeed import COMBINED_STREAM_KEY, ConsumerState, DataFeed
+from .diagnostics import ConsumerStreamSnapshot, TaskSnapshot, snapshot_consumer_stream
 
 __all__ = [
     "DataFeed",
@@ -150,6 +151,9 @@ __all__ = [
     "validar_integridad_velas",
     "escuchar_velas",
     "escuchar_velas_combinado",
+    "TaskSnapshot",
+    "ConsumerStreamSnapshot",
+    "snapshot_consumer_stream",
 ]
 
 time = _time
