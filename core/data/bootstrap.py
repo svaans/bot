@@ -12,7 +12,6 @@ import numpy as np
 from binance_api.cliente import fetch_ohlcv_async, obtener_cliente
 from core.metrics import registrar_warmup_progress
 from core.utils.io_metrics import observe_disk_write
-from core.utils.io_metrics import observe_disk_write
 from core.utils.utils import configurar_logger
 
 log = configurar_logger('bootstrap')
