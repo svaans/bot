@@ -710,6 +710,18 @@ async def consumer_loop(feed: "DataFeed", symbol: str) -> None:
                         pass
                     log_method = log.debug
                 log_method("consumer.skip", extra=safe_extra(payload))
+                log.debug(
+                    "loop sigue",
+                    extra=safe_extra(
+                        {
+                            "symbol": sym,
+                            "timestamp": ts,
+                            "stage": "DataFeed._consumer",
+                            "outcome": outcome,
+                            "timeframe": timeframe,
+                        }
+                    ),
+                )
             elif outcome == "ok":
                 feed._stats[symbol]["processed"] += 1
             should_activate_debug_wrapper = (
