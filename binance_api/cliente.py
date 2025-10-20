@@ -319,6 +319,17 @@ async def fetch_ticker_async(cliente: BinanceClient | None, symbol: str) -> Dict
         return await _fetch_ticker_simulado(symbol)
     return await _fetch_ticker_real(cliente, symbol)
 
+
+
+async def fetch_book_ticker_async(
+    cliente: BinanceClient | None, symbol: str
+) -> Dict[str, float]:
+    """Devuelve el mejor bid/ask para ``symbol`` desde Binance o un stub."""
+
+    if cliente is None or getattr(cliente, "simulated", True):
+        return await _fetch_book_ticker_simulado(symbol)
+    return await _fetch_book_ticker_real(cliente, symbol)
+
 # ────────────────────────────── MODO SIMULADO ─────────────────────────────
 async def _fetch_ohlcv_simulado(
     symbol: str,
@@ -373,6 +384,22 @@ async def _fetch_ticker_simulado(symbol: str) -> Dict[str, float]:
     base_price = 100.0
     offset = abs(hash(symbol)) % 1000 / 100.0
     return {"last": base_price + offset}
+
+
+async def _fetch_book_ticker_simulado(symbol: str) -> Dict[str, float]:
+
+    await asyncio.sleep(0)
+    base_price = 100.0 + (abs(hash(symbol)) % 1000) / 100.0
+    spread = 0.02 + (abs(hash(symbol[::-1])) % 25) / 10000.0
+    mid = base_price
+    bid = max(0.0, mid - spread / 2)
+    ask = max(bid, mid + spread / 2)
+    return {
+        "bid": round(bid, 8),
+        "ask": round(ask, 8),
+        "timestamp": int(time.time() * 1000),
+        "source": "simulated",
+    }
 
 
 # ──────────────────────────────── MODO REAL ───────────────────────────────
@@ -433,6 +460,27 @@ async def _fetch_ticker_real(cliente: BinanceClient, symbol: str) -> Dict[str, f
     return {"last": price}
 
 
+async def _fetch_book_ticker_real(cliente: BinanceClient, symbol: str) -> Dict[str, float]:
+    data = await cliente._request(
+        "GET",
+        "/api/v3/ticker/bookTicker",
+        params={"symbol": _to_binance_symbol(symbol)},
+    )
+    bid = float(data.get("bidPrice") or data.get("bid") or 0.0)
+    ask = float(data.get("askPrice") or data.get("ask") or 0.0)
+    timestamp = data.get("updateTime") or data.get("time")
+    try:
+        ts_int = int(timestamp) if timestamp is not None else int(time.time() * 1000)
+    except (TypeError, ValueError):
+        ts_int = int(time.time() * 1000)
+    return {
+        "bid": bid,
+        "ask": ask,
+        "timestamp": ts_int,
+        "source": "book_ticker",
+    }
+
+
 # ──────────────────────────────── HELPERS ────────────────────────────────
 async def close_client_session(cliente: BinanceClient | None) -> None:
     """Cierra el ``ClientSession`` asociado si está activo."""
@@ -445,4 +493,13 @@ async def close_client_session(cliente: BinanceClient | None) -> None:
 fetch_ohlcv = fetch_ohlcv_async
 fetch_balance = fetch_balance_async
 fetch_ticker = fetch_ticker_async
-__all__.extend(["fetch_ohlcv", "fetch_balance", "fetch_ticker", "close_client_session"])
+fetch_book_ticker = fetch_book_ticker_async
+__all__.extend(
+    [
+        "fetch_ohlcv",
+        "fetch_balance",
+        "fetch_ticker",
+        "fetch_book_ticker",
+        "close_client_session",
+    ]
+)
