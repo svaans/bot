@@ -9,7 +9,7 @@ import logging
 import os
 import time
 from collections import defaultdict
-from typing import Any, Awaitable, Callable, Dict, Iterable, List, Optional
+from typing import Any, Awaitable, Callable, Dict, Iterable, List, Mapping, Optional
 
 from core.utils.log_utils import log_kv, safe_extra
 from core.utils.utils import intervalo_a_segundos
@@ -20,6 +20,7 @@ from . import handlers as handlers_module
 from . import monitors as monitors_module
 from . import streaming as streaming_module
 from ._shared import COMBINED_STREAM_KEY, ConsumerState, _safe_float, _safe_int, log
+from .spread_sampler import SpreadSampler
 
 
 class DataFeed:
@@ -149,6 +150,20 @@ class DataFeed:
         self._reconnect_attempts: Dict[str, int] = {}
         self._reconnect_since: Dict[str, float] = {}
         self._ws_retry_telemetry: Dict[str, dict[str, Any]] = {}
+
+        spread_enabled_env = os.getenv("DF_SPREAD_ENABLED", "true").strip().lower()
+        self._spread_enabled = spread_enabled_env not in {"0", "false", "no"}
+        spread_ttl = _safe_float(os.getenv("DF_SPREAD_CACHE_TTL", "2.5"), 2.5)
+        self._spread_sampler: SpreadSampler | None = None
+        if self._spread_enabled:
+            try:
+                self._spread_sampler = SpreadSampler(ttl=max(0.25, spread_ttl))
+            except Exception:
+                log.exception("spread.sampler_init_failed", extra=safe_extra({"stage": "DataFeed"}))
+                self._spread_enabled = False
+        self._spread_fetcher: Any | None = None
+        self._spread_fetcher_unavailable = False
+        self._spread_fetcher_error_logged = False
 
         self.ws_backoff_base = max(0.05, _safe_float(os.getenv("DF_WS_BACKOFF_BASE", "0.5"), 0.5))
         self.ws_backoff_max = max(
@@ -690,6 +705,69 @@ class DataFeed:
 
     async def _reiniciar_consumer(self, symbol: str) -> None:
         await monitors_module.reiniciar_consumer(self, symbol)
+
+    def _resolve_spread_fetcher(self) -> Callable[[Any | None, str], Awaitable[Mapping[str, Any] | None]] | None:
+        if not self._spread_enabled or self._spread_sampler is None:
+            return None
+        if self._spread_fetcher is not None:
+            return self._spread_fetcher  # type: ignore[return-value]
+        if self._spread_fetcher_unavailable:
+            return None
+        try:
+            from binance_api.cliente import fetch_book_ticker_async
+        except Exception:
+            if not self._spread_fetcher_error_logged:
+                log.warning(
+                    "spread.fetcher_unavailable",
+                    extra=safe_extra({"stage": "DataFeed", "reason": "import_error"}),
+                )
+                self._spread_fetcher_error_logged = True
+            self._spread_fetcher_unavailable = True
+            return None
+        self._spread_fetcher = fetch_book_ticker_async
+        return fetch_book_ticker_async
+
+    async def _maybe_attach_spread(self, symbol: str, candle: dict) -> None:
+        if not self._spread_enabled or self._spread_sampler is None:
+            return
+        if not isinstance(candle, dict):
+            return
+
+        existing = candle.get("spread_ratio")
+        if existing is None:
+            existing = candle.get("spread")
+        if existing is not None:
+            try:
+                candle.setdefault("spread_ratio", float(existing))
+            except (TypeError, ValueError):
+                candle.pop("spread_ratio", None)
+            return
+
+        fetcher = self._resolve_spread_fetcher()
+        if fetcher is None:
+            return
+
+        cliente = getattr(self, "_cliente", None)
+        try:
+            sample = await self._spread_sampler.sample(symbol, fetcher, cliente=cliente)
+        except Exception:
+            log.exception(
+                "spread.sample_error",
+                extra=safe_extra({"symbol": symbol, "stage": "DataFeed"}),
+            )
+            return
+
+        if sample is None:
+            return
+
+        candle["spread_ratio"] = sample.ratio
+        candle.setdefault("spread", sample.ratio)
+        candle.setdefault("best_bid", sample.bid)
+        candle.setdefault("best_ask", sample.ask)
+        if sample.timestamp_ms is not None:
+            candle.setdefault("spread_timestamp", sample.timestamp_ms)
+        if sample.source:
+            candle.setdefault("spread_source", sample.source)
 
     async def _do_backfill(self, symbol: str) -> None:
         start = time.perf_counter()
