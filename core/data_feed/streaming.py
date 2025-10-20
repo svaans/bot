@@ -1,5 +1,6 @@
 import asyncio
 import random
+import time
 from typing import List
 
 from binance_api.websocket import InactividadTimeoutError
@@ -8,6 +9,41 @@ from . import escuchar_velas, escuchar_velas_combinado
 
 from ._shared import COMBINED_STREAM_KEY, log
 from . import events
+
+
+def _build_retry_log_context(
+    feed: "DataFeed",
+    key: str,
+    reason: str,
+    *,
+    include_next_attempt: bool,
+) -> dict[str, object]:
+    """Genera ``extra`` enriquecido para logs de reconexión."""
+
+    attempts = max(0, int(feed._reconnect_attempts.get(key, 0)))
+    if include_next_attempt:
+        attempts += 1
+
+    since = feed._reconnect_since.get(key)
+    elapsed = 0.0
+    if since is not None:
+        try:
+            elapsed = max(0.0, time.monotonic() - float(since))
+        except Exception:
+            elapsed = 0.0
+
+    payload: dict[str, object] = {
+        "intervalo": feed.intervalo,
+        "stage": "DataFeed",
+        "reason": reason,
+        "retry_attempt": attempts,
+        "retry_downtime": round(elapsed, 3),
+    }
+
+    payload["retry_max_attempts"] = feed.max_reconnect_attempts
+    payload["retry_max_downtime"] = feed.max_reconnect_time
+
+    return payload
 
 
 def _emit_ws_drop_signal(feed: "DataFeed", payload: dict[str, object]) -> None:
@@ -58,6 +94,15 @@ async def stream_simple(feed: "DataFeed", symbol: str) -> None:
     primera_vez = True
     while feed._running and symbol in feed._queues:
         if not events.verify_reconnect_limits(feed, symbol, "loop_guard"):
+            log.error(
+                "ws_connect:limits",
+                extra={
+                    "symbol": symbol,
+                    **_build_retry_log_context(
+                        feed, symbol, "loop_guard", include_next_attempt=False
+                    ),
+                },
+            )
             return
         try:
             if primera_vez:
@@ -108,9 +153,9 @@ async def stream_simple(feed: "DataFeed", symbol: str) -> None:
                 "ws_connect:retry",
                 extra={
                     "symbol": symbol,
-                    "intervalo": feed.intervalo,
-                    "stage": "DataFeed",
-                    "reason": "inactividad",
+                    **_build_retry_log_context(
+                        feed, symbol, "inactividad", include_next_attempt=True
+                    ),
                 },
                 exc_info=True,
             )
@@ -135,9 +180,12 @@ async def stream_simple(feed: "DataFeed", symbol: str) -> None:
                 "ws_connect:retry",
                 extra={
                     "symbol": symbol,
-                    "intervalo": feed.intervalo,
-                    "stage": "DataFeed",
-                    "reason": type(exc).__name__,
+                    **_build_retry_log_context(
+                        feed,
+                        symbol,
+                        type(exc).__name__,
+                        include_next_attempt=True,
+                    ),
                 },
                 exc_info=True,
             )
@@ -161,6 +209,15 @@ async def stream_combinado(feed: "DataFeed", symbols: List[str]) -> None:
     primera_vez = True
     while feed._running and all(s in feed._queues for s in symbols):
         if not events.verify_reconnect_limits(feed, COMBINED_STREAM_KEY, "loop_guard"):
+            log.error(
+                "ws_connect:limits",
+                extra={
+                    "symbols": symbols,
+                    **_build_retry_log_context(
+                        feed, COMBINED_STREAM_KEY, "loop_guard", include_next_attempt=False
+                    ),
+                },
+            )
             return
         try:
             if primera_vez:
@@ -226,9 +283,12 @@ async def stream_combinado(feed: "DataFeed", symbols: List[str]) -> None:
                 "ws_connect:retry",
                 extra={
                     "symbols": symbols,
-                    "intervalo": feed.intervalo,
-                    "stage": "DataFeed",
-                    "reason": "inactividad",
+                    **_build_retry_log_context(
+                        feed,
+                        COMBINED_STREAM_KEY,
+                        "inactividad",
+                        include_next_attempt=True,
+                    ),
                 },
                 exc_info=True,
             )
@@ -253,9 +313,12 @@ async def stream_combinado(feed: "DataFeed", symbols: List[str]) -> None:
                 "ws_connect:retry",
                 extra={
                     "symbols": symbols,
-                    "intervalo": feed.intervalo,
-                    "stage": "DataFeed",
-                    "reason": type(exc).__name__,
+                    **_build_retry_log_context(
+                        feed,
+                        COMBINED_STREAM_KEY,
+                        type(exc).__name__,
+                        include_next_attempt=True,
+                    ),
                 },
                 exc_info=True,
             )
