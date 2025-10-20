@@ -7,6 +7,8 @@ from typing import Callable, List, Tuple
 import pytest
 
 import core.data_feed as data_feed_module
+import core.data_feed.events as events_module
+import core.data_feed.streaming as streaming_module
 from core.data_feed import DataFeed
 from core.utils.feature_flags import reset_flag_cache
 
@@ -171,3 +173,57 @@ def test_verify_reconnect_limits_guard_respects_max_downtime(monkeypatch) -> Non
     assert downtime_events
     assert downtime_events[-1][1]["reason"] == "loop_guard"
     assert downtime_events[-1][1]["elapsed"] >= 1.5
+
+
+def test_retry_log_context_reports_attempts_and_downtime(monkeypatch) -> None:
+    reloj = {"valor": 100.0}
+
+    def fake_monotonic() -> float:
+        return reloj["valor"]
+
+    monkeypatch.setattr(streaming_module.time, "monotonic", fake_monotonic)
+    monkeypatch.setattr(data_feed_module.time, "monotonic", fake_monotonic)
+    monkeypatch.setattr(events_module.time, "monotonic", fake_monotonic)
+
+    feed = DataFeed(
+        "1m",
+        max_reconnect_attempts=5,
+        max_reconnect_time=30.0,
+    )
+
+    context = streaming_module._build_retry_log_context(  # type: ignore[attr-defined]
+        feed,
+        "BTCUSDT",
+        "error",
+        include_next_attempt=True,
+    )
+
+    assert context["retry_attempt"] == 1
+    assert context["retry_downtime"] == 0.0
+    assert context["retry_max_attempts"] == 5
+    assert context["retry_max_downtime"] == 30.0
+    assert context["reason"] == "error"
+
+    assert feed._register_reconnect_attempt("BTCUSDT", "fallo temporal") is True
+
+    reloj["valor"] = 112.5
+
+    context_next = streaming_module._build_retry_log_context(  # type: ignore[attr-defined]
+        feed,
+        "BTCUSDT",
+        "error",
+        include_next_attempt=True,
+    )
+
+    assert context_next["retry_attempt"] == 2
+    assert context_next["retry_downtime"] == pytest.approx(12.5, rel=1e-6)
+
+    context_guard = streaming_module._build_retry_log_context(  # type: ignore[attr-defined]
+        feed,
+        "BTCUSDT",
+        "loop_guard",
+        include_next_attempt=False,
+    )
+
+    assert context_guard["retry_attempt"] == 1
+    assert context_guard["reason"] == "loop_guard"
