@@ -395,6 +395,16 @@ async def handle_candle(
             registrar_vela_rechazada(symbol_label, "stale", timeframe_label)
         return
 
+    maybe_attach_spread = getattr(feed, "_maybe_attach_spread", None)
+    if callable(maybe_attach_spread):
+        try:
+            await maybe_attach_spread(symbol, candle)
+        except Exception:
+            log.exception(
+                "spread.attach_failed",
+                extra=safe_extra({"symbol": symbol, "tf": feed.intervalo}),
+            )
+
     events.reset_reconnect_tracking(feed, symbol)
     if feed._combined:
         events.reset_reconnect_tracking(feed, COMBINED_STREAM_KEY)
