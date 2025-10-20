@@ -21,6 +21,7 @@ if "indicators" not in sys.modules:
 from core import procesar_vela as procesar_vela_mod
 from core.data_feed import DataFeed
 from core.data_feed import handlers as df_handlers
+from core.data_feed.spread_sampler import SpreadSample
 from core.procesar_vela import procesar_vela as procesar_vela_handler
 from core.trader.trader_lite import TraderLite
 from tests.factories import DummyConfig, DummySupervisor
@@ -74,6 +75,34 @@ async def test_datafeed_consumer_executes_registered_handler() -> None:
     consumer.cancel()
     with contextlib.suppress(asyncio.CancelledError):
         await consumer
+
+
+@pytest.mark.asyncio
+async def test_datafeed_attach_spread_enriches_candle() -> None:
+    feed = DataFeed("1m", handler_timeout=0.1)
+    feed._cliente = object()
+
+    sample = SpreadSample(bid=101.0, ask=101.2, ratio=0.001977, timestamp_ms=321)
+
+    class DummySampler:
+        async def sample(self, symbol: str, fetcher, *, cliente: object | None) -> SpreadSample | None:
+            assert symbol == "BTCUSDT"
+            assert cliente is feed._cliente
+            return sample
+
+    feed._spread_sampler = DummySampler()  # type: ignore[assignment]
+    feed._spread_enabled = True
+    feed._spread_fetcher = lambda *_args, **_kwargs: None  # type: ignore[assignment]
+
+    candle = {"symbol": "BTCUSDT", "is_closed": True, "timestamp": 1_700_000_000}
+
+    await feed._maybe_attach_spread("BTCUSDT", candle)
+
+    assert candle["spread_ratio"] == pytest.approx(sample.ratio)
+    assert candle["best_bid"] == pytest.approx(sample.bid)
+    assert candle["best_ask"] == pytest.approx(sample.ask)
+    assert candle["spread"] == pytest.approx(sample.ratio)
+    assert candle["spread_timestamp"] == sample.timestamp_ms
 
 @pytest.mark.asyncio
 async def test_datafeed_consumer_skip_expected_downgrades_log_and_counts(
