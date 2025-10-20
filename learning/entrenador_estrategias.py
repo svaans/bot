@@ -6,12 +6,10 @@ from typing import Dict, Iterable, Mapping, Tuple
 from dotenv import dotenv_values
 from core.strategies.pesos import gestor_pesos
 from core.utils.utils import configurar_logger
+from .historial_operaciones import HistorialOperaciones, cargar_historial_operaciones
 from .utils_resultados import distribuir_retorno_por_estrategia, obtener_retorno_total_registro
 CONFIG = dotenv_values('config/claves.env')
 MODO_REAL = CONFIG.get('MODO_REAL', 'False') == 'True'
-CARPETA_ORDENES = 'ordenes_reales' if MODO_REAL else 'ordenes_simuladas'
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-CARPETA_HISTORICO = os.path.join(BASE_DIR, 'ultimas_operaciones')
 RUTA_PESOS = 'config/estrategias_pesos.json'
 MIN_OPERACIONES = 5
 log = configurar_logger('entrenador_estrategias')
@@ -123,24 +121,36 @@ def dividir_train_test(df: pd.DataFrame, test_ratio: float=0.2):
     return df_train, df_test
 
 
+def _cargar_historial(symbol: str) -> HistorialOperaciones | None:
+    """Obtiene el historial consolidado para ``symbol`` respetando reintentos."""
+
+    errores: list[str] = []
+    for intento in range(3):
+        try:
+            return cargar_historial_operaciones(symbol, max_operaciones=500)
+        except FileNotFoundError:
+            time.sleep(0.3)
+        except RuntimeError as exc:
+            errores.append(str(exc))
+            break
+    if errores:
+        log.error(
+            '❌ Error al cargar historial consolidado',
+            extra={'symbol': symbol, 'errores': errores},
+        )
+    else:
+        log.info(
+            '⚠️ No se encontró historial reciente', extra={'symbol': symbol}
+        )
+    return None
+
+
 def actualizar_pesos_estrategias_symbol(symbol: str):
     FACTOR_SUAVIZADO = 0.02
-    archivo = f"{symbol.replace('/', '_').upper()}.parquet"
-    ruta = os.path.join(CARPETA_HISTORICO, archivo)
-    for intento in range(3):
-        if os.path.exists(ruta):
-            break
-        time.sleep(0.3)
-    if not os.path.exists(ruta):
-        print(
-            f'⚠️ No se encontró historial para {symbol} en {CARPETA_HISTORICO}'
-            )
+    historial = _cargar_historial(symbol)
+    if historial is None:
         return
-    try:
-        ordenes = pd.read_parquet(ruta)
-    except Exception as e:
-        print(f'❌ Error al leer el archivo {ruta}: {e}')
-        return
+    ordenes = historial.data
     if len(ordenes) < MIN_OPERACIONES:
         log.info(f'⚠️ Insuficientes operaciones para {symbol}.')
         return
@@ -165,9 +175,11 @@ def actualizar_pesos_estrategias_symbol(symbol: str):
     pesos_totales[symbol] = pesos_suavizados
     gestor_pesos.pesos = pesos_totales
     gestor_pesos.guardar()
+    origen = os.path.relpath(str(historial.source), os.getcwd())
     print(
-        f"✅ Pesos suavizados para {symbol} en modo {'REAL' if MODO_REAL else 'SIMULADO'}:"
-        )
+        f"✅ Pesos suavizados para {symbol} en modo {'REAL' if MODO_REAL else 'SIMULADO'} "
+        f"(datos: {origen}):"
+    )
     for estrategia, peso in pesos_suavizados.items():
         print(f'  - {estrategia}: {peso:.3f}')
     if metricas_test:
