@@ -414,6 +414,7 @@ async def handle_candle(
             registrar_vela_rechazada(symbol_label, "queue_missing", timeframe_label)
         return
 
+    queue_size_before = queue.qsize()
     candle.setdefault("_df_enqueue_time", time.monotonic())
 
     tf_label = str(feed.intervalo).lower()
@@ -421,7 +422,20 @@ async def handle_candle(
 
     log.debug(
         "recv candle",
-        extra=safe_extra({"symbol": symbol, "timestamp": ts, "queue_size": queue.qsize()}),
+        extra=safe_extra({"symbol": symbol, "timestamp": ts, "queue_size": queue_size_before}),
+    )
+
+    log.info(
+        "queue.enqueue.pending",
+        extra=safe_extra(
+            {
+                "symbol": symbol,
+                "tf": feed.intervalo,
+                "timestamp": ts,
+                "queue_size": queue_size_before,
+                "from_backfill": bool(_from_backfill),
+            }
+        ),
     )
 
     bar_open_ts = _to_int(candle.get("open_time")) or _to_int(candle.get("openTime"))
@@ -495,6 +509,7 @@ async def handle_candle(
                 "bar_open_ts": bar_open_ts,
                 "bar_close_ts": bar_close_ts,
                 "queue_size": queue_size_after,
+                "queue_size_before": queue_size_before,
             }
         ),
     )
