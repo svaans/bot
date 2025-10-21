@@ -8,7 +8,7 @@ import inspect
 import logging
 import os
 import time
-from collections import defaultdict
+from collections import defaultdict, deque
 from typing import Any, Awaitable, Callable, Dict, Iterable, List, Mapping, Optional
 
 from core.utils.log_utils import log_kv, safe_extra
@@ -30,7 +30,7 @@ class DataFeed:
         self,
         intervalo: str,
         *,
-        handler_timeout: float = float(os.getenv("DF_HANDLER_TIMEOUT_SEC", "2.0")),
+        handler_timeout: float = float(os.getenv("DF_HANDLER_TIMEOUT_SEC", "6.0")),
         inactivity_intervals: int = int(os.getenv("DF_INACTIVITY_INTERVALS", "10")),
         queue_max: int = int(os.getenv("DF_QUEUE_MAX", "2000")),
         queue_policy: str | None = None,
@@ -150,6 +150,9 @@ class DataFeed:
         self._reconnect_attempts: Dict[str, int] = {}
         self._reconnect_since: Dict[str, float] = {}
         self._ws_retry_telemetry: Dict[str, dict[str, Any]] = {}
+        self._slot_versions: Dict[str, Dict[int, dict[str, Any]]] = defaultdict(dict)
+        self._slot_recent: Dict[str, deque[int]] = defaultdict(deque)
+        self._slot_history_limit = max(1, int(os.getenv("DF_DEDUP_HISTORY", "64")))
 
         spread_enabled_env = os.getenv("DF_SPREAD_ENABLED", "true").strip().lower()
         self._spread_enabled = spread_enabled_env not in {"0", "false", "no"}

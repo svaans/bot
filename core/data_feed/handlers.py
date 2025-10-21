@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import time
+from collections import deque
 from typing import Any, Awaitable, Callable, Mapping
 
 from core.utils.feature_flags import is_flag_enabled
@@ -73,6 +74,29 @@ except Exception:  # pragma: no cover - fallback cuando Prometheus no está disp
 
 
 _PATCH_LOGGED = False
+
+
+def _normalize_flag(value: Any) -> bool | None:
+    """Normaliza valores heterogéneos (bool/int/str) a booleanos."""
+
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        try:
+            return bool(int(value))
+        except (TypeError, ValueError):
+            return None
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if not normalized or normalized in {"none", "null"}:
+            return None
+        if normalized in {"1", "true", "t", "yes", "y", "closed", "final", "done"}:
+            return True
+        if normalized in {"0", "false", "f", "no", "n", "open", "partial"}:
+            return False
+    return None
 
 
 def _metrics_extended_enabled() -> bool:
@@ -301,6 +325,85 @@ def _normalize_candle_payload(candle: Mapping[str, Any]) -> dict[str, Any]:
                 normalized["timestamp"] = parsed
 
     return normalized
+
+
+def _resolve_slot_key(candle: Mapping[str, Any], default_ts: int | None) -> int | None:
+    """Determina la clave de slot (bar_open_ts) asociada a la vela."""
+
+    open_ts = _to_int(candle.get("open_time")) or _to_int(candle.get("openTime"))
+    if open_ts is not None:
+        return open_ts
+    if default_ts is not None:
+        try:
+            return int(default_ts)
+        except (TypeError, ValueError):
+            return None
+    timestamp = candle.get("timestamp")
+    return _to_int(timestamp)
+
+
+def _track_slot_version(
+    feed: "DataFeed",
+    symbol: str,
+    slot_key: int | None,
+    candle: dict[str, Any],
+) -> None:
+    """Actualiza estructuras de deduplicación por slot y marca la vela."""
+
+    if slot_key is None:
+        return
+
+    try:
+        slot_versions = feed._slot_versions  # type: ignore[attr-defined]
+        slot_recent = feed._slot_recent  # type: ignore[attr-defined]
+        history_limit = max(1, int(getattr(feed, "_slot_history_limit", 64)))
+    except AttributeError:
+        return
+
+    if not isinstance(slot_versions, dict) or not isinstance(slot_recent, dict):
+        return
+
+    info = slot_versions.setdefault(symbol, {})
+    previous = info.get(slot_key)
+    previous_version = 0
+    if isinstance(previous, dict):
+        try:
+            previous_version = int(previous.get("version", 0))
+        except (TypeError, ValueError):
+            previous_version = 0
+
+    slot_version = previous_version + 1
+
+    final_flag = _normalize_flag(
+        candle.get("is_final")
+        or candle.get("final")
+        or candle.get("is_closed")
+    )
+
+    info[slot_key] = {
+        "version": slot_version,
+        "final": bool(final_flag) if final_flag is not None else True,
+        "updated": time.monotonic(),
+    }
+
+    candle["_df_slot_key"] = slot_key
+    candle["_df_slot_version"] = slot_version
+    if final_flag is not None:
+        candle["_df_slot_final"] = bool(final_flag)
+
+    if previous is not None:
+        feed._stats[symbol]["dedup_versions"] = slot_version
+        feed._stats[symbol]["dedup_replaced"] += 1
+
+    recent_slots = slot_recent.setdefault(symbol, deque())  # type: ignore[name-defined]
+    if not recent_slots or recent_slots[-1] != slot_key:
+        recent_slots.append(slot_key)
+
+    while len(recent_slots) > history_limit:
+        old_slot = recent_slots.popleft()
+        if old_slot == slot_key:
+            continue
+        info.pop(old_slot, None)
 
 
 
@@ -538,6 +641,8 @@ async def handle_candle(
         k: candle.get(k) for k in ("timestamp", "open", "high", "low", "close", "volume")
     }
     feed._last_monotonic[symbol] = time.monotonic()
+    slot_key = _resolve_slot_key(candle, ts)
+    _track_slot_version(feed, symbol, slot_key, candle)
     events.emit_event(feed, "tick", {"symbol": symbol, "ts": ts})
 
 
@@ -565,6 +670,66 @@ async def consumer_loop(feed: "DataFeed", symbol: str) -> None:
         ts = candle.get("timestamp") or candle.get("close_time") or candle.get("open_time")
         timeframe = candle.get("timeframe") or candle.get("interval") or candle.get("tf")
         metrics_enabled = _metrics_extended_enabled()
+        timeframe_label = str(timeframe or feed.intervalo or "unknown").lower()
+
+        slot_key = candle.get("_df_slot_key") if isinstance(candle, dict) else None
+        slot_version = candle.get("_df_slot_version") if isinstance(candle, dict) else None
+        latest_version: int | None = None
+        if slot_key is not None:
+            try:
+                slot_info = feed._slot_versions.get(symbol, {}).get(int(slot_key))  # type: ignore[attr-defined]
+            except Exception:
+                slot_info = None
+            if isinstance(slot_info, dict):
+                try:
+                    latest_version = int(slot_info.get("version", 0))
+                except (TypeError, ValueError):
+                    latest_version = None
+
+        if (
+            latest_version is not None
+            and slot_version is not None
+            and int(slot_version) < latest_version
+        ):
+            feed._stats[symbol]["dedup_skipped"] += 1
+            if metrics_enabled:
+                registrar_vela_rechazada(sym, "dedup_superseded", timeframe_label)
+            log.debug(
+                "consumer.skip.dedup",
+                extra=safe_extra(
+                    {
+                        "symbol": sym,
+                        "tf": timeframe,
+                        "slot_key": slot_key,
+                        "slot_version": slot_version,
+                        "latest_version": latest_version,
+                        "stage": "DataFeed._consumer",
+                    }
+                ),
+            )
+            queue.task_done()
+            continue
+
+        stage_durations: dict[str, float] | None = None
+        if isinstance(candle, dict):
+            raw_stage = candle.get("_df_stage_durations")
+            if isinstance(raw_stage, dict):
+                stage_durations = raw_stage
+            else:
+                stage_durations = {}
+                candle["_df_stage_durations"] = stage_durations
+
+        queue_wait: float | None = None
+        enqueue_time = candle.get("_df_enqueue_time") if isinstance(candle, dict) else None
+        if enqueue_time is not None:
+            try:
+                queue_wait = max(0.0, time.monotonic() - float(enqueue_time))
+            except (TypeError, ValueError):
+                queue_wait = None
+        if queue_wait is not None:
+            feed._stats[symbol]["queue_wait_ms"] = int(queue_wait * 1000)
+            if stage_durations is not None:
+                stage_durations.setdefault("queue_wait", queue_wait)
         outcome = "ok"
         handler = feed._handler
         if handler is None:
@@ -607,13 +772,14 @@ async def consumer_loop(feed: "DataFeed", symbol: str) -> None:
         feed._handler_expected_info = handler_info
         
         handler_completed = False
+        handler_started_at: float | None = None
         try:
-            if candle.get("_df_enqueue_time") is not None:
-                edad = time.monotonic() - candle["_df_enqueue_time"]
-                feed._stats[symbol]["latency_ms"] = int(edad * 1000)
+            if queue_wait is not None:
+                feed._stats[symbol]["latency_ms"] = int(queue_wait * 1000)
                 if metrics_enabled:
-                    timeframe_label = str(timeframe or feed.intervalo or "unknown").lower()
-                    DATAFEED_HANDLER_LATENCY.labels(symbol=sym, timeframe=timeframe_label).observe(edad)
+                    DATAFEED_HANDLER_LATENCY.labels(symbol=sym, timeframe=timeframe_label).observe(
+                        queue_wait
+                    )
 
             events.set_consumer_state(feed, symbol, ConsumerState.HEALTHY)
             feed._stats[symbol]["handler_calls"] += 1
@@ -621,6 +787,7 @@ async def consumer_loop(feed: "DataFeed", symbol: str) -> None:
                 "handler.invoke",
                 extra=safe_extra({"symbol": sym, "stage": "DataFeed._consumer"}),
             )
+            handler_started_at = time.perf_counter()
             await asyncio.wait_for(handler(candle), timeout=feed.handler_timeout)
             handler_completed = True
 
@@ -654,6 +821,30 @@ async def consumer_loop(feed: "DataFeed", symbol: str) -> None:
             events.emit_event(feed, "consumer_error", {"symbol": sym, "ts": ts, "error": str(exc)})
 
         finally:
+            handler_elapsed = 0.0
+            if handler_started_at is not None:
+                handler_elapsed = max(0.0, time.perf_counter() - handler_started_at)
+                feed._stats[symbol]["handler_elapsed_ms"] = int(handler_elapsed * 1000)
+                total_elapsed = handler_elapsed + (queue_wait or 0.0)
+                feed._stats[symbol]["handler_total_ms"] = int(total_elapsed * 1000)
+            if stage_durations is not None:
+                if handler_started_at is not None:
+                    stage_durations["handler"] = handler_elapsed
+                if queue_wait is not None:
+                    stage_durations.setdefault("queue_wait", queue_wait)
+                    base_total = stage_durations.get("total")
+                    try:
+                        base_total = float(base_total)
+                    except (TypeError, ValueError):
+                        base_total = 0.0
+                    stage_durations["total"] = base_total + handler_elapsed + queue_wait
+                elif handler_started_at is not None:
+                    base_total = stage_durations.get("total")
+                    try:
+                        base_total = float(base_total)
+                    except (TypeError, ValueError):
+                        base_total = 0.0
+                    stage_durations["total"] = base_total + handler_elapsed
             feed._consumer_last[symbol] = time.monotonic()
             queue.task_done()
             skip_reason = candle.pop("_df_skip_reason", None)

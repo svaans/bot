@@ -440,7 +440,7 @@ class TraderLite(TraderLiteBackfillMixin, TraderLiteProcessingMixin):
             return caster(default)
 
         kwargs: Dict[str, Any] = {
-            "handler_timeout": _resolve("handler_timeout", "DF_HANDLER_TIMEOUT_SEC", 2.0, float),
+            "handler_timeout": _resolve("handler_timeout", "DF_HANDLER_TIMEOUT_SEC", 6.0, float),
             "inactivity_intervals": _resolve("inactivity_intervals", "DF_INACTIVITY_INTERVALS", 10, int),
             "queue_max": _resolve("df_queue_default_limit", "DF_QUEUE_MAX", 2000, int),
             "queue_min_recommended": _resolve(
