@@ -703,7 +703,7 @@ class TraderLiteProcessingMixin:
             handler_timeout = getattr(getattr(self, "feed", None), "handler_timeout", None)
             warn_threshold: float | None = None
             if isinstance(handler_timeout, (int, float)) and handler_timeout > 0:
-                warn_threshold = float(handler_timeout) * 0.75
+                warn_threshold = float(handler_timeout) * 0.8
 
             if warn_threshold is not None and elapsed >= warn_threshold:
                 slow_payload = {
