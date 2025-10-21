@@ -2,13 +2,14 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import os
 import random
 import sqlite3
 from collections.abc import Mapping
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any, Dict, Mapping, Optional
+from typing import Any, Dict, Optional
 
 from core.orders.order_model import Order
 from core.utils.feature_flags import is_flag_enabled
@@ -38,7 +39,7 @@ from core.metrics import (
 	subscribe_order_pnl_metrics,
 )
 from core.registro_metrico import registro_metrico
-from binance_api.cliente import obtener_cliente
+from binance_api.cliente import BinanceClient, fetch_balance_async, obtener_cliente
 from config import config as app_config
 from core.orders.market_retry_executor import ExecutionResult, MarketRetryExecutor
 from core.orders.order_helpers import coerce_float, coerce_int, lookup_meta
@@ -48,6 +49,32 @@ log = configurar_logger('orders', modo_silencioso=True)
 UTC = timezone.utc
 
 MAX_HISTORIAL_ORDENES = 1000
+
+
+async def _fetch_balance_non_blocking(cliente: Any | None) -> Mapping[str, Any]:
+    """Obtiene el balance evitando bloquear el loop principal."""
+
+    if cliente is None:
+        return await fetch_balance_async(None)
+
+    fetch_balance = getattr(cliente, "fetch_balance", None)
+    if callable(fetch_balance):
+        if inspect.iscoroutinefunction(fetch_balance):
+            return await fetch_balance()
+        resultado = await asyncio.to_thread(fetch_balance)
+        if inspect.isawaitable(resultado):
+            return await resultado
+        return resultado
+
+    fetch_balance_async_attr = getattr(cliente, "fetch_balance_async", None)
+    if callable(fetch_balance_async_attr):
+        return await fetch_balance_async_attr()
+
+    if isinstance(cliente, BinanceClient):
+        return await fetch_balance_async(cliente)
+
+    return {}
+
 
 
 _PERSISTENCE_ERRORS: tuple[type[BaseException], ...] = (OSError,)
@@ -1095,9 +1122,12 @@ class OrderManager:
             if self.modo_real:
                 try:
                     cliente = obtener_cliente()
-                    balance = cliente.fetch_balance()
+                    balance = await _fetch_balance_non_blocking(cliente)
                     quote = symbol.split('/')[1]
-                    disponible = balance.get('free', {}).get(quote, 0.0)
+                    free_balances = balance.get('free', {}) if isinstance(balance, Mapping) else {}
+                    if not isinstance(free_balances, Mapping):
+                        free_balances = {}
+                    disponible = float(free_balances.get(quote, 0.0))
                 except Exception as e:
                     log.error(f'❌ Error obteniendo balance: {e}')
                     disponible = 0.0
