@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib
+import json
 import logging
 import sys
 import textwrap
@@ -18,6 +19,7 @@ from core.hot_reload import (
     _DebouncedReloader,
     _NOISY_WATCHDOG_LOGGERS,
     _configure_watchdog_logging,
+    _log_hot_reload_event,
 )
 from observability.metrics import (
     HOT_RELOAD_DEBOUNCE_SECONDS,
@@ -341,6 +343,25 @@ def test_modular_reload_controller_detects_cross_dependency(monkeypatch, tmp_pat
     for key in list(sys.modules):
         if key in ("pkg", "otherpkg") or key.startswith("pkg.") or key.startswith("otherpkg."):
             sys.modules.pop(key)
+
+
+def test_hot_reload_log_serialization_avoids_scientific_notation(caplog):
+    caplog.set_level(logging.INFO, logger="hot_reload.test")
+    logger = logging.getLogger("hot_reload.test")
+
+    _log_hot_reload_event(
+        logger,
+        "hot_reload_scan_scheduled",
+        duration_seconds=0.000064,
+        filters_applied=True,
+    )
+
+    record = caplog.records[-1]
+    assert "e-" not in record.message
+
+    payload = json.loads(record.message)
+    assert payload["duration_seconds"] == pytest.approx(0.000064)
+    assert payload["filters_applied"] is True
 
 
 def test_configure_watchdog_logging_sets_warning_when_unset():

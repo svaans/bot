@@ -1,5 +1,4 @@
-# core/hot_reload.py
-from __future__ import annotations
+"""Infraestructura de hot-reload con logging estructurado estable."""
 
 from __future__ import annotations
 
@@ -8,16 +7,114 @@ import errno
 import importlib
 import json
 import logging
+import math
 import os
 import sys
 import threading
 import time
 from dataclasses import dataclass
+from json import encoder as json_encoder
 from pathlib import Path
 from types import ModuleType
-from typing import Callable, Iterable, Optional, Sequence, Set
+from typing import Any, Callable, Iterable, Mapping, Optional, Sequence, Set
 
 from core.state import persist_critical_state
+
+
+class _PlainFloatJSONEncoder(json.JSONEncoder):
+    """JSON encoder que evita notación científica en ``float``."""
+
+    def __init__(self, *args: Any, precision: int = 6, **kwargs: Any) -> None:
+        self._precision = precision
+        super().__init__(*args, **kwargs)
+
+    def iterencode(self, o: Any, _one_shot: bool = False):  # type: ignore[override]
+        if self.check_circular:
+            markers: dict[int, Any] | None = {}
+        else:
+            markers = None
+
+        if self.ensure_ascii:
+            _encoder = json_encoder.encode_basestring_ascii
+        else:
+            _encoder = json_encoder.encode_basestring
+
+        def floatstr(  # type: ignore[override]
+            value: float,
+            allow_nan: bool = self.allow_nan,
+        ) -> str:
+            if math.isnan(value):
+                if not allow_nan:
+                    raise ValueError("Out of range float values are not JSON compliant")
+                return "NaN"
+            if math.isinf(value):
+                if not allow_nan:
+                    raise ValueError("Out of range float values are not JSON compliant")
+                return "Infinity" if value > 0 else "-Infinity"
+
+            text = format(value, f".{self._precision}f")
+            text = text.rstrip("0").rstrip(".")
+            return text or "0"
+
+        _iterencode = json_encoder._make_iterencode(  # type: ignore[attr-defined]
+            markers,
+            self.default,
+            _encoder,
+            self.indent,
+            floatstr,
+            self.key_separator,
+            self.item_separator,
+            self.sort_keys,
+            self.skipkeys,
+            _one_shot,
+        )
+        return _iterencode(o, 0)
+
+
+def _sanitize_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
+    """Convierte valores potencialmente problemáticos a representaciones JSON seguras."""
+
+    def _convert(value: Any) -> Any:
+        if value is None or isinstance(value, (str, int, bool)):
+            return value
+        if isinstance(value, float):
+            if math.isnan(value):
+                return "NaN"
+            if math.isinf(value):
+                return "Infinity" if value > 0 else "-Infinity"
+            return value
+        if isinstance(value, Path):
+            return str(value)
+        if isinstance(value, Mapping):
+            return {str(k): _convert(v) for k, v in value.items()}
+        if isinstance(value, (list, tuple, set, frozenset)):
+            return [_convert(v) for v in value]
+        return str(value)
+
+    return {str(key): _convert(value) for key, value in payload.items()}
+
+
+def _serialize_payload(payload: Mapping[str, Any]) -> str:
+    """Serializa el payload usando el encoder que evita notación científica."""
+
+    encoder = _PlainFloatJSONEncoder(ensure_ascii=False, allow_nan=False)
+    return encoder.encode(payload)
+
+
+def _log_hot_reload_event(
+    logger: logging.Logger,
+    event: str,
+    *,
+    level: int = logging.INFO,
+    **fields: Any,
+) -> None:
+    """Emite un log JSON compacto con normalización de números pequeños."""
+
+    payload: dict[str, Any] = {"event": event}
+    payload.update(fields)
+    sanitized = _sanitize_payload(payload)
+    message = _serialize_payload(sanitized)
+    logger.log(level, message)
 from observability.metrics import (
     HOT_RELOAD_BACKEND,
     HOT_RELOAD_DEBOUNCE_SECONDS,
@@ -504,14 +601,14 @@ class _DebouncedReloader(PatternMatchingEventHandler):
                     if str(selected_path).startswith(str(self.root))
                     else selected_path
                 )
-                payload = {
-                    "event": "hot_reload_change_detected",
-                    "path": str(rel),
-                    "debounce": round(self.debounce, 3),
-                    "restart_scheduled_in": round(self.debounce, 3),
-                    "ts": now,
-                }
-                self._logger.info(json.dumps(payload))
+                _log_hot_reload_event(
+                    self._logger,
+                    "hot_reload_change_detected",
+                    path=str(rel),
+                    debounce=round(self.debounce, 3),
+                    restart_scheduled_in=round(self.debounce, 3),
+                    ts=now,
+                )
 
     # ---- Internals ----
 
@@ -543,15 +640,15 @@ class _DebouncedReloader(PatternMatchingEventHandler):
                 rel = trig.relative_to(self.root)
             except Exception:
                 rel = trig
-            payload = {
-                "event": "hot_reload_restart_triggered",
-                "path": str(rel),
-                "restart_reason": "file_change",
-                "debounce": round(self.debounce, 3),
-                "duration_since_change": round(delta, 3),
-                "ts": now,
-            }
-            self._logger.info(json.dumps(payload))
+            _log_hot_reload_event(
+                self._logger,
+                "hot_reload_restart_triggered",
+                path=str(rel),
+                restart_reason="file_change",
+                debounce=round(self.debounce, 3),
+                duration_since_change=round(delta, 3),
+                ts=now,
+            )
 
         HOT_RELOAD_DEBOUNCE_SECONDS.labels(kind="elapsed").inc(delta)
 
@@ -647,16 +744,13 @@ def _schedule_observer(
 
     HOT_RELOAD_SCAN_DURATION_SECONDS.labels(mode=mode).observe(duration)
 
-    logger.info(
-        json.dumps(
-            {
-                "event": "hot_reload_scan_scheduled",
-                "mode": mode,
-                "path": str(path),
-                "duration_seconds": round(duration, 6),
-                "filters_applied": filters_applied,
-            }
-        )
+    _log_hot_reload_event(
+        logger,
+        "hot_reload_scan_scheduled",
+        mode=mode,
+        path=str(path),
+        duration_seconds=round(duration, 6),
+        filters_applied=filters_applied,
     )
 
     return duration
@@ -826,16 +920,13 @@ def start_hot_reload(
             status = "error"
             raise
         finally:
-            logger.info(
-                json.dumps(
-                    {
-                        "event": "hot_reload_observer_prepared",
-                        "mode": mode_label,
-                        "scheduled_targets": len(scheduled),
-                        "scan_duration_seconds": round(total_duration, 6),
-                        "status": status,
-                    }
-                )
+            _log_hot_reload_event(
+                logger,
+                "hot_reload_observer_prepared",
+                mode=mode_label,
+                scheduled_targets=len(scheduled),
+                scan_duration_seconds=round(total_duration, 6),
+                status=status,
             )
         return observer_instance
 
@@ -847,16 +938,13 @@ def start_hot_reload(
         except OSError as exc:
             if getattr(exc, "errno", None) == errno.ENOSPC:
                 if verbose:
-                    logging.getLogger("hot_reload").info(
-                        json.dumps(
-                            {
-                                "event": "hot_reload_backend_switch",
-                                "mode": "polling",
-                                "restart_reason": "inotify_limit",
-                                "path": str(root),
-                                "debounce": round(debounce_seconds, 3),
-                            }
-                        )
+                    _log_hot_reload_event(
+                        logging.getLogger("hot_reload"),
+                        "hot_reload_backend_switch",
+                        mode="polling",
+                        restart_reason="inotify_limit",
+                        path=str(root),
+                        debounce=round(debounce_seconds, 3),
                     )
                 observer_cls = PollingObserver
                 observer = _start(observer_cls)
@@ -868,30 +956,24 @@ def start_hot_reload(
     mode = "polling" if observer_cls is PollingObserver else "native"
     HOT_RELOAD_BACKEND.labels(mode=mode).inc()
 
-    logger.info(
-        json.dumps(
-            {
-                "event": "hot_reload_backend_selected",
-                "mode": mode,
-                "observer_class": f"{observer_cls.__module__}.{observer_cls.__name__}",
-                "targets": len(schedule_targets),
-                "polling_forced": force_poll,
-            }
-        )
+    _log_hot_reload_event(
+        logger,
+        "hot_reload_backend_selected",
+        mode=mode,
+        observer_class=f"{observer_cls.__module__}.{observer_cls.__name__}",
+        targets=len(schedule_targets),
+        polling_forced=force_poll,
     )
 
 
     if verbose:
-        logger.info(
-            json.dumps(
-                {
-                    "event": "hot_reload_started",
-                    "mode": mode,
-                    "path": str(root),
-                    "debounce": round(debounce_seconds, 3),
-                    "excludes": sorted(excludes),
-                }
-            )
+        _log_hot_reload_event(
+            logger,
+            "hot_reload_started",
+            mode=mode,
+            path=str(root),
+            debounce=round(debounce_seconds, 3),
+            excludes=sorted(excludes),
         )
 
     return observer
