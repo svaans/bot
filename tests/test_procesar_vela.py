@@ -353,6 +353,19 @@ async def test_procesar_vela_omite_operacion_si_no_hay_oportunidad() -> None:
 
 
 @pytest.mark.asyncio
+async def test_procesar_vela_expone_duraciones_de_etapas() -> None:
+    trader = DummyTrader(side="long", generar_propuesta=False)
+    candle = _build_candle(20_100.0)
+
+    await procesar_vela(trader, candle)
+
+    stages = candle.get("_df_stage_durations")
+    assert isinstance(stages, dict)
+    assert "parse" in stages
+    assert all(isinstance(value, float) for value in stages.values())
+
+
+@pytest.mark.asyncio
 async def test_procesar_vela_marca_skip_reason_de_trader() -> None:
     trader = WarmupTrader()
     candle = _build_candle(19_000.0)

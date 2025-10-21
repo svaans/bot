@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import inspect
+import time
 from typing import Any, Awaitable, Callable, Dict, List, Optional
 
 from core.metrics import (
     BARS_IN_FUTURE_TOTAL,
     BARS_OUT_OF_RANGE_TOTAL,
     EVAL_ATTEMPTS_TOTAL,
+    TRADER_PIPELINE_LATENCY,
     TRADER_PROCESAR_VELA_CALLS_TOTAL,
     TRADER_SKIPS_TOTAL,
     WAITING_CLOSE_STREAK,
@@ -647,6 +649,8 @@ class TraderLiteProcessingMixin:
             ),
         )
         outcome = "ok"
+        handler_started_at = time.perf_counter()
+        stage_durations: dict[str, float] = {}
         try:
             await self._handler_invoker(candle)
         except Exception:
@@ -668,18 +672,61 @@ class TraderLiteProcessingMixin:
                     ),
                 )
         finally:
-            log.debug(
-                "procesar_vela.exit",
-                extra=safe_extra(
-                    {
-                        "symbol": sym,
-                        "timestamp": ts,
-                        "timeframe": tf_str,
-                        "stage": "Trader._procesar_vela",
-                        "result": outcome,
-                    }
-                ),
-            )
+            elapsed = max(0.0, time.perf_counter() - handler_started_at)
+            try:
+                TRADER_PIPELINE_LATENCY.labels(symbol=sym, timeframe=metric_tf_label).observe(elapsed)
+            except Exception:
+                pass
+
+            if isinstance(candle, dict):
+                raw_stages = candle.get("_df_stage_durations")
+                if isinstance(raw_stages, dict):
+                    for stage_name, duration in raw_stages.items():
+                        try:
+                            stage_durations[str(stage_name)] = float(duration)
+                        except (TypeError, ValueError):
+                            continue
+
+            exit_payload = {
+                "symbol": sym,
+                "timestamp": ts,
+                "timeframe": tf_str,
+                "stage": "Trader._procesar_vela",
+                "result": outcome,
+                "elapsed_secs": elapsed,
+            }
+            for stage_name, duration in stage_durations.items():
+                exit_payload[f"{stage_name}_secs"] = duration
+
+            log.debug("procesar_vela.exit", extra=safe_extra(exit_payload))
+
+            handler_timeout = getattr(getattr(self, "feed", None), "handler_timeout", None)
+            warn_threshold: float | None = None
+            if isinstance(handler_timeout, (int, float)) and handler_timeout > 0:
+                warn_threshold = float(handler_timeout) * 0.8
+
+            if warn_threshold is not None and elapsed >= warn_threshold:
+                slow_payload = {
+                    "symbol": sym,
+                    "timestamp": ts,
+                    "timeframe": tf_str,
+                    "stage": "Trader._procesar_vela",
+                    "elapsed_secs": elapsed,
+                    "threshold_secs": warn_threshold,
+                }
+                if isinstance(handler_timeout, (int, float)) and handler_timeout > 0:
+                    slow_payload["timeout_secs"] = float(handler_timeout)
+                if stage_durations:
+                    slow_payload["stages"] = stage_durations
+                log.warning("procesar_vela.slow", extra=safe_extra(slow_payload))
+
+                bus = getattr(self, "event_bus", None) or getattr(self, "bus", None)
+                emit = getattr(bus, "emit", None) if bus is not None else None
+                if callable(emit):
+                    try:
+                        emit("trader.pipeline.slow", slow_payload)
+                    except Exception:
+                        pass
             try:
                 self._after_procesar_vela(sym)
             except Exception:

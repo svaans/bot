@@ -1389,6 +1389,14 @@ async def procesar_vela(trader: Any, vela: dict) -> None:
         safe_inc(HANDLER_EXCEPTIONS)
         log.exception("Excepción en procesar_vela: %s", e)
     finally:
+        if isinstance(vela, dict):
+            try:
+                vela["_df_stage_durations"] = {
+                    str(stage): float(duration)
+                    for stage, duration in stage_durations.items()
+                }
+            except Exception:
+                vela["_df_stage_durations"] = dict(stage_durations)
         try:
             if symbol:
                 safe_inc(

@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import asyncio
 from typing import Any
+from types import SimpleNamespace
 
 import pytest
 
 from core.trader_modular import TraderLite
+from core.trader.trader_lite_processing import TraderLiteProcessingMixin
 
 from .factories import DummyConfig, DummySupervisor
 
@@ -227,6 +229,72 @@ async def test_start_registra_tareas_en_supervisor() -> None:
     await asyncio.sleep(0)
 
     assert {task["name"] for task in supervisor.supervised} == {"heartbeat_loop", "data_feed"}
+
+
+@pytest.mark.asyncio
+async def test_procesar_vela_registra_latencia_y_avisa_si_es_lento(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    class DummyTrader(TraderLiteProcessingMixin):
+        def __init__(self) -> None:
+            self.feed = SimpleNamespace(handler_timeout=1.0)
+            self.config = SimpleNamespace(intervalo_velas="1m")
+            self.estado = {}
+            self._handler_invoker = self._fake_invoker
+            self._after_calls: list[str] = []
+
+        async def _fake_invoker(self, candle: dict) -> None:
+            candle.setdefault("_df_stage_durations", {})
+            candle["_df_stage_durations"].update({"parse": 0.4, "gating": 0.3, "strategy": 0.5})
+
+        def _after_procesar_vela(self, symbol: str) -> None:
+            self._after_calls.append(symbol)
+
+    trader = DummyTrader()
+
+    class RecordingHistogram:
+        def __init__(self) -> None:
+            self.label_calls: list[dict[str, str]] = []
+            self.observed: list[float] = []
+
+        def labels(self, *, symbol: str, timeframe: str) -> "RecordingHistogram":
+            self.label_calls.append({"symbol": symbol, "timeframe": timeframe})
+            return self
+
+        def observe(self, value: float) -> None:
+            self.observed.append(value)
+
+    histogram = RecordingHistogram()
+    monkeypatch.setattr(
+        "core.trader.trader_lite_processing.TRADER_PIPELINE_LATENCY",
+        histogram,
+    )
+
+    perf_values = iter([100.0, 101.5, 101.5, 101.5])
+
+    def fake_perf_counter() -> float:
+        return next(perf_values, 101.5)
+
+    monkeypatch.setattr(
+        "core.trader.trader_lite_processing.time.perf_counter",
+        fake_perf_counter,
+    )
+
+    candle = {"symbol": "BTCUSDT", "timestamp": 1_000, "timeframe": "1m"}
+
+    caplog.set_level("WARNING", logger="trader_modular")
+
+    await trader._procesar_vela(candle)
+
+    assert histogram.label_calls == [{"symbol": "BTCUSDT", "timeframe": "1m"}]
+    assert histogram.observed and histogram.observed[0] == pytest.approx(1.5, rel=1e-6)
+
+    slow_records = [rec for rec in caplog.records if rec.getMessage() == "procesar_vela.slow"]
+    assert slow_records, "Debe registrarse un warning cuando la latencia excede el umbral"
+    record = slow_records[0]
+    assert getattr(record, "elapsed_secs", 0.0) == pytest.approx(1.5, rel=1e-6)
+    assert getattr(record, "threshold_secs", 0.0) == pytest.approx(0.8, rel=1e-6)
+    assert isinstance(getattr(record, "stages", {}), dict)
 
 
 @pytest.mark.asyncio
