@@ -4,6 +4,7 @@ from __future__ import annotations
 import io
 import json
 import logging
+import math
 import os
 import sys
 import threading
@@ -33,7 +34,11 @@ def _json_safe(value: Any, *, _depth: int = 0, _max_depth: int = 5) -> Any:
 
     if _depth >= _max_depth:
         return repr(value)
-    if value is None or isinstance(value, (str, int, float, bool)):
+    if isinstance(value, float):
+        if math.isnan(value) or math.isinf(value):
+            return None
+        return value
+    if value is None or isinstance(value, (str, int, bool)):
         return value
     if isinstance(value, (datetime, date, datetime_time)):
         return value.isoformat()
