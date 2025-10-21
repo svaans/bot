@@ -390,3 +390,14 @@
 307. `TraderLite.is_symbol_ready` bloquea la evaluación hasta completar el backfill histórico configurado.
 308. `StrategyEngine.evaluar_entrada` nunca retorna `permitido=None`; marca `False` y motivo `"error"` ante fallos.
 309. Consulte `docs/integridad_flujo_datos.md` para obtener la explicación completa de estas salvaguardas.
+
+
+## 35. Observabilidad y Formateo de Logs JSON
+310. `python -m tools.log_stream` provee una CLI para limpiar ANSI, tolerar `NaN/Infinity` y fusionar JSON anidado en `message`.
+311. Para revisar los logs en vivo con formato amigable: `python main.py 2>&1 | python -m tools.log_stream --pretty`.
+312. Filtra por logger o nivel con `python -m tools.log_stream logs/bot.jsonl --logger hot_reload --level ERROR WARNING`.
+313. El flujo admite `stdin` o archivos `jsonl`; cualquier línea inválida se descarta sin detener el stream.
+314. Si prefieres `jq`, utiliza: `python main.py 2>&1 | sed -u 's/\x1b\[[0-9;]*m//g' | jq -R 'fromjson? | select(.) | . as $r | ($r.message | fromjson? // {}) as $m | $r + $m'`.
+315. Para sólo errores/avisos agrega `| jq -R 'fromjson? | select(.) | select(.level=="ERROR" or .level=="WARNING")'`.
+316. Antes de analizar con `jq`, puedes sanitizar `NaN/Infinity` con `sed -u 's/: *NaN\>/: null/g; s/: *Infinity\>/: null/g; s/: *-Infinity\>/: null/g'`.
+317. Guarda logs crudos con `python main.py > logs/bot.jsonl 2>&1` y reprocesa luego con la misma herramienta o pipeline.
