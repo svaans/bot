@@ -44,7 +44,13 @@ _CALLBACK_EXCEPTIONS = Counter(
 
 
 class EventBus:
-    """Simple asynchronous event bus backed by lightweight asyncio tasks."""
+    """Simple asynchronous event bus backed by lightweight asyncio tasks.
+
+    **Contrato de concurrencia:** cada listener se ejecuta en su propia tarea;
+    los callbacks del mismo ``event_type`` pueden correr en paralelo. Solo
+    deben mutar estado que posean o que esté protegido con locks/asyncio; si
+    necesitas orden estricto, serializa en el consumidor o usa una cola dedicada.
+    """
 
     def __init__(self, *, max_cached_payloads: int = 256) -> None:
         self._listeners: Dict[str, List[Callable[[Any], Awaitable[None]]]] = defaultdict(list)

@@ -177,20 +177,34 @@ class OrderCircuitBreakerOpen(RuntimeError):
         self.state = state
 
 
-_ORDER_CIRCUITS: Dict[str, _CircuitBreakerState] = {}
+class OrderCircuitBreakerStore:
+    """Circuit breakers por sesión (una instancia por ``Trader`` en producción)."""
+
+    __slots__ = ("_circuits",)
+
+    def __init__(self) -> None:
+        self._circuits: Dict[str, _CircuitBreakerState] = {}
+
+    def get_state(self, symbol: str, side: str) -> _CircuitBreakerState:
+        key = f"{symbol.upper()}:{side.lower()}"
+        state = self._circuits.get(key)
+        if state is None:
+            state = _CircuitBreakerState()
+            self._circuits[key] = state
+        return state
+
+    def clear(self) -> None:
+        self._circuits.clear()
 
 
-def _circuit_key(symbol: str, side: str) -> str:
-    return f"{symbol.upper()}:{side.lower()}"
+_DEFAULT_ORDER_CIRCUIT_STORE = OrderCircuitBreakerStore()
 
 
-def _get_circuit_state(symbol: str, side: str) -> _CircuitBreakerState:
-    key = _circuit_key(symbol, side)
-    state = _ORDER_CIRCUITS.get(key)
-    if state is None:
-        state = _CircuitBreakerState()
-        _ORDER_CIRCUITS[key] = state
-    return state
+def _resolve_order_circuit_store(trader: Any) -> OrderCircuitBreakerStore:
+    store = getattr(trader, "order_circuit_store", None)
+    if isinstance(store, OrderCircuitBreakerStore):
+        return store
+    return _DEFAULT_ORDER_CIRCUIT_STORE
 
 COLUMNS = ("timestamp", "open", "high", "low", "close", "volume")
 
@@ -1342,6 +1356,7 @@ async def procesar_vela(trader: Any, vela: dict) -> None:
                 tp,
                 meta,
                 trace_id=trace_id,
+                circuit_store=_resolve_order_circuit_store(trader),
             )
             safe_inc(ENTRADAS_ABIERTAS, symbol=symbol, side=side)
             notify = getattr(trader, "enqueue_notification", None)
@@ -1454,6 +1469,7 @@ async def _abrir_orden(
     *,
     trace_id: str | None = None,
     max_attempts: Optional[int] = None,
+    circuit_store: OrderCircuitBreakerStore | None = None,
 ) -> None:
     """Wrapper robusto sobre OrderManager.crear(...) con reintentos controlados."""
     crear = getattr(orders, "crear", None)
@@ -1465,7 +1481,8 @@ async def _abrir_orden(
     if sl <= 0 or tp <= 0:
         log.debug("[%s] SL/TP no establecidos al abrir (sl=%.6f, tp=%.6f)", symbol, sl, tp)
 
-    state = _get_circuit_state(symbol, side)
+    store = circuit_store or _DEFAULT_ORDER_CIRCUIT_STORE
+    state = store.get_state(symbol, side)
     now = time.monotonic()
     state.reset_if_idle(now, _ORDER_CIRCUIT_RESET_AFTER)
     if state.opened_until and state.opened_until <= now:

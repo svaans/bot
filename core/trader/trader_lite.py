@@ -323,6 +323,10 @@ class TraderLite(TraderLiteBackfillMixin, TraderLiteProcessingMixin):
         # Configurar guardia de spread (puede devolver None si está deshabilitado).
         self.spread_guard = self._create_spread_guard()
 
+        from core.procesar_vela import OrderCircuitBreakerStore
+
+        self.order_circuit_store = OrderCircuitBreakerStore()
+
     async def _execute_pipeline(
         self,
         symbol: str,

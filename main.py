@@ -259,6 +259,18 @@ async def main():
         stop_event.set()
         _safe_call(bot, 'solicitar_parada')
 
+    # Windows no soporta loop.add_signal_handler; signal.signal al menos captura Ctrl+C.
+    if platform.system() == 'Windows':
+        def _win_sigint(_signum, _frame):
+            print('\n🛑 SIGINT recibida (Windows); solicitando parada…')
+            stop_event.set()
+            _safe_call(bot, 'solicitar_parada')
+
+        try:
+            signal.signal(signal.SIGINT, _win_sigint)
+        except (ValueError, OSError):
+            pass
+
     if platform.system() != 'Windows':
         try:
             loop = asyncio.get_running_loop()

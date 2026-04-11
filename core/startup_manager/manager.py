@@ -72,6 +72,18 @@ class StartupManager(
             except (TypeError, ValueError):
                 self.startup_timeout = 90.0
 
+        # Warmup + precarga: debe acoplarse a startup_timeout (antes 15s fijos rompían arranques lentos).
+        _computed = max(15.0, min(180.0, self.startup_timeout * 0.5))
+        _computed = min(_computed, max(15.0, self.startup_timeout - 5.0))
+        _bt_env = os.getenv("BOOTSTRAP_TIMEOUT")
+        if _bt_env:
+            try:
+                self.bootstrap_timeout = max(5.0, float(_bt_env))
+            except (TypeError, ValueError):
+                self.bootstrap_timeout = _computed
+        else:
+            self.bootstrap_timeout = _computed
+
         self.event_bus = None
         if self.trader is not None:
             self.event_bus = getattr(self.trader, "event_bus", None) or getattr(self.trader, "bus", None)
@@ -89,8 +101,8 @@ class StartupManager(
         try:
             await self._load_config()
 
-            with phase("_bootstrap"):
-                await asyncio.wait_for(self._bootstrap(), timeout=15)
+            with phase("_bootstrap", extra={"timeout": self.bootstrap_timeout}):
+                await asyncio.wait_for(self._bootstrap(), timeout=self.bootstrap_timeout)
 
             assert self.trader is not None, "Trader no inicializado tras bootstrap"
             feed = getattr(self.trader, "data_feed", None) or getattr(self, "data_feed", None)

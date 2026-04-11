@@ -162,7 +162,7 @@ class RecordingBus:
 def reset_buffers() -> Generator[Any, None, None]:
     procesar_vela_mod._buffers._estados.clear()
     procesar_vela_mod._buffers._locks.clear()
-    procesar_vela_mod._ORDER_CIRCUITS.clear()
+    procesar_vela_mod._DEFAULT_ORDER_CIRCUIT_STORE.clear()
 
     metric = DummyMetric()
     originals = {
@@ -190,7 +190,7 @@ def reset_buffers() -> Generator[Any, None, None]:
 
     procesar_vela_mod._buffers._estados.clear()
     procesar_vela_mod._buffers._locks.clear()
-    procesar_vela_mod._ORDER_CIRCUITS.clear()
+    procesar_vela_mod._DEFAULT_ORDER_CIRCUIT_STORE.clear()
     for name, value in originals.items():
         setattr(procesar_vela_mod, name, value)
 

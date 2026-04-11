@@ -22,6 +22,8 @@ from . import streaming as streaming_module
 from ._shared import COMBINED_STREAM_KEY, ConsumerState, _safe_float, _safe_int, log
 from .spread_sampler import SpreadSampler
 
+_CLIENTE_UNCHANGED = object()
+
 
 class DataFeed:
     """DataFeed robusto y legible para velas cerradas."""
@@ -432,6 +434,34 @@ class DataFeed:
 
     def is_active(self) -> bool:
         return self.activos
+
+    def attach_trader_stream_bindings(
+        self,
+        symbols: Iterable[str],
+        handler: Callable[[dict], Awaitable[None]] | None,
+        cliente: Any = _CLIENTE_UNCHANGED,
+    ) -> None:
+        """Configura símbolos, handler y cliente antes de ``iniciar()``/``start()``.
+
+        API estable para el arranque coordinado con ``TraderLite`` (evita que
+        otros módulos asignen directamente atributos internos).
+
+        Si ``cliente`` se omite, no se modifica ``_cliente`` (útil en fallbacks
+        donde el trader no expone aún un cliente REST).
+        """
+
+        symbols_list = [str(s).upper() for s in symbols if s is not None and str(s).strip()]
+        self._symbols = list(dict.fromkeys(symbols_list))
+        self._handler = handler
+        if cliente is not _CLIENTE_UNCHANGED:
+            self._cliente = cliente
+        if not self._symbols:
+            log.warning("attach_trader_stream_bindings: lista de símbolos vacía")
+
+    def set_managed_by_trader(self, value: bool) -> None:
+        """Marca si el ciclo de vida del stream lo gobierna el trader o el startup externo."""
+
+        self._managed_by_trader = bool(value)
 
     def verificar_continuidad(self, *, max_gap_intervals: int | None = None) -> bool:
         if not self._symbols:
