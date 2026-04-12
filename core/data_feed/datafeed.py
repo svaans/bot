@@ -593,6 +593,21 @@ class DataFeed:
         while self._running and any(not task.done() for task in self._tasks.values()):
             await asyncio.sleep(0.1)
 
+        # Si los streams terminaron (p. ej. agotar reintentos WS) y nadie puso
+        # _running en False, quedarían consumidores y monitores vivos sin productor.
+        if self._running:
+            log.error(
+                "datafeed.streams_all_exited",
+                extra=safe_extra(
+                    {
+                        "symbols": list(self._symbols),
+                        "intervalo": self.intervalo,
+                        "combined": self._combined,
+                    }
+                ),
+            )
+            await self.detener()
+
     async def iniciar(self) -> None:
         if not self._symbols or not self._handler:
             log.warning("No se puede iniciar(): faltan símbolos o handler")
