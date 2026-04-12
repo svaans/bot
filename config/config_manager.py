@@ -223,6 +223,8 @@ class Config:
     orders_reconcile_enabled: bool = False
     funding_enabled: bool = False
     backfill_ventana_enabled: bool = False
+    entrada_cooldown_tras_crear_failed_sec: float = 0.0
+    entrada_cooldown_tras_crear_failed_por_symbol: Dict[str, float] = field(default_factory=dict)
 
 class ConfigManager:
     """Carga y proporciona acceso a la configuración del bot."""
@@ -475,6 +477,20 @@ class ConfigManager:
             getattr(defaults, 'backfill_ventana_enabled', False),
         )
 
+        entrada_cooldown_tras_crear_failed_sec = max(
+            0.0,
+            _cargar_float(
+                'ENTRADA_COOLDOWN_TRAS_CREAR_FAILED_SEC',
+                getattr(defaults, 'entrada_cooldown_tras_crear_failed_sec', 0.0),
+            ),
+        )
+        entrada_cooldown_tras_crear_failed_por_symbol: Dict[str, float] = dict(
+            getattr(defaults, 'entrada_cooldown_tras_crear_failed_por_symbol', {})
+        )
+        entrada_cooldown_tras_crear_failed_por_symbol.update(
+            _parse_float_mapping('ENTRADA_COOLDOWN_TRAS_CREAR_FAILED_POR_SYMBOL')
+        )
+
         risk_capital_total = _cargar_float(
             'RISK_CAPITAL_TOTAL', getattr(defaults, 'risk_capital_total', 0.0)
         )
@@ -620,6 +636,8 @@ class ConfigManager:
             orders_reconcile_enabled=orders_reconcile_enabled,
             funding_enabled=funding_enabled,
             backfill_ventana_enabled=backfill_ventana_enabled,
+            entrada_cooldown_tras_crear_failed_sec=entrada_cooldown_tras_crear_failed_sec,
+            entrada_cooldown_tras_crear_failed_por_symbol=entrada_cooldown_tras_crear_failed_por_symbol,
             risk_kill_switch_max_consecutive_losses=risk_kill_switch_max_consecutive_losses,
         )
 

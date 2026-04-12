@@ -18,6 +18,7 @@ from core.utils.logger import configurar_logger
 from prometheus_client import Gauge
 
 from core.metrics_helpers import safe_inc, safe_set
+from core.orders.order_open_status import OrderOpenStatus
 from core.utils.metrics_compat import Counter, Histogram
 from indicadores.incremental import (
     actualizar_atr_incremental,
@@ -270,7 +271,59 @@ def _is_num(x: Any) -> bool:
         return not (x is None or isinstance(x, bool) or math.isnan(float(x)) or math.isinf(float(x)))
     except Exception:
         return False
-    
+
+
+def _resolve_entrada_cooldown_tras_crear_failed_sec(trader: Any, symbol: str) -> float:
+    """Segundos de pausa tras un ``crear_failed`` (config + overrides por símbolo)."""
+
+    cfg = getattr(trader, "config", None)
+    if cfg is None:
+        return 0.0
+    sym_u = str(symbol or "").strip().upper()
+    per = getattr(cfg, "entrada_cooldown_tras_crear_failed_por_symbol", None)
+    if isinstance(per, dict) and sym_u in per:
+        try:
+            return max(0.0, float(per[sym_u]))
+        except (TypeError, ValueError):
+            pass
+    try:
+        return max(0.0, float(getattr(cfg, "entrada_cooldown_tras_crear_failed_sec", 0.0) or 0.0))
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _format_entry_open_notification(
+    side: str,
+    symbol: str,
+    precio: float,
+    propuesta: Mapping[str, Any],
+    *,
+    timeframe_label: str | None,
+) -> str:
+    """Texto breve para Telegram/log con contexto de la decisión de entrada."""
+
+    parts: list[str] = [f"Abrir {side} {symbol} @ {precio:.6f}"]
+    score = propuesta.get("score")
+    if score is not None:
+        try:
+            parts.append(f"score={float(score):.4f}")
+        except (TypeError, ValueError):
+            parts.append(f"score={score}")
+    if timeframe_label:
+        parts.append(f"tf={timeframe_label}")
+    meta = propuesta.get("meta")
+    if isinstance(meta, Mapping):
+        mp = meta.get("match_parcial")
+        if mp is not None:
+            try:
+                parts.append(f"match={float(mp):.3f}")
+            except (TypeError, ValueError):
+                parts.append(f"match={mp}")
+        po = meta.get("persistencia_ok")
+        if po is not None:
+            parts.append(f"persist_ok={bool(po)}")
+    return " | ".join(parts)
+
 
 def _normalize_flag(value: Any) -> Optional[bool]:
     """Convierte un valor potencialmente heterogéneo a booleano."""
@@ -1400,7 +1453,7 @@ async def procesar_vela(trader: Any, vela: dict) -> None:
             pass
 
         try:
-            await _abrir_orden(
+            status = await _abrir_orden(
                 orders,
                 symbol,
                 side,
@@ -1411,10 +1464,40 @@ async def procesar_vela(trader: Any, vela: dict) -> None:
                 trace_id=trace_id,
                 circuit_store=_resolve_order_circuit_store(trader),
             )
+            if status not in (OrderOpenStatus.OPENED, OrderOpenStatus.PENDING_REGISTRATION):
+                safe_inc(
+                    ENTRADAS_RECHAZADAS_V2,
+                    symbol=symbol,
+                    timeframe=timeframe_label,
+                    reason="crear_failed",
+                )
+                _mark_skip(vela, "crear_failed", {"status": getattr(status, "value", str(status))}, score=score)
+                cooldown_sec = _resolve_entrada_cooldown_tras_crear_failed_sec(trader, symbol)
+                if cooldown_sec > 0:
+                    reg = getattr(trader, "registrar_cooldown_entrada", None)
+                    if callable(reg):
+                        reg(symbol, cooldown_sec)
+                        log.debug(
+                            "crear_failed.entrada_cooldown",
+                            extra={
+                                "symbol": symbol,
+                                "seconds": cooldown_sec,
+                            },
+                        )
+                return
             safe_inc(ENTRADAS_ABIERTAS, symbol=symbol, side=side)
             notify = getattr(trader, "enqueue_notification", None)
             if callable(notify):
-                notify(f"Abrir {side} {symbol} @ {precio:.6f}", "INFO")
+                notify(
+                    _format_entry_open_notification(
+                        side,
+                        symbol,
+                        precio,
+                        propuesta,
+                        timeframe_label=timeframe_label,
+                    ),
+                    "INFO",
+                )
         except OrderCircuitBreakerOpen as exc:
             safe_inc(
                 ENTRADAS_RECHAZADAS_V2,
@@ -1533,8 +1616,13 @@ async def _abrir_orden(
     trace_id: str | None = None,
     max_attempts: Optional[int] = None,
     circuit_store: OrderCircuitBreakerStore | None = None,
-) -> None:
-    """Wrapper robusto sobre OrderManager.crear(...) con reintentos controlados."""
+) -> OrderOpenStatus:
+    """Wrapper robusto sobre OrderManager.crear(...) con reintentos solo ante excepciones.
+
+    ``crear`` devuelve :class:`OrderOpenStatus`; un ``FAILED`` lógico (fondos,
+    niveles, duplicado, etc.) no lanza excepción y **no** debe tratarse como
+    apertura exitosa ni disparar notificaciones de éxito.
+    """
     crear = getattr(orders, "crear", None)
     if not callable(crear):
         raise RuntimeError("OrderManager no implementa crear(...)")
@@ -1574,9 +1662,7 @@ async def _abrir_orden(
                 meta=payload_meta,
             )
             if asyncio.iscoroutine(res):
-                await res
-            state.record_success()
-            return
+                res = await res
         except asyncio.CancelledError:
             raise
         except Exception as exc:
@@ -1607,9 +1693,26 @@ async def _abrir_orden(
                 high = delay + jitter
                 delay = random.uniform(low, high)
             await asyncio.sleep(delay)
+            continue
+
+        if res in (OrderOpenStatus.OPENED, OrderOpenStatus.PENDING_REGISTRATION):
+            state.record_success()
+            return res
+
+        log.warning(
+            "orders_crear_rejected",
+            extra={
+                "symbol": symbol,
+                "side": side,
+                "status": getattr(res, "value", str(res)),
+                "attempt": attempt,
+            },
+        )
+        return OrderOpenStatus.FAILED
 
     if last_exc is not None:
         raise last_exc
+    return OrderOpenStatus.FAILED
 
 
 

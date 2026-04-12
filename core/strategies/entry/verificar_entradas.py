@@ -13,6 +13,15 @@ Notas de diseño
 - Tolerante a dependencias opcionales (engine, persistencia, riesgo).
 - Respeta umbrales de Config (score técnico, distancias mínimas, overrides).
 - Emite eventos vía `on_event(evt, data)` si se provee.
+- El motor (``engine``) debe distinguir señal **nueva** o borde frente a un
+  régimen que sigue válido vela tras vela; si solo devuelve ``side`` mientras
+  la tendencia se mantiene, cada vela cerrada puede volver a candidatar entrada
+  hasta que falle ``OrderManager.crear`` o exista orden local —por eso conviene
+  lógica de edge/cooldown en el propio motor o metadatos (p. ej. timestamp de
+  última señal emitida).
+- Tras un ``crear_failed`` en :mod:`core.procesar_vela`, el trader puede aplicar
+  ``entrada_cooldown_tras_crear_failed_sec`` (config / env) vía
+  ``Trader.registrar_cooldown_entrada`` para no re-evaluar el motor en cada vela.
 """
 
 from __future__ import annotations

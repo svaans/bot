@@ -9,7 +9,7 @@ import threading
 import time
 from collections import OrderedDict, deque
 from collections.abc import Iterable, Iterator, MutableMapping
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from copy import deepcopy
 from concurrent.futures import Future
 from typing import Any, Awaitable, Callable, Dict, Optional, TYPE_CHECKING
@@ -622,6 +622,32 @@ class Trader(TraderLite):
                 log.warning("[%s] Error consultando gestor de riesgo", symbol, exc_info=True)
 
         return True
+
+    def registrar_cooldown_entrada(self, symbol: str, seconds: float) -> None:
+        """Bloquea nuevas evaluaciones de entrada para ``symbol`` durante ``seconds``.
+
+        Usado tras rechazos de apertura (p. ej. ``crear_failed``) para no
+        re-evaluar el motor en cada vela mientras la situación no cambia.
+        """
+
+        try:
+            sec = float(seconds)
+        except (TypeError, ValueError):
+            return
+        if sec <= 0:
+            return
+        key = str(symbol or "").strip()
+        if not key:
+            return
+        store = getattr(self, "_entrada_cooldowns", None)
+        if not isinstance(store, dict):
+            self._entrada_cooldowns = {}
+            store = self._entrada_cooldowns
+        store[key] = datetime.now(UTC) + timedelta(seconds=sec)
+        log.debug(
+            "entrada.cooldown_registrado",
+            extra=safe_extra({"symbol": key, "seconds": sec}),
+        )
 
     async def evaluar_condiciones_de_entrada(
         self,

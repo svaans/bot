@@ -102,3 +102,5 @@ class DevelopmentConfig:
     risk_capital_divergence_threshold: float = 0.1
     momentum_activation_threshold: float = 0.001
     momentum_threshold_overrides: Dict[str, float] = field(default_factory=dict)
+    entrada_cooldown_tras_crear_failed_sec: float = 300.0
+    entrada_cooldown_tras_crear_failed_por_symbol: Dict[str, float] = field(default_factory=dict)

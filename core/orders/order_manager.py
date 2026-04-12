@@ -8,7 +8,6 @@ import random
 import sqlite3
 from collections.abc import Mapping
 from datetime import datetime, timezone
-from enum import Enum
 from typing import Any, Dict, Optional
 
 from core.orders.order_model import Order
@@ -90,14 +89,6 @@ _PERSISTENCE_ERROR_KEYWORDS = (
     "locked",
     "write",
 )
-
-
-class OrderOpenStatus(Enum):
-    """Estado resultante al intentar abrir una orden."""
-
-    OPENED = "opened"
-    PENDING_REGISTRATION = "pending_registration"
-    FAILED = "failed"
 
 
 class OrderManager:
