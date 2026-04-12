@@ -169,7 +169,22 @@ class SnapshotMixin:
                     data = json.loads(text or "{}")
             server = data.get("serverTime", 0) / 1000
             drift = abs(server - time.time())
-            return drift < 0.5
+            max_drift = float(os.getenv("CLOCK_DRIFT_MAX_SECONDS", "2.0"))
+            if drift >= max_drift:
+                self.log.error(
+                    "Desfase de reloj frente a Binance: %.3fs (máximo %.3fs). "
+                    "Sincroniza la hora en Windows o define CLOCK_DRIFT_MAX_SECONDS.",
+                    drift,
+                    max_drift,
+                )
+                return False
+            if drift >= 0.5:
+                self.log.warning(
+                    "Desfase de reloj frente a Binance: %.3fs; las peticiones firmadas "
+                    "usan compensación automática (CCXT). Conviene activar sincronización NTP.",
+                    drift,
+                )
+            return True
         except Exception as e:
             client_error = getattr(aiohttp, "ClientError", ())
             if not isinstance(client_error, tuple):

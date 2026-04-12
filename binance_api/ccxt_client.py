@@ -145,7 +145,13 @@ def obtener_ccxt(config: Any | None = None) -> Any:
                 "apiKey": api_key,
                 "secret": api_secret,
                 "enableRateLimit": True,
-                "options": {"defaultType": "spot"},
+                "options": {
+                    "defaultType": "spot",
+                    # Evita Binance -1021 cuando el reloj local va unos cientos de ms
+                    # por delante: fetch_markets() llama a load_time_difference() y el
+                    # nonce usa milliseconds() - timeDifference (ver ccxt binance).
+                    "adjustForTimeDifference": True,
+                },
             }
         )
 
