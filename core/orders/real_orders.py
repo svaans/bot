@@ -36,7 +36,7 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 from datetime import datetime, timezone
 
 UTC = timezone.utc
-from binance_api.cliente import obtener_cliente
+from binance_api.ccxt_client import binance_spot_client_order_id, obtener_ccxt as obtener_cliente
 from binance_api.filters import get_symbol_filters
 from .order_model import Order, normalizar_precio_cantidad
 from core.utils.utils import configurar_logger, guardar_orden_real
@@ -1067,7 +1067,13 @@ def registrar_operacion(data: (dict | Order)) ->None:
         _ULTIMO_FLUSH = ahora
 
 
-def ejecutar_orden_market(symbol: str, cantidad: float, operation_id: str | None = None) -> dict:
+def ejecutar_orden_market(
+    symbol: str,
+    cantidad: float,
+    operation_id: str | None = None,
+    *,
+    order_attempt: int = 1,
+) -> dict:
     """Ejecuta una compra de mercado y devuelve detalles de la ejecución."""
     entrada = {'symbol': symbol, 'cantidad': cantidad}
     if cantidad <= 0:
@@ -1131,16 +1137,24 @@ def ejecutar_orden_market(symbol: str, cantidad: float, operation_id: str | None
             extra={'symbol': symbol, 'timeframe': None},
         )
         params = {}
-        if operation_id:
-            params['newClientOrderId'] = operation_id
+        cid = binance_spot_client_order_id(operation_id, attempt=order_attempt)
+        if cid:
+            params['newClientOrderId'] = cid
         response = cliente.create_market_buy_order(symbol, cantidad, params)
         ejecutado = float(response.get('amount') or response.get('filled') or 0)
         if ejecutado <= 0:
-            ejecutado = cantidad
-        restante = max(cantidad - ejecutado, 0.0)
-        status = 'FILLED'
-        if restante > 1e-8:
+            log.warning(
+                '⚠️ Compra %s: exchange devolvió filled=0; no se asume ejecución completa.',
+                symbol,
+                extra={'symbol': symbol, 'timeframe': None},
+            )
+            restante = cantidad
             status = 'PARTIAL'
+        else:
+            restante = max(cantidad - ejecutado, 0.0)
+            status = 'FILLED'
+            if restante > 1e-8:
+                status = 'PARTIAL'
         metricas = {'fee': 0.0, 'pnl': 0.0}
         if operation_id:
             metricas = _acumular_metricas(operation_id, response)
@@ -1156,7 +1170,17 @@ def ejecutar_orden_market(symbol: str, cantidad: float, operation_id: str | None
                 )
             except Exception:
                 pass
-        log.info(f'🟢 Order real ejecutada: {symbol}, cantidad: {ejecutado}', extra={'symbol': symbol, 'timeframe': None})
+        if ejecutado > 0:
+            log.info(
+                f'🟢 Order real ejecutada: {symbol}, cantidad: {ejecutado}',
+                extra={'symbol': symbol, 'timeframe': None},
+            )
+        else:
+            log.warning(
+                '⚠️ Compra %s sin fills reportados en la respuesta.',
+                symbol,
+                extra={'symbol': symbol, 'timeframe': None},
+            )
         salida = {
             'ejecutado': ejecutado,
             'restante': restante,
@@ -1324,7 +1348,13 @@ def ejecutar_orden_market(symbol: str, cantidad: float, operation_id: str | None
         raise
 
 
-def ejecutar_orden_market_sell(symbol: str, cantidad: float, operation_id: str | None = None) -> dict:
+def ejecutar_orden_market_sell(
+    symbol: str,
+    cantidad: float,
+    operation_id: str | None = None,
+    *,
+    order_attempt: int = 1,
+) -> dict:
     """Ejecuta una venta de mercado validando saldo y devuelve detalles."""
     entrada = {'symbol': symbol, 'cantidad': cantidad}
 
@@ -1399,13 +1429,19 @@ def ejecutar_orden_market_sell(symbol: str, cantidad: float, operation_id: str |
         )
 
         params = {}
-        if operation_id:
-            params['newClientOrderId'] = operation_id
+        cid = binance_spot_client_order_id(operation_id, attempt=order_attempt)
+        if cid:
+            params['newClientOrderId'] = cid
 
         response = cliente.create_market_sell_order(symbol, cantidad_vender, params)
         ejecutado = float(response.get('amount') or response.get('filled') or 0)
         if ejecutado <= 0:
-            ejecutado = cantidad_vender
+            log.warning(
+                '⚠️ Venta %s: exchange devolvió filled=0; no se asume ejecución completa.',
+                symbol,
+                extra={'symbol': symbol, 'timeframe': None},
+            )
+            ejecutado = 0.0
 
         restante = max(cantidad_vender - ejecutado, 0.0)
         status = 'FILLED' if restante <= 1e-8 else 'PARTIAL'
@@ -1486,14 +1522,20 @@ def _market_sell_retry(symbol: str, cantidad: float, operation_id: str | None = 
     restante = cantidad
     total = total_fee = total_pnl = 0.0
     min_qty = 0.0
+    attempt = 0
     while restante > 0:
-        resp = ejecutar_orden_market_sell(symbol, restante, operation_id)
+        attempt += 1
+        resp = ejecutar_orden_market_sell(
+            symbol, restante, operation_id, order_attempt=attempt
+        )
         ejecutado = float(resp.get('ejecutado', 0.0))
         restante = float(resp.get('restante', 0.0))
         min_qty = float(resp.get('min_qty', 0.0))
         total += ejecutado
         total_fee += float(resp.get('fee', 0.0))
         total_pnl += float(resp.get('pnl', 0.0))
+        if ejecutado <= 0:
+            break
         if resp.get('status') != 'PARTIAL' or restante < min_qty:
             break
     estado = 'FILLED' if restante < 1e-8 else 'PARTIAL'
@@ -1533,9 +1575,7 @@ def ejecutar_orden_limit(
     cliente = obtener_cliente()
     cliente.load_markets()  # asegura markets en ccxt
 
-    params_base = {}
-    if operation_id:
-        params_base["newClientOrderId"] = operation_id
+    params_base: dict[str, Any] = {}
 
     filtros = get_symbol_filters(symbol, cliente)
     min_qty = filtros.get("min_qty", 0.0)
@@ -1553,8 +1593,9 @@ def ejecutar_orden_limit(
         )
 
         params = params_base.copy()
-        if operation_id:
-            params["newClientOrderId"] = f"{operation_id}-{intento}"
+        cid = binance_spot_client_order_id(operation_id, attempt=intento)
+        if cid:
+            params["newClientOrderId"] = cid
 
         if side == "buy":
             orden = cliente.create_limit_buy_order(symbol, cantidad_norm, precio_actual, params)
@@ -1616,10 +1657,15 @@ def ejecutar_orden_limit(
         log.warning(
             f"⚠️ Fallback a orden de mercado en {symbol} tras {max_reintentos} intentos limit fallidos"
         )
+        m_attempt = max_reintentos + 1
         if side == "buy":
-            res_market = ejecutar_orden_market(symbol, restante, operation_id)
+            res_market = ejecutar_orden_market(
+                symbol, restante, operation_id, order_attempt=m_attempt
+            )
         else:
-            res_market = ejecutar_orden_market_sell(symbol, restante, operation_id)
+            res_market = ejecutar_orden_market_sell(
+                symbol, restante, operation_id, order_attempt=m_attempt
+            )
         ejecutado_total += res_market.get("ejecutado", 0.0)
         restante = res_market.get("restante", 0.0)
         slippage = res_market.get("slippage", slippage)

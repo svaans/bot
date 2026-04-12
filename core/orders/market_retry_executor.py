@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import functools
 import math
 import os
 from dataclasses import dataclass
@@ -126,7 +127,13 @@ class MarketRetryExecutor:
             restante_previo = restante
             try:
                 resp = await asyncio.to_thread(
-                    real_orders.ejecutar_orden_market, symbol, restante, operation_id
+                    functools.partial(
+                        real_orders.ejecutar_orden_market,
+                        symbol,
+                        restante,
+                        operation_id,
+                        order_attempt=intentos,
+                    )
                 )
             except Exception as exc:  # pragma: no cover - defensivo
                 self.log.error(

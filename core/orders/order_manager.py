@@ -39,7 +39,8 @@ from core.metrics import (
 	subscribe_order_pnl_metrics,
 )
 from core.registro_metrico import registro_metrico
-from binance_api.cliente import BinanceClient, fetch_balance_async, obtener_cliente
+from binance_api.cliente import BinanceClient, fetch_balance_async
+from binance_api.ccxt_client import obtener_ccxt as obtener_cliente
 from config import config as app_config
 from core.orders.market_retry_executor import ExecutionResult, MarketRetryExecutor
 from core.orders.order_helpers import coerce_float, coerce_int, lookup_meta

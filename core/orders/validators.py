@@ -1,6 +1,6 @@
 from __future__ import annotations
 """Validadores centralizados para restricciones de Binance."""
-from binance_api.cliente import obtener_cliente
+from binance_api.ccxt_client import obtener_ccxt as obtener_cliente
 from core.utils.logger import configurar_logger
 
 log = configurar_logger('validators', modo_silencioso=True)

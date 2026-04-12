@@ -11,7 +11,7 @@ Las funciones contenidas aquí se basan en las implementaciones
 originales de ``validators.py``.
 """
 
-from binance_api.cliente import obtener_cliente
+from binance_api.ccxt_client import obtener_ccxt as obtener_cliente
 from core.utils.logger import configurar_logger
 
 # Configuramos un logger silencioso para evitar ruido innecesario

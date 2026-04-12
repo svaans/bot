@@ -173,43 +173,49 @@ class GestorOrdenes:
         if not orden or getattr(orden, "cerrando", False):
             return False
         orden.cerrando = True
-        # Precio
-        if precio is None:
-            precio = await self._ticker_precio(symbol, fallback=getattr(orden, "precio_entrada", None))
-        if not precio:
-            return False
-        ok = await self._safe_publish("cerrar_orden", {"symbol": symbol, "precio": precio, "motivo": motivo})
-        if not ok:
-            return False
-        # Reporte
-        info = getattr(orden, "to_dict", lambda: {})()
-        operation_id = getattr(orden, "operation_id", None)
-        order_id = getattr(orden, "order_id", None) or getattr(orden, "id", None)
-        info.update({
-            "symbol": symbol,
-            "precio_cierre": float(precio),
-            "fecha_cierre": datetime.now(UTC).isoformat(),
-            "motivo_cierre": motivo,
-            "operation_id": operation_id,
-            "order_id": order_id,
-        })
-        await self._reportar(info)
-        audit_payload = dict(info)
-        audit_payload.pop("operation_id", None)
-        audit_payload.pop("order_id", None)
-        await self._auditar(
-            symbol=symbol,
-            evento=AuditEvent.EXIT,
-            resultado=AuditResult.SUCCESS,
-            resultado_normalizado=AuditResult.SUCCESS,
-            operation_id=operation_id,
-            order_id=order_id,
-            source="orders.gestor_ordenes",
-            razon=motivo,
-            **audit_payload,
-        )
-        self._emit("orden_cerrada", {"symbol": symbol, "motivo": motivo})
-        return True
+        success = False
+        try:
+            if precio is None:
+                precio = await self._ticker_precio(symbol, fallback=getattr(orden, "precio_entrada", None))
+            if not precio:
+                return False
+            ok = await self._safe_publish(
+                "cerrar_orden", {"symbol": symbol, "precio": precio, "motivo": motivo}
+            )
+            if not ok:
+                return False
+            info = getattr(orden, "to_dict", lambda: {})()
+            operation_id = getattr(orden, "operation_id", None)
+            order_id = getattr(orden, "order_id", None) or getattr(orden, "id", None)
+            info.update({
+                "symbol": symbol,
+                "precio_cierre": float(precio),
+                "fecha_cierre": datetime.now(UTC).isoformat(),
+                "motivo_cierre": motivo,
+                "operation_id": operation_id,
+                "order_id": order_id,
+            })
+            await self._reportar(info)
+            audit_payload = dict(info)
+            audit_payload.pop("operation_id", None)
+            audit_payload.pop("order_id", None)
+            await self._auditar(
+                symbol=symbol,
+                evento=AuditEvent.EXIT,
+                resultado=AuditResult.SUCCESS,
+                resultado_normalizado=AuditResult.SUCCESS,
+                operation_id=operation_id,
+                order_id=order_id,
+                source="orders.gestor_ordenes",
+                razon=motivo,
+                **audit_payload,
+            )
+            self._emit("orden_cerrada", {"symbol": symbol, "motivo": motivo})
+            success = True
+            return True
+        finally:
+            if not success:
+                orden.cerrando = False
 
     async def cerrar_parcial(self, symbol: str, cantidad: float, precio: float | None, motivo: str, *, df=None) -> bool:
         orden = self.orders.obtener(symbol)
