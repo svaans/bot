@@ -51,6 +51,9 @@ class RiskManager:
         cooldown_pct: float = 0.1,
         correlacion_ttl: int = 1800,
         cooldown_duracion: int = 300,
+        *,
+        order_manager: Any | None = None,
+        kill_switch_max_perdidas_consecutivas: int = 5,
     ) -> None:
         self.umbral = umbral
         self._factor_kelly_prev = None
@@ -78,6 +81,10 @@ class RiskManager:
         self._exposure_comprometido: Dict[str, float] = {}
         self._pnl_state: Dict[str, Dict[str, float]] = {}
         self._latent_stop_triggered: Set[str] = set()
+        self.order_manager: Any | None = order_manager
+        self.kill_switch_max_perdidas_consecutivas = max(0, int(kill_switch_max_perdidas_consecutivas))
+        self._perdidas_consecutivas = 0
+        self._kill_switch_disparado = False
         if bus:
             self.subscribe(bus)
         RIESGO_CONSUMIDO_GAUGE.set(0.0)
@@ -115,9 +122,14 @@ class RiskManager:
     def subscribe(self, bus: EventBus) -> None:
         bus.subscribe('registrar_perdida', self._on_registrar_perdida)
         bus.subscribe('orders.pnl_update', self._on_pnl_update)
+        bus.subscribe('risk.win_streak_reset', self._on_win_streak_reset)
 
     async def _on_registrar_perdida(self, data: Any) -> None:
         self.registrar_perdida(data.get('symbol'), data.get('perdida', 0.0))
+        await self._maybe_activate_kill_switch()
+
+    async def _on_win_streak_reset(self, data: Any) -> None:
+        self._perdidas_consecutivas = 0
 
     async def _on_pnl_update(self, payload: Any) -> None:
         if not isinstance(payload, Mapping):
@@ -229,21 +241,44 @@ class RiskManager:
                     self.bus.emit("risk.cooldown_activated", payload)
             elif self._cooldown_fin is None:
                 COOLDOWN_ACTIVO_GAUGE.set(0.0)
-            capital_total = 0.0
-            if self.capital_manager:
-                obtener_exposure = getattr(self.capital_manager, "exposure_disponible", None)
-                if callable(obtener_exposure):
-                    try:
-                        capital_total = float(obtener_exposure())
-                    except TypeError:
-                        capital_total = float(obtener_exposure(None))  # type: ignore[call-arg]
-                    except Exception:
-                        log.warning(
-                            '⚠️ Error consultando exposición disponible global',
-                            exc_info=True,
-                        )
-                        capital_total = 0.0
-            self._evaluar_alerta_capital(capital_total)
+            self._perdidas_consecutivas += 1
+            self._evaluar_alerta_capital(self._exposure_disponible_global())
+
+    def _exposure_disponible_global(self) -> float:
+        if not self.capital_manager:
+            return 0.0
+        obtener_exposure = getattr(self.capital_manager, "exposure_disponible", None)
+        if not callable(obtener_exposure):
+            return 0.0
+        try:
+            return float(obtener_exposure())
+        except TypeError:
+            return float(obtener_exposure(None))  # type: ignore[call-arg]
+        except Exception:
+            log.warning(
+                '⚠️ Error consultando exposición disponible global',
+                exc_info=True,
+            )
+            return 0.0
+
+    async def _maybe_activate_kill_switch(self) -> None:
+        if self._kill_switch_disparado or self.order_manager is None:
+            return
+        capital_total = self._exposure_disponible_global()
+        ratio = (self.riesgo_diario / capital_total) if capital_total > 0 else 0.0
+        max_p = self.kill_switch_max_perdidas_consecutivas
+        umbral = float(self.umbral)
+        excede_dd = umbral > 0.0 and ratio >= umbral
+        excede_racha = max_p > 0 and self._perdidas_consecutivas >= max_p
+        if not excede_dd and not excede_racha:
+            return
+        await self.kill_switch(
+            self.order_manager,
+            ratio,
+            umbral,
+            self._perdidas_consecutivas,
+            max_p,
+        )
 
     @staticmethod
     def _coerce_float(value: Any) -> float:
@@ -813,29 +848,66 @@ class RiskManager:
             return dt if dt.tzinfo else dt.replace(tzinfo=UTC)
         return None
     
+    @staticmethod
+    def _precio_referencia_cierre_kill(symbol: str, orden: Any) -> float | None:
+        """Precio de referencia para cierre en simulación; ``None`` fuerza mercado en real."""
+        mark = RiskManager._coerce_float(getattr(orden, 'precio_mark', 0.0))
+        if mark > 0:
+            return mark
+        mx = RiskManager._coerce_float(getattr(orden, 'max_price', 0.0))
+        if mx > 0:
+            return mx
+        ent = RiskManager._coerce_float(getattr(orden, 'precio_entrada', 0.0))
+        return ent if ent > 0 else None
+
     async def kill_switch(
         self,
         order_manager: Any,
-        drawdown_diario: float,
-        limite_drawdown: float,
+        ratio_perdida_diaria: float,
+        limite_ratio: float,
         perdidas_consecutivas: int,
         max_perdidas: int,
     ) -> bool:
-        """Cancela órdenes y cierra posiciones ante pérdidas excesivas."""
-        if drawdown_diario < limite_drawdown and perdidas_consecutivas < max_perdidas:
+        """Cierra posiciones si el ratio de pérdida diaria o la racha superan los límites.
+
+        ``ratio_perdida_diaria`` y ``limite_ratio`` son fracciones positivas (p. ej. 0.03 = 3%).
+        """
+        excede_dd = limite_ratio > 0.0 and ratio_perdida_diaria >= limite_ratio
+        excede_racha = max_perdidas > 0 and perdidas_consecutivas >= max_perdidas
+        if not excede_dd and not excede_racha:
             return False
+        if self._kill_switch_disparado:
+            return True
+        self._kill_switch_disparado = True
         log.warning('🛑 Kill switch activado. Cerrando posiciones abiertas.')
+        ordenes = list(getattr(order_manager, 'ordenes', {}).items())
+        modo_real = bool(getattr(order_manager, 'modo_real', False))
+        cerrado_todo = True
+        hubo_intento = bool(ordenes)
         try:
-            for symbol, orden in list(getattr(order_manager, 'ordenes', {}).items()):
-                precio = getattr(orden, 'precio_entrada', 0.0)
+            for symbol, orden in ordenes:
+                precio_arg: float | None
+                if modo_real:
+                    precio_arg = None
+                else:
+                    ref = self._precio_referencia_cierre_kill(symbol, orden)
+                    precio_arg = ref if ref is not None else 0.0
                 try:
-                    await order_manager.cerrar_async(symbol, precio, 'Kill Switch')
+                    ok = await order_manager.cerrar_async(symbol, precio_arg, 'Kill Switch')
+                    cerrado_todo = cerrado_todo and bool(ok)
                 except Exception as e:
+                    cerrado_todo = False
                     log.error(f'❌ Error cerrando {symbol} en kill switch: {e}')
         finally:
             if self.bus:
+                if not hubo_intento:
+                    msg = '🛑 Kill switch activado: no había posiciones abiertas'
+                elif cerrado_todo:
+                    msg = '🛑 Kill switch activado: posiciones cerradas'
+                else:
+                    msg = '🛑 Kill switch activado: cierre incompleto (revisar posiciones)'
                 await self.bus.publish('notify', {
-                    'mensaje': '🛑 Kill switch activado: posiciones cerradas',
+                    'mensaje': msg,
                     'tipo': 'CRITICAL',
                 })
         return True

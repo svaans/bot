@@ -69,7 +69,6 @@ class Supervisor:
         self.task_heartbeat: Dict[str, datetime] = {}
         self.task_intervals: Dict[str, Deque[float]] = defaultdict(lambda: deque(maxlen=100))
         self.task_expected_interval: Dict[str, float] = {}
-        self.task_expected_interval: Dict[str, int] = {}
         self.task_cooldown: Dict[str, datetime] = {}
         self.task_backoff: Dict[str, int] = defaultdict(int)
         self.task_restart_history: Dict[str, Deque[datetime]] = defaultdict(deque)

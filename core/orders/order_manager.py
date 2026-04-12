@@ -1521,7 +1521,7 @@ class OrderManager:
             self._actualizar_capital_disponible(symbol, orden)
             return True
 
-    async def cerrar_async(self, symbol: str, precio: float, motivo: str) -> bool:
+    async def cerrar_async(self, symbol: str, precio: float | None, motivo: str) -> bool:
         lock = self._locks.setdefault(symbol, asyncio.Lock())
         async with lock:
             """Cierra la orden indicada completamente."""
@@ -1538,6 +1538,13 @@ class OrderManager:
             orden.cerrando = True
             operation_id = self._generar_operation_id(symbol)
             entrada_log = {'symbol': symbol, 'precio': precio, 'cantidad': orden.cantidad}
+            precio_referencia = (
+                float(precio)
+                if precio is not None
+                else float(
+                    getattr(orden, 'max_price', 0.0) or getattr(orden, 'precio_entrada', 0.0) or 0.0
+                )
+            )
             try:
                 venta_exitosa = True
 
@@ -1570,7 +1577,7 @@ class OrderManager:
                                     emit=False,
                                 )
 
-                            if restante > 0 and not remainder_executable(symbol, precio, restante):
+                            if restante > 0 and not remainder_executable(symbol, precio_referencia, restante):
                                 log.info(f'♻️ Resto no ejecutable para {symbol}: {restante}')
                                 venta_exitosa = True
                                 motivo += '|non_executable_remainder'
@@ -1591,7 +1598,7 @@ class OrderManager:
                                 orden.cantidad_abierta = restante
                                 requeued = self._requeue_full_close(
                                     symbol,
-                                    precio,
+                                    precio if precio is not None else precio_referencia,
                                     motivo,
                                     operation_id=operation_id,
                                 )
@@ -1609,7 +1616,8 @@ class OrderManager:
                                 await self.bus.publish('notify', {'mensaje': f'❌ Venta fallida en {symbol}: {e}', 'operation_id': operation_id})
                 else:
                     # Modo simulado: calcula PnL por diferencia
-                    diff = (precio - orden.precio_entrada) * orden.cantidad
+                    precio_cierre = precio_referencia
+                    diff = (precio_cierre - orden.precio_entrada) * orden.cantidad
                     if orden.direccion in ('short', 'venta'):
                         diff = -diff
                     self._apply_realized_pnl_delta(
@@ -1633,7 +1641,8 @@ class OrderManager:
                     return False
 
                 # Venta exitosa: cerrar y registrar
-                orden.precio_cierre = precio
+                precio_cierre_registro = precio if precio is not None else precio_referencia
+                orden.precio_cierre = precio_cierre_registro
                 orden.fecha_cierre = datetime.now(UTC).isoformat()
                 orden.motivo_cierre = motivo
                 self._set_latent_pnl(symbol, orden, 0.0, emit=False)
@@ -1644,21 +1653,24 @@ class OrderManager:
                 self._emit_pnl_update(
                     symbol,
                     orden,
-                    extra={'precio_mark': precio, 'motivo': motivo, 'retorno': retorno},
+                    extra={'precio_mark': precio_cierre_registro, 'motivo': motivo, 'retorno': retorno},
                 )
 
                 self.historial.setdefault(symbol, []).append(orden.to_dict())
                 if len(self.historial[symbol]) > self.max_historial:
                     self.historial[symbol] = self.historial[symbol][-self.max_historial:]
 
-                if retorno < 0 and self.bus:
-                    await self.bus.publish('registrar_perdida', {'symbol': symbol, 'perdida': retorno})
+                if self.bus:
+                    if retorno < 0:
+                        await self.bus.publish('registrar_perdida', {'symbol': symbol, 'perdida': retorno})
+                    else:
+                        await self.bus.publish('risk.win_streak_reset', {})
 
-                log.info(f'📤 Orden cerrada para {symbol} @ {precio:.2f} | {motivo}')
+                log.info(f'📤 Orden cerrada para {symbol} @ {precio_cierre_registro:.2f} | {motivo}')
                 if self.bus:
                     if self.modo_real:
                         mensaje = (
-                            f"""📤 Venta {symbol}\nEntrada: {orden.precio_entrada:.2f} Salida: {precio:.2f}\nRetorno: {retorno * 100:.2f}%\nMotivo: {motivo}"""
+                            f"""📤 Venta {symbol}\nEntrada: {orden.precio_entrada:.2f} Salida: {precio_cierre_registro:.2f}\nRetorno: {retorno * 100:.2f}%\nMotivo: {motivo}"""
                         )
                         await self.bus.publish('notify', {'mensaje': mensaje, 'operation_id': operation_id})
                     else:
@@ -1666,7 +1678,7 @@ class OrderManager:
                             'orden_simulada_cerrada',
                             {
                                 'symbol': symbol,
-                                'precio_cierre': precio,
+                                'precio_cierre': precio_cierre_registro,
                                 'retorno': retorno,
                                 'motivo': motivo,
                                 'operation_id': operation_id,
@@ -1825,8 +1837,11 @@ class OrderManager:
                     self.historial.setdefault(symbol, []).append(orden.to_dict())
                     if len(self.historial[symbol]) > self.max_historial:
                         self.historial[symbol] = self.historial[symbol][-self.max_historial:]
-                    if retorno < 0 and self.bus:
-                        await self.bus.publish('registrar_perdida', {'symbol': symbol, 'perdida': retorno})
+                    if self.bus:
+                        if retorno < 0:
+                            await self.bus.publish('registrar_perdida', {'symbol': symbol, 'perdida': retorno})
+                        else:
+                            await self.bus.publish('risk.win_streak_reset', {})
                     log.info(f'📤 Orden cerrada para {symbol} @ {precio:.2f} | {motivo}')
                     if self.bus:
                         if self.modo_real:

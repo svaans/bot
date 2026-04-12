@@ -376,11 +376,29 @@ async def test_kill_switch_cierra_posiciones_y_notifica() -> None:
     manager = RiskManager(0.05, bus=bus)
 
     orders = DummyOrderManager()
-    triggered = await manager.kill_switch(orders, -0.1, -0.05, 3, 2)
+    triggered = await manager.kill_switch(orders, 0.1, 0.05, 3, 2)
 
     assert triggered is True
     assert orders.closed == [("BTCUSDT", 10.0, "Kill Switch")]
     assert bus.events and bus.events[0][0] == "notify"
+
+
+@pytest.mark.asyncio
+async def test_kill_switch_no_op_si_umbrales_no_superados() -> None:
+    class DummyOrderManager:
+        def __init__(self) -> None:
+            self.ordenes = {"BTCUSDT": object()}
+            self.closed: list[tuple[str, float | None, str]] = []
+
+        async def cerrar_async(self, symbol: str, precio: float | None, motivo: str) -> bool:
+            self.closed.append((symbol, precio, motivo))
+            return True
+
+    manager = RiskManager(0.05)
+    orders = DummyOrderManager()
+    triggered = await manager.kill_switch(orders, 0.01, 0.05, 1, 5)
+    assert triggered is False
+    assert orders.closed == []
 
 
 def test_cooldown_emite_alerta_y_se_libera(monkeypatch: pytest.MonkeyPatch) -> None:

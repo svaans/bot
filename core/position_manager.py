@@ -71,6 +71,11 @@ class PositionManager:
 
         self.risk_manager = risk_manager
         self._manager.risk_manager = risk_manager
+        if risk_manager is not None:
+            try:
+                setattr(risk_manager, "order_manager", self._manager)
+            except Exception:
+                pass
         capital_manager = getattr(self._manager, "capital_manager", None)
         if risk_manager is not None and capital_manager is not None:
             try:
