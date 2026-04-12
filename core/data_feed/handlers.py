@@ -846,6 +846,10 @@ async def consumer_loop(feed: "DataFeed", symbol: str) -> None:
                         base_total = 0.0
                     stage_durations["total"] = base_total + handler_elapsed
             feed._consumer_last[symbol] = time.monotonic()
+            if handler_completed:
+                ts_done = _to_int(ts)
+                if ts_done is not None:
+                    feed._last_handler_close_ts[sym] = ts_done
             queue.task_done()
             skip_reason = candle.pop("_df_skip_reason", None)
             skip_details = candle.pop("_df_skip_details", None)

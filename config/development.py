@@ -13,6 +13,7 @@ class DevelopmentConfig:
     symbols: List[str] = field(default_factory=lambda : ['BTC/EUR',
         'ETH/EUR', 'ADA/EUR', 'SOL/EUR', 'BNB/EUR'])
     umbral_riesgo_diario: float = 0.03
+    risk_kill_switch_max_consecutive_losses: int = 5
     risk_alerta_capital_pct: float = 0.85
     min_order_eur: float = 10.0
     persistencia_minima: int = 1

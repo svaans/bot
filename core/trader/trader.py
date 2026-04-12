@@ -412,6 +412,13 @@ class Trader(TraderLite):
             umbral = float(raw or umbral)
         except Exception:
             pass
+        max_loss_streak = 5
+        try:
+            raw_ks = getattr(cfg, "risk_kill_switch_max_consecutive_losses", None)
+            if raw_ks is not None:
+                max_loss_streak = max(0, int(raw_ks))
+        except (TypeError, ValueError):
+            max_loss_streak = 5
         try:
             from core.risk.risk_manager import RiskManager
 
@@ -420,6 +427,7 @@ class Trader(TraderLite):
                 bus=bus,
                 capital_manager=capital_manager,
                 order_manager=orders,
+                kill_switch_max_perdidas_consecutivas=max_loss_streak,
             )
             orders.risk_manager = self.risk
         except Exception:

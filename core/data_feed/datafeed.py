@@ -144,7 +144,11 @@ class DataFeed:
         self._consumer_tasks: Dict[str, asyncio.Task] = {}
         self._locks: Dict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
 
+        # Cierre de vela (ms) de la última vela aceptada en cola (tras validar y
+        # antes del handler). Para el último cierre procesado con éxito por el
+        # consumidor, ver ``_last_handler_close_ts``.
         self._last_close_ts: Dict[str, int] = {}
+        self._last_handler_close_ts: Dict[str, int] = {}
         self._ultimo_candle: Dict[str, dict] = {}
         self._last_monotonic: Dict[str, float] = {}
         self._consumer_last: Dict[str, float] = {}

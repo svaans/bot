@@ -8,6 +8,7 @@ MODO_OPERATIVO = cfg.modo_operativo
 INTERVALO_VELAS = cfg.intervalo_velas
 SYMBOLS = cfg.symbols
 UMBRAL_RIESGO_DIARIO = cfg.umbral_riesgo_diario
+RISK_KILL_SWITCH_MAX_CONSECUTIVE_LOSSES = cfg.risk_kill_switch_max_consecutive_losses
 MIN_ORDER_EUR = cfg.min_order_eur
 DIVERSIDAD_MINIMA = cfg.diversidad_minima
 PERSISTENCIA_MINIMA = cfg.persistencia_minima

@@ -222,6 +222,7 @@ class Config:
     orders_reconcile_enabled: bool = False
     funding_enabled: bool = False
     backfill_ventana_enabled: bool = False
+    risk_kill_switch_max_consecutive_losses: int = 5
 
 class ConfigManager:
     """Carga y proporciona acceso a la configuración del bot."""
@@ -499,6 +500,13 @@ class ConfigManager:
         umbral_riesgo_diario = _cargar_float('UMBRAL_RIESGO_DIARIO', defaults.umbral_riesgo_diario)
         if umbral_riesgo_diario <= 0:
             raise ValueError('UMBRAL_RIESGO_DIARIO debe ser mayor a 0')
+        risk_kill_switch_max_consecutive_losses = max(
+            0,
+            _cargar_int(
+                'RISK_KILL_SWITCH_MAX_CONSECUTIVE_LOSSES',
+                getattr(defaults, 'risk_kill_switch_max_consecutive_losses', 5),
+            ),
+        )
         min_order_eur = _cargar_float('MIN_ORDER_EUR', defaults.min_order_eur)
         diversidad_minima = _cargar_int('DIVERSIDAD_MINIMA', defaults.diversidad_minima)
         persistencia_minima = _cargar_int('PERSISTENCIA_MINIMA', defaults.persistencia_minima)
@@ -612,6 +620,7 @@ class ConfigManager:
             orders_reconcile_enabled=orders_reconcile_enabled,
             funding_enabled=funding_enabled,
             backfill_ventana_enabled=backfill_ventana_enabled,
+            risk_kill_switch_max_consecutive_losses=risk_kill_switch_max_consecutive_losses,
         )
 
         log.info(
