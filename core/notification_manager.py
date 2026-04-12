@@ -12,6 +12,7 @@ from typing import Literal
 import aiohttp
 
 from core.utils.logger import configurar_logger
+from core.utils.log_utils import summarize_telegram_api_result, truncate_for_log
 from core.utils.metrics_compat import Counter, Gauge, Histogram
 from core.notificador import escape_markdown
 
@@ -122,7 +123,8 @@ class _TelegramBackend:
                 except Exception as exc:  # pragma: no cover - json inválido
                     body = await response.text()
                     raise NotificationDeliveryError(
-                        f"Respuesta no JSON de Telegram (HTTP {status}): {body!r}"
+                        "Respuesta no JSON de Telegram (HTTP %s): %s"
+                        % (status, truncate_for_log(body, 200))
                     ) from exc
         except aiohttp.ClientError as exc:
             raise NotificationDeliveryError(f"Error de red enviando a Telegram: {exc}") from exc
@@ -131,14 +133,19 @@ class _TelegramBackend:
 
         if status != 200:
             raise NotificationDeliveryError(
-                f"HTTP {status} al enviar mensaje: {data!r}"
+                "HTTP %s al enviar mensaje: %s"
+                % (status, truncate_for_log(repr(data), 320))
             )
         if not data.get("ok", False):
             descripcion = data.get("description", "Respuesta desconocida")
             raise NotificationDeliveryError(
-                f"Telegram rechazó la notificación: {descripcion}"
+                "Telegram rechazó la notificación: %s"
+                % (truncate_for_log(str(descripcion), 400),)
             )
-        return DeliveryReport(status="success", details={"response": data})
+        return DeliveryReport(
+            status="success",
+            details={"response": summarize_telegram_api_result(data)},
+        )
 
 
 @dataclass
@@ -227,7 +234,11 @@ class NotificationManager:
                 try:
                     self._on_event(
                         "notify_drop",
-                        {"nivel": nivel, "reason": "queue_full", "mensaje": mensaje},
+                        {
+                            "nivel": nivel,
+                            "reason": "queue_full",
+                            "mensaje": truncate_for_log(mensaje, 500),
+                        },
                     )
                 except Exception:
                     pass
@@ -236,7 +247,7 @@ class NotificationManager:
             self._log_safe(
                 "debug",
                 "Cola de notificaciones cerrada; se descarta el mensaje '%s'",
-                mensaje,
+                truncate_for_log(mensaje, 200),
             )
             NOTIFY_SKIPPED.labels(channel="internal").inc()
 
@@ -372,7 +383,10 @@ class NotificationManager:
                     self._emit_event(
                         "notify_success",
                         canal,
-                        {"meta": meta, "details": report.details},
+                        {
+                            "meta": meta,
+                            "details": report.details,
+                        },
                     )
                     return True
                 if report.status == "skipped":

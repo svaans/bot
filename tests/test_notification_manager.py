@@ -54,6 +54,7 @@ async def test_telegram_backend_real_http_success() -> None:
             report = await backend.send("mensaje")
             assert report.status == "success"
             assert report.details and report.details["response"]["ok"] is True
+            assert report.details["response"].get("message_id") == 123
         assert called["value"] is True
     finally:
         await server.close()

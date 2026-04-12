@@ -3,6 +3,7 @@ import os
 import time
 from typing import Any, Tuple
 import httpx
+from core.utils.log_utils import safe_extra, truncate_for_log
 from core.utils.utils import configurar_logger
 from observability.metrics import NOTIFICATIONS_RETRY, NOTIFICATIONS_TOTAL
 from dotenv import load_dotenv
@@ -78,7 +79,13 @@ class Notificador:
                         return True, info
                     log.error(
                         '⚠️ Error enviando notificación',
-                        extra={"id": request_id, **info},
+                        extra=safe_extra(
+                            {
+                                "id": request_id,
+                                "status_code": info.get("status_code"),
+                                "body": truncate_for_log(info.get("body"), 400),
+                            }
+                        ),
                     )
                     if intento >= self._max_reintentos:
                         NOTIFICATIONS_TOTAL.labels(channel='telegram', result='error').inc()
@@ -94,8 +101,8 @@ class Notificador:
                         intento + 1,
                         self._max_reintentos,
                         exc,
-                        extra={"id": request_id},
-                    )
+                    extra=safe_extra({"id": request_id}),
+                )
                     if intento >= self._max_reintentos:
                         break
                     NOTIFICATIONS_RETRY.labels(channel='telegram').inc()
@@ -106,7 +113,7 @@ class Notificador:
         log.error(
             '❌ Excepción al enviar notificación: %s',
             ultimo_error,
-            extra={"id": request_id},
+            extra=safe_extra({"id": request_id}),
         )
         return False, {"exception": str(ultimo_error) if ultimo_error else "error desconocido"}
 
@@ -151,7 +158,13 @@ class Notificador:
                     return True, info
                 log.error(
                     '⚠️ Error enviando notificación',
-                    extra={"id": request_id, **info},
+                    extra=safe_extra(
+                        {
+                            "id": request_id,
+                            "status_code": info.get("status_code"),
+                            "body": truncate_for_log(info.get("body"), 400),
+                        }
+                    ),
                 )
                 if intento >= self._max_reintentos:
                     NOTIFICATIONS_TOTAL.labels(channel='telegram', result='error').inc()
@@ -167,7 +180,7 @@ class Notificador:
                     intento + 1,
                     self._max_reintentos,
                     exc,
-                    extra={"id": request_id},
+                    extra=safe_extra({"id": request_id}),
                 )
                 if intento >= self._max_reintentos:
                     break
@@ -180,7 +193,7 @@ class Notificador:
         log.error(
             '❌ Excepción al enviar notificación: %s',
             ultimo_error,
-            extra={"id": request_id},
+            extra=safe_extra({"id": request_id}),
         )
         return False, {"exception": str(ultimo_error) if ultimo_error else "error desconocido"}
 
