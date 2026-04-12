@@ -10,6 +10,9 @@ partes del códigobase.
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import os
+import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Iterable, List, MutableMapping, Sequence
@@ -18,7 +21,7 @@ import httpx
 
 from core.event_bus import EventBus
 from core.utils.logger import configurar_logger
-from observability.metrics import NOTIFICATIONS_TOTAL
+from observability.metrics import ALERT_NOTIFY_SUPPRESSED_TOTAL, NOTIFICATIONS_TOTAL
 
 log = configurar_logger("observability.alerts", modo_silencioso=True)
 
@@ -242,6 +245,8 @@ class AlertDispatcher:
             channel_list.append(PrometheusAlertRecorder())
         self._channels = channel_list
         self._session: httpx.AsyncClient | None = None
+        self._notify_last_sent: dict[str, float] = {}
+        self._notify_throttle_lock = asyncio.Lock()
         if bus:
             self.subscribe(bus)
 
@@ -270,11 +275,88 @@ class AlertDispatcher:
             self._session = httpx.AsyncClient()
         return self._session
 
+    @staticmethod
+    def _notify_rate_interval_seconds(severity: str) -> float:
+        """Intervalo mínimo entre envíos; <=0 desactiva el límite para esa severidad."""
+
+        if os.getenv("ALERT_NOTIFY_RATE_LIMIT_ENABLED", "true").strip().lower() in {
+            "0",
+            "false",
+            "no",
+            "off",
+        }:
+            return 0.0
+        sev = severity.upper()
+        if sev == "CRITICAL":
+            raw = os.getenv("ALERT_NOTIFY_MIN_INTERVAL_CRITICAL_SEC", "60")
+        elif sev == "ERROR":
+            raw = os.getenv("ALERT_NOTIFY_MIN_INTERVAL_ERROR_SEC", "45")
+        else:
+            return 0.0
+        try:
+            return float(raw)
+        except (TypeError, ValueError):
+            return 60.0 if sev == "CRITICAL" else 45.0
+
+    @staticmethod
+    def _notify_throttle_key(severity: str, payload: dict[str, Any], message: str) -> tuple[str | None, str]:
+        """Devuelve (clave, kind) para métricas; ``None`` si no aplica rate limit."""
+
+        sev = severity.upper()
+        if sev not in {"CRITICAL", "ERROR"}:
+            return None, "none"
+        op = payload.get("operation_id")
+        if op is not None and str(op).strip():
+            oid = str(op).strip()
+            return f"{sev}:op:{oid}", "operation_id"
+        fp = hashlib.sha256(message.encode("utf-8")).hexdigest()[:24]
+        return f"{sev}:msg:{fp}", "message_hash"
+
+    def _trim_notify_throttle_map(self) -> None:
+        cap = max(64, int(os.getenv("ALERT_NOTIFY_THROTTLE_MAX_KEYS", "2048")))
+        while len(self._notify_last_sent) > cap:
+            self._notify_last_sent.pop(next(iter(self._notify_last_sent)))
+
+    async def _maybe_suppress_notify_rate_limit(
+        self,
+        severity: str,
+        payload_dict: dict[str, Any],
+        message: str,
+    ) -> bool:
+        interval = self._notify_rate_interval_seconds(severity)
+        if interval <= 0:
+            return False
+        key, kind = self._notify_throttle_key(severity, payload_dict, message)
+        if key is None:
+            return False
+        now = time.monotonic()
+        async with self._notify_throttle_lock:
+            last = self._notify_last_sent.get(key, 0.0)
+            if now - last < interval:
+                ALERT_NOTIFY_SUPPRESSED_TOTAL.labels(
+                    severity=severity.upper(),
+                    key_kind=kind,
+                ).inc()
+                log.debug(
+                    "alert.notify_suppressed",
+                    extra={
+                        "severity": severity.upper(),
+                        "key_kind": kind,
+                        "interval_sec": interval,
+                    },
+                )
+                return True
+            self._notify_last_sent[key] = now
+            self._trim_notify_throttle_map()
+        return False
+
     async def _on_notify(self, payload: Any) -> None:
         message = ""
         severity = "INFO"
         metadata: MutableMapping[str, Any] | None = None
+        payload_dict: dict[str, Any] = {}
         if isinstance(payload, dict):
+            payload_dict = dict(payload)
             message = str(payload.get("mensaje", "")).strip()
             severity = str(payload.get("tipo", "INFO")).upper()
             metadata = {
@@ -287,6 +369,9 @@ class AlertDispatcher:
 
         if not message:
             message = "Notificación recibida sin cuerpo"
+
+        if await self._maybe_suppress_notify_rate_limit(severity, payload_dict, message):
+            return
 
         alert = StructuredAlert(
             event="notify",

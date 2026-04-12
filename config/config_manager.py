@@ -132,6 +132,7 @@ class Config:
     symbols: List[str]
     umbral_riesgo_diario: float
     min_order_eur: float
+    risk_kill_switch_max_consecutive_losses: int = 5
     diversidad_minima: int = 2
     capital_currency: Optional[str] = None
     persistencia_minima: int = 1
@@ -222,7 +223,6 @@ class Config:
     orders_reconcile_enabled: bool = False
     funding_enabled: bool = False
     backfill_ventana_enabled: bool = False
-    risk_kill_switch_max_consecutive_losses: int = 5
 
 class ConfigManager:
     """Carga y proporciona acceso a la configuración del bot."""

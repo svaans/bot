@@ -7,6 +7,7 @@ __all__ = [
     "SIGNALS_CONFLICT",
     "SIGNALS_CONFLICT_RESOLVED",
     "NOTIFICATIONS_TOTAL",
+    "ALERT_NOTIFY_SUPPRESSED_TOTAL",
     "NOTIFICATIONS_RETRY",
     "BOT_OPERATIONAL_MODE",
     "BOT_OPERATIONAL_MODE_TRANSITIONS_TOTAL",
@@ -91,6 +92,12 @@ NOTIFICATIONS_RETRY = Counter(
     "bot_notifications_retry_total",
     "Reintentos realizados al enviar notificaciones externas",
     ["channel"],
+)
+
+ALERT_NOTIFY_SUPPRESSED_TOTAL = Counter(
+    "bot_alert_notify_suppressed_total",
+    "Eventos notify no reenviados por rate limit (CRITICAL/ERROR)",
+    ["severity", "key_kind"],
 )
 
 EMOTIONAL_STATE_SCORE = Gauge(

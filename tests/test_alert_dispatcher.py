@@ -12,7 +12,7 @@ from observability.alerts import (
     AlertDeliveryResult,
     AlertDispatcher,
 )
-from observability.metrics import NOTIFICATIONS_TOTAL
+from observability.metrics import ALERT_NOTIFY_SUPPRESSED_TOTAL, NOTIFICATIONS_TOTAL
 
 
 class _DummyChannel(AlertChannel):
@@ -87,6 +87,64 @@ async def test_alert_dispatcher_ruta_cooldown() -> None:
     assert alert.event == "risk.cooldown_activated"
     assert alert.severity == "CRITICAL"
     assert alert.metadata == payload
+
+    await dispatcher.aclose()
+
+
+@pytest.mark.asyncio
+async def test_alert_dispatcher_rate_limit_critical_by_operation_id(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("ALERT_NOTIFY_MIN_INTERVAL_CRITICAL_SEC", "3600")
+    monkeypatch.setenv("ALERT_NOTIFY_MIN_INTERVAL_ERROR_SEC", "0")
+
+    bus = EventBus()
+    dummy = _DummyChannel()
+    suppressed = ALERT_NOTIFY_SUPPRESSED_TOTAL.labels(
+        severity="CRITICAL",
+        key_kind="operation_id",
+    )
+    base_sup = suppressed._value
+
+    dispatcher = AlertDispatcher(
+        bus=bus,
+        channels=[dummy],
+        enable_prometheus=False,
+    )
+
+    p1 = {
+        "mensaje": "fallo A",
+        "tipo": "CRITICAL",
+        "operation_id": "op-dedup",
+    }
+    await bus.publish("notify", p1)
+    await bus.publish("notify", dict(p1, mensaje="fallo B"))
+    await _wait_until(lambda: len(dummy.alerts) == 1)
+
+    assert dummy.alerts[0].message == "fallo A"
+    assert suppressed._value == base_sup + 1
+
+    await dispatcher.aclose()
+
+
+@pytest.mark.asyncio
+async def test_alert_dispatcher_warning_not_rate_limited(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("ALERT_NOTIFY_MIN_INTERVAL_CRITICAL_SEC", "3600")
+
+    bus = EventBus()
+    dummy = _DummyChannel()
+    dispatcher = AlertDispatcher(
+        bus=bus,
+        channels=[dummy],
+        enable_prometheus=False,
+    )
+
+    p = {"mensaje": "w", "tipo": "WARNING", "operation_id": "same"}
+    await bus.publish("notify", p)
+    await bus.publish("notify", dict(p, mensaje="w2"))
+    await _wait_until(lambda: len(dummy.alerts) == 2)
 
     await dispatcher.aclose()
 
