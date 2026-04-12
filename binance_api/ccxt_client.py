@@ -166,6 +166,18 @@ def obtener_ccxt(config: Any | None = None) -> Any:
                 staging = os.getenv("BINANCE_STAGING_REST_URL", "")
                 _apply_staging_urls(exchange, staging)
 
+        # ``load_markets()`` de CCXT invoca ``fetch_currencies()`` *antes* de
+        # ``fetch_markets()``; la primera es firmada (sapi/v1/capital/config/getall).
+        # ``load_time_difference()`` solo se disparaba dentro de ``fetch_markets()``,
+        # así que esa primera firma iba con timeDifference=0 → Binance -1021.
+        try:
+            exchange.load_time_difference()
+        except Exception as exc:
+            logger.warning(
+                "ccxt: load_time_difference falló (%s); riesgo de -1021 en la carga inicial",
+                exc,
+            )
+
         exchange.load_markets()
         _EXCHANGE = exchange
         _EXCHANGE_KEY = fp
