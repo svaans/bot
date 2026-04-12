@@ -8,6 +8,7 @@ UTC = timezone.utc
 from typing import Any
 import inspect
 
+from binance_api.ccxt_client import obtener_ccxt
 from binance_api.cliente import BinanceClient, fetch_balance_async
 from config import config as app_config
 from ccxt.base.errors import AuthenticationError, NetworkError
@@ -45,9 +46,15 @@ def obtener_orden_abierta():
             ordenes = real_orders.cargar_ordenes()
             modo = getattr(app_config, 'MODO_OPERATIVO', OperationalMode.from_bool(app_config.MODO_REAL))
             if not ordenes and (modo.is_real or modo.uses_testnet):
-                ordenes = real_orders.sincronizar_ordenes_binance(
-                    config=app_config.cfg
-                )
+                try:
+                    ordenes = real_orders.sincronizar_ordenes_binance(
+                        config=app_config.cfg
+                    )
+                except Exception as exc:
+                    log.warning(
+                        'No se pudo sincronizar órdenes con el exchange: %s',
+                        exc,
+                    )
             return ordenes if ordenes else None
         except (OSError, sqlite3.Error) as e:
             log.warning(f'⚠️ Error al leer órdenes desde la base de datos: {e}')
@@ -232,14 +239,16 @@ async def _fetch_balance(cliente: Any | None) -> dict:
     """Recupera el balance soportando clientes síncronos y asíncronos."""
 
     if cliente is None:
-        cliente = BinanceClient(app_config.cfg)
+        try:
+            cliente = obtener_ccxt(getattr(app_config, "cfg", None))
+        except Exception:
+            cliente = None
 
     fetch_balance = getattr(cliente, 'fetch_balance', None)
     if callable(fetch_balance):
-        resultado = fetch_balance()
-        if inspect.isawaitable(resultado):
-            return await resultado
-        return resultado
+        if inspect.iscoroutinefunction(fetch_balance):
+            return await fetch_balance()
+        return await asyncio.to_thread(fetch_balance)
 
     fetch_balance_async_attr = getattr(cliente, 'fetch_balance_async', None)
     if callable(fetch_balance_async_attr):

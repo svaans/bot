@@ -9,6 +9,17 @@ from core.auditoria import AuditEvent, AuditResult
 from core.gestor_ordenes import GestorOrdenes
 
 
+class SilentPublishBus:
+    """Publica eventos pero no completa ``future`` (provoca timeout en el gestor)."""
+
+    def __init__(self) -> None:
+        self.published: list[tuple[str, dict[str, Any]]] = []
+
+    async def publish(self, evento: str, payload: dict[str, Any]) -> None:
+        copia = {k: v for k, v in payload.items() if k != "future"}
+        self.published.append((evento, copia))
+
+
 class DummyBus:
     """Bus asíncrono que completa el ``future`` con respuestas predefinidas."""
 
@@ -189,6 +200,19 @@ async def test_abrir_operacion_revierte_si_bus_rechaza() -> None:
 
 
 @pytest.mark.asyncio
+async def test_abrir_operacion_revierte_si_bus_timeout() -> None:
+    bus = SilentPublishBus()
+    orders = DummyOrders()
+    gestor = GestorOrdenes(bus, orders, timeout_bus=0.15)
+
+    ok = await gestor.abrir_operacion("BTCUSDT", 10_000.0, 0.25, "long")
+
+    assert ok is False
+    assert "BTCUSDT" not in orders.store
+    assert bus.published and bus.published[0][0] == "abrir_orden"
+
+
+@pytest.mark.asyncio
 async def test_cerrar_operacion_exitosa_registra_reporte() -> None:
     bus = DummyBus([True])
     orders = DummyOrders()
@@ -252,10 +276,12 @@ async def test_cerrar_operacion_falla_sin_precio_disponible() -> None:
 
     gestor._auditar = auditar_stub  # type: ignore[attr-defined]
 
+    orden = orders.store["BTCUSDT"]
     ok = await gestor.cerrar_operacion("BTCUSDT", None, "manual")
 
     assert ok is False
     assert bus.published == []
+    assert orden.cerrando is False
 
 
 @pytest.mark.asyncio
@@ -266,10 +292,12 @@ async def test_cerrar_operacion_falla_si_bus_rechaza() -> None:
     orders.crear("BTCUSDT", 9_900.0, 0.4, "long", {})
 
     gestor = GestorOrdenes(bus, orders, reporter=reporter, timeout_bus=5.0)
+    orden = orders.store["BTCUSDT"]
     ok = await gestor.cerrar_operacion("BTCUSDT", 9_800.0, "stop_loss")
 
     assert ok is False
     assert not reporter.records
+    assert orden.cerrando is False
 
 
 @pytest.mark.asyncio
