@@ -268,7 +268,7 @@ def limpiar_venta_fallida(symbol: str) -> None:
     """Elimina `symbol` del registro de ventas fallidas."""
     with _VENTAS_FALLIDAS_LOCK:
         _VENTAS_FALLIDAS.discard(symbol)
-_BUFFER_LOCK = threading.Lock()
+_BUFFER_LOCK = threading.RLock()
 _MAX_BUFFER = int(os.getenv('MAX_BUFFER_OPERATIONS', '10') or 10)
 _FLUSH_INTERVAL = int(os.getenv('FLUSH_INTERVAL', '300') or 300)
 _ULTIMO_FLUSH = time.time()
@@ -1056,15 +1056,17 @@ def registrar_operacion(data: (dict | Order)) ->None:
     with _BUFFER_LOCK:
         _BUFFER_OPERACIONES.append(registro)
         log.debug(f'📥 Operación registrada en buffer para {symbol}', extra={'symbol': symbol, 'timeframe': None})
-    ahora = time.time()
-    if len(_BUFFER_OPERACIONES
-        ) >= _MAX_BUFFER or ahora - _ULTIMO_FLUSH >= _FLUSH_INTERVAL:
-        log.debug(
-            '🔁 Buffer de operaciones lleno o expirado, iniciando flush...',
-            extra={'symbol': symbol, 'timeframe': None},
-        )
-        flush_operaciones()
-        _ULTIMO_FLUSH = ahora
+        ahora = time.time()
+        if (
+            len(_BUFFER_OPERACIONES) >= _MAX_BUFFER
+            or ahora - _ULTIMO_FLUSH >= _FLUSH_INTERVAL
+        ):
+            log.debug(
+                '🔁 Buffer de operaciones lleno o expirado, iniciando flush...',
+                extra={'symbol': symbol, 'timeframe': None},
+            )
+            flush_operaciones()
+            _ULTIMO_FLUSH = ahora
 
 
 def ejecutar_orden_market(

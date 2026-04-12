@@ -505,6 +505,16 @@ class OperationalModeService:
             setattr(config_module, "MODO_OPERATIVO", mode)
         except Exception:
             log.debug("No se pudo actualizar config.config tras cambio de modo", exc_info=True)
+        if previous != mode:
+            try:
+                from binance_api.ccxt_client import reset_ccxt_exchange
+
+                reset_ccxt_exchange()
+            except Exception:
+                log.debug(
+                    "No se pudo invalidar cliente CCXT tras cambio de modo",
+                    exc_info=True,
+                )
         if self._event_bus is not None:
             payload = {
                 "from": previous.value if isinstance(previous, OperationalMode) else previous,

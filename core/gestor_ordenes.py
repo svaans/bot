@@ -157,7 +157,7 @@ class GestorOrdenes:
             return False
         orden = self.orders.crear(symbol, precio, cantidad, direccion, extras or {})
         ok = await self._safe_publish("abrir_orden", {"symbol": symbol, "precio": precio, "cantidad": cantidad, "direccion": direccion})
-        if ok is False:
+        if not ok:
             # revertir creación si no se confirma
             try:
                 self.orders.eliminar(symbol)
@@ -225,7 +225,10 @@ class GestorOrdenes:
             precio = await self._ticker_precio(symbol, fallback=getattr(orden, "precio_entrada", None))
         if not precio:
             return False
-        ok = await self._safe_publish("cerrar_parcial", {"symbol": symbol, "cantidad": cantidad, "precio": precio, "motivo": motivo})
+        ok = await self._safe_publish(
+            "cerrar_parcial",
+            {"symbol": symbol, "cantidad": cantidad, "precio": precio, "motivo": motivo},
+        )
         if not ok:
             return False
         # reporting simple
