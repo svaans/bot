@@ -796,6 +796,12 @@ def start_hot_reload(
         Extensiones adicionales (incluyendo el punto) a monitorear además de ``.py``.
     restart_cooldown_seconds : float | None
         Ventana mínima entre reinicios consecutivos del proceso tras aplicar cambios.
+
+    Variables de entorno
+    --------------------
+    HOT_RELOAD_MODULAR_DISABLED
+        Si vale ``1``/``true``/``yes``/``on``, no se usa recarga modular en hilo
+        (``importlib.reload``); todo cambio relevante fuerza reinicio de proceso.
     """
     _configure_watchdog_logging()
     
@@ -858,8 +864,20 @@ def start_hot_reload(
         ignore_patterns_set.update(str(p) for p in ignore_patterns)
     ignore_patterns_set.update(NOISY_FILE_PATTERNS)
 
+    _hr_log = logging.getLogger("hot_reload")
+    _modular_disabled = os.getenv("HOT_RELOAD_MODULAR_DISABLED", "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
     modular_controller: ModularReloadController | None = None
-    if modular_reload:
+    if modular_reload and _modular_disabled:
+        _hr_log.info(
+            "HOT_RELOAD_MODULAR_DISABLED activo: se omite importlib.reload en hilo; "
+            "cualquier cambio bajo vigilancia reinicia el proceso."
+        )
+    elif modular_reload:
         modular_controller = ModularReloadController(
             root=root,
             rules=tuple(modular_reload),

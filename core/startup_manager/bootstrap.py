@@ -51,7 +51,7 @@ class BootstrapMixin:
             msg = (
                 "Cliente Binance no inicializado. "
                 "Verifica las claves API y las variables de entorno "
-                "BINANCE_API_KEY/BINANCE_SECRET."
+                "BINANCE_API_KEY y BINANCE_API_SECRET."
             )
             self.log.error(msg)
             raise RuntimeError(msg)

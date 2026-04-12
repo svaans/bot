@@ -1,7 +1,22 @@
 {
-  "timestamp": 1776013547.9366555,
+  "timestamp": 1776022727.1488955,
   "reason": "hot_reload",
   "entries": {
+    "risk_manager": {
+      "posiciones_abiertas": [],
+      "correlaciones": {},
+      "riesgo_diario": 0.0,
+      "fecha_riesgo": "2026-04-12",
+      "cooldown_fin": null,
+      "capital_alerta_activa": false,
+      "capital_alerta_fecha": null,
+      "ultimo_ratio_capital": 0.0,
+      "ultimo_factor_kelly": 1.0,
+      "factor_kelly_prev": null,
+      "exposure_comprometido": {},
+      "pnl_state": {},
+      "latent_stop": []
+    },
     "reporter_diario": {
       "ultimas_operaciones": {},
       "fecha_actual": "2026-04-12"

@@ -49,7 +49,7 @@ from core.operational_mode import OperationalModeService
 from core.diag.phase_logger import phase
 from core.startup_manager import StartupManager
 from core.metrics import iniciar_exporter
-from core.state import restore_critical_state
+from core.state import persist_critical_state, restore_critical_state
 
 
 # --- Utilidades internas ---
@@ -434,6 +434,12 @@ async def main():
             except Exception:
                 pass
             alert_dispatcher = None
+
+        # 4b) Estado crítico en disco (riesgo, etc.) mientras el trader sigue en memoria
+        try:
+            persist_critical_state(reason="shutdown")
+        except Exception:
+            traceback.print_exc()
 
         # 5) Cierre del bot con timeout
         await _safe_acall(bot, 'cerrar', timeout=15)

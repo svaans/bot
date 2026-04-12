@@ -99,7 +99,13 @@ class _JsonFormatter(logging.Formatter):
             data["exc_info"] = self.formatException(record.exc_info)
         if record.stack_info:
             data["stack"] = self.formatStack(record.stack_info)
-        extras = {k: _json_safe(v) for k, v in record.__dict__.items() if k not in _RESERVED_ATTRS}
+        extras_raw = {k: v for k, v in record.__dict__.items() if k not in _RESERVED_ATTRS}
+        # ``extra={"timestamp": ms_vela}`` termina en ``record.__dict__`` y, al hacer
+        # ``data.update``, pisa la hora ISO del evento. El ms de vela va como ``candle_ts``.
+        if "timestamp" in extras_raw:
+            extras_raw = dict(extras_raw)
+            extras_raw["candle_ts"] = extras_raw.pop("timestamp")
+        extras = {k: _json_safe(v) for k, v in extras_raw.items()}
         if extras:
             data.update(extras)
         return json.dumps(data, ensure_ascii=False, default=_json_safe)
