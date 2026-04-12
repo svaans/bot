@@ -15,6 +15,8 @@ from config.configuracion import cargar_configuracion_simbolo, guardar_configura
 from core.adaptador_umbral import calcular_umbral_adaptativo
 from core.adaptador_dinamico import calcular_tp_sl_adaptativos
 from core.risk import RiskManager
+
+from .historial_operaciones import symbol_desde_parquet_stem
 CONFIG = dotenv_values('config/claves.env')
 MODO_REAL = CONFIG.get('MODO_REAL', 'False') == 'True'
 CARPETA_ORDENES = 'ordenes_reales' if MODO_REAL else 'ordenes_simuladas'
@@ -92,13 +94,26 @@ def procesar_simbolo(symbol: str, ruta: str) ->None:
     _actualizar_config(symbol, df.tail(60))
     feedback = _cargar_feedback(symbol)
     _aplicar_feedback_pesos(symbol, feedback)
-    rm = RiskManager(0.03)
+    cfg_riesgo = cargar_configuracion_simbolo(symbol) or {}
+    umbral_seed = float(cfg_riesgo.get('riesgo_maximo_diario', 0.03))
+    rm = RiskManager(umbral_seed)
     semana = df[df['timestamp'] >= (datetime.now(UTC) - pd.Timedelta(days=7
         )).timestamp()]
     metricas = {'ganancia_semana': semana.get('retorno_total', pd.Series())
         .sum(), 'winrate': (semana.get('retorno_total', pd.Series()) > 0).
         mean(), 'drawdown': semana.get('retorno_total', pd.Series()).min()}
+    umbral_antes = rm.umbral
     rm.ajustar_umbral(metricas)
+    if rm.umbral != umbral_antes:
+        cfg_riesgo = cargar_configuracion_simbolo(symbol) or {}
+        cfg_riesgo['riesgo_maximo_diario'] = float(rm.umbral)
+        guardar_configuracion_simbolo(symbol, cfg_riesgo)
+        log.info(
+            '🔧 riesgo_maximo_diario persistido para %s: %.4f → %.4f',
+            symbol,
+            umbral_antes,
+            rm.umbral,
+        )
 
 
 def ejecutar_ciclo() ->None:
@@ -107,7 +122,7 @@ def ejecutar_ciclo() ->None:
         log.warning(f'⚠️ No se encontraron órdenes en {CARPETA_ORDENES}')
         return
     for ruta in archivos:
-        symbol = os.path.splitext(os.path.basename(ruta))[0].replace('_', '/')
+        symbol = symbol_desde_parquet_stem(os.path.splitext(os.path.basename(ruta))[0])
         procesar_simbolo(symbol, ruta)
     if datetime.now(UTC).weekday() == 0:
         recalibrar_pesos_semana()

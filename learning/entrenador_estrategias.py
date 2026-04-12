@@ -112,7 +112,12 @@ def calcular_pesos_suavizados(
 
 
 def dividir_train_test(df: pd.DataFrame, test_ratio: float=0.2):
-    """Divide el DataFrame en particiones de entrenamiento y prueba."""
+    """Divide el DataFrame en particiones de entrenamiento y prueba.
+
+    Asume filas **ordenadas en el tiempo** (más antiguas primero): el bloque final
+    es validación y el resto entrenamiento. :func:`cargar_historial_operaciones`
+    ordena por ``timestamp`` / ``fecha_cierre`` cuando carga desde parquet.
+    """
     if df.empty:
         return df, pd.DataFrame()
     n_test = max(1, int(len(df) * test_ratio))

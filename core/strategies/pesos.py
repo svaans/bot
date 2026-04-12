@@ -153,6 +153,10 @@ class GestorPesos:
         """
         Deriva pesos por símbolo analizando CSVs de resultados de backtest.
 
+        ``json.loads`` y, en su defecto, ``ast.literal_eval`` interpretan el campo de
+        estrategias; limítelo a CSV de **origen confiable** (entrada no validada puede
+        romper el parseo o forzar rutas de código inesperadas).
+
         Heurística:
           - Suma contribuciones positivas de retorno de cada estrategia.
           - Si `estrategias_activas` es dict, usa las claves; si es lista, cuenta 1 por estrategia.

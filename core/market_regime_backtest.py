@@ -1,4 +1,9 @@
-"""Backtesting utilitario para calibrar ``core.market_regime.detectar_regimen``."""
+"""Backtesting utilitario para calibrar ``core.market_regime.detectar_regimen``.
+
+La columna de etiquetas (p. ej. ``regimen_real``) debe ser **conocible en el momento
+de la decisión** para cada fila evaluada. Si las etiquetas incorporan información
+futura (lookahead), la precisión reportada será optimista y no reflejará desempeño real.
+"""
 
 from __future__ import annotations
 

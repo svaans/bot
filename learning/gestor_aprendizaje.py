@@ -8,6 +8,9 @@ from .analisis_resultados import analizar_estrategias_en_ordenes
 from core.strategies.ajustador_pesos import ajustar_pesos_por_desempeno
 from core.strategies.pesos import gestor_pesos
 from dotenv import dotenv_values
+
+from .historial_operaciones import normalizar_symbol_parquet_filename
+
 CONFIG = dotenv_values('config/claves.env')
 MODO_REAL = CONFIG.get('MODO_REAL', 'False') == 'True'
 CARPETA_ORDENES = 'ordenes_reales' if MODO_REAL else 'ordenes_simuladas'
@@ -22,10 +25,15 @@ def registrar_resultado_trade(orden: dict):
     if not symbol or 'estrategias_activas' not in orden:
         print('⚠️ Orden incompleta, no se puede registrar.')
         return
+    try:
+        fname = normalizar_symbol_parquet_filename(symbol)
+    except ValueError as exc:
+        print(f'⚠️ Símbolo inválido para persistencia: {exc}')
+        return
     timestamp = orden.get('timestamp', datetime.now(UTC).timestamp())
     orden['timestamp'] = timestamp
     df_orden = pd.DataFrame([orden])
-    ruta_archivo = f"{CARPETA_ORDENES}/{symbol.replace('/', '_')}.parquet"
+    ruta_archivo = os.path.join(CARPETA_ORDENES, fname)
     if os.path.exists(ruta_archivo):
         df_existente = pd.read_parquet(ruta_archivo)
         df_ordenes = pd.concat([df_existente, df_orden], ignore_index=True)

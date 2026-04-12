@@ -122,3 +122,14 @@ def test_cargar_historial_sin_fuentes(tmp_path: Path, monkeypatch: pytest.Monkey
 
     with pytest.raises(FileNotFoundError):
         loader.cargar_historial_operaciones(symbol)
+
+
+def test_symbol_parquet_roundtrip() -> None:
+    """El stem del parquet debe reconstruir pares BASE/QUOTE con un solo guion bajo."""
+
+    sym = "BTC/USDT"
+    stem = loader.normalizar_symbol_parquet_filename(sym).removesuffix(".parquet")
+    assert loader.symbol_desde_parquet_stem(stem) == "BTC/USDT"
+
+    # Un solo split: quote puede contener "_" en otros contextos de nombre de archivo.
+    assert loader.symbol_desde_parquet_stem("ABC_X_Y") == "ABC/X_Y"

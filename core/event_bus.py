@@ -241,16 +241,20 @@ class EventBus:
 
     @staticmethod
     def _log_task_error(task: asyncio.Task, event_type: str) -> None:
-        """Loggear cualquier excepción producida por ``task``."""
+        """Registra excepciones de callbacks con traza completa (tarea ya terminada)."""
         if task.cancelled():
             return
         try:
             exc = task.exception()
         except Exception as err:  # pragma: no cover - seguridad adicional
-            log.error(f"❌ Error revisando tarea de '{event_type}': {err}")
+            log.error("❌ Error revisando tarea de '%s': %s", event_type, err)
             return
-        if exc:
-            log.error(f"❌ Error en callback de '{event_type}': {exc}")
+        if exc is not None:
+            log.error(
+                "❌ Error en callback de '%s'",
+                event_type,
+                exc_info=(type(exc), exc, exc.__traceback__),
+            )
 
     @staticmethod
     def respond(

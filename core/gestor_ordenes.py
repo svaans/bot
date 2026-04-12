@@ -29,6 +29,9 @@ Requisitos de los colaboradores (interfaces mínimas)
 
 Notas
 -----
+- En el arranque estándar del bot las órdenes van por :class:`core.orders.order_manager.OrderManager`
+  y el bus global; este ``GestorOrdenes`` es una capa reusable usada sobre todo en pruebas o
+  integraciones que inyectan bus/orders explícitamente (no está cableado en ``StartupManager``).
 - Si no pasas `reporter`/`auditor`, simplemente no se registra nada (no rompe).
 - Los cálculos de capital, Kelly y riesgo se dejan a otros módulos.
 """

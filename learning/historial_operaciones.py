@@ -15,6 +15,7 @@ tests sin duplicar lógica de descubrimiento de archivos.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, Sequence
@@ -62,10 +63,39 @@ class HistorialOperaciones:
     source: Path
 
 
+def normalizar_symbol_parquet_filename(symbol: str) -> str:
+    """Devuelve un nombre ``*.parquet`` seguro (sin componentes de ruta ni ``..``)."""
+
+    raw = str(symbol).strip().upper()
+    if not raw:
+        raise ValueError("símbolo vacío")
+    raw = raw.replace("\\", "_").replace("/", "_")
+    raw = re.sub(r"[^A-Z0-9._-]", "_", raw)
+    raw = re.sub(r"_+", "_", raw).strip("._")
+    if not raw or ".." in raw:
+        raise ValueError(f"símbolo inválido para archivo de historial: {symbol!r}")
+    return f"{raw}.parquet"
+
+
+def symbol_desde_parquet_stem(stem: str) -> str:
+    """Reconstruye un símbolo estilo mercado (``BASE/QUOTE``) desde el stem del parquet.
+
+    Los archivos se generan con :func:`normalizar_symbol_parquet_filename`, que usa un
+    único ``_`` entre base y quote. No sustituye todos los ``_`` por ``/`` (eso rompería
+    pares cuyo quote contenga guiones bajos legítimos en el nombre de archivo).
+    """
+
+    s = str(stem).strip().upper()
+    if not s or "_" not in s:
+        return s
+    base, quote = s.split("_", 1)
+    return f"{base}/{quote}"
+
+
 def _normalizar_nombre_archivo(symbol: str) -> str:
     """Convierte ``symbol`` en el nombre de archivo estándar."""
 
-    return symbol.replace("/", "_").upper() + ".parquet"
+    return normalizar_symbol_parquet_filename(symbol)
 
 
 def _build_fuentes(symbol: str) -> Sequence[Path]:
@@ -145,4 +175,6 @@ __all__ = [
     "CARPETA_ORDENES",
     "CARPETA_ULTIMAS",
     "cargar_historial_operaciones",
+    "normalizar_symbol_parquet_filename",
+    "symbol_desde_parquet_stem",
 ]
