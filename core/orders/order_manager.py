@@ -643,6 +643,58 @@ class OrderManager:
         )
         return True
 
+    def _requeue_full_close(
+        self,
+        symbol: str,
+        precio: float,
+        motivo: str,
+        *,
+        operation_id: str,
+    ) -> bool:
+        if not self.bus:
+            return False
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return False
+
+        payload = {"symbol": symbol, "precio": precio, "motivo": motivo}
+
+        async def _retry() -> None:
+            try:
+                if self._partial_close_retry_delay > 0:
+                    await asyncio.sleep(self._partial_close_retry_delay)
+                await self.bus.publish("cerrar_orden", dict(payload))
+            except Exception:
+                log.warning(
+                    "orders.full_close.retry_failed",
+                    extra=safe_extra(
+                        {
+                            "symbol": symbol,
+                            "operation_id": operation_id,
+                        }
+                    ),
+                    exc_info=True,
+                )
+
+        loop.create_task(
+            _retry(),
+            name=f"orders.retry_full_close.{symbol.replace('/', '')}",
+        )
+        log.info(
+            "orders.full_close.reenqueued",
+            extra=safe_extra(
+                {
+                    "symbol": symbol,
+                    "precio": precio,
+                    "motivo": motivo,
+                    "operation_id": operation_id,
+                    "delay": self._partial_close_retry_delay,
+                }
+            ),
+        )
+        return True
+
     async def _on_abrir(self, data: dict) -> None:
         try:
             status = await self.abrir_async(**data)
@@ -1490,7 +1542,11 @@ class OrderManager:
 
                 if self.modo_real:
                     venta_exitosa = False
-                    cantidad = orden.cantidad if is_valid_number(orden.cantidad) else 0.0
+                    abierta = getattr(orden, "cantidad_abierta", 0.0) or 0.0
+                    if is_valid_number(abierta) and abierta > 1e-08:
+                        cantidad = abierta
+                    else:
+                        cantidad = orden.cantidad if is_valid_number(orden.cantidad) else 0.0
 
                     if cantidad > 1e-08:
                         try:
@@ -1520,8 +1576,26 @@ class OrderManager:
                             elif execution.executed > 0 and restante <= 1e-08:
                                 venta_exitosa = True
                             elif execution.executed > 0 and restante > 0:
-                                log.error(f'❌ Venta parcial pendiente ejecutable para {symbol}: restante={restante}')
-                                real_orders.registrar_venta_fallida(symbol)
+                                log.warning(
+                                    "orders.full_close.partial_fill_executable_remainder",
+                                    extra=safe_extra(
+                                        {
+                                            "symbol": symbol,
+                                            "operation_id": operation_id,
+                                            "executed": execution.executed,
+                                            "restante": restante,
+                                        }
+                                    ),
+                                )
+                                orden.cantidad_abierta = restante
+                                requeued = self._requeue_full_close(
+                                    symbol,
+                                    precio,
+                                    motivo,
+                                    operation_id=operation_id,
+                                )
+                                if not requeued:
+                                    real_orders.registrar_venta_fallida(symbol)
                             else:
                                 log.error(f'❌ Venta no ejecutada para {symbol} (sin fills)')
                                 real_orders.registrar_venta_fallida(symbol)

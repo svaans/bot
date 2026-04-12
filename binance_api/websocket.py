@@ -524,6 +524,8 @@ async def _consume_ws_stream(
             await asyncio.sleep(backoff)
             backoff = min(backoff * 2, 30.0)
         else:
+            # try completó sin excepción (p. ej. salida limpia del ``async with``
+            # tras ``ConnectionClosedOK``): terminar el bucle externo de reconexión.
             break
 
 

@@ -5,7 +5,8 @@ Las órdenes se almacenan en una pequeña base SQLite para facilitar la
 persistencia entre reinicios del bot.
 
 ⚠️ **Estado global**: este módulo utiliza cachés y buffers globales como
-``_CACHE_ORDENES`` o ``_BUFFER_OPERACIONES``. Está pensado para una sola
+``_CACHE_ORDENES`` o ``_BUFFER_OPERACIONES``. El caché SQLite en memoria se
+serializa con ``_CACHE_ORDENES_LOCK`` entre hilos; sigue siendo una sola
 instancia del bot por proceso. Si se desean ejecutar múltiples bots o tests
 concurrentes en el mismo proceso, se recomienda encapsular este estado en una
 clase o crear instancias independientes.
@@ -22,6 +23,7 @@ Variables de entorno relevantes:
   reduce automáticamente para disminuir la carga de cada escritura.
 """
 import os
+import copy
 import json
 import sqlite3
 import time
@@ -64,6 +66,7 @@ ORDENES_DB_PATH = os.getenv(
 )
 RUTA_DB = ORDENES_DB_PATH
 _CACHE_ORDENES: dict[str, Order] | None = None
+_CACHE_ORDENES_LOCK = threading.RLock()
 _VENTAS_FALLIDAS: set[str] = set()
 _VENTAS_FALLIDAS_LOCK = threading.Lock()
 _BUFFER_OPERACIONES: list[dict] = []
@@ -437,29 +440,30 @@ def _init_db() ->None:
 def cargar_ordenes() ->dict[str, Order]:
     """Carga las órdenes almacenadas desde la base de datos SQLite."""
     global _CACHE_ORDENES
-    if _CACHE_ORDENES is not None:
+    with _CACHE_ORDENES_LOCK:
+        if _CACHE_ORDENES is not None:
+            return _CACHE_ORDENES
+        _init_db()
+        ordenes: dict[str, Order] = {}
+        try:
+            with _connect_db() as conn:
+                conn.row_factory = sqlite3.Row
+                filas = conn.execute(
+                    "SELECT * FROM ordenes WHERE fecha_cierre IS NULL OR fecha_cierre = ''"
+                ).fetchall()
+                for row in filas:
+                    data = dict(row)
+                    orden = Order.from_dict(data)
+                    ordenes[orden.symbol] = orden
+            log.info(
+                f'📥 {len(ordenes)} órdenes abiertas cargadas desde la base de datos.',
+                extra={'symbol': None, 'timeframe': None},
+            )
+        except sqlite3.Error as e:
+            log.error(f'❌ Error al cargar órdenes desde SQLite: {e}')
+            return {}
+        _CACHE_ORDENES = ordenes
         return _CACHE_ORDENES
-    _init_db()
-    ordenes: dict[str, Order] = {}
-    try:
-        with _connect_db() as conn:
-            conn.row_factory = sqlite3.Row
-            filas = conn.execute(
-                "SELECT * FROM ordenes WHERE fecha_cierre IS NULL OR fecha_cierre = ''"
-            ).fetchall()
-            for row in filas:
-                data = dict(row)
-                orden = Order.from_dict(data)
-                ordenes[orden.symbol] = orden
-        log.info(
-            f'📥 {len(ordenes)} órdenes abiertas cargadas desde la base de datos.',
-            extra={'symbol': None, 'timeframe': None},
-        )
-    except sqlite3.Error as e:
-        log.error(f'❌ Error al cargar órdenes desde SQLite: {e}')
-        return {}
-    _CACHE_ORDENES = ordenes
-    return _CACHE_ORDENES
 
 
 def guardar_ordenes(ordenes: dict[str, Order]) ->None:
@@ -469,53 +473,54 @@ def guardar_ordenes(ordenes: dict[str, Order]) ->None:
     def ordenar_dict(d):
         return json.dumps({k: o.to_dict() for k, o in d.items()}, sort_keys
             =True)
-    if _CACHE_ORDENES and ordenar_dict(_CACHE_ORDENES) == ordenar_dict(ordenes
-        ):
-        return
-    _init_db()
-    try:
-        with _connect_db() as conn:
-            with conn:
-                for orden in ordenes.values():
-                    data = _validar_datos_orden(orden)
-                    if isinstance(data.get('estrategias_activas'), dict):
-                        data['estrategias_activas'] = json.dumps(
-                            data['estrategias_activas']
+    with _CACHE_ORDENES_LOCK:
+        if _CACHE_ORDENES and ordenar_dict(_CACHE_ORDENES) == ordenar_dict(ordenes
+            ):
+            return
+        _init_db()
+        try:
+            with _connect_db() as conn:
+                with conn:
+                    for orden in ordenes.values():
+                        data = _validar_datos_orden(orden)
+                        if isinstance(data.get('estrategias_activas'), dict):
+                            data['estrategias_activas'] = json.dumps(
+                                data['estrategias_activas']
+                            )
+                        conn.execute(
+                            """
+                            INSERT OR REPLACE INTO ordenes (
+                                symbol, precio_entrada, cantidad, stop_loss, take_profit,
+                                timestamp, estrategias_activas, tendencia, max_price,
+                                direccion, precio_cierre, fecha_cierre, motivo_cierre,
+                                retorno_total
+                            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            """,
+                            (
+                                data.get('symbol'),
+                                data.get('precio_entrada'),
+                                data.get('cantidad'),
+                                data.get('stop_loss'),
+                                data.get('take_profit'),
+                                data.get('timestamp'),
+                                data.get('estrategias_activas'),
+                                data.get('tendencia'),
+                                data.get('max_price'),
+                                data.get('direccion'),
+                                data.get('precio_cierre'),
+                                data.get('fecha_cierre'),
+                                data.get('motivo_cierre'),
+                                data.get('retorno_total'),
+                            ),
                         )
-                    conn.execute(
-                        """
-                        INSERT OR REPLACE INTO ordenes (
-                            symbol, precio_entrada, cantidad, stop_loss, take_profit,
-                            timestamp, estrategias_activas, tendencia, max_price,
-                            direccion, precio_cierre, fecha_cierre, motivo_cierre,
-                            retorno_total
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                        """,
-                        (
-                            data.get('symbol'),
-                            data.get('precio_entrada'),
-                            data.get('cantidad'),
-                            data.get('stop_loss'),
-                            data.get('take_profit'),
-                            data.get('timestamp'),
-                            data.get('estrategias_activas'),
-                            data.get('tendencia'),
-                            data.get('max_price'),
-                            data.get('direccion'),
-                            data.get('precio_cierre'),
-                            data.get('fecha_cierre'),
-                            data.get('motivo_cierre'),
-                            data.get('retorno_total'),
-                        ),
-                    )
-        _CACHE_ORDENES = ordenes
-        log.info(
-            f'💾 {len(ordenes)} órdenes guardadas correctamente en la base de datos.',
-            extra={'symbol': None, 'timeframe': None},
-        )
-    except (sqlite3.Error, ValueError) as e:
-        log.error(f'❌ Error al guardar órdenes en SQLite: {e}')
-        raise
+            _CACHE_ORDENES = ordenes
+            log.info(
+                f'💾 {len(ordenes)} órdenes guardadas correctamente en la base de datos.',
+                extra={'symbol': None, 'timeframe': None},
+            )
+        except (sqlite3.Error, ValueError) as e:
+            log.error(f'❌ Error al guardar órdenes en SQLite: {e}')
+            raise
 
 
 def obtener_orden(symbol: str) ->(Order | None):
@@ -531,7 +536,9 @@ def obtener_todas_las_ordenes():
 
 
 def reconciliar_ordenes(simbolos: list[str] | None = None) -> dict[str, Order]:
-    local = cargar_ordenes()
+    # Copia profunda: la reconciliación muta órdenes y hace I/O larga; no debe
+    # tocar las instancias en caché ni bloquear el lock durante fetch a Binance.
+    local = copy.deepcopy(cargar_ordenes())
     try:
         cliente = obtener_cliente()
         ordenes_api: list[dict] = []
@@ -926,71 +933,73 @@ def reconciliar_trades_binance(
 
 
 def actualizar_orden(symbol: str, data: (Order | dict)) ->None:
-    ordenes = cargar_ordenes()
-    if ordenes.get(symbol) == data:
-        return
-    try:
-        d = _validar_datos_orden(data)
-        if isinstance(d.get('estrategias_activas'), dict):
-            d['estrategias_activas'] = json.dumps(d['estrategias_activas'])
-        _init_db()
-        with _connect_db() as conn:
-            with conn:
-                conn.execute(
-                    """
-                    INSERT OR REPLACE INTO ordenes (
-                        symbol, precio_entrada, cantidad, stop_loss, take_profit,
-                        timestamp, estrategias_activas, tendencia, max_price,
-                        direccion, precio_cierre, fecha_cierre, motivo_cierre,
-                        retorno_total
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    (
-                        d.get('symbol'),
-                        d.get('precio_entrada'),
-                        d.get('cantidad'),
-                        d.get('stop_loss'),
-                        d.get('take_profit'),
-                        d.get('timestamp'),
-                        d.get('estrategias_activas'),
-                        d.get('tendencia'),
-                        d.get('max_price'),
-                        d.get('direccion'),
-                        d.get('precio_cierre'),
-                        d.get('fecha_cierre'),
-                        d.get('motivo_cierre'),
-                        d.get('retorno_total'),
-                    ),
-                )
-        ordenes[symbol] = data if isinstance(data, Order) else Order.from_dict(d)
-        _CACHE_ORDENES = ordenes
-        log.info(f'📌 Order actualizada para {symbol}.', extra={'symbol': symbol, 'timeframe': None})
-    except Exception as e:
-        log.error(f'❌ Error al actualizar orden para {symbol}: {e}')
-        raise
+    with _CACHE_ORDENES_LOCK:
+        ordenes = cargar_ordenes()
+        if ordenes.get(symbol) == data:
+            return
+        try:
+            d = _validar_datos_orden(data)
+            if isinstance(d.get('estrategias_activas'), dict):
+                d['estrategias_activas'] = json.dumps(d['estrategias_activas'])
+            _init_db()
+            with _connect_db() as conn:
+                with conn:
+                    conn.execute(
+                        """
+                        INSERT OR REPLACE INTO ordenes (
+                            symbol, precio_entrada, cantidad, stop_loss, take_profit,
+                            timestamp, estrategias_activas, tendencia, max_price,
+                            direccion, precio_cierre, fecha_cierre, motivo_cierre,
+                            retorno_total
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            d.get('symbol'),
+                            d.get('precio_entrada'),
+                            d.get('cantidad'),
+                            d.get('stop_loss'),
+                            d.get('take_profit'),
+                            d.get('timestamp'),
+                            d.get('estrategias_activas'),
+                            d.get('tendencia'),
+                            d.get('max_price'),
+                            d.get('direccion'),
+                            d.get('precio_cierre'),
+                            d.get('fecha_cierre'),
+                            d.get('motivo_cierre'),
+                            d.get('retorno_total'),
+                        ),
+                    )
+            ordenes[symbol] = data if isinstance(data, Order) else Order.from_dict(d)
+            _CACHE_ORDENES = ordenes
+            log.info(f'📌 Order actualizada para {symbol}.', extra={'symbol': symbol, 'timeframe': None})
+        except Exception as e:
+            log.error(f'❌ Error al actualizar orden para {symbol}: {e}')
+            raise
 
 
 def eliminar_orden(symbol: str, forzar_log: bool=False) ->None:
     """Elimina una orden activa del sistema si existe."""
-    ordenes = cargar_ordenes()
-    if symbol not in ordenes:
-        if forzar_log:
-            log.warning(f'⚠️ Intento de eliminar orden inexistente: {symbol}')
-        else:
-            log.debug(
-                f'Intento de eliminar orden inexistente ignorado: {symbol}',
-                extra={'symbol': symbol, 'timeframe': None},
-            )
-        return
-    try:
-        with _connect_db() as conn:
-            conn.execute('DELETE FROM ordenes WHERE symbol = ?', (symbol,))
-        del ordenes[symbol]
-        _CACHE_ORDENES = ordenes
-        log.info(f'🗑️ Order eliminada correctamente para {symbol}.', extra={'symbol': symbol, 'timeframe': None})
-    except sqlite3.Error as e:
-        log.error(f'❌ Error eliminando orden de la base de datos: {e}')
-        raise
+    with _CACHE_ORDENES_LOCK:
+        ordenes = cargar_ordenes()
+        if symbol not in ordenes:
+            if forzar_log:
+                log.warning(f'⚠️ Intento de eliminar orden inexistente: {symbol}')
+            else:
+                log.debug(
+                    f'Intento de eliminar orden inexistente ignorado: {symbol}',
+                    extra={'symbol': symbol, 'timeframe': None},
+                )
+            return
+        try:
+            with _connect_db() as conn:
+                conn.execute('DELETE FROM ordenes WHERE symbol = ?', (symbol,))
+            del ordenes[symbol]
+            _CACHE_ORDENES = ordenes
+            log.info(f'🗑️ Order eliminada correctamente para {symbol}.', extra={'symbol': symbol, 'timeframe': None})
+        except sqlite3.Error as e:
+            log.error(f'❌ Error eliminando orden de la base de datos: {e}')
+            raise
 
 
 def registrar_orden(symbol: str, precio: float, cantidad: float, sl: float,
