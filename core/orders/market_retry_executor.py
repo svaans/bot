@@ -62,34 +62,18 @@ class MarketRetryExecutor:
         entrada: dict[str, Any],
     ) -> ExecutionResult:
         intentos = 0
+        next_order_attempt = 1
         while True:
             intentos += 1
             try:
                 resp = await asyncio.to_thread(
-                    real_orders._market_sell_retry, symbol, cantidad, operation_id
-                )
-                salida = {
-                    "ejecutado": float(resp.get("ejecutado", 0.0)),
-                    "fee": float(resp.get("fee", 0.0)),
-                    "pnl": float(resp.get("pnl", 0.0)),
-                }
-                log_decision(
-                    self.log,
-                    "_market_sell",
-                    operation_id,
-                    entrada,
-                    {},
-                    "execute",
-                    salida,
-                )
-                status = str(resp.get("status") or "FILLED").upper()
-                remaining = float(resp.get("restante", 0.0))
-                return ExecutionResult(
-                    executed=salida["ejecutado"],
-                    fee=salida["fee"],
-                    pnl=salida["pnl"],
-                    status=status,
-                    remaining=remaining,
+                    functools.partial(
+                        real_orders._market_sell_retry,
+                        symbol,
+                        cantidad,
+                        operation_id,
+                        next_order_attempt,
+                    )
                 )
             except Exception as exc:  # pragma: no cover - defensivo
                 self.log.error(
@@ -110,6 +94,53 @@ class MarketRetryExecutor:
                         remaining=cantidad,
                     )
                 await asyncio.sleep(self._market_retry_sleep(intentos))
+                continue
+
+            if str(resp.get("status") or "").upper() == "ERROR":
+                last_att = int(resp.get("last_order_attempt") or next_order_attempt)
+                next_order_attempt = last_att + 1
+                self.log.error(
+                    "❌ Venta %s devolvió ERROR del exchange (intento %s/%s)",
+                    symbol,
+                    intentos,
+                    self._max_attempts,
+                    extra={"event": "market_sell_exchange_error", "symbol": symbol},
+                )
+                if intentos >= self._max_attempts:
+                    await self._manejar_exhausted("sell", symbol, operation_id)
+                    return ExecutionResult(
+                        executed=float(resp.get("ejecutado", 0.0)),
+                        fee=float(resp.get("fee", 0.0)),
+                        pnl=float(resp.get("pnl", 0.0)),
+                        status="FAILED",
+                        remaining=float(resp.get("restante", cantidad)),
+                    )
+                await asyncio.sleep(self._market_retry_sleep(intentos))
+                continue
+
+            salida = {
+                "ejecutado": float(resp.get("ejecutado", 0.0)),
+                "fee": float(resp.get("fee", 0.0)),
+                "pnl": float(resp.get("pnl", 0.0)),
+            }
+            log_decision(
+                self.log,
+                "_market_sell",
+                operation_id,
+                entrada,
+                {},
+                "execute",
+                salida,
+            )
+            status = str(resp.get("status") or "FILLED").upper()
+            remaining = float(resp.get("restante", 0.0))
+            return ExecutionResult(
+                executed=salida["ejecutado"],
+                fee=salida["fee"],
+                pnl=salida["pnl"],
+                status=status,
+                remaining=remaining,
+            )
 
     async def _ejecutar_market_buy(
         self,

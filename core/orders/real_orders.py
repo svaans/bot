@@ -1524,17 +1524,40 @@ def ejecutar_orden_market_sell(
 
 
 
-def _market_sell_retry(symbol: str, cantidad: float, operation_id: str | None = None) -> dict:
-    """Envía ventas de mercado reintentando en caso de fills parciales."""
+def _market_sell_retry(
+    symbol: str,
+    cantidad: float,
+    operation_id: str | None = None,
+    order_attempt_start: int = 1,
+) -> dict:
+    """Envía ventas de mercado reintentando en caso de fills parciales.
+
+    ``order_attempt_start`` alinea ``newClientOrderId`` con reintentos externos
+    (p. ej. :class:`MarketRetryExecutor`): cada llamada a Binance debe usar un
+    id de cliente distinto aunque este bucle se reinicie tras un error.
+    """
     restante = cantidad
     total = total_fee = total_pnl = 0.0
     min_qty = 0.0
     attempt = 0
+    last_order_attempt = max(0, int(order_attempt_start) - 1)
     while restante > 0:
         attempt += 1
+        oid_att = int(order_attempt_start) + attempt - 1
+        last_order_attempt = oid_att
         resp = ejecutar_orden_market_sell(
-            symbol, restante, operation_id, order_attempt=attempt
+            symbol, restante, operation_id, order_attempt=oid_att
         )
+        if str(resp.get("status") or "").upper() == "ERROR":
+            return {
+                "ejecutado": total,
+                "restante": restante,
+                "status": "ERROR",
+                "min_qty": float(resp.get("min_qty", 0.0)),
+                "fee": total_fee,
+                "pnl": total_pnl,
+                "last_order_attempt": last_order_attempt,
+            }
         ejecutado = float(resp.get('ejecutado', 0.0))
         restante = float(resp.get('restante', 0.0))
         min_qty = float(resp.get('min_qty', 0.0))
@@ -1553,6 +1576,7 @@ def _market_sell_retry(symbol: str, cantidad: float, operation_id: str | None = 
         'min_qty': min_qty,
         'fee': total_fee,
         'pnl': total_pnl,
+        'last_order_attempt': last_order_attempt,
     }
 
 
