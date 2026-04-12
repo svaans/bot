@@ -951,7 +951,22 @@ def start_hot_reload(
             else:
                 HOT_RELOAD_ERRORS_TOTAL.labels(stage="backend_start").inc()
                 raise
-
+        except TypeError as exc:
+            # watchdog<4 + Python 3.13: el handle de directorio Win32 usaba el
+            # atributo ``_handle`` y pisa ``threading.Thread._handle`` (3.13+).
+            if "_ThreadHandle" not in str(exc):
+                raise
+            if verbose:
+                _log_hot_reload_event(
+                    logging.getLogger("hot_reload"),
+                    "hot_reload_backend_switch",
+                    mode="polling",
+                    restart_reason="watchdog_py313_thread_handle",
+                    path=str(root),
+                    debounce=round(debounce_seconds, 3),
+                )
+            observer_cls = PollingObserver
+            observer = _start(observer_cls)
 
     mode = "polling" if observer_cls is PollingObserver else "native"
     HOT_RELOAD_BACKEND.labels(mode=mode).inc()
