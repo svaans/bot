@@ -85,6 +85,7 @@ class RiskManager:
         self.kill_switch_max_perdidas_consecutivas = max(0, int(kill_switch_max_perdidas_consecutivas))
         self._perdidas_consecutivas = 0
         self._kill_switch_disparado = False
+        self._risk_subscribed_bus_ids: set[int] = set()
         if bus:
             self.subscribe(bus)
         RIESGO_CONSUMIDO_GAUGE.set(0.0)
@@ -120,12 +121,28 @@ class RiskManager:
                 )
 
     def subscribe(self, bus: EventBus) -> None:
+        bus_id = id(bus)
+        if bus_id in self._risk_subscribed_bus_ids:
+            return
+        self._risk_subscribed_bus_ids.add(bus_id)
         bus.subscribe('registrar_perdida', self._on_registrar_perdida)
         bus.subscribe('orders.pnl_update', self._on_pnl_update)
         bus.subscribe('risk.win_streak_reset', self._on_win_streak_reset)
 
     async def _on_registrar_perdida(self, data: Any) -> None:
-        self.registrar_perdida(data.get('symbol'), data.get('perdida', 0.0))
+        if not isinstance(data, Mapping):
+            return
+        raw_pm = data.get('perdida_moneda')
+        perdida_moneda: float | None = None
+        if raw_pm is not None:
+            pm = self._coerce_float(raw_pm)
+            if pm > 0:
+                perdida_moneda = pm
+        self.registrar_perdida(
+            data.get('symbol'),
+            self._coerce_float(data.get('perdida', 0.0)),
+            perdida_moneda=perdida_moneda,
+        )
         await self._maybe_activate_kill_switch()
 
     async def _on_win_streak_reset(self, data: Any) -> None:
@@ -204,45 +221,77 @@ class RiskManager:
 
         return float(self._ultimo_ratio_capital)
 
-    def registrar_perdida(self, symbol: str, perdida: float) ->None:
-        """Registra una pérdida para ``symbol``."""
-        if perdida < 0:
-            hoy = datetime.now(UTC).date()
-            if hoy != self._fecha_riesgo:
-                self._fecha_riesgo = hoy
-                self.riesgo_diario = 0.0
-                RIESGO_CONSUMIDO_GAUGE.set(self.riesgo_diario)
-                self._reset_alerta_capital()
-            perdida_abs = abs(perdida)
-            self.riesgo_diario += perdida_abs
+    def registrar_perdida(
+        self,
+        symbol: str | None,
+        perdida: float,
+        *,
+        perdida_moneda: float | None = None,
+    ) -> None:
+        """Registra una pérdida para ``symbol``.
+
+        Si ``perdida_moneda`` > 0 (misma unidad que el capital asignado), se
+        acumula para drawdown diario y persistencia. Si no, se usa ``|perdida|``
+        cuando ``perdida < 0`` (compat: fracción o moneda según el caller).
+        """
+        if not symbol:
+            return
+        increment = 0.0
+        if perdida_moneda is not None and perdida_moneda > 0:
+            increment = float(perdida_moneda)
+        elif perdida < 0:
+            increment = abs(float(perdida))
+        if increment <= 0:
+            return
+
+        hoy = datetime.now(UTC).date()
+        if hoy != self._fecha_riesgo:
+            self._fecha_riesgo = hoy
+            self.riesgo_diario = 0.0
             RIESGO_CONSUMIDO_GAUGE.set(self.riesgo_diario)
-            registro_metrico.registrar(
-                "risk_drawdown",
-                {
+            self._reset_alerta_capital()
+        perdida_abs = increment
+        self.riesgo_diario += perdida_abs
+        RIESGO_CONSUMIDO_GAUGE.set(self.riesgo_diario)
+        registro_metrico.registrar(
+            "risk_drawdown",
+            {
+                "symbol": symbol,
+                "loss": float(perdida_abs),
+                "riesgo_diario": float(self.riesgo_diario),
+            },
+        )
+        actualizar_perdida(symbol, -increment)
+        capital_symbol = 0.0
+        sym_key = str(symbol).upper()
+        if self.capital_manager:
+            cm = getattr(self.capital_manager, "capital_por_simbolo", {}) or {}
+            capital_symbol = float(cm.get(sym_key, cm.get(symbol, 0.0)))
+        cooldown_trigger = False
+        if capital_symbol > 0:
+            if perdida_moneda is not None and perdida_moneda > 0:
+                cooldown_trigger = (perdida_moneda / capital_symbol) > self.cooldown_pct
+            else:
+                ap = abs(float(perdida))
+                if ap >= 1.0:
+                    cooldown_trigger = (ap / capital_symbol) > self.cooldown_pct
+                else:
+                    cooldown_trigger = ap > self.cooldown_pct
+        if cooldown_trigger:
+            estaba_activo = self.cooldown_activo
+            self._cooldown_fin = datetime.now(UTC) + timedelta(seconds=self.cooldown_duracion)
+            COOLDOWN_ACTIVO_GAUGE.set(1.0)
+            if self.bus and not estaba_activo:
+                payload = {
                     "symbol": symbol,
-                    "loss": float(perdida_abs),
-                    "riesgo_diario": float(self.riesgo_diario),
-                },
-            )
-            actualizar_perdida(symbol, perdida)
-            capital_symbol = 0.0
-            if self.capital_manager:
-                capital_symbol = self.capital_manager.capital_por_simbolo.get(symbol, 0.0)
-            if capital_symbol > 0 and perdida_abs / capital_symbol > self.cooldown_pct:
-                estaba_activo = self.cooldown_activo
-                self._cooldown_fin = datetime.now(UTC) + timedelta(seconds=self.cooldown_duracion)
-                COOLDOWN_ACTIVO_GAUGE.set(1.0)
-                if self.bus and not estaba_activo:
-                    payload = {
-                        "symbol": symbol,
-                        "perdida": float(perdida_abs),
-                        "cooldown_fin": self._cooldown_fin.isoformat(),
-                    }
-                    self.bus.emit("risk.cooldown_activated", payload)
-            elif self._cooldown_fin is None:
-                COOLDOWN_ACTIVO_GAUGE.set(0.0)
-            self._perdidas_consecutivas += 1
-            self._evaluar_alerta_capital(self._exposure_disponible_global())
+                    "perdida": float(perdida_abs),
+                    "cooldown_fin": self._cooldown_fin.isoformat(),
+                }
+                self.bus.emit("risk.cooldown_activated", payload)
+        elif self._cooldown_fin is None:
+            COOLDOWN_ACTIVO_GAUGE.set(0.0)
+        self._perdidas_consecutivas += 1
+        self._evaluar_alerta_capital(self._exposure_disponible_global())
 
     def _exposure_disponible_global(self) -> float:
         if not self.capital_manager:

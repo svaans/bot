@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import os
 import threading
 import time
 from collections import OrderedDict, deque
@@ -372,6 +373,57 @@ class Trader(TraderLite):
             }
         else:
             self.pesos_por_simbolo = {symbol: {} for symbol in config.symbols}
+
+        self.capital_manager = None
+        self.risk = None
+        self._wire_risk_stack()
+
+    def _wire_risk_stack(self) -> None:
+        """Compone CapitalManager + RiskManager con el bus y OrderManager del trader."""
+        if not is_flag_enabled("trader.risk_stack.enabled", default=True):
+            return
+        if os.environ.get("BOT_RISK_STACK_DISABLED", "").strip().lower() in {"1", "true", "yes"}:
+            return
+        bus = getattr(self, "bus", None)
+        orders = getattr(self, "orders", None)
+        if bus is None or orders is None:
+            return
+        cfg = getattr(self, "config", None)
+        capital_manager = getattr(self, "capital_manager", None)
+        if capital_manager is None and cfg is not None:
+            try:
+                from core.capital_manager import CapitalManager
+
+                capital_manager = CapitalManager(cfg)
+                self.capital_manager = capital_manager
+                orders.capital_manager = capital_manager
+            except Exception:
+                log.debug(
+                    "trader.risk_stack.capital_manager_skipped",
+                    exc_info=True,
+                )
+        umbral = 0.03
+        try:
+            from config import config as app_cfg
+
+            raw = getattr(cfg, "umbral_riesgo_diario", None)
+            if raw is None:
+                raw = getattr(app_cfg, "UMBRAL_RIESGO_DIARIO", umbral)
+            umbral = float(raw or umbral)
+        except Exception:
+            pass
+        try:
+            from core.risk.risk_manager import RiskManager
+
+            self.risk = RiskManager(
+                umbral,
+                bus=bus,
+                capital_manager=capital_manager,
+                order_manager=orders,
+            )
+            orders.risk_manager = self.risk
+        except Exception:
+            log.exception("trader.risk_stack.risk_manager_failed")
 
     async def stop(self) -> None:  # type: ignore[override]
         try:

@@ -266,6 +266,17 @@ class OrderManager:
             self.start_sync()
         self._ensure_background_tasks()
 
+    async def _publish_registrar_perdida(self, symbol: str, retorno: float, orden: Order) -> None:
+        """Publica pérdida al bus; incluye importe en moneda cuando ``pnl_realizado`` es fiable."""
+        if not self.bus or retorno >= 0:
+            return
+        payload: dict[str, Any] = {"symbol": symbol, "perdida": retorno}
+        pnl_tot = float(getattr(orden, "pnl_realizado", 0.0) or 0.0)
+        loss_quote = abs(min(0.0, pnl_tot))
+        if loss_quote > 0:
+            payload["perdida_moneda"] = loss_quote
+        await self.bus.publish("registrar_perdida", payload)
+
     def _apply_realized_pnl_delta(
         self,
         symbol: str,
@@ -1662,7 +1673,7 @@ class OrderManager:
 
                 if self.bus:
                     if retorno < 0:
-                        await self.bus.publish('registrar_perdida', {'symbol': symbol, 'perdida': retorno})
+                        await self._publish_registrar_perdida(symbol, retorno, orden)
                     else:
                         await self.bus.publish('risk.win_streak_reset', {})
 
@@ -1839,7 +1850,7 @@ class OrderManager:
                         self.historial[symbol] = self.historial[symbol][-self.max_historial:]
                     if self.bus:
                         if retorno < 0:
-                            await self.bus.publish('registrar_perdida', {'symbol': symbol, 'perdida': retorno})
+                            await self._publish_registrar_perdida(symbol, retorno, orden)
                         else:
                             await self.bus.publish('risk.win_streak_reset', {})
                     log.info(f'📤 Orden cerrada para {symbol} @ {precio:.2f} | {motivo}')

@@ -54,6 +54,24 @@ from core.state import restore_critical_state
 
 # --- Utilidades internas ---
 
+
+async def _startup_run_with_timeout(startup: StartupManager) -> Tuple[Any, Any, Any]:
+    st = float(getattr(startup, "startup_timeout", 90.0) or 90.0)
+    return await asyncio.wait_for(startup.run(), timeout=st + 5.0)
+
+
+def _try_start_alert_dispatcher(trader: Any) -> Any:
+    try:
+        from observability.alerts import AlertDispatcher
+
+        bus = getattr(trader, "event_bus", None) or getattr(trader, "bus", None)
+        if bus is None:
+            return None
+        return AlertDispatcher(bus=bus)
+    except Exception as exc:
+        print(f"⚠️ AlertDispatcher no disponible: {exc}")
+        return None
+
 async def _maybe_await(maybe_coro):
     """Await si es coroutine/awaitable; si no, devuelve tal cual."""
     if inspect.isawaitable(maybe_coro):
@@ -137,23 +155,15 @@ async def main():
     tarea_bot: Optional[asyncio.Task] = None
     config = None
     mode_service: OperationalModeService | None = None
+    alert_dispatcher: Any = None
 
     # 1) Arranque del bot
     try:
         restore_critical_state()
         startup = StartupManager()
-        # El timeout global de arranque debe contemplar los plazos internos del
-        # StartupManager (warmup, espera de feeds, etc.). Utilizamos la
-        # configuración calculada por la propia instancia y añadimos un margen
-        # defensivo para evitar ocultar errores reales tras un TimeoutError.
-        startup_timeout = getattr(startup, "startup_timeout", 90.0) or 90.0
-        timeout_margin = 5.0
-        # [No verificado] Se asume que run() devuelve (bot, tarea_bot, config).
+        # Timeout alineado con ``startup.startup_timeout`` + margen (mismo criterio que reinicios).
         with phase("StartupManager.run"):
-            triple: Tuple[Any, Any, Any] = await asyncio.wait_for(
-                startup.run(),
-                timeout=startup_timeout + timeout_margin,
-            )
+            triple: Tuple[Any, Any, Any] = await _startup_run_with_timeout(startup)
         if not isinstance(triple, tuple) or len(triple) != 3:
             raise RuntimeError("StartupManager.run() no devolvió (bot, tarea_bot, config)")
         bot, tarea_bot, config = triple
@@ -250,6 +260,9 @@ async def main():
         except Exception:
             traceback.print_exc()
 
+    if bot is not None:
+        alert_dispatcher = _try_start_alert_dispatcher(bot)
+
     # 4) Señales/parada
     stop_event = asyncio.Event()
     tarea_stop = asyncio.create_task(stop_event.wait())
@@ -330,8 +343,14 @@ async def main():
                         if mode_service is not None:
                             await mode_service.stop()
                             mode_service = None
+                        if alert_dispatcher is not None:
+                            try:
+                                await alert_dispatcher.aclose()
+                            except Exception:
+                                pass
+                            alert_dispatcher = None
                         startup = StartupManager()
-                        triple = await startup.run()
+                        triple = await _startup_run_with_timeout(startup)
                         if not isinstance(triple, tuple) or len(triple) != 3:
                             raise RuntimeError("StartupManager.run() no devolvió (bot, tarea_bot, config)")
                         bot, tarea_bot, config = triple
@@ -351,6 +370,8 @@ async def main():
                                 mode_service.start()
                         except Exception as exc:
                             print(f"⚠️ No se pudo reiniciar el servicio de modos operativos: {exc}")
+                        if bot is not None:
+                            alert_dispatcher = _try_start_alert_dispatcher(bot)
                     except Exception as e:
                         print(f"❌ Error reiniciando bot: {e}")
                         traceback.print_exc()
@@ -406,6 +427,13 @@ async def main():
                 await mode_service.stop()
             except Exception as exc:
                 print(f"⚠️ Error deteniendo servicio de modos: {exc}")
+
+        if alert_dispatcher is not None:
+            try:
+                await alert_dispatcher.aclose()
+            except Exception:
+                pass
+            alert_dispatcher = None
 
         # 5) Cierre del bot con timeout
         await _safe_acall(bot, 'cerrar', timeout=15)
