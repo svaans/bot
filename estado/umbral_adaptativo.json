@@ -5,7 +5,8 @@
     "ADA/EUR": 1.0
   },
   "histeresis_skips": {
-    "BNB/EUR": 7,
-    "SOL/EUR": 2
+    "BNB/EUR": 9,
+    "SOL/EUR": 6,
+    "ADA/EUR": 1
   }
 }

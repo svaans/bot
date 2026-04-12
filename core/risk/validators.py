@@ -142,9 +142,15 @@ def validate_levels(
     contexto = {**contexto_base, "sl_adj": sl_adj, "tp_adj": tp_adj, "exchange_min": exchange_min}
 
     if side_norm == "long":
+        if not (sl_adj < entry < tp_adj) and (tp_adj < entry < sl_adj):
+            sl_adj, tp_adj = tp_adj, sl_adj
+            contexto["sl_adj"], contexto["tp_adj"] = sl_adj, tp_adj
         if not (sl_adj < entry < tp_adj):
             _raise_validation_error("direction_mismatch", contexto)
     else:
+        if not (tp_adj < entry < sl_adj) and (sl_adj < entry < tp_adj):
+            sl_adj, tp_adj = tp_adj, sl_adj
+            contexto["sl_adj"], contexto["tp_adj"] = sl_adj, tp_adj
         if not (tp_adj < entry < sl_adj):
             _raise_validation_error("direction_mismatch", contexto)
 

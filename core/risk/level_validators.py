@@ -55,7 +55,8 @@ def validate_levels(
     1. Normalizar ``sl`` y ``tp`` a ``tick_size`` (o ``step_size`` si el
        ``tick_size`` es cero).
     2. Verificar que la jerarquía de precios sea coherente con la dirección
-       (`long`: ``sl < entry < tp``; `short`: ``tp < entry < sl``).
+       (`long`: ``sl < entry < tp``; `short`: ``tp < entry < sl``). Si los
+       niveles vienen con la geometría del lado opuesto, se intercambian SL/TP.
     3. Comprobar distancias mínimas con respecto a ``entry``.
 
     Parameters
@@ -116,10 +117,17 @@ def validate_levels(
     exchange_min = price_increment if price_increment > 0 else 0.0
     contexto = {**contexto_base, "sl_adj": sl_adj, "tp_adj": tp_adj, "exchange_min": exchange_min}
 
+    # Algunas estrategias devuelven SL/TP con la jerarquía del lado opuesto al `side`.
     if side_norm == "long":
+        if not (sl_adj < entry < tp_adj) and (tp_adj < entry < sl_adj):
+            sl_adj, tp_adj = tp_adj, sl_adj
+            contexto["sl_adj"], contexto["tp_adj"] = sl_adj, tp_adj
         if not (sl_adj < entry < tp_adj):
             raise LevelValidationError("direction_mismatch", contexto)
     else:
+        if not (tp_adj < entry < sl_adj) and (sl_adj < entry < tp_adj):
+            sl_adj, tp_adj = tp_adj, sl_adj
+            contexto["sl_adj"], contexto["tp_adj"] = sl_adj, tp_adj
         if not (tp_adj < entry < sl_adj):
             raise LevelValidationError("direction_mismatch", contexto)
 
