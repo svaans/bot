@@ -1457,6 +1457,16 @@ async def procesar_vela(trader: Any, vela: dict) -> None:
         safe_inc(HANDLER_EXCEPTIONS)
         log.exception("Excepción en procesar_vela: %s", e)
     finally:
+        try:
+            total_secs = max(0.0, time.perf_counter() - t0)
+            accounted = (
+                float(stage_durations.get("parse", 0.0) or 0.0)
+                + float(stage_durations.get("gating", 0.0) or 0.0)
+                + float(stage_durations.get("strategy", 0.0) or 0.0)
+            )
+            stage_durations["remainder"] = max(0.0, total_secs - accounted)
+        except Exception:
+            pass
         if isinstance(vela, dict):
             try:
                 vela["_df_stage_durations"] = {
@@ -1481,7 +1491,7 @@ async def procesar_vela(trader: Any, vela: dict) -> None:
                 "strategy": STRATEGY_LATENCY,
             }
             emit_fn = getattr(bus, "emit", None)
-            for stage in ("parse", "gating", "strategy"):
+            for stage in ("parse", "gating", "strategy", "remainder"):
                 duration = stage_durations.get(stage)
                 if duration is None:
                     continue
