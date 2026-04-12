@@ -1,0 +1,17 @@
+{
+  "symbols": [
+    "BTC/EUR",
+    "ETH/EUR",
+    "ADA/EUR",
+    "SOL/EUR",
+    "BNB/EUR"
+  ],
+  "modo_real": false,
+  "modo_operativo": "paper_trading",
+  "timestamp": 1776004654.6539333,
+  "persistencia_tecnica": {
+    "minimo": 1,
+    "peso_extra": 0.5,
+    "conteo": {}
+  }
+}

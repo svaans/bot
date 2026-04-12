@@ -63,7 +63,7 @@ Django>=4.2                   # Framework web utilizado en el backend
 
 # ───────── CRIPTOGRAFÍA Y SEGURIDAD ─────────
 cryptography==44.0.3          # Seguridad, cifrado y certificados
-cffi==1.17.1                  # Interfaz con código C (usado por cryptography)
+cffi==2.0.0                  # Interfaz con código C (usado por cryptography)
 pycparser==2.22               # Parser de C para CFFI
 pytest==8.2.2
 pytest-asyncio==0.23.6
