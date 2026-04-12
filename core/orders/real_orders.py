@@ -539,6 +539,9 @@ def reconciliar_ordenes(simbolos: list[str] | None = None) -> dict[str, Order]:
     # Copia profunda: la reconciliación muta órdenes y hace I/O larga; no debe
     # tocar las instancias en caché ni bloquear el lock durante fetch a Binance.
     local = copy.deepcopy(cargar_ordenes())
+    cfg = getattr(app_config, "cfg", None)
+    if simbolos is None:
+        simbolos = list(getattr(cfg, "symbols", None) or ())
     try:
         cliente = obtener_cliente()
         ordenes_api: list[dict] = []
@@ -648,6 +651,8 @@ def sincronizar_ordenes_binance(
         modo_real = getattr(config, "modo_real", True)
     if not modo_real:
         return cargar_ordenes()
+    if simbolos is None and config is not None:
+        simbolos = list(getattr(config, "symbols", None) or ())
     try:
         cliente = obtener_cliente(config)
         ordenes_api = []

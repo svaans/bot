@@ -151,6 +151,9 @@ def obtener_ccxt(config: Any | None = None) -> Any:
                     # por delante: fetch_markets() llama a load_time_difference() y el
                     # nonce usa milliseconds() - timeDifference (ver ccxt binance).
                     "adjustForTimeDifference": True,
+                    # CCXT lanza ExchangeError si fetch_open_orders() va sin símbolo
+                    # y esto sigue en True (límites de ratio más estrictos en Binance).
+                    "warnOnFetchOpenOrdersWithoutSymbol": False,
                 },
             }
         )
