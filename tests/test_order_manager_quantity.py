@@ -48,6 +48,36 @@ async def test_crear_fallback_capital_manager() -> None:
 
 
 @pytest.mark.asyncio
+async def test_crear_resolves_quantity_via_capital_manager_builtin(tmp_path: Path) -> None:
+    """Sin cantidad en meta, OrderManager debe usar CapitalManager (no el bus vacío)."""
+    config = SimpleNamespace(
+        symbols=["BTC/USDT"],
+        risk_capital_total=0.0,
+        risk_capital_default_per_symbol=0.0,
+        risk_capital_per_symbol={"BTC/USDT": 500.0},
+        min_order_eur=10.0,
+        risk_kelly_base=0.1,
+    )
+    repo = CapitalRepository(path=tmp_path / "capital.json")
+    capital = CapitalManager(config, capital_repository=repo)
+    manager = OrderManager(modo_real=False, bus=None)
+    manager.capital_manager = capital
+
+    status = await manager.crear(
+        symbol="BTC/USDT",
+        side="buy",
+        precio=20_000.0,
+        sl=19_000.0,
+        tp=21_000.0,
+        meta={},
+    )
+    assert status is OrderOpenStatus.OPENED
+    orden = manager.obtener("BTC/USDT")
+    assert orden is not None
+    assert orden.cantidad_abierta == pytest.approx(500.0 / 20_000.0)
+
+
+@pytest.mark.asyncio
 async def test_crear_fallback_event_bus() -> None:
     bus = EventBus()
     manager = OrderManager(modo_real=False, bus=bus)

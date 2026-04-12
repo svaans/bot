@@ -190,6 +190,33 @@ class CapitalManager:
             return float(self._state.default_por_symbol)
         return 0.0
 
+    def calcular_cantidad_async(
+        self,
+        symbol: str,
+        precio: float,
+        *,
+        exposicion_total: float = 0.0,
+        stop_loss: float | None = None,
+    ) -> dict[str, float]:
+        """Cantidad sugerida desde exposure disponible (quote / notional).
+
+        Consumido por :class:`core.orders.quantity_resolver.QuantityResolver`.
+        ``exposicion_total`` del meta acota el notional máximo de esta operación.
+        ``stop_loss`` se acepta por compatibilidad de firma; el ajuste fino va en la orden.
+        """
+        _ = stop_loss
+        precio_f = float(precio)
+        if precio_f <= 0:
+            return {"cantidad": 0.0}
+        disponible = float(self.exposure_disponible(symbol))
+        notional_cap = disponible
+        ex_tot = float(exposicion_total) if exposicion_total else 0.0
+        if ex_tot > 0:
+            notional_cap = min(notional_cap, ex_tot)
+        if notional_cap <= 0:
+            return {"cantidad": 0.0}
+        return {"cantidad": notional_cap / precio_f}
+
     def actualizar_exposure(self, symbol: str, disponible: float) -> None:
         """Update the available exposure for ``symbol`` and refresh caches."""
 

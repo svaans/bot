@@ -461,6 +461,14 @@ class Trader(TraderLite):
     async def cerrar(self) -> None:
         """Detiene el trader y limpia tareas en segundo plano."""
         await self.stop()
+        orders = getattr(self, "orders", None)
+        if orders is not None:
+            aclose = getattr(orders, "aclose_background_tasks", None)
+            if callable(aclose):
+                try:
+                    await aclose()
+                except Exception:
+                    log.exception("Fallo cerrando tareas de fondo del OrderManager")
         while self._bg_tasks:
             task = self._bg_tasks.pop()
             if task.done():

@@ -191,7 +191,6 @@ class OrderManager:
             os.getenv("LIMIT_ORDER_MAX_RETRY", str(getattr(real_orders, "_LIMIT_MAX_RETRY", 3)))
             or getattr(real_orders, "_LIMIT_MAX_RETRY", 3)
         )
-        self._bot_env = os.getenv("BOT_ENV", "").lower()
         self._reconcile_enabled = self._resolve_reconcile_enabled()
         self._reconcile_interval = max(
             60.0,
@@ -411,11 +410,11 @@ class OrderManager:
         return result
 
     def _resolve_reconcile_enabled(self) -> bool:
+        """Activa reconciliación periódica solo en modo real, vía config o ``ORDERS_RECONCILE_ENABLED``."""
+        if not self.modo_real:
+            return False
         base_enabled = bool(getattr(self._config, "orders_reconcile_enabled", False))
-        flag_enabled = is_flag_enabled("orders.reconcile.enabled", base_enabled)
-        if self._bot_env == "staging":
-            return flag_enabled
-        return False
+        return is_flag_enabled("orders.reconcile.enabled", base_enabled)
 
     def _resolve_execution_policy(self, symbol: str, side: str) -> str:
         if not self._limit_enabled:
@@ -447,12 +446,17 @@ class OrderManager:
                             "count": len(divergencias),
                         }),
                     )
+            except asyncio.CancelledError:
+                raise
             except Exception as exc:  # pragma: no cover - defensivo
                 log.error(
                     "orders.reconcile_trades.error",
                     extra=safe_extra({"error": str(exc)}),
                 )
-            await asyncio.sleep(self._reconcile_interval)
+            try:
+                await asyncio.sleep(self._reconcile_interval)
+            except asyncio.CancelledError:
+                raise
 
     def _log_reconcile_report(self, divergencias: list[dict[str, Any]]) -> None:
         if not divergencias:
@@ -890,9 +894,44 @@ class OrderManager:
 
     async def _sync_loop(self) -> None:
         while True:
-            success = await self._sync_once()
+            try:
+                success = await self._sync_once()
+            except asyncio.CancelledError:
+                raise
             delay = self._compute_next_sync_delay(success)
-            await asyncio.sleep(delay)
+            # Evita la sensación de “consola colgada”: tras reconciliar no hay más
+            # mensajes hasta minutos después (sleep largo) mientras el resto del bot sigue en el loop.
+            log.info(
+                "orders.background_sync_idle",
+                extra=safe_extra(
+                    {
+                        "sync_ok": success,
+                        "next_sync_in_sec": round(delay, 1),
+                        "ordenes_en_memoria": len(self.ordenes),
+                    }
+                ),
+            )
+            try:
+                await asyncio.sleep(delay)
+            except asyncio.CancelledError:
+                raise
+
+    async def aclose_background_tasks(self) -> None:
+        """Cancela tareas periódicas (flush, reconciliación, sync) y reintentos de registro."""
+        tasks: list[asyncio.Task[Any]] = []
+        for attr in ("_flush_task", "_reconcile_task", "_sync_task"):
+            t = getattr(self, attr, None)
+            if t is not None and not t.done():
+                t.cancel()
+                tasks.append(t)
+            setattr(self, attr, None)
+        for sym, t in list(getattr(self, "_registro_retry_tasks", {}).items()):
+            if t is not None and not t.done():
+                t.cancel()
+                tasks.append(t)
+        self._registro_retry_tasks.clear()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
 
     def _compute_next_sync_delay(self, success: bool) -> float:
         """Calcula el próximo retardo del loop de sincronización."""
