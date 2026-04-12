@@ -15,7 +15,16 @@ from core.estrategias import obtener_estrategias_por_tendencia, calcular_sinergi
 from core.scoring import calcular_score_tecnico
 from core.utils import configurar_logger
 log = configurar_logger('entradas')
-_FUNCIONES = cargar_estrategias()
+_FUNCIONES: dict | None = None
+
+
+def _estrategias_cargadas() -> dict:
+    """Carga perezosa del registro de estrategias (evita import circular y acelera arranques parciales)."""
+
+    global _FUNCIONES
+    if _FUNCIONES is None:
+        _FUNCIONES = cargar_estrategias()
+    return _FUNCIONES
 
 ENTRADA_EVAL_LATENCY_MS = Histogram(
     "entrada_eval_latency_ms",
@@ -28,15 +37,13 @@ async def evaluar_estrategias(symbol: str, df: pd.DataFrame, tendencia: str) -> 
     """Evalúa las estrategias correspondientes a ``tendencia``
     Retorna un diccionario con puntaje_total, estrategias_activas y diversidad.
     """
-    global _FUNCIONES
-    if not _FUNCIONES:
-        _FUNCIONES = cargar_estrategias()
+    funciones = _estrategias_cargadas()
     nombres = obtener_estrategias_por_tendencia(tendencia)
     activas: dict[str, bool] = {}
     puntaje_total = 0.0
 
     async def ejecutar(nombre: str):
-        func = _FUNCIONES.get(nombre)
+        func = funciones.get(nombre)
         if not callable(func):
             log.warning(f'Estrategia no encontrada: {nombre}')
             return nombre, False

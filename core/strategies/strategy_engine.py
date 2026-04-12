@@ -53,7 +53,13 @@ if TYPE_CHECKING:  # pragma: no cover - solo para type checkers
     from core.trader import EstadoSimbolo
 
 class StrategyEngine:
-    """Evalúa estrategias de entrada y salida."""
+    """Evalúa estrategias de entrada y salida.
+
+    Encadena: señales por tendencia y pesos por símbolo, umbral adaptativo
+    (:mod:`core.adaptador_umbral`), score técnico, diversidad mínima y
+    validadores (volumen, RSI, pendiente, Bollinger). Las salidas delegan en
+    :mod:`core.strategies.exit.gestor_salidas`.
+    """
 
     def __init__(
         self,

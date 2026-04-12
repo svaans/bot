@@ -4,10 +4,20 @@ Este módulo calcula un umbral mínimo para validar señales de entrada. El
 resultado se obtiene combinando factores derivados de la volatilidad,
 la pendiente y el RSI actuales. Cada componente se calcula por separado
 para facilitar la auditoría del proceso.
+
+**Configuración:** ``config/configuraciones_optimas.json`` se lee una vez y se
+cachea en memoria. Tras editar el JSON en caliente, llama a
+:func:`invalidate_umbral_config_cache` o reinicia el proceso.
+
+**Estado suavizado:** los valores en ``_UMBRAL_SUAVIZADO`` se restauran desde
+``estado/umbral_adaptativo.json`` en la primera llamada a
+:func:`calcular_umbral_adaptativo` y se vuelcan al disco con limitación de
+frecuencia para no saturar E/S.
 """
 from __future__ import annotations
 import json
 import math
+import time
 from collections import deque
 from pathlib import Path
 from typing import Deque, Dict, Optional
@@ -30,6 +40,9 @@ _UMBRAL_SUAVIZADO: Dict[str, float] = {}
 _HISTERESIS_SKIPS: Dict[str, int] = {}
 _UMBRAL_HISTORICO: Dict[str, Deque[float]] = {}
 RUTA_ESTADO = Path(ESTADO_DIR) / "umbral_adaptativo.json"
+_UMBRAL_ESTADO_CARGADO = False
+_LAST_UMBRAL_PERSIST_MONO: float = 0.0
+_UMBRAL_PERSIST_MIN_SEC = 45.0
 # Parámetros de suavizado
 ALPHA_BASE = 0.3
 ALPHA_VOLATILIDAD_ALTA = 0.5
@@ -96,6 +109,28 @@ def _cargar_config() -> Dict[str, dict]:
     return _CONFIG_CACHE
 
 
+def invalidate_umbral_config_cache() -> None:
+    """Fuerza la próxima lectura de ``configuraciones_optimas.json`` desde disco."""
+
+    global _CONFIG_CACHE
+    _CONFIG_CACHE = None
+
+
+def _ensure_umbral_estado_cargado() -> None:
+    global _UMBRAL_ESTADO_CARGADO
+    if not _UMBRAL_ESTADO_CARGADO:
+        cargar_estado()
+        _UMBRAL_ESTADO_CARGADO = True
+
+
+def _maybe_persist_umbral_estado() -> None:
+    global _LAST_UMBRAL_PERSIST_MONO
+    ahora = time.monotonic()
+    if ahora - _LAST_UMBRAL_PERSIST_MONO >= _UMBRAL_PERSIST_MIN_SEC:
+        guardar_estado()
+        _LAST_UMBRAL_PERSIST_MONO = ahora
+
+
 def calcular_umbral_adaptativo(
     symbol: str, df: pd.DataFrame, contexto: Optional[Dict] = None
 ) -> float:
@@ -113,6 +148,7 @@ def calcular_umbral_adaptativo(
     - **Persistencia**: una alta consistencia en señales previas puede
       reducir ligeramente el umbral requerido.
     """
+    _ensure_umbral_estado_cargado()
     config = _cargar_config().get(symbol, {})
     base = config.get("peso_minimo_total", 0.5)
     factor = config.get("factor_umbral", 1.0)
@@ -201,6 +237,7 @@ def calcular_umbral_adaptativo(
         UMBRAL_ADAPTATIVO_ACTUAL.labels(symbol=symbol).set(suavizado)
         resultado = round(suavizado, 2)
     historial.append(resultado)
+    _maybe_persist_umbral_estado()
     return resultado
 
 

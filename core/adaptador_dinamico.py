@@ -3,6 +3,10 @@
 Provee utilidades para adaptar configuraciones base en función de la
 volatilidad reciente y para calcular niveles de ``take profit`` y ``stop
 loss`` según el régimen de mercado.
+
+La constante ``CONFIGS_OPTIMAS`` se rellena **una vez al importar** el
+módulo. Si se edita ``config/configuraciones_optimas.json`` en caliente,
+usa :func:`recargar_configs_optimas` o reinicia el proceso.
 """
 from __future__ import annotations
 import asyncio
@@ -31,13 +35,24 @@ from core.utils.utils import configurar_logger
 log = configurar_logger('adaptador_dinamico')
 RUTA_CONFIGS_OPTIMAS = 'config/configuraciones_optimas.json'
 if os.path.exists(RUTA_CONFIGS_OPTIMAS):
-    with open(RUTA_CONFIGS_OPTIMAS, 'r') as f:
+    with open(RUTA_CONFIGS_OPTIMAS, 'r', encoding='utf-8') as f:
         CONFIGS_OPTIMAS = json.load(f)
 else:
     log.warning(
         '❌ Archivo de configuración no encontrado. Se usará configuración por defecto.'
     )
     CONFIGS_OPTIMAS: dict = {}
+
+
+def recargar_configs_optimas() -> None:
+    """Vuelve a leer ``config/configuraciones_optimas.json`` y actualiza ``CONFIGS_OPTIMAS``."""
+
+    global CONFIGS_OPTIMAS
+    if os.path.exists(RUTA_CONFIGS_OPTIMAS):
+        with open(RUTA_CONFIGS_OPTIMAS, 'r', encoding='utf-8') as f:
+            CONFIGS_OPTIMAS = json.load(f)
+    else:
+        CONFIGS_OPTIMAS = {}
 
 @dataclass(frozen=True)
 class MinDistanceConstraints:

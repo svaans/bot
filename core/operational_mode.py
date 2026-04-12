@@ -21,6 +21,15 @@ El servicio interno valida el token SHA-256 proporcionado vía la variable de
 entorno ``MODE_CHANGE_TOKEN`` o ``MODE_CHANGE_TOKEN_HASH`` y aplica las
 transiciones pertinentes propagando el nuevo estado al trader y a la
 configuración global.
+
+Al arrancar, el estado en SQLite se alinea con la configuración cargada
+(``bootstrap``): un reinicio vuelve a imponer el modo del entorno frente al
+último cambio en caliente persistido en disco.
+
+``TraderLite`` crea el cliente REST de Binance solo si ``modo_real`` es
+``True`` en el ``__init__``; pasar de simulado a real en caliente actualiza
+órdenes y CCXT, pero puede hacer falta **reiniciar el proceso** para que el
+trader tenga un cliente REST coherente en todos los caminos de código.
 """
 
 from __future__ import annotations
@@ -422,7 +431,7 @@ class OperationalModeService:
             log.warning("Comando %s rechazado: token no configurado", command.command_id)
             self._repository.mark_command(command.command_id, status="rejected", result="token_unavailable")
             return
-        if not hmac.compare_digest(expected_hash, command.token_hash.lower()):
+        if not _hashes_equal_timing_safe(expected_hash, command.token_hash):
             log.warning("Token inválido para comando de modo %s", command.command_id)
             self._repository.mark_command(command.command_id, status="rejected", result="invalid_token")
             return
@@ -491,12 +500,29 @@ class OperationalModeService:
                 setattr(cfg, "modo_operativo", mode)
         self._config = cfg
         if self._trader is not None:
+            orders = getattr(self._trader, "orders", None)
+            prev_orders_real = bool(getattr(orders, "modo_real", False)) if orders is not None else False
             with contextlib.suppress(Exception):
                 setattr(self._trader, "modo_real", mode.is_real)
             with contextlib.suppress(Exception):
                 setattr(self._trader, "operational_mode", mode)
             with contextlib.suppress(Exception):
                 setattr(self._trader, "config", cfg)
+            if orders is not None:
+                with contextlib.suppress(Exception):
+                    setattr(orders, "modo_real", mode.is_real)
+                with contextlib.suppress(Exception):
+                    setattr(orders, "_config", cfg)
+                if mode.is_real and not prev_orders_real:
+                    start_sync = getattr(orders, "start_sync", None)
+                    if callable(start_sync):
+                        start_sync()
+                elif not mode.is_real and prev_orders_real:
+                    sync_task = getattr(orders, "_sync_task", None)
+                    if sync_task is not None and not sync_task.done():
+                        sync_task.cancel()
+                    with contextlib.suppress(Exception):
+                        setattr(orders, "_sync_task", None)
         try:
             import config.config as config_module  # type: ignore
 
@@ -527,6 +553,16 @@ class OperationalModeService:
 
 def _hash_token(token: str) -> str:
     return hashlib.sha256(token.encode()).hexdigest()
+
+
+def _hashes_equal_timing_safe(expected: str, received: str) -> bool:
+    """Compara hashes hex en tiempo constante sin ``ValueError`` por longitud distinta."""
+
+    exp = expected.strip().lower()
+    got = received.strip().lower()
+    if not exp or len(exp) != len(got):
+        return False
+    return hmac.compare_digest(exp, got)
 
 
 def submit_mode_change(

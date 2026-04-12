@@ -1,4 +1,17 @@
-"""Listas de estrategias agrupadas por tipo de tendencia."""
+"""Listas de estrategias agrupadas por tipo de tendencia.
+
+Cada nombre debe coincidir con un módulo ``core.strategies.entry.<nombre>``
+que expone una función callable ``<nombre>(df)``; el cargador dinámico
+(:func:`core.strategies.entry.loader.cargar_estrategias`) construye el
+registro en tiempo de ejecución. Para comprobar coherencia ejecuta
+``python -m core.diag.auditoria_estrategias``.
+
+El flujo de adaptabilidad en entrada suele ser: detección de tendencia →
+estrategias activas y pesos (:mod:`core.strategies.pesos`) →
+:func:`core.adaptador_umbral.calcular_umbral_adaptativo` y validaciones en
+:class:`core.strategies.strategy_engine.StrategyEngine`. Salidas combinan
+adaptadores de umbral con TP/SL en :mod:`core.adaptador_dinamico`.
+"""
 ESTRATEGIAS_POR_TENDENCIA = {'alcista': ['ascending_scallop',
     'ascending_triangle', 'cup_with_handle', 'double_bottom',
     'estrategia_adx', 'estrategia_bollinger_breakout',
