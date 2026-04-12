@@ -1,3 +1,9 @@
+"""Orquestación de estrategias de salida con prioridades fijas.
+
+``Kill Switch`` tiene la máxima prioridad y el resultado incluye la clave
+``kill_switch: True`` para que :mod:`verificar_salidas` cierre sin pasar por
+filtros técnicos que podrían aplazar un apagado de emergencia.
+"""
 import pandas as pd
 import asyncio
 import inspect
@@ -32,13 +38,13 @@ def _clasificar_politica(evento: str, resultado: dict) -> str | None:
         return "Kill Switch"
     if "trailing" in e:
         return "Trailing/Break-even"
-    if "break" in e and "even" in e or resultado.get("break_even"):
+    if ("break" in e and "even" in e) or resultado.get("break_even"):
         return "Trailing/Break-even"
-    if "take" in e and "profit" in e or "tp" in e:
+    if ("take" in e and "profit" in e) or ("tp" in e):
         return "Take-Profit"
-    if "stop" in e and "loss" in e or "sl" in e:
+    if ("stop" in e and "loss" in e) or ("sl" in e):
         return "Stop-Loss"
-    if "tiempo" in e or "t_max" in e or "perdida" in e and "tiempo" in e:
+    if "tiempo" in e or "t_max" in e or ("perdida" in e and "tiempo" in e):
         return "Cierre por tiempo"
     return None
 
@@ -58,7 +64,11 @@ async def evaluar_salidas(orden: dict, df, config=None, contexto=None):
         acciones_prioritarias.append(
             {
                 'evento': 'Kill Switch',
-                'resultado': {'cerrar': True, 'razon': 'Kill Switch'},
+                'resultado': {
+                    'cerrar': True,
+                    'razon': 'Kill Switch',
+                    'kill_switch': True,
+                },
                 'prioridad': PRIORIDADES['Kill Switch'],
             }
         )
@@ -138,7 +148,7 @@ async def evaluar_salidas(orden: dict, df, config=None, contexto=None):
             log.error(
                 f'❌ Error ejecutando estrategia de salida {getattr(f, "__name__", f)} en {symbol}: {e}'
             )
-            raise
+            continue
 
         # Manejo de escalado: reducir posición cuando se llenan targets
         if resultado.get('targets_hit'):
@@ -174,8 +184,10 @@ async def evaluar_salidas(orden: dict, df, config=None, contexto=None):
 
     if acciones_prioritarias:
         accion = max(acciones_prioritarias, key=lambda x: x['prioridad'])
-        res = accion['resultado']
+        res = dict(accion['resultado'])
         res.setdefault('razon', accion['evento'])
+        if accion['prioridad'] == PRIORIDADES['Kill Switch']:
+            res['kill_switch'] = True
         return res
     
     peso_total = sum(obtener_peso_salida(razon, symbol) for razon in señales)

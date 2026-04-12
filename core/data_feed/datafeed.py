@@ -1,6 +1,14 @@
 from __future__ import annotations
 
-"""Implementación principal del ``DataFeed`` modularizado."""
+"""Implementación principal del ``DataFeed`` modularizado.
+
+Ingesta: el cliente en ``binance_api.websocket`` reconecta ante cortes de red
+(``WebSocketException`` / ``OSError``) y propaga :class:`~binance_api.websocket.InactividadTimeoutError`
+cuando no hay tráfico; :mod:`core.data_feed.streaming` vuelve a lanzar tareas
+según ``DF_MAX_RECONNECT_*``. Las colas por símbolo aplican
+``queue_policy`` (p. ej. ``drop_oldest``) y, si ``backpressure`` y autotune
+están activos, amplían capacidad vía ``_apply_queue_backpressure_strategy``.
+"""
 
 import asyncio
 import contextlib

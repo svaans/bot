@@ -132,3 +132,21 @@ def extract_quantity(result: Any) -> float:
 
     value = coerce_float(result)
     return float(value) if value and value > 0 else 0.0
+
+
+def extract_ccxt_operation_id(order: Mapping[str, Any] | None) -> str | None:
+    """Id de cliente o id CCXT para correlacionar con órdenes del exchange."""
+
+    if not isinstance(order, Mapping):
+        return None
+    for key in ('clientOrderId', 'clientOrderID', 'origClientOrderId', 'id'):
+        raw = order.get(key)
+        if raw not in (None, ''):
+            return str(raw)
+    info = order.get('info')
+    if isinstance(info, Mapping):
+        for key in ('clientOrderId', 'clientOrderID', 'origClientOrderId', 'id'):
+            raw = info.get(key)
+            if raw not in (None, ''):
+                return str(raw)
+    return None

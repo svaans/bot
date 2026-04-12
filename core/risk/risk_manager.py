@@ -1,4 +1,17 @@
-"""Gestión de riesgo del bot."""
+"""Gestión de riesgo del bot.
+
+**Kill switch automático** (:meth:`_maybe_activate_kill_switch`): compara
+``riesgo_diario`` (pérdida acumulada en moneda cuando se usa
+``perdida_moneda``) con la **exposición disponible global** del
+``CapitalManager`` (suma de capital libre por símbolo). El cociente se
+contrasta con ``umbral`` (p. ej. 0.05 ≈ 5 % del disponible). También dispara
+por racha de pérdidas consecutivas vía ``registrar_perdida``. El flag
+``kill_switch_disparado`` y la racha se persisten en el estado crítico para
+coherencia tras reinicio.
+
+**Reinicio de racha:** el bus puede emitir ``risk.win_streak_reset`` para
+poner a cero ``_perdidas_consecutivas`` sin cerrar posiciones.
+"""
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
@@ -313,6 +326,7 @@ class RiskManager:
     async def _maybe_activate_kill_switch(self) -> None:
         if self._kill_switch_disparado or self.order_manager is None:
             return
+        # Denominador: exposición disponible global (CapitalManager), no capital teórico asignado.
         capital_total = self._exposure_disponible_global()
         ratio = (self.riesgo_diario / capital_total) if capital_total > 0 else 0.0
         max_p = self.kill_switch_max_perdidas_consecutivas
@@ -781,6 +795,8 @@ class RiskManager:
         state = {
             "posiciones_abiertas": sorted(self.posiciones_abiertas),
             "correlaciones": correlaciones,
+            "kill_switch_disparado": bool(self._kill_switch_disparado),
+            "perdidas_consecutivas": int(self._perdidas_consecutivas),
             "riesgo_diario": float(self.riesgo_diario),
             "fecha_riesgo": self._fecha_riesgo.isoformat(),
             "cooldown_fin": self._cooldown_fin.isoformat() if self._cooldown_fin else None,
@@ -804,6 +820,11 @@ class RiskManager:
     def _load_critical_state(self, payload: Mapping[str, Any]) -> None:
         if not isinstance(payload, Mapping):
             return
+        self._kill_switch_disparado = bool(payload.get("kill_switch_disparado", False))
+        try:
+            self._perdidas_consecutivas = max(0, int(payload.get("perdidas_consecutivas", 0)))
+        except (TypeError, ValueError):
+            self._perdidas_consecutivas = 0
         posiciones = payload.get("posiciones_abiertas")
         if isinstance(posiciones, list):
             self.posiciones_abiertas = {str(sym).upper() for sym in posiciones if sym}

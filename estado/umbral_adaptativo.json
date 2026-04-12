@@ -2,11 +2,14 @@
   "umbral_suavizado": {
     "SOL/EUR": 1.0391352213596194,
     "BNB/EUR": 1.065620455097665,
-    "ADA/EUR": 1.0
+    "ADA/EUR": 1.0,
+    "BTC/EUR": 1.0,
+    "ETH/EUR": 1.0
   },
   "histeresis_skips": {
-    "BNB/EUR": 9,
-    "SOL/EUR": 6,
-    "ADA/EUR": 1
+    "BNB/EUR": 24,
+    "SOL/EUR": 20,
+    "ADA/EUR": 6,
+    "BTC/EUR": 1
   }
 }

@@ -101,7 +101,14 @@ class OrderOpenStatus(Enum):
 
 
 class OrderManager:
-    """Abstrae la creación y cierre de órdenes."""
+    """Abstrae la creación y cierre de órdenes.
+
+    En **modo real**, el bucle ``_sync_loop`` llama a
+    :func:`real_orders.reconciliar_ordenes`, que fusiona SQLite con órdenes
+    abiertas del exchange. Si la API falla, la reconciliación no modifica el
+    estado persistido (solo se registra error). Las métricas
+    ``registrar_orders_sync_*`` reflejan éxito o fallo por ciclo.
+    """
 
     def __init__(
         self,

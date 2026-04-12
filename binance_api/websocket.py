@@ -111,7 +111,13 @@ async def escuchar_velas(
     ultimo_timestamp: Optional[int] = None,
     ultimo_cierre: Optional[float] = None,
 ) -> None:
-    """Escucha velas para ``symbol`` desde Binance o modo simulado."""
+    """Escucha velas para ``symbol`` desde Binance o modo simulado.
+
+    En modo real, ``backpressure`` se conserva en la firma por compatibilidad con
+    :class:`core.data_feed.DataFeed` y el wrapper en ``core.data_feed``; el
+    cliente WebSocket no aplica colas propias: el backpressure real es la
+    política de cola del DataFeed (``DF_QUEUE_*``, ``DF_BACKPRESSURE``).
+    """
 
     if _should_simulate(cliente):
         await _escuchar_velas_simulado(
@@ -151,7 +157,11 @@ async def escuchar_velas_combinado(
     ultimo_cierre: Optional[float] = None,
     ultimos: Mapping[str, Mapping[str, Any]] | None = None,
 ) -> None:
-    """Escucha velas para múltiples símbolos."""
+    """Escucha velas para múltiples símbolos.
+
+    Con cliente real, ``backpressure`` no altera el socket; el DataFeed regula
+    la carga vía colas. En simulación combinada se reenvía a cada tarea simulada.
+    """
 
     if _should_simulate(cliente):
         await _escuchar_velas_combinado_simulado(
@@ -506,7 +516,29 @@ async def _consume_ws_stream(
                             "first_bytes": preview,
                         },
                     )
-                    data = json.loads(raw_text)
+                    try:
+                        data = json.loads(raw_text)
+                    except json.JSONDecodeError as exc:
+                        logger.warning(
+                            "ws.recv.json_error",
+                            extra={
+                                "event": "ws.recv.json_error",
+                                "url": url,
+                                "error": repr(exc),
+                                "first_bytes": preview,
+                            },
+                        )
+                        continue
+                    if not isinstance(data, dict):
+                        logger.debug(
+                            "ws.recv.non_object_json",
+                            extra={
+                                "event": "ws.recv.non_object_json",
+                                "url": url,
+                                "type": type(data).__name__,
+                            },
+                        )
+                        continue
                     result = handler(data)
                     if asyncio.iscoroutine(result):
                         await result

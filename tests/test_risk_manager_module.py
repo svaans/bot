@@ -451,3 +451,23 @@ def test_cooldown_emite_alerta_y_se_libera(monkeypatch: pytest.MonkeyPatch) -> N
 
     assert manager.cooldown_activo is False
     assert pytest.approx(risk_module.COOLDOWN_ACTIVO_GAUGE._value, rel=1e-9) == 0.0
+
+
+def test_estado_critico_serializa_kill_switch_y_racha() -> None:
+    manager = RiskManager(0.05)
+    manager._kill_switch_disparado = True
+    manager._perdidas_consecutivas = 4
+    payload = manager._export_critical_state()
+    assert payload.get("kill_switch_disparado") is True
+    assert payload.get("perdidas_consecutivas") == 4
+    otro = RiskManager(0.1)
+    otro._load_critical_state(payload)
+    assert otro._kill_switch_disparado is True
+    assert otro._perdidas_consecutivas == 4
+
+
+def test_estado_critico_antiguo_sin_campos_kill_switch() -> None:
+    otro = RiskManager(0.05)
+    otro._load_critical_state({"riesgo_diario": 1.0})
+    assert otro._kill_switch_disparado is False
+    assert otro._perdidas_consecutivas == 0

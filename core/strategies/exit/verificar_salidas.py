@@ -289,7 +289,12 @@ async def _manejar_cambio_tendencia(trader, orden, df) -> bool:
 
 async def _aplicar_salidas_adicionales(trader, orden, df) -> bool:
     """Evalúa estrategias complementarias de salida. Se ejecuta en última
-    instancia."""
+    instancia.
+
+    Si :func:`gestor_salidas.evaluar_salidas` devuelve ``kill_switch: True``,
+    el cierre es inmediato (sin ``validar_necesidad_de_salida`` ni
+    ``permitir_cierre_tecnico``).
+    """
 
     symbol = orden.symbol
     precio_cierre = float(df['close'].iloc[-1])
@@ -317,6 +322,10 @@ async def _aplicar_salidas_adicionales(trader, orden, df) -> bool:
         log.info(f'🟡 Break-Even activado para {symbol} → SL movido a entrada: {nuevo_sl}')
     if resultado.get('cerrar', False):
         razon = resultado.get('razon', 'Estrategia desconocida')
+        # Kill switch debe cerrar sin filtros técnicos (riesgo / operativa).
+        if resultado.get('kill_switch'):
+            await trader._cerrar_y_reportar(orden, precio_cierre, str(razon), df=df)
+            return True
         tendencia_actual = obtener_tendencia(symbol, df)
         evaluacion = await trader.engine.evaluar_entrada(
             symbol,

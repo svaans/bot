@@ -1,10 +1,12 @@
 {
-  "timestamp": 1776033492.4060495,
+  "timestamp": 1776035473.2244024,
   "reason": "hot_reload",
   "entries": {
     "risk_manager": {
       "posiciones_abiertas": [],
       "correlaciones": {},
+      "kill_switch_disparado": false,
+      "perdidas_consecutivas": 0,
       "riesgo_diario": 0.0,
       "fecha_riesgo": "2026-04-12",
       "cooldown_fin": null,

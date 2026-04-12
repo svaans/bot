@@ -39,6 +39,7 @@ UTC = timezone.utc
 from binance_api.ccxt_client import binance_spot_client_order_id, obtener_ccxt as obtener_cliente
 from binance_api.filters import get_symbol_filters
 from .order_model import Order, normalizar_precio_cantidad
+from .order_helpers import extract_ccxt_operation_id
 from core.utils.utils import configurar_logger, guardar_orden_real
 from core.utils.logger import log_decision
 from core.supervisor import tick
@@ -538,6 +539,10 @@ def obtener_todas_las_ordenes():
 def reconciliar_ordenes(simbolos: list[str] | None = None) -> dict[str, Order]:
     # Copia profunda: la reconciliación muta órdenes y hace I/O larga; no debe
     # tocar las instancias en caché ni bloquear el lock durante fetch a Binance.
+    #
+    # Si ``fetch_open_orders`` falla, se devuelve una copia del estado local **sin**
+    # aplicar cierres ni altas desde el exchange (evita borrar posiciones locales
+    # por error transitorio de red).
     local = copy.deepcopy(cargar_ordenes())
     cfg = getattr(app_config, "cfg", None)
     if simbolos is None:
@@ -575,6 +580,7 @@ def reconciliar_ordenes(simbolos: list[str] | None = None) -> dict[str, Order]:
             'price': price,
             'amount': amount,
             'side': o.get('side', 'buy').lower(),
+            'operation_id': extract_ccxt_operation_id(o),
         }
     local_symbols = set(local.keys())
     exchange_symbols = set(exchange.keys())
@@ -600,6 +606,8 @@ def reconciliar_ordenes(simbolos: list[str] | None = None) -> dict[str, Order]:
             log.warning(f'⚠️ No se pudo eliminar orden local {sym}: {e}')
         local.pop(sym, None)
     for sym in exchange_only:
+        # ``operation_id`` queda en el objeto :class:`Order` en memoria; el esquema
+        # SQLite actual no persiste esa columna (se pierde al recargar desde disco).
         info = exchange[sym]
         side = info['side']
         direccion = 'long' if side == 'buy' else 'short'
@@ -628,7 +636,7 @@ def reconciliar_ordenes(simbolos: list[str] | None = None) -> dict[str, Order]:
                 {},
                 '',
                 direccion,
-                info.get('clientOrderId') if isinstance(info, dict) else None,
+                info.get('operation_id'),
             )
         except Exception as e:
             log.warning(f'⚠️ No se pudo registrar orden reconciliada para {sym}: {e}')
@@ -697,7 +705,8 @@ def sincronizar_ordenes_binance(
                     sl, tp = tp_calc, sl_calc
         except Exception as e:
             log.warning(f'⚠️ Error calculando SL/TP para {symbol}: {e}')
-        registrar_orden(symbol, price, amount, sl, tp, {}, '', direccion, None)
+        op_id = extract_ccxt_operation_id(o)
+        registrar_orden(symbol, price, amount, sl, tp, {}, '', direccion, op_id)
     return cargar_ordenes()
 
 _ULTIMO_OPEN_ORDERS: dict[str, list] = {}

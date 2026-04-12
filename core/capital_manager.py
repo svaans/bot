@@ -264,7 +264,6 @@ class CapitalManager:
     # Persistencia
     # ------------------------------------------------------------------
     def _apply_persisted_state(self, snapshot: CapitalSnapshot) -> None:
-        snapshot: CapitalSnapshot = self._repository.load()
         overrides = snapshot.capital_por_simbolo
         if overrides:
             for symbol, value in overrides.items():
