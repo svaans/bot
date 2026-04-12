@@ -204,6 +204,7 @@ class Config:
     trader_fastpath_skip_notifications: bool = True
     trader_fastpath_skip_entries: bool = False
     trader_fastpath_skip_trend: bool = True
+    trader_buffer_isolated: bool = False
     timeout_evaluar_condiciones_por_symbol: Dict[str, int] = field(default_factory=dict)
     indicadores_normalize_default: bool = True
     indicadores_cache_max_entries: int = 128
@@ -359,11 +360,15 @@ class ConfigManager:
         ).lower() == 'true'
         trader_fastpath_skip_entries = os.getenv(
             'TRADER_FASTPATH_SKIP_ENTRIES',
-            str(getattr(defaults, 'trader_fastpath_skip_entries', True)),
+            str(getattr(defaults, 'trader_fastpath_skip_entries', False)),
         ).lower() == 'true'
         trader_fastpath_skip_trend = os.getenv(
             'TRADER_FASTPATH_SKIP_TREND',
             str(getattr(defaults, 'trader_fastpath_skip_trend', True)),
+        ).lower() == 'true'
+        trader_buffer_isolated = os.getenv(
+            'TRADER_BUFFER_ISOLATED',
+            str(getattr(defaults, 'trader_buffer_isolated', False)),
         ).lower() == 'true'
 
         # Timeouts por símbolo (nuevo: se toma de env si existe)
@@ -589,6 +594,7 @@ class ConfigManager:
             trader_fastpath_skip_notifications=trader_fastpath_skip_notifications,
             trader_fastpath_skip_entries=trader_fastpath_skip_entries,
             trader_fastpath_skip_trend=trader_fastpath_skip_trend,
+            trader_buffer_isolated=trader_buffer_isolated,
             timeout_evaluar_condiciones_por_symbol=timeout_evaluar_por_symbol,
             indicadores_normalize_default=indicadores_normalize_default,
             indicadores_cache_max_entries=indicadores_cache_max_entries,

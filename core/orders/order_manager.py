@@ -644,7 +644,17 @@ class OrderManager:
         return True
 
     async def _on_abrir(self, data: dict) -> None:
-        status = await self.abrir_async(**data)
+        try:
+            status = await self.abrir_async(**data)
+        except Exception as exc:
+            log.exception("Fallo en handler abrir_orden (event_bus)")
+            EventBus.respond(
+                data,
+                ack=False,
+                error=str(exc),
+                result=OrderOpenStatus.FAILED.value,
+            )
+            return
         EventBus.respond(
             data,
             ack=status is OrderOpenStatus.OPENED,
@@ -652,11 +662,21 @@ class OrderManager:
         )
 
     async def _on_cerrar(self, data: dict) -> None:
-        result = await self.cerrar_async(**data)
+        try:
+            result = await self.cerrar_async(**data)
+        except Exception as exc:
+            log.exception("Fallo en handler cerrar_orden (event_bus)")
+            EventBus.respond(data, ack=False, error=str(exc), result=False)
+            return
         EventBus.respond(data, ack=bool(result), result=result)
 
     async def _on_cerrar_parcial(self, data: dict) -> None:
-        result = await self.cerrar_parcial_async(**data)
+        try:
+            result = await self.cerrar_parcial_async(**data)
+        except Exception as exc:
+            log.exception("Fallo en handler cerrar_parcial (event_bus)")
+            EventBus.respond(data, ack=False, error=str(exc), result=False)
+            return
         EventBus.respond(data, ack=bool(result), result=result)
 
     async def _resolve_quantity_with_fallback(
@@ -696,7 +716,8 @@ class OrderManager:
             )
         except Exception as e:
             log.error(f'❌ Error sincronizando órdenes: {e}')
-            return
+            registrar_orders_sync_failure(type(e).__name__)
+            return False
 
         reconciliadas = set(ordenes_reconciliadas.keys())
         local_only = actuales - reconciliadas

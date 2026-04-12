@@ -181,6 +181,7 @@ def reset_buffers() -> Generator[Any, None, None]:
             "WARMUP_RESTANTE",
             "LAST_BAR_AGE",
             "SPREAD_GUARD_MISSING",
+            "SPREAD_GUARD_ERRORS",
         )
     }
     for name in originals:

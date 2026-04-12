@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 
 from collections.abc import Mapping
 from numbers import Real
-from typing import Any, Callable, Dict, List, Mapping, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 import pandas as pd
 

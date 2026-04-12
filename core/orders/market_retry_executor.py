@@ -101,7 +101,13 @@ class MarketRetryExecutor:
                 )
                 if intentos >= self._max_attempts:
                     await self._manejar_exhausted("sell", symbol, operation_id)
-                    return 0.0, 0.0, 0.0
+                    return ExecutionResult(
+                        executed=0.0,
+                        fee=0.0,
+                        pnl=0.0,
+                        status="FAILED",
+                        remaining=cantidad,
+                    )
                 await asyncio.sleep(self._market_retry_sleep(intentos))
 
     async def _ejecutar_market_buy(

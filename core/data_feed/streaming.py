@@ -1,3 +1,12 @@
+"""Bucles de reconexión del ``DataFeed``.
+
+Las llamadas a ``escuchar_velas`` / ``escuchar_velas_combinado`` deben usar siempre
+los wrappers de :mod:`core.data_feed` (este paquete), que adaptan la firma histórica
+a :mod:`binance_api.websocket`. No invocar ``binance_api.websocket.escuchar_velas``
+directamente desde aquí: los argumentos posicionales difieren (heartbeat, dict
+de opciones, etc.).
+"""
+
 import asyncio
 import random
 import time

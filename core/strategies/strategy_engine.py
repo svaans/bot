@@ -80,10 +80,10 @@ class StrategyEngine:
         self._metrics = metrics_module
         self._salida_evaluator = salida_evaluator or evaluar_salidas
         self._synergy_cap = 0.5
-        self._synergy_history: deque[float] = deque(maxlen=240)
+        self._synergy_history_by_symbol: dict[str, deque[float]] = {}
         self._synergy_lock = Lock()
         self._synergy_check_interval = 300.0
-        self._last_synergy_check = 0.0
+        self._last_synergy_check_by_symbol: dict[str, float] = {}
 
 
     @staticmethod
@@ -269,7 +269,10 @@ class StrategyEngine:
         )
         cumple_div = diversidad >= int(config.get("diversidad_minima", 1))
         umbral_score = float(config.get("umbral_score_tecnico", 1.0))
-        empate = score_total == umbral or score_tec == umbral_score
+        _emp_tol = float(config.get("umbral_empate_abs_tol", 1e-6))
+        empate = math.isclose(score_total, umbral, rel_tol=0.0, abs_tol=_emp_tol) or math.isclose(
+            score_tec, umbral_score, rel_tol=0.0, abs_tol=_emp_tol
+        )
         permitido = (
             score_total > umbral
             and score_tec > umbral_score
@@ -323,15 +326,22 @@ class StrategyEngine:
     def _registrar_sinergia(self, symbol: str, sinergia: float) -> None:
         if not math.isfinite(sinergia) or sinergia < 0.0:
             return
+        sym_key = str(symbol or "").strip().upper() or "__UNKNOWN__"
         with self._synergy_lock:
-            self._synergy_history.append(min(sinergia, 1.0))
-            if len(self._synergy_history) < max(10, self._synergy_history.maxlen // 4):
+            hist = self._synergy_history_by_symbol.get(sym_key)
+            if hist is None:
+                hist = deque(maxlen=240)
+                self._synergy_history_by_symbol[sym_key] = hist
+            hist.append(min(sinergia, 1.0))
+            maxlen = hist.maxlen or 240
+            if len(hist) < max(10, maxlen // 4):
                 return
             ahora = monotonic()
-            if ahora - self._last_synergy_check < self._synergy_check_interval:
+            last = self._last_synergy_check_by_symbol.get(sym_key, 0.0)
+            if ahora - last < self._synergy_check_interval:
                 return
-            self._last_synergy_check = ahora
-            valores = sorted(self._synergy_history)
+            self._last_synergy_check_by_symbol[sym_key] = ahora
+            valores = sorted(hist)
         dispersion = statistics.pstdev(valores) if len(valores) > 1 else 0.0
         index_90 = max(0, min(len(valores) - 1, math.ceil(0.9 * len(valores)) - 1))
         p90 = valores[index_90]

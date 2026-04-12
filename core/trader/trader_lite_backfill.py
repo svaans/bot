@@ -165,6 +165,9 @@ class TraderLiteBackfillMixin:
         return manager.snapshot(symbol, timeframe=timeframe)
 
     def _get_buffer_manager(self):
+        explicit = getattr(self, "buffer_manager", None)
+        if explicit is not None:
+            return explicit
         if self._buffer_manager is None:
             self._buffer_manager = get_buffer_manager()
         return self._buffer_manager

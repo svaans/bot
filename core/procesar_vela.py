@@ -117,6 +117,11 @@ SPREAD_GUARD_MISSING = Counter(
     "Velas sin spread_ratio cuando la guardia de spread está activa",
     ["symbol", "timeframe"],
 )
+SPREAD_GUARD_ERRORS = Counter(
+    "procesar_vela_spread_guard_errors_total",
+    "Excepciones al evaluar spread_guard (el pipeline sigue; revisar guardia)",
+    ["symbol"],
+)
 
 log = configurar_logger("procesar_vela")
 
@@ -301,6 +306,25 @@ def _validar_candle(c: dict) -> Tuple[bool, str]:
     for flag_name in ("is_closed", "is_final", "final"):
         flag_value = _normalize_flag(c.get(flag_name))
         if flag_value is False:
+            return False, "incomplete"
+    strict_closed = os.getenv("PROCESAR_VELA_STRICT_CLOSED", "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+    }
+    if strict_closed:
+        any_true = False
+        any_key = False
+        for flag_name in ("is_closed", "is_final", "final"):
+            if flag_name not in c:
+                continue
+            any_key = True
+            if _normalize_flag(c.get(flag_name)) is True:
+                any_true = True
+                break
+        if not any_key:
+            return False, "closed_flag_missing"
+        if not any_true:
             return False, "incomplete"
     # Orden temporal
     if int(c["timestamp"]) <= 0:
@@ -890,14 +914,30 @@ class BufferManager:
         return df
 
 
-# Instancia de módulo (compartida)
+# Instancia de módulo (compartida por defecto; ver ``trader.buffer_manager`` para aislar)
 _BUFFER_MAXLEN = max(600, int(os.getenv("PROCESAR_VELA_BUFFER_MAXLEN", "1500")))
-_buffers = BufferManager(maxlen=_BUFFER_MAXLEN)
+
+
+def create_buffer_manager(maxlen: int | None = None) -> BufferManager:
+    """Crea un ``BufferManager`` (p. ej. uno por ``Trader`` si ``trader_buffer_isolated``)."""
+
+    ml = maxlen if maxlen is not None else _BUFFER_MAXLEN
+    return BufferManager(maxlen=ml)
+
+
+_buffers = create_buffer_manager(_BUFFER_MAXLEN)
 
 
 def get_buffer_manager() -> BufferManager:
     """Devuelve el administrador de buffers global utilizado por el pipeline."""
 
+    return _buffers
+
+
+def _resolve_buffer_manager(trader: Any) -> BufferManager:
+    bm = getattr(trader, "buffer_manager", None)
+    if isinstance(bm, BufferManager):
+        return bm
     return _buffers
 
 
@@ -936,6 +976,7 @@ async def procesar_vela(trader: Any, vela: dict) -> None:
     strategy_end: float | None = None
     bus = getattr(trader, "event_bus", None) or getattr(trader, "bus", None)
     orders = getattr(trader, "orders", None)
+    buf = _resolve_buffer_manager(trader)
 
     def _mark_stage(stage: str, start_time: float | None) -> float:
         existing = stage_ends.get(stage)
@@ -1038,9 +1079,9 @@ async def procesar_vela(trader: Any, vela: dict) -> None:
                             "spread_guard",
                             {"ratio": float(spread_ratio)},
                         )
-                        lock = _buffers.get_lock(symbol, timeframe_hint)
+                        lock = buf.get_lock(symbol, timeframe_hint)
                         async with lock:
-                            _buffers.append(symbol, vela, timeframe=timeframe_hint)
+                            buf.append(symbol, vela, timeframe=timeframe_hint)
                         return
                 elif hasattr(sg, "permite_entrada"):
                     if not bool(sg.permite_entrada(symbol, {}, 0.0)):
@@ -1052,21 +1093,32 @@ async def procesar_vela(trader: Any, vela: dict) -> None:
                             reason="spread_guard",
                         )
                         _mark_skip(vela, "spread_guard")
-                        lock = _buffers.get_lock(symbol, timeframe_hint)
+                        lock = buf.get_lock(symbol, timeframe_hint)
                         async with lock:
-                            _buffers.append(symbol, vela, timeframe=timeframe_hint)
+                            buf.append(symbol, vela, timeframe=timeframe_hint)
                         return
-            except Exception:
-                # No bloquear por fallo del guard
-                pass
+            except Exception as exc:
+                try:
+                    SPREAD_GUARD_ERRORS.labels(symbol=symbol or "unknown").inc()
+                except Exception:
+                    pass
+                log.warning(
+                    "spread_guard.error",
+                    extra={
+                        "symbol": symbol or "unknown",
+                        "timeframe": timeframe_label,
+                        "error": str(exc),
+                    },
+                    exc_info=True,
+                )
 
         # 3) Append al buffer por símbolo (protegido por lock)
         buffer_timeframe = timeframe_hint
-        lock = _buffers.get_lock(symbol, buffer_timeframe)
+        lock = buf.get_lock(symbol, buffer_timeframe)
         async with lock:
-            _buffers.append(symbol, vela, timeframe=buffer_timeframe)
-            df = _buffers.dataframe(symbol, timeframe=buffer_timeframe)
-            symbol_state = _buffers.state(symbol, timeframe=buffer_timeframe)
+            buf.append(symbol, vela, timeframe=buffer_timeframe)
+            df = buf.dataframe(symbol, timeframe=buffer_timeframe)
+            symbol_state = buf.state(symbol, timeframe=buffer_timeframe)
 
         if df is None or df.empty:
             _ensure_gating_end()
@@ -1166,7 +1218,8 @@ async def procesar_vela(trader: Any, vela: dict) -> None:
 
         # 5) Fast-path si estás bajo presión con histéresis configurable
         fast_enabled = bool(getattr(cfg, "trader_fastpath_enabled", True))
-        if fast_enabled and getattr(cfg, "trader_fastpath_skip_entries", True):
+        # Debe coincidir con config.Config (default False): sin atributo, no se salta por fastpath.
+        if fast_enabled and getattr(cfg, "trader_fastpath_skip_entries", False):
             threshold = int(getattr(cfg, "trader_fastpath_threshold", 350))
             resume_threshold_cfg = getattr(cfg, "trader_fastpath_resume_threshold", None)
             if resume_threshold_cfg is None:

@@ -78,6 +78,7 @@ class DevelopmentConfig:
     trader_fastpath_skip_notifications: bool = True
     trader_fastpath_skip_entries: bool = False
     trader_fastpath_skip_trend: bool = True
+    trader_buffer_isolated: bool = False
     timeout_evaluar_condiciones_por_symbol: Dict[str, int] = field(default_factory=dict)
     indicadores_normalize_default: bool = True
     indicadores_cache_max_entries: int = 128

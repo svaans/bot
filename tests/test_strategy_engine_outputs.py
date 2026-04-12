@@ -164,7 +164,9 @@ def test_strategy_engine_registra_sinergia_y_actualiza_metricas() -> None:
 
     metrics = _DummyMetrics()
     engine = _build_engine_with_metrics(metrics)
-    engine._synergy_history = collections.deque(maxlen=20)  # type: ignore[attr-defined]
+    engine._synergy_history_by_symbol = {
+        "BTCUSDT": collections.deque(maxlen=20),
+    }
     engine._synergy_check_interval = 0.0  # type: ignore[attr-defined]
 
     valores = [0.52] * 7 + [0.3] * 3
