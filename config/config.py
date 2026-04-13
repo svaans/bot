@@ -47,5 +47,6 @@ ORDERS_RECONCILE_ENABLED = cfg.orders_reconcile_enabled
 FUNDING_ENABLED = cfg.funding_enabled
 BACKFILL_VENTANA_ENABLED = cfg.backfill_ventana_enabled
 ENTRADA_COOLDOWN_TRAS_CREAR_FAILED_SEC = cfg.entrada_cooldown_tras_crear_failed_sec
+ENTRADA_DEDUPE_POR_VELA = cfg.entrada_dedupe_por_vela
 RISK_ALERTA_CAPITAL_PCT = cfg.risk_alerta_capital_pct
 RISK_CAPITAL_DIVERGENCE_THRESHOLD = cfg.risk_capital_divergence_threshold

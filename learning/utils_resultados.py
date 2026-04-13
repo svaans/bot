@@ -1,10 +1,17 @@
 """Utilidades para distribuir retornos de órdenes entre estrategias activas."""
 from __future__ import annotations
 
-from ast import literal_eval
-import math
+import ast
 import json
+import math
+from ast import literal_eval
 from typing import Any, Dict, Mapping
+
+# Límites ante entradas hostiles o corruptas (JSON/literales enormes o muy anidados).
+_MAX_ESTRATEGIAS_ACTIVAS_STR_LEN = 65_536
+_LITERAL_EVAL_MAX_LEN = 8_192
+_LITERAL_EVAL_MAX_NODES = 400
+
 
 def parsear_estrategias_activas(raw: Any) -> Dict[str, Any]:
     """Normaliza la representación de ``estrategias_activas`` a un ``dict``.
@@ -21,6 +28,8 @@ def parsear_estrategias_activas(raw: Any) -> Dict[str, Any]:
     if isinstance(raw, str):
         texto = raw.strip()
         if not texto:
+            return {}
+        if len(texto) > _MAX_ESTRATEGIAS_ACTIVAS_STR_LEN:
             return {}
         for loader in (_cargar_json, _cargar_json_comillas_simples, _cargar_literal):
             data = loader(texto)
@@ -44,9 +53,17 @@ def _cargar_json_comillas_simples(texto: str) -> Any:
 
 
 def _cargar_literal(texto: str) -> Any:
+    if len(texto) > _LITERAL_EVAL_MAX_LEN:
+        return None
+    try:
+        tree = ast.parse(texto, mode="eval")
+    except SyntaxError:
+        return None
+    if sum(1 for _ in ast.walk(tree)) > _LITERAL_EVAL_MAX_NODES:
+        return None
     try:
         return literal_eval(texto)
-    except (ValueError, SyntaxError):
+    except (ValueError, SyntaxError, MemoryError):
         return None
 
 

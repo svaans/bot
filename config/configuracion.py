@@ -1,3 +1,11 @@
+"""Parámetros por símbolo en JSON (p. ej. ``config/configuraciones_optimas.json``).
+
+Coexiste con :class:`config.config_manager.Config` (variables de entorno): cada
+subsistema elige fuente; no hay precedencia única documentada en un solo sitio.
+
+``core.adaptador_dinamico`` cachea el JSON al importar; tras editar el archivo en
+caliente usar :func:`core.adaptador_dinamico.recargar_configs_optimas`.
+"""
 import os
 import json
 import shutil
@@ -129,14 +137,33 @@ class ConfigurationService:
     def __init__(self, ruta: str=RUTA_CONFIG_SIMBOLOS) ->None:
         self.ruta = ruta
 
+    def _merge_with_base(
+        self,
+        symbol: str,
+        partial: dict[str, Any] | None,
+        *,
+        silent_defaults: bool = False,
+    ) -> dict[str, Any]:
+        """Completa ``partial`` con :data:`CONFIG_BASE` (logs opcionales por clave)."""
+
+        config = dict(partial) if isinstance(partial, dict) else {}
+        for clave, valor_defecto in CONFIG_BASE.items():
+            if clave not in config:
+                if not silent_defaults:
+                    log.warning(
+                        f"⚠️ {symbol} - Faltante: '{clave}'. Usando valor por defecto: {valor_defecto}"
+                    )
+                config[clave] = valor_defecto
+        return config
+
     def load(self, symbol: str) ->dict[str, Any]:
         objetivo = Path(self.ruta)
         if not objetivo.exists():
-            log.error(
-                '❌ Archivo de configuración no encontrado',
-                extra={"path": str(objetivo)},
+            log.warning(
+                '⚠️ Archivo de configuración no encontrado; usando CONFIG_BASE',
+                extra={"path": str(objetivo), "symbol": symbol},
             )
-            raise ValueError('Archivo de configuración inexistente')
+            return self._merge_with_base(symbol, {}, silent_defaults=True)
         try:
             configuraciones = self._leer_json(objetivo)
         except json.JSONDecodeError as e:
@@ -145,19 +172,25 @@ class ConfigurationService:
                 extra={"path": str(objetivo), "error": str(e)},
             )
             raise
-        if not isinstance(configuraciones, dict) or not configuraciones:
+        if not isinstance(configuraciones, dict):
             log.error(
-                '❌ El archivo debe contener un diccionario de configuraciones válido'
-                )
+                '❌ El archivo debe contener un diccionario de configuraciones por símbolo'
+            )
             raise ValueError('Configuraciones inválidas')
-        config = configuraciones.get(symbol, {}).copy()
-        for clave, valor_defecto in CONFIG_BASE.items():
-            if clave not in config:
-                log.warning(
-                    f"⚠️ {symbol} - Faltante: '{clave}'. Usando valor por defecto: {valor_defecto}"
-                    )
-                config[clave] = valor_defecto
-        return config
+        if not configuraciones:
+            log.warning(
+                '⚠️ Archivo JSON vacío ({}); ningún símbolo persistido aún',
+                extra={"path": str(objetivo)},
+            )
+        partial = configuraciones.get(symbol, {})
+        if not isinstance(partial, dict):
+            log.warning(
+                "⚠️ Configuración para %s no es un dict; se ignora",
+                symbol,
+                extra={"symbol": symbol},
+            )
+            partial = {}
+        return self._merge_with_base(symbol, partial.copy())
 
     def save(self, symbol: str, config: dict[str, Any]) ->None:
         if not isinstance(config, dict):

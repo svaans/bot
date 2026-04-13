@@ -3,7 +3,27 @@ import pandas as pd
 import pytest
 from learning.analisis_resultados import analizar_estrategias_en_ordenes
 from learning.entrenador_estrategias import calcular_pesos_suavizados, evaluar_estrategias
-from learning.utils_resultados import distribuir_retorno_por_estrategia, extraer_pesos_estrategias
+from learning.utils_resultados import (
+    distribuir_retorno_por_estrategia,
+    extraer_pesos_estrategias,
+    parsear_estrategias_activas,
+)
+
+
+def test_parsear_estrategias_rechaza_cadena_demasiado_larga() -> None:
+    base = json.dumps({"ema": True})
+    huge = base + "x" * 70_000
+    assert parsear_estrategias_activas(huge) == {}
+
+
+def test_parsear_estrategias_literal_muy_grande_no_cuelga() -> None:
+    # Claves enteras: JSON estándar no aplica; literal_eval supera el tope de nodos AST.
+    literal = "{" + ",".join(f"{i}:1" for i in range(500)) + "}"
+    assert parsear_estrategias_activas(literal) == {}
+
+
+def test_parsear_estrategias_json_pequeno_siguen_funcionando() -> None:
+    assert parsear_estrategias_activas(json.dumps({"rsi": True})) == {"rsi": True}
 
 
 def test_distribuir_retorno_por_pesos():

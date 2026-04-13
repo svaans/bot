@@ -85,13 +85,15 @@ async def _run_verificar(
     engine_result: dict,
     *,
     df: pd.DataFrame | None = None,
+    estado: dict | None = None,
 ) -> object:
     async def _fake_eval(*_args, **_kwargs):
         return engine_result
 
     monkeypatch.setattr(verificar_mod, "_evaluar_engine", _fake_eval)
     df_use = df if df is not None else _build_df()
-    return await verificar_mod.verificar_entrada(trader, "BTCUSDT", df_use, estado={}, on_event=None)
+    st: dict = {} if estado is None else estado
+    return await verificar_mod.verificar_entrada(trader, "BTCUSDT", df_use, estado=st, on_event=None)
 
 
 @pytest.mark.asyncio
@@ -163,6 +165,35 @@ async def test_score_below_threshold_blocks(
     assert getattr(final_record, "permitida") is False
     razones = getattr(final_record, "razones", [])
     assert "score_bajo" in razones
+
+
+@pytest.mark.asyncio
+async def test_engine_permitido_false_blocks_despite_high_technical_score(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """El motor puede negar por score_total, diversidad, etc.; el pipeline debe respetarlo."""
+    config = _config()
+    trader = _trader(config)
+
+    result = await _run_verificar(
+        monkeypatch,
+        trader,
+        {
+            "side": "long",
+            "score": 99.0,
+            "persistencia_ok": True,
+            "permitido": False,
+            "motivo_rechazo": "score_total_insuficiente",
+            "score_total": 0.1,
+            "umbral": 1.0,
+        },
+    )
+
+    assert result is None
+    score_false = verificar_mod.GATE_SCORE_DECISIONS_TOTAL.labels("BTCUSDT", "1m", "false")
+    score_true = verificar_mod.GATE_SCORE_DECISIONS_TOTAL.labels("BTCUSDT", "1m", "true")
+    assert score_false._value == 0
+    assert score_true._value == 0
 
 
 @pytest.mark.asyncio
@@ -301,3 +332,110 @@ async def test_distancias_gate_tolerates_float_rounding(monkeypatch: pytest.Monk
     expected_tp = df.iloc[-1]["close"] * (1 + 2 * min_pct)
     assert result["stop_loss"] == pytest.approx(expected_sl)
     assert result["take_profit"] == pytest.approx(expected_tp)
+
+
+@pytest.mark.asyncio
+async def test_entrada_dedupe_segunda_llamada_misma_vela_rechaza(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = _config()
+    trader = _trader(config)
+    estado: dict = {}
+    engine = {"side": "long", "score": 80.0, "persistencia_ok": True}
+
+    r1 = await _run_verificar(monkeypatch, trader, engine, estado=estado)
+    r2 = await _run_verificar(monkeypatch, trader, engine, estado=estado)
+
+    assert isinstance(r1, dict)
+    assert r2 is None
+    assert "_entrada_dedupe_vela" in estado
+
+
+@pytest.mark.asyncio
+async def test_entrada_dedupe_desactivado_permite_repetir(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = _config(entrada_dedupe_por_vela=False)
+    trader = _trader(config)
+    estado: dict = {}
+    engine = {"side": "long", "score": 80.0, "persistencia_ok": True}
+
+    r1 = await _run_verificar(monkeypatch, trader, engine, estado=estado)
+    r2 = await _run_verificar(monkeypatch, trader, engine, estado=estado)
+
+    assert isinstance(r1, dict)
+    assert isinstance(r2, dict)
+
+
+@pytest.mark.asyncio
+async def test_entrada_dedupe_nueva_vela_permite_de_nuevo(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = _config()
+    trader = _trader(config)
+    estado: dict = {}
+    engine = {"side": "long", "score": 80.0, "persistencia_ok": True}
+
+    df1 = _build_df()
+    df2 = df1.copy()
+    df2.loc[df2.index[-1], "timestamp"] = 1_700_000_001
+
+    r1 = await _run_verificar(monkeypatch, trader, engine, df=df1, estado=estado)
+    r2 = await _run_verificar(monkeypatch, trader, engine, df=df2, estado=estado)
+
+    assert isinstance(r1, dict)
+    assert isinstance(r2, dict)
+
+
+@pytest.mark.asyncio
+async def test_entrada_dedupe_cambia_lado_misma_vela_permite(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = _config()
+    trader = _trader(config)
+    estado: dict = {}
+
+    r1 = await _run_verificar(
+        monkeypatch,
+        trader,
+        {"side": "long", "score": 80.0, "persistencia_ok": True},
+        estado=estado,
+    )
+    r2 = await _run_verificar(
+        monkeypatch,
+        trader,
+        {"side": "short", "score": 80.0, "persistencia_ok": True},
+        estado=estado,
+    )
+
+    assert isinstance(r1, dict)
+    assert isinstance(r2, dict)
+
+
+@pytest.mark.asyncio
+async def test_entrada_dedupe_no_registra_si_rechaza_score(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = _config()
+    trader = _trader(config)
+    estado: dict = {}
+    seq = [
+        {"side": "long", "score": 30.0, "persistencia_ok": True},
+        {"side": "long", "score": 80.0, "persistencia_ok": True},
+    ]
+    idx = [0]
+
+    async def _fake_eval(*_args: object, **_kwargs: object) -> dict:
+        i = idx[0]
+        idx[0] = i + 1
+        return seq[i]
+
+    monkeypatch.setattr(verificar_mod, "_evaluar_engine", _fake_eval)
+    df_use = _build_df()
+
+    r1 = await verificar_mod.verificar_entrada(trader, "BTCUSDT", df_use, estado=estado, on_event=None)
+    r2 = await verificar_mod.verificar_entrada(trader, "BTCUSDT", df_use, estado=estado, on_event=None)
+
+    assert r1 is None
+    assert isinstance(r2, dict)
+    assert "_entrada_dedupe_vela" in estado

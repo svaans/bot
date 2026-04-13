@@ -95,6 +95,7 @@ async def test_alert_dispatcher_ruta_cooldown() -> None:
 async def test_alert_dispatcher_rate_limit_critical_by_operation_id(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setenv("ALERT_NOTIFY_RATE_LIMIT_ENABLED", "true")
     monkeypatch.setenv("ALERT_NOTIFY_MIN_INTERVAL_CRITICAL_SEC", "3600")
     monkeypatch.setenv("ALERT_NOTIFY_MIN_INTERVAL_ERROR_SEC", "0")
 
@@ -170,5 +171,26 @@ async def test_alert_dispatcher_registra_fallos() -> None:
 
     assert success_metric._value == base_success + 1
     assert error_metric._value == base_error + 1
+
+    await dispatcher.aclose()
+
+
+@pytest.mark.asyncio
+async def test_alert_dispatcher_notify_usa_nivel_si_no_hay_tipo() -> None:
+    """Compatibilidad con enqueue_notification (nivel) frente a OrderManager (tipo)."""
+
+    bus = EventBus()
+    dummy = _DummyChannel()
+    dispatcher = AlertDispatcher(
+        bus=bus,
+        channels=[dummy],
+        enable_prometheus=False,
+    )
+    await bus.publish(
+        "notify",
+        {"mensaje": "solo nivel", "nivel": "WARNING"},
+    )
+    await _wait_until(lambda: len(dummy.alerts) == 1)
+    assert dummy.alerts[0].severity == "WARNING"
 
     await dispatcher.aclose()

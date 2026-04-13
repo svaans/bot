@@ -19,6 +19,10 @@ API principal:
 
 Compat:
 Se mantienen alias a nivel de módulo si decides exportarlos igual que antes.
+
+``shutdown`` / ``stop_supervision`` cancelan también las tareas internas
+``heartbeat`` y ``watchdog`` (antes quedaban huérfanas). ``start_supervision`` es
+idempotente: una segunda llamada no duplica el par heartbeat/watchdog.
 """
 from __future__ import annotations
 import asyncio
@@ -27,7 +31,7 @@ import traceback
 from math import ldexp
 from collections import defaultdict, deque
 from datetime import datetime, timedelta, timezone
-from typing import Awaitable, Callable, Deque, Dict, Optional
+from typing import Any, Awaitable, Callable, Deque, Dict, Optional
 
 try:  # pragma: no cover - métrica opcional
     from core.metrics import TASK_TIMEOUT_SECONDS
@@ -81,6 +85,8 @@ class Supervisor:
         self.last_ping: Dict[str, float] = {}
         # Estado
         self.stop_event = asyncio.Event()
+        self._supervision_core_tasks: list[asyncio.Task[Any]] = []
+        self._supervision_started = False
         self._watchdog_interval_event = asyncio.Event()
         self._watchdog_interval = watchdog_check_interval
         self._watchdog_timeout = watchdog_timeout
@@ -463,18 +469,32 @@ class Supervisor:
         return task
 
     def start_supervision(self) -> None:
+        if self._supervision_started:
+            return
+        self._supervision_started = True
         loop = asyncio.get_running_loop()
         loop.set_exception_handler(self.exception_handler)
-        asyncio.create_task(self.heartbeat(), name="heartbeat")
-        asyncio.create_task(self.watchdog(), name="watchdog")
+        self._supervision_core_tasks = [
+            asyncio.create_task(self.heartbeat(), name="supervisor_heartbeat"),
+            asyncio.create_task(self.watchdog(), name="supervisor_watchdog"),
+        ]
         self._emit("supervision_started", {})
 
     async def shutdown(self) -> None:
         self.stop_event.set()
-        for t in list(self.tasks.values()):
-            t.cancel()
-        if self.tasks:
-            await asyncio.gather(*self.tasks.values(), return_exceptions=True)
+        core_tasks = list(self._supervision_core_tasks)
+        self._supervision_core_tasks.clear()
+        for t in core_tasks:
+            if not t.done():
+                t.cancel()
+        supervised = list(self.tasks.values())
+        for t in supervised:
+            if not t.done():
+                t.cancel()
+        await asyncio.gather(*core_tasks, *supervised, return_exceptions=True)
+        self.tasks.clear()
+        self._supervision_started = False
+        self.stop_event = asyncio.Event()
         self._emit("supervision_stopped", {})
 
 

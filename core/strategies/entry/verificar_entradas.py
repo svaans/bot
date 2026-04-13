@@ -13,12 +13,10 @@ Notas de diseño
 - Tolerante a dependencias opcionales (engine, persistencia, riesgo).
 - Respeta umbrales de Config (score técnico, distancias mínimas, overrides).
 - Emite eventos vía `on_event(evt, data)` si se provee.
-- El motor (``engine``) debe distinguir señal **nueva** o borde frente a un
-  régimen que sigue válido vela tras vela; si solo devuelve ``side`` mientras
-  la tendencia se mantiene, cada vela cerrada puede volver a candidatar entrada
-  hasta que falle ``OrderManager.crear`` o exista orden local —por eso conviene
-  lógica de edge/cooldown en el propio motor o metadatos (p. ej. timestamp de
-  última señal emitida).
+- Con ``entrada_dedupe_por_vela`` (config / env ``ENTRADA_DEDUPE_POR_VELA``), no se
+  vuelve a aprobar la misma tupla (timeframe + timestamp de vela de cierre + lado)
+  mientras el estado del símbolo conserve la última señal registrada (clave
+  ``_entrada_dedupe_vela`` en ``estado``).
 - Tras un ``crear_failed`` en :mod:`core.procesar_vela`, el trader puede aplicar
   ``entrada_cooldown_tras_crear_failed_sec`` (config / env) vía
   ``Trader.registrar_cooldown_entrada`` para no re-evaluar el motor en cada vela.
@@ -29,7 +27,6 @@ from __future__ import annotations
 import asyncio
 import inspect
 import math
-import asyncio
 from dataclasses import dataclass, field
 import time
 from typing import Any, Callable, Optional
@@ -75,6 +72,70 @@ ColumnsBase = ["timestamp", "open", "high", "low", "close", "volume"]
 
 
 log = configurar_logger("entry_verifier", modo_silencioso=True)
+
+_ENTRADA_DEDUPE_STATE_KEY = "_entrada_dedupe_vela"
+
+
+def _normalize_dedupe_bar_ts(ts_value: Any) -> Any | None:
+    if ts_value is None:
+        return None
+    try:
+        if isinstance(ts_value, float) and pd.isna(ts_value):
+            return None
+    except Exception:
+        pass
+    try:
+        return int(ts_value)
+    except (TypeError, ValueError):
+        return ts_value
+
+
+def _entrada_dedupe_enabled(cfg: Any) -> bool:
+    if cfg is None:
+        return True
+    return bool(getattr(cfg, "entrada_dedupe_por_vela", True))
+
+
+def _entrada_es_duplicado_por_vela(
+    estado: Any,
+    *,
+    timeframe_value: str | None,
+    bar_ts: Any,
+    side: str,
+) -> bool:
+    if not isinstance(estado, dict):
+        return False
+    ts_norm = _normalize_dedupe_bar_ts(bar_ts)
+    if ts_norm is None:
+        return False
+    prev = estado.get(_ENTRADA_DEDUPE_STATE_KEY)
+    if not isinstance(prev, dict):
+        return False
+    tf_key = str(timeframe_value or "unknown")
+    return (
+        str(prev.get("tf") or "") == tf_key
+        and prev.get("bar_ts") == ts_norm
+        and str(prev.get("side") or "").lower() == str(side).lower()
+    )
+
+
+def _entrada_registrar_dedupe_vela(
+    estado: Any,
+    *,
+    timeframe_value: str | None,
+    bar_ts: Any,
+    side: str,
+) -> None:
+    if not isinstance(estado, dict):
+        return
+    ts_norm = _normalize_dedupe_bar_ts(bar_ts)
+    if ts_norm is None:
+        return
+    estado[_ENTRADA_DEDUPE_STATE_KEY] = {
+        "tf": str(timeframe_value or "unknown"),
+        "bar_ts": ts_norm,
+        "side": str(side).lower(),
+    }
 
 
 def _metrics_extended_enabled() -> bool:
@@ -725,6 +786,19 @@ async def verificar_entrada(
     cfg = getattr(trader, "config", None)
     if cfg is None:
         return _reject_with_skip("config_missing")
+
+    permitido_engine = resultado_engine.get("permitido")
+    if permitido_engine is False:
+        motivo = resultado_engine.get("motivo_rechazo") or "permitido_false"
+        extra = {
+            "motivo_engine": motivo,
+            "score_total": resultado_engine.get("score_total"),
+            "umbral": resultado_engine.get("umbral"),
+            "score_tecnico": resultado_engine.get("score_tecnico"),
+            "umbral_score_tecnico": resultado_engine.get("umbral_score_tecnico"),
+        }
+        return _reject_with_skip("engine_denegado", extra=extra)
+
     contradicciones = bool(resultado_engine.get("contradicciones", False))
 
     # Reglas de contradicción
@@ -839,10 +913,35 @@ async def verificar_entrada(
         decision.meta.setdefault("persistencia_warning", True)
         decision.add_reason("persistencia_warning")
 
+    if _entrada_dedupe_enabled(cfg) and _entrada_es_duplicado_por_vela(
+        estado,
+        timeframe_value=timeframe_value,
+        bar_ts=ts_value,
+        side=side,
+    ):
+        decision.permitida = False
+        decision.add_reason("entrada_dedupe_vela")
+        payload = {
+            "symbol": symbol,
+            "reason": "entrada_dedupe_vela",
+            "bar_ts": ts_value,
+            "timeframe": timeframe_value,
+            "side": side,
+        }
+        _emit(on_event, "entry_skip", payload)
+        _finalize_decision(decision)
+        return _reject("entrada_dedupe_vela", extra=payload)
+
     _emit(on_event, "entry_candidate", {"symbol": symbol, "side": side, "score": decision.score})
     decision.add_reason("ok")
     final_payload = decision.to_payload()
     _finalize_decision(decision)
+    _entrada_registrar_dedupe_vela(
+        estado,
+        timeframe_value=timeframe_value,
+        bar_ts=ts_value,
+        side=side,
+    )
     return _approve(final_payload)
 
 

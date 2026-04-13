@@ -304,6 +304,8 @@ class StrategyEngine:
             else:
                 motivo = "desconocido"
 
+        # ``verificar_entrada`` respeta ``permitido``; si es False no se abre aunque
+        # el score técnico pase otros filtros aislados en el pipeline.
         return {
             "permitido": permitido,
             "motivo_rechazo": motivo,

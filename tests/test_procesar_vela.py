@@ -11,6 +11,7 @@ import pytest
 from core import procesar_vela as procesar_vela_mod
 from core.procesar_vela import procesar_vela
 from core.operational_mode import OperationalMode
+from core.orders.order_open_status import OrderOpenStatus
 from indicadores.atr import calcular_atr
 from indicadores.momentum import calcular_momentum
 from indicadores.rsi import calcular_rsi
@@ -65,10 +66,11 @@ class DummyOrders:
         self.requested.append(symbol)
         return None
 
-    async def crear(self, **payload: Any) -> None:
+    async def crear(self, **payload: Any) -> OrderOpenStatus:
         # Simula creación satisfactoria almacenando los datos exactos
         await asyncio.sleep(0)
         self.created.append(dict(payload))
+        return OrderOpenStatus.OPENED
 
 
 class FlakyOrders(DummyOrders):
@@ -102,7 +104,7 @@ class DummyTrader:
         self.config = DummyConfig(symbols=["BTCUSDT"])
         self.orders = DummyOrders()
         self.estado = {"BTCUSDT": {"trend": "up"}}
-        self.notifications: list[tuple[str, str]] = []
+        self.notifications: list[dict[str, Any]] = []
         self.side = side
         self.generar_propuesta = generar_propuesta
         self.evaluaciones: list[tuple[str, Any, Any]] = []
@@ -123,8 +125,8 @@ class DummyTrader:
             "meta": {"fuente": "unit-test"},
         }
 
-    def enqueue_notification(self, mensaje: str, nivel: str = "INFO") -> None:
-        self.notifications.append((mensaje, nivel))
+    def enqueue_notification(self, mensaje: str, nivel: str = "INFO", **meta: Any) -> None:
+        self.notifications.append({"mensaje": mensaje, "nivel": nivel, **meta})
 
 
 class WarmupTrader:
@@ -300,9 +302,11 @@ async def test_procesar_vela_abre_operacion_para_oportunidad(side: str) -> None:
     assert created["meta"]["fuente"] == "unit-test"
     assert isinstance(created["meta"].get("trace_id"), str)
     assert len(created["meta"]["trace_id"]) >= 8
-    assert trader.notifications == [
-        (f"Abrir {side} BTCUSDT @ {candle['close']:.6f}", "INFO")
-    ]
+    assert len(trader.notifications) == 1
+    n0 = trader.notifications[0]
+    assert n0["mensaje"].startswith(f"Abrir {side} BTCUSDT @ {candle['close']:.6f}")
+    assert n0["nivel"] == "INFO"
+    assert n0.get("dedup_key", "").startswith(f"entry_open:BTCUSDT:1m:{int(candle['timestamp'])}:{side}")
 
 
 @pytest.mark.asyncio

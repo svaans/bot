@@ -124,6 +124,12 @@ def test_cargar_historial_sin_fuentes(tmp_path: Path, monkeypatch: pytest.Monkey
         loader.cargar_historial_operaciones(symbol)
 
 
+def test_normalizar_symbol_rechaza_puntos_dobles() -> None:
+    """Evita componentes ``..`` en el nombre final (riesgo de confusión con rutas)."""
+    with pytest.raises(ValueError):
+        loader.normalizar_symbol_parquet_filename("BTC..USDT")
+
+
 def test_symbol_parquet_roundtrip() -> None:
     """El stem del parquet debe reconstruir pares BASE/QUOTE con un solo guion bajo."""
 

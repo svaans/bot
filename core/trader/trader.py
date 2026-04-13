@@ -1712,10 +1712,16 @@ class Trader(TraderLite):
         return None
 
     # Compat helpers -------------------------------------------------------
-    def enqueue_notification(self, mensaje: str, nivel: str = "INFO") -> None:
+    def enqueue_notification(self, mensaje: str, nivel: str = "INFO", **meta: Any) -> None:
         if self.on_event:
             try:
-                self.on_event("notify", {"mensaje": mensaje, "nivel": nivel})
+                payload: dict[str, Any] = {
+                    "mensaje": mensaje,
+                    "nivel": nivel,
+                    "tipo": nivel,
+                }
+                payload.update(meta)
+                self.on_event("notify", payload)
             except Exception as exc:
                 self._log_hook_exception(
                     "on_event.notify",
@@ -1731,7 +1737,7 @@ class Trader(TraderLite):
             asyncio.get_running_loop()
         except RuntimeError:
             try:
-                manager.enviar(mensaje, nivel)
+                manager.enviar(mensaje, nivel, **meta)
             except Exception as exc:
                 self._log_hook_exception(
                     "notification_manager.sync",
@@ -1740,7 +1746,7 @@ class Trader(TraderLite):
                 )
             return
 
-        task = asyncio.create_task(manager.enviar_async(mensaje, nivel))
+        task = asyncio.create_task(manager.enviar_async(mensaje, nivel, **meta))
         self._register_bg_task(task)
 
     def enqueue_persistence(self, tipo: str, datos: dict, *, immediate: bool = False) -> None:

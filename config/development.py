@@ -104,3 +104,5 @@ class DevelopmentConfig:
     momentum_threshold_overrides: Dict[str, float] = field(default_factory=dict)
     entrada_cooldown_tras_crear_failed_sec: float = 300.0
     entrada_cooldown_tras_crear_failed_por_symbol: Dict[str, float] = field(default_factory=dict)
+    # Evita re-emitir la misma candidatura (mismo TF + vela + lado) en re-evaluaciones del mismo cierre.
+    entrada_dedupe_por_vela: bool = True

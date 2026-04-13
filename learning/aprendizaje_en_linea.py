@@ -9,6 +9,7 @@ from config.configuracion import cargar_configuracion_simbolo, guardar_configura
 from core.utils.utils import configurar_logger
 from .utils_resultados import (distribuir_retorno_por_estrategia,
     obtener_retorno_total_registro, parsear_estrategias_activas)
+from .historial_operaciones import normalizar_symbol_parquet_filename
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CARPETA_OPERACIONES = os.path.join(BASE_DIR, 'ultimas_operaciones')
 RUTA_PESOS = 'config/estrategias_pesos.json'
@@ -22,8 +23,12 @@ os.makedirs(CARPETA_OPERACIONES, exist_ok=True)
 
 
 def registrar_resultado_trade(symbol: str, orden: dict, ganancia: float):
-    archivo = os.path.join(CARPETA_OPERACIONES, symbol.replace('/', '_').
-        upper() + '.parquet')
+    try:
+        fname = normalizar_symbol_parquet_filename(symbol)
+    except ValueError as exc:
+        log.warning('símbolo inválido para historial aprendizaje_en_linea: %s', exc)
+        return
+    archivo = os.path.join(CARPETA_OPERACIONES, fname)
     historial = []
     if os.path.exists(archivo):
         try:

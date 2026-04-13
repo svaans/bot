@@ -225,6 +225,7 @@ class Config:
     backfill_ventana_enabled: bool = False
     entrada_cooldown_tras_crear_failed_sec: float = 0.0
     entrada_cooldown_tras_crear_failed_por_symbol: Dict[str, float] = field(default_factory=dict)
+    entrada_dedupe_por_vela: bool = True
 
 class ConfigManager:
     """Carga y proporciona acceso a la configuración del bot."""
@@ -491,6 +492,11 @@ class ConfigManager:
             _parse_float_mapping('ENTRADA_COOLDOWN_TRAS_CREAR_FAILED_POR_SYMBOL')
         )
 
+        entrada_dedupe_por_vela = _env_bool(
+            'ENTRADA_DEDUPE_POR_VELA',
+            getattr(defaults, 'entrada_dedupe_por_vela', True),
+        )
+
         risk_capital_total = _cargar_float(
             'RISK_CAPITAL_TOTAL', getattr(defaults, 'risk_capital_total', 0.0)
         )
@@ -638,6 +644,7 @@ class ConfigManager:
             backfill_ventana_enabled=backfill_ventana_enabled,
             entrada_cooldown_tras_crear_failed_sec=entrada_cooldown_tras_crear_failed_sec,
             entrada_cooldown_tras_crear_failed_por_symbol=entrada_cooldown_tras_crear_failed_por_symbol,
+            entrada_dedupe_por_vela=entrada_dedupe_por_vela,
             risk_kill_switch_max_consecutive_losses=risk_kill_switch_max_consecutive_losses,
         )
 

@@ -2,11 +2,14 @@ import argparse
 import json
 from dataclasses import dataclass
 from pathlib import Path
-import pandas as pd
+
 import numpy as np
+import pandas as pd
 from scipy.optimize import minimize
 
-RUTA_CONFIG = Path('config/configuraciones_optimas.json')
+from .config_output_path import _CONFIG_ROOT, _REPO_ROOT, resolve_config_output_path
+
+RUTA_CONFIG = _CONFIG_ROOT / "configuraciones_optimas.json"
 
 
 def _cargar_config(path: Path) -> dict:
@@ -64,6 +67,7 @@ def calibrar_pesos(
     validation_fraction: float = 0.25,
     l2_penalty: float = 1e-3,
 ) -> AdaptiveWeightsCalibration:
+    path_config = resolve_config_output_path(path_config)
     df = pd.read_csv(path_datos)
     if not 0 < validation_fraction < 1:
         raise ValueError('validation_fraction debe estar en (0, 1)')
@@ -134,11 +138,11 @@ def main() -> None:
     )
     parser.add_argument(
         '--salida',
-        default=str(RUTA_CONFIG),
-        help='Ruta del archivo de configuración de salida',
+        default=str(RUTA_CONFIG.relative_to(_REPO_ROOT)),
+        help='Ruta del JSON de salida (solo bajo el directorio config/ del repositorio)',
     )
     args = parser.parse_args()
-    resultado = calibrar_pesos(Path(args.dataset), Path(args.salida))
+    resultado = calibrar_pesos(Path(args.dataset), resolve_config_output_path(Path(args.salida)))
     print('Pesos optimizados:', resultado.weights)
     print(
         'MSE entrenamiento:',

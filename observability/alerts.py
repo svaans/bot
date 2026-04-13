@@ -1,10 +1,17 @@
 """Herramientas de observabilidad para consolidar alertas estructuradas.
 
-Este módulo centraliza el enrutamiento de eventos críticos del ``EventBus`` y
-los transforma en alertas estructuradas para diferentes canales externos
-Discord, Slack y métricas Prometheus. Al normalizar los mensajes se facilita la
-auditoría y se evita la proliferación de consumidores huérfanos en otras
-partes del códigobase.
+Este módulo centraliza el enrutamiento de eventos ``notify`` del ``EventBus``
+hacia Discord/Slack (y métricas). **Telegram** del bot usa sobre todo
+:class:`core.notification_manager.NotificationManager` (cola propia), no este
+dispatcher.
+
+**Rate limit:** solo aplica a severidades ``CRITICAL`` y ``ERROR`` vía env
+(``ALERT_NOTIFY_*``). Los avisos ``INFO``/``WARNING`` no se suprimen aquí; el
+frenado de spam en Telegram debe ir por deduplicación en el ``NotificationManager``
+(``dedup_key`` en meta), políticas de negocio, o límites específicos de Telegram.
+
+Los payloads pueden usar ``tipo`` o, por compatibilidad, ``nivel`` (como
+:meth:`core.trader.Trader.enqueue_notification`).
 """
 
 from __future__ import annotations
@@ -331,8 +338,8 @@ class AlertDispatcher:
             return False
         now = time.monotonic()
         async with self._notify_throttle_lock:
-            last = self._notify_last_sent.get(key, 0.0)
-            if now - last < interval:
+            last = self._notify_last_sent.get(key)
+            if last is not None and now - last < interval:
                 ALERT_NOTIFY_SUPPRESSED_TOTAL.labels(
                     severity=severity.upper(),
                     key_kind=kind,
@@ -358,11 +365,13 @@ class AlertDispatcher:
         if isinstance(payload, dict):
             payload_dict = dict(payload)
             message = str(payload.get("mensaje", "")).strip()
-            severity = str(payload.get("tipo", "INFO")).upper()
+            severity = str(
+                payload.get("tipo") or payload.get("nivel") or "INFO"
+            ).upper()
             metadata = {
                 k: v
                 for k, v in payload.items()
-                if k not in {"mensaje", "tipo"}
+                if k not in {"mensaje", "tipo", "nivel"}
             } or None
         else:
             message = str(payload)

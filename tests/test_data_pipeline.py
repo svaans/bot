@@ -23,6 +23,7 @@ from core.data_feed import DataFeed
 from core.data_feed import handlers as df_handlers
 from core.data_feed.spread_sampler import SpreadSample
 from core.procesar_vela import procesar_vela as procesar_vela_handler
+from core.orders.order_open_status import OrderOpenStatus
 from core.trader.trader_lite import TraderLite
 from tests.factories import DummyConfig, DummySupervisor
 
@@ -422,8 +423,9 @@ async def test_procesar_vela_no_falla_si_metricas_explotan(monkeypatch: pytest.M
                 def obtener(self, _symbol: str) -> None:
                     return None
 
-                def crear(self, **payload: Any) -> None:
+                def crear(self, **payload: Any) -> OrderOpenStatus:
                     self.created.append(dict(payload))
+                    return OrderOpenStatus.OPENED
 
             self.orders = _Orders()
 
@@ -440,7 +442,7 @@ async def test_procesar_vela_no_falla_si_metricas_explotan(monkeypatch: pytest.M
                 "score": 3.0,
             }
 
-        def enqueue_notification(self, mensaje: str, nivel: str = "INFO") -> None:
+        def enqueue_notification(self, mensaje: str, nivel: str = "INFO", **_meta: Any) -> None:
             self.notifications.append((mensaje, nivel))
 
     trader = TraderStub()

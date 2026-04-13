@@ -292,6 +292,34 @@ def _resolve_entrada_cooldown_tras_crear_failed_sec(trader: Any, symbol: str) ->
         return 0.0
 
 
+def _entry_open_notify_dedup_key(
+    symbol: str,
+    side: str,
+    timeframe_label: str | None,
+    propuesta: Mapping[str, Any],
+    vela: Mapping[str, Any] | None,
+) -> str | None:
+    """Clave estable para deduplicar el aviso de apertura en NotificationManager."""
+
+    ts = propuesta.get("timestamp")
+    if ts is None and vela is not None:
+        ts = (
+            vela.get("close_time")
+            or vela.get("event_time")
+            or vela.get("open_time")
+            or vela.get("timestamp")
+        )
+    if ts is None:
+        return None
+    try:
+        ts_norm = int(ts)
+    except (TypeError, ValueError):
+        ts_norm = ts
+    sym_u = str(symbol).strip().upper()
+    tf = str(timeframe_label or "unknown").strip()
+    return f"entry_open:{sym_u}:{tf}:{ts_norm}:{str(side).lower()}"
+
+
 def _format_entry_open_notification(
     side: str,
     symbol: str,
@@ -1004,7 +1032,7 @@ async def procesar_vela(trader: Any, vela: dict) -> None:
     Requisitos de `trader`:
       - atributos: config, spread_guard (opcional), orders (OrderManager), estado (dict) si quieres estados extra
       - método: evaluar_condiciones_de_entrada(symbol, df, estado)
-      - método opcional: enqueue_notification(mensaje, nivel)
+      - método opcional: enqueue_notification(mensaje, nivel, dedup_key=..., **meta)
     """
     t0 = time.perf_counter()
     symbol = ""
@@ -1488,16 +1516,24 @@ async def procesar_vela(trader: Any, vela: dict) -> None:
             safe_inc(ENTRADAS_ABIERTAS, symbol=symbol, side=side)
             notify = getattr(trader, "enqueue_notification", None)
             if callable(notify):
-                notify(
-                    _format_entry_open_notification(
-                        side,
-                        symbol,
-                        precio,
-                        propuesta,
-                        timeframe_label=timeframe_label,
-                    ),
-                    "INFO",
+                msg = _format_entry_open_notification(
+                    side,
+                    symbol,
+                    precio,
+                    propuesta,
+                    timeframe_label=timeframe_label,
                 )
+                dk = _entry_open_notify_dedup_key(
+                    symbol,
+                    side,
+                    timeframe_label,
+                    propuesta,
+                    vela if isinstance(vela, dict) else None,
+                )
+                if dk:
+                    notify(msg, "INFO", dedup_key=dk)
+                else:
+                    notify(msg, "INFO")
         except OrderCircuitBreakerOpen as exc:
             safe_inc(
                 ENTRADAS_RECHAZADAS_V2,
