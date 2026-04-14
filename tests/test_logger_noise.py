@@ -4,6 +4,19 @@ from __future__ import annotations
 
 import logging
 
+import pytest
+
+
+def test_console_log_level_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    from core.utils import logger as logger_module
+
+    monkeypatch.setenv("BOT_LOG_LEVEL", "WARNING")
+    assert logger_module.console_log_level() == logging.WARNING
+    monkeypatch.setenv("BOT_LOG_LEVEL", "debug")
+    assert logger_module.console_log_level() == logging.DEBUG
+    monkeypatch.delenv("BOT_LOG_LEVEL", raising=False)
+    assert logger_module.console_log_level() == logging.INFO
+
 
 def test_noisy_loggers_escalated():
     """Los loggers de websockets y binance deben elevarse al menos a INFO."""

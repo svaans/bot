@@ -7,9 +7,9 @@
     "ETH/EUR": 1.0
   },
   "histeresis_skips": {
-    "BNB/EUR": 45,
-    "SOL/EUR": 30,
-    "ADA/EUR": 10,
+    "BNB/EUR": 50,
+    "SOL/EUR": 35,
+    "ADA/EUR": 11,
     "BTC/EUR": 3,
     "ETH/EUR": 1
   }

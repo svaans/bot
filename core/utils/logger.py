@@ -1,4 +1,10 @@
-"""Utilities de logging estructurado en JSON para el bot."""
+"""Utilities de logging estructurado en JSON para el bot.
+
+Nivel de salida por consola: variable de entorno ``BOT_LOG_LEVEL`` (``DEBUG``,
+``INFO``, ``WARNING``, ``ERROR``, ``CRITICAL``). Por defecto ``INFO``: operación
+normal sin inundar la terminal. Usa ``BOT_LOG_LEVEL=DEBUG`` para diagnóstico
+detallado (p. ej. trazas de vela y datafeed).
+"""
 from __future__ import annotations
 
 import io
@@ -18,9 +24,26 @@ from typing import Any, Dict, MutableMapping, Optional
 
 __all__ = [
     "configurar_logger",
+    "console_log_level",
     "log_decision",
     "_should_log",
 ]
+
+_CONSOLE_LEVEL_ALIASES: dict[str, int] = {
+    "DEBUG": logging.DEBUG,
+    "INFO": logging.INFO,
+    "WARNING": logging.WARNING,
+    "WARN": logging.WARNING,
+    "ERROR": logging.ERROR,
+    "CRITICAL": logging.CRITICAL,
+}
+
+
+def console_log_level() -> int:
+    """Nivel mínimo de severidad para la consola JSON (env ``BOT_LOG_LEVEL``)."""
+
+    raw = (os.getenv("BOT_LOG_LEVEL") or "INFO").strip().upper()
+    return _CONSOLE_LEVEL_ALIASES.get(raw, logging.INFO)
 
 
 _LOCK = threading.Lock()
@@ -163,12 +186,14 @@ def _build_handler() -> logging.Handler:
     handler = _SafeStreamHandler()
     formatter = _JsonFormatter()
     handler.setFormatter(formatter)
+    handler.setLevel(console_log_level())
     return handler
 
 
 def _ensure_root_logger() -> None:
-    """Guarantee a StreamHandler in the root logger with DEBUG level."""
+    """Asegura un ``StreamHandler`` JSON en el root y un nivel de consola coherente."""
 
+    level = console_log_level()
     root_logger = logging.getLogger()
     if not root_logger.handlers:
         root_logger.addHandler(_build_handler())
@@ -177,7 +202,13 @@ def _ensure_root_logger() -> None:
         has_stream_handler = any(isinstance(h, logging.StreamHandler) for h in root_logger.handlers)
         if not has_stream_handler:
             root_logger.addHandler(_build_handler())
-    root_logger.setLevel(logging.DEBUG)
+        else:
+            for h in root_logger.handlers:
+                if isinstance(h, logging.StreamHandler) and isinstance(
+                    getattr(h, "formatter", None), _JsonFormatter
+                ):
+                    h.setLevel(level)
+    root_logger.setLevel(level)
 
 
 _ensure_root_logger()
@@ -193,12 +224,13 @@ def _set_minimum_level(logger_name: str, min_level: int) -> None:
 
 
 def _configure_noisy_loggers() -> None:
-    """Ajusta loggers ruidosos de terceros para silenciar mensajes DEBUG."""
+    """Ajusta loggers ruidosos de terceros para no quedar por debajo de la consola."""
 
+    floor = max(logging.INFO, console_log_level())
     noisy_loggers: dict[str, int] = {
-        "websockets.client": logging.INFO,
-        "websockets.protocol": logging.INFO,
-        "binance_api.websocket": logging.INFO,
+        "websockets.client": floor,
+        "websockets.protocol": floor,
+        "binance_api.websocket": floor,
     }
     for name, min_level in noisy_loggers.items():
         _set_minimum_level(name, min_level)
@@ -209,12 +241,13 @@ _configure_noisy_loggers()
 
 def configurar_logger(nombre: str, *, modo_silencioso: bool | None = None, nivel: int | None = None) -> logging.Logger:
     """Devuelve un logger configurado con formato JSON y singleton por nombre."""
+    base = console_log_level()
     with _LOCK:
         if nombre in _CONFIGURED:
             logger = _CONFIGURED[nombre]
         else:
             logger = logging.getLogger(nombre)
-            logger.setLevel(logging.DEBUG)
+            logger.setLevel(base)
             logger.handlers.clear()
             logger.addHandler(_build_handler())
             logger.propagate = False
@@ -222,7 +255,7 @@ def configurar_logger(nombre: str, *, modo_silencioso: bool | None = None, nivel
         if nombre in {"trader", "trader_modular"}:
             # Estos loggers deben propagar al root para asegurar visibilidad completa.
             logger.handlers.clear()
-            logger.setLevel(logging.DEBUG)
+            logger.setLevel(base)
             logger.propagate = True
     if nivel is not None:
         logger.setLevel(nivel)
