@@ -302,6 +302,24 @@ class ConfigManager:
                 modo_operativo = OperationalMode.REAL if modo_real_env.strip().lower() == 'true' else OperationalMode.PAPER_TRADING
         modo_real = modo_operativo.is_real
 
+        if modo_env:
+            mode_source = "MODO_OPERATIVO_or_BOT_MODE"
+        elif os.getenv("MODO_REAL") is not None:
+            mode_source = "MODO_REAL"
+        else:
+            mode_source = f"default(BOT_ENV={env_name})"
+        log.info(
+            "config.operational_mode_resolved",
+            extra=safe_extra(
+                {
+                    "modo_operativo": modo_operativo.value,
+                    "modo_real": modo_real,
+                    "bot_env": env_name,
+                    "mode_source": mode_source,
+                }
+            ),
+        )
+
         # Claves API (solo si modo_real)
         api_key = os.environ.get('BINANCE_API_KEY')
         api_secret = os.environ.get('BINANCE_API_SECRET')

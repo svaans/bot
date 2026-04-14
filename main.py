@@ -259,6 +259,12 @@ async def main():
         print('🟢 Modo REAL activado')
     else:
         print('🟡 Modo SIMULADO activado')
+        print(
+            '   Si esperabas REAL: en config/claves.env pon MODO_REAL=true '
+            '(o MODO_OPERATIVO=real), o BOT_ENV=production. '
+            'Sin eso, development usa paper por defecto. '
+            'Si ya tenías REAL y ves esto, revisa desfase de reloj (CLOCK_DRIFT).'
+        )
 
     mostrar_banner()
     print(f'🚀 Iniciando bot de trading... Modo real: {getattr(config, "modo_real", False)}')
