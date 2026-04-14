@@ -8,6 +8,7 @@ from typing import Any, Callable, Sequence, Tuple
 import pandas as pd
 import pytest
 
+from core.orders.order_open_status import OrderOpenStatus
 from core.procesar_vela import procesar_vela
 from core.trader_modular import Trader
 from data_feed import DataFeed
@@ -187,8 +188,9 @@ def trader_factory(monkeypatch: pytest.MonkeyPatch) -> Callable[
         def obtener(self, _symbol: str) -> None:
             return None
 
-        def crear(self, **payload: Any) -> None:
+        def crear(self, **payload: Any) -> OrderOpenStatus:
             self.created.append(dict(payload))
+            return OrderOpenStatus.OPENED
 
     async def _pipeline(
         self: Trader,
