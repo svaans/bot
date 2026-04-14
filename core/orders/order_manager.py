@@ -97,6 +97,35 @@ _PERSISTENCE_ERROR_KEYWORDS = (
 )
 
 
+def _backtest_slippage_bps() -> float:
+    try:
+        v = float(os.getenv("BACKTEST_SLIPPAGE_BPS", "0") or 0)
+    except (TypeError, ValueError):
+        return 0.0
+    return max(0.0, v)
+
+
+def _sim_aplicar_slippage_entrada_salida(
+    precio: float,
+    direccion: str,
+    *,
+    es_entrada: bool,
+) -> float:
+    """Ajusta precio en backtest: long compra más caro / vende más barato; short al revés."""
+
+    bps = _backtest_slippage_bps()
+    if bps <= 0 or not is_valid_number(precio) or precio <= 0:
+        return precio
+    k = bps / 10000.0
+    d = (direccion or "long").lower()
+    short = d in ("short", "venta")
+    if not short:
+        factor = (1.0 + k) if es_entrada else (1.0 - k)
+    else:
+        factor = (1.0 - k) if es_entrada else (1.0 + k)
+    return float(precio * factor)
+
+
 class OrderManager:
     """Abstrae la creación y cierre de órdenes.
 
@@ -513,6 +542,13 @@ class OrderManager:
             pnl = float(resultado.get("pnl", 0.0))
             remaining = float(resultado.get("restante", 0.0))
             status = str(resultado.get("status") or "FILLED").upper()
+            fill_avg = resultado.get("precio_fill_promedio")
+            try:
+                fill_avg_f = float(fill_avg) if fill_avg is not None else None
+            except (TypeError, ValueError):
+                fill_avg_f = None
+            if fill_avg_f is not None and fill_avg_f <= 0:
+                fill_avg_f = None
             if remaining > 0:
                 log.warning(
                     "orders.limit_execution.partial",
@@ -525,7 +561,14 @@ class OrderManager:
                         }
                     ),
                 )
-            return ExecutionResult(executed, fee, pnl, status, remaining=remaining)
+            return ExecutionResult(
+                executed,
+                fee,
+                pnl,
+                status,
+                remaining=remaining,
+                precio_fill_promedio=fill_avg_f,
+            )
 
         return await self._market_executor.ejecutar(side, symbol, cantidad, operation_id, entrada)
 
@@ -1287,6 +1330,11 @@ class OrderManager:
 
             self.abriendo.add(symbol)
             try:
+                precio_senal = float(precio)
+                if not self.modo_real:
+                    precio = _sim_aplicar_slippage_entrada_salida(
+                        precio, direccion, es_entrada=True
+                    )
                 objetivo = objetivo if objetivo is not None else cantidad
                 orden = Order(
                     symbol=symbol,
@@ -1314,6 +1362,7 @@ class OrderManager:
                     operation_id=operation_id,
                 )
                 self.ordenes[symbol] = orden
+                precio_para_registro = float(precio)
 
                 if self.bus:
                     estrategias_txt = ', '.join(estrategias.keys())
@@ -1336,14 +1385,30 @@ class OrderManager:
                                 'side': 'buy',
                                 'symbol': symbol,
                                 'cantidad': cantidad,
-                                'precio_senal': precio,
+                                'precio_senal': precio_senal,
                             },
-							precio=precio,
+							precio=precio_senal,
                         )
                         # actualiza con lo realmente ejecutado
                         cantidad = float(execution.executed)
                         orden.fee_total = getattr(orden, 'fee_total', 0.0) + execution.fee
                         self._apply_realized_pnl_delta(symbol, orden, execution.pnl)
+                        precio_registro = precio_senal
+                        fill_px = execution.precio_fill_promedio
+                        if (
+                            fill_px is not None
+                            and is_valid_number(fill_px)
+                            and float(fill_px) > 0
+                        ):
+                            precio_registro = float(fill_px)
+                            orden.precio_entrada = precio_registro
+                            orden.max_price = max(
+                                precio_registro,
+                                float(getattr(orden, "max_price", precio_registro) or precio_registro),
+                            )
+                            if orden.entradas and isinstance(orden.entradas[0], dict):
+                                orden.entradas[0]["precio"] = precio_registro
+                            orden.precio_ultima_piramide = precio_registro
                         if cantidad <= 0:
                             if self.bus:
                                 await self.bus.publish(
@@ -1377,6 +1442,7 @@ class OrderManager:
                                     }
                                 ),
                             )
+                        precio_para_registro = precio_registro
                     else:
                         # Simulado: el “coste” inicial lo cargamos como PnL negativo hasta el cierre
                         self._apply_realized_pnl_delta(symbol, orden, -(precio * cantidad))
@@ -1390,7 +1456,7 @@ class OrderManager:
                                     await asyncio.to_thread(
                                         real_orders.registrar_orden,
                                         symbol,
-                                        precio,
+                                        precio_para_registro,
                                         cantidad,
                                         sl,
                                         tp,
@@ -1545,10 +1611,12 @@ class OrderManager:
                 return False
             
             operation_id = self._generar_operation_id(symbol)
+            execution: ExecutionResult | None = None
 
             if self.modo_real:
                 try:
                     if cantidad > 0:
+                        precio_senal_py = float(precio)
                         execution = await self._execute_real_order(
                             'buy',
                             symbol,
@@ -1558,9 +1626,9 @@ class OrderManager:
                                 'side': 'buy',
                                 'symbol': symbol,
                                 'cantidad': cantidad,
-                                'precio_senal': precio,
+                                'precio_senal': precio_senal_py,
                             },
-							precio=precio,
+							precio=precio_senal_py,
                         )
                         cantidad = execution.executed
                         orden.fee_total = getattr(orden, 'fee_total', 0.0) + execution.fee
@@ -1579,23 +1647,45 @@ class OrderManager:
                         )
                     return False
             else:
-                # Simulado: costea la compra al PnL
-                self._apply_realized_pnl_delta(symbol, orden, -(precio * cantidad))
+                px_sim = _sim_aplicar_slippage_entrada_salida(
+                    precio, orden.direccion, es_entrada=True
+                )
+                self._apply_realized_pnl_delta(symbol, orden, -(px_sim * cantidad))
 
             total_prev = orden.cantidad_abierta
             orden.cantidad_abierta += cantidad
             orden.cantidad += cantidad
 
-            if orden.cantidad > 0:
-                orden.precio_entrada = ((orden.precio_entrada * total_prev) + (precio * cantidad)) / orden.cantidad
+            if self.modo_real and cantidad > 0 and execution is not None:
+                fill_px = execution.precio_fill_promedio
+                px_nueva = (
+                    float(fill_px)
+                    if (
+                        fill_px is not None
+                        and is_valid_number(fill_px)
+                        and float(fill_px) > 0
+                    )
+                    else float(precio)
+                )
+            elif not self.modo_real:
+                px_nueva = _sim_aplicar_slippage_entrada_salida(
+                    precio, orden.direccion, es_entrada=True
+                )
             else:
-                orden.precio_entrada = precio  # fallback defensivo
+                px_nueva = float(precio)
 
-            orden.max_price = max(getattr(orden, 'max_price', precio), precio)
+            if orden.cantidad > 0:
+                orden.precio_entrada = (
+                    (orden.precio_entrada * total_prev) + (px_nueva * cantidad)
+                ) / orden.cantidad
+            else:
+                orden.precio_entrada = px_nueva  # fallback defensivo
+
+            orden.max_price = max(getattr(orden, 'max_price', px_nueva), px_nueva)
             if not getattr(orden, 'entradas', None):
                 orden.entradas = []
-            orden.entradas.append({'precio': precio, 'cantidad': cantidad})
-            orden.precio_ultima_piramide = precio
+            orden.entradas.append({'precio': px_nueva, 'cantidad': cantidad})
+            orden.precio_ultima_piramide = px_nueva
             self._actualizar_capital_disponible(symbol, orden)
             return True
 
@@ -1623,6 +1713,7 @@ class OrderManager:
                     getattr(orden, 'max_price', 0.0) or getattr(orden, 'precio_entrada', 0.0) or 0.0
                 )
             )
+            precio_cierre_mtm = float(precio) if precio is not None else float(precio_referencia)
             try:
                 venta_exitosa = True
 
@@ -1705,9 +1796,11 @@ class OrderManager:
                                     },
                                 )
                 else:
-                    # Modo simulado: calcula PnL por diferencia
-                    precio_cierre = precio_referencia
-                    diff = (precio_cierre - orden.precio_entrada) * orden.cantidad
+                    # Modo simulado: calcula PnL por diferencia (slippage de salida opcional)
+                    precio_cierre_mtm = _sim_aplicar_slippage_entrada_salida(
+                        precio_referencia, orden.direccion, es_entrada=False
+                    )
+                    diff = (precio_cierre_mtm - orden.precio_entrada) * orden.cantidad
                     if orden.direccion in ('short', 'venta'):
                         diff = -diff
                     self._apply_realized_pnl_delta(
@@ -1731,7 +1824,10 @@ class OrderManager:
                     return False
 
                 # Venta exitosa: cerrar y registrar
-                precio_cierre_registro = precio if precio is not None else precio_referencia
+                if self.modo_real:
+                    precio_cierre_registro = precio if precio is not None else precio_referencia
+                else:
+                    precio_cierre_registro = precio_cierre_mtm
                 orden.precio_cierre = precio_cierre_registro
                 orden.fecha_cierre = datetime.now(UTC).isoformat()
                 orden.motivo_cierre = motivo
@@ -1830,7 +1926,8 @@ class OrderManager:
                     return False
 
                 operation_id = self._generar_operation_id(symbol)
-				
+                precio_mtm = float(precio)
+
                 if self.modo_real:
                     try:
                         execution = await self._execute_real_order(
@@ -1913,7 +2010,10 @@ class OrderManager:
                         )
                         return False
                 else:
-                    diff = (precio - orden.precio_entrada) * cantidad
+                    precio_mtm = _sim_aplicar_slippage_entrada_salida(
+                        float(precio), orden.direccion, es_entrada=False
+                    )
+                    diff = (precio_mtm - orden.precio_entrada) * cantidad
                     if orden.direccion in ('short', 'venta'):
                         diff = -diff
                     self._apply_realized_pnl_delta(
@@ -1924,15 +2024,15 @@ class OrderManager:
                     )
 
                 orden.cantidad_abierta -= cantidad
-                self.actualizar_mark_to_market(symbol, precio)
+                self.actualizar_mark_to_market(symbol, precio_mtm)
 
-                log.info(f'📤 Cierre parcial de {symbol}: {cantidad} @ {precio:.2f} | {motivo}')
+                log.info(f'📤 Cierre parcial de {symbol}: {cantidad} @ {precio_mtm:.2f} | {motivo}')
                 if self.bus:
-                    mensaje = f"""📤 Venta parcial {symbol}\nCantidad: {cantidad}\nPrecio: {precio:.2f}\nMotivo: {motivo}"""
+                    mensaje = f"""📤 Venta parcial {symbol}\nCantidad: {cantidad}\nPrecio: {precio_mtm:.2f}\nMotivo: {motivo}"""
                     await self.bus.publish('notify', {'mensaje': mensaje, 'operation_id': operation_id})
 
                 if orden.cantidad_abierta <= 0:
-                    orden.precio_cierre = precio
+                    orden.precio_cierre = precio_mtm
                     orden.fecha_cierre = datetime.now(UTC).isoformat()
                     orden.motivo_cierre = motivo
                     self._set_latent_pnl(symbol, orden, 0.0, emit=False)
@@ -1942,7 +2042,7 @@ class OrderManager:
                     self._emit_pnl_update(
                         symbol,
                         orden,
-                        extra={'precio_mark': precio, 'motivo': motivo, 'retorno': retorno},
+                        extra={'precio_mark': precio_mtm, 'motivo': motivo, 'retorno': retorno},
                     )
                     self.historial.setdefault(symbol, []).append(orden.to_dict())
                     if len(self.historial[symbol]) > self.max_historial:
@@ -1952,11 +2052,11 @@ class OrderManager:
                             await self._publish_registrar_perdida(symbol, retorno, orden)
                         else:
                             await self.bus.publish('risk.win_streak_reset', {})
-                    log.info(f'📤 Orden cerrada para {symbol} @ {precio:.2f} | {motivo}')
+                    log.info(f'📤 Orden cerrada para {symbol} @ {precio_mtm:.2f} | {motivo}')
                     if self.bus:
                         if self.modo_real:
                             mensaje = (
-                                f"""📤 Venta {symbol}\nEntrada: {orden.precio_entrada:.2f} Salida: {precio:.2f}\nRetorno: {retorno * 100:.2f}%\nMotivo: {motivo}"""
+                                f"""📤 Venta {symbol}\nEntrada: {orden.precio_entrada:.2f} Salida: {precio_mtm:.2f}\nRetorno: {retorno * 100:.2f}%\nMotivo: {motivo}"""
                             )
                             await self.bus.publish('notify', {'mensaje': mensaje, 'operation_id': operation_id})
                         else:
@@ -1964,7 +2064,7 @@ class OrderManager:
                                 'orden_simulada_cerrada',
                                 {
                                     'symbol': symbol,
-                                    'precio_cierre': precio,
+                                    'precio_cierre': precio_mtm,
                                     'retorno': retorno,
                                     'motivo': motivo,
                                     'operation_id': operation_id,

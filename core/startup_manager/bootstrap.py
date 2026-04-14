@@ -59,10 +59,41 @@ class BootstrapMixin:
     async def _enable_strategies(self) -> None:
         assert self.trader is not None and self.config is not None
 
+        if os.getenv("BINANCE_SYNC_SYSTEM_TIME", "").strip().lower() in {"1", "true", "yes", "on"}:
+            from core.utils.binance_time_sync import try_sync_windows_system_time_from_binance
+
+            synced = await asyncio.to_thread(try_sync_windows_system_time_from_binance)
+            if synced:
+                self.log.info(
+                    "Reloj del sistema alineado con la hora UTC de Binance (SetSystemTime)."
+                )
+            else:
+                self.log.warning(
+                    "BINANCE_SYNC_SYSTEM_TIME activo pero no se pudo fijar la hora del SO. "
+                    "El bot debe ejecutarse como administrador en Windows, o lanza manualmente: "
+                    "python -m core.utils.binance_time_sync"
+                )
+
         with phase("_check_clock_drift"):
             clock_ok = await asyncio.wait_for(self._check_clock_drift(), timeout=5)
         if not clock_ok:
-            await self._apply_clock_drift_safety()
+            # Por defecto NO se pasa a papel: CCXT ya compensa tiempo y MODO_REAL=true
+            # debe respetarse. Activa CLOCK_DRIFT_FORCE_PAPER=true si quieres el fallback estricto.
+            force_paper = os.getenv("CLOCK_DRIFT_FORCE_PAPER", "false").strip().lower() in {
+                "true",
+                "1",
+                "yes",
+                "on",
+            }
+            if force_paper:
+                await self._apply_clock_drift_safety()
+            else:
+                self.log.error(
+                    "Desfase de reloj frente a Binance por encima del umbral; "
+                    "se mantiene el modo del .env (CLOCK_DRIFT_FORCE_PAPER no está activo). "
+                    "Sincroniza NTP en Windows, sube CLOCK_DRIFT_MAX_SECONDS o pon "
+                    "CLOCK_DRIFT_FORCE_PAPER=true para forzar modo papel."
+                )
 
         if not await self._check_storage():
             raise RuntimeError(

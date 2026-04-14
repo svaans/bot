@@ -14,6 +14,17 @@ from core.utils.logger import log_decision
 from core.utils.log_utils import format_exception_for_log, safe_extra
 
 
+def _parse_precio_fill_promedio(resp: dict[str, Any]) -> float | None:
+    v = resp.get("precio_fill_promedio")
+    if v is None:
+        return None
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return None
+    return f if f > 0 else None
+
+
 def _precio_senal_desde_entrada(entrada: dict[str, Any]) -> float | None:
     v = entrada.get("precio_senal")
     if v is None:
@@ -34,6 +45,7 @@ class ExecutionResult:
     pnl: float
     status: str
     remaining: float = 0.0
+    precio_fill_promedio: float | None = None
 
 
 class MarketRetryExecutor:
@@ -112,6 +124,7 @@ class MarketRetryExecutor:
                         pnl=0.0,
                         status="FAILED",
                         remaining=cantidad,
+                        precio_fill_promedio=None,
                     )
                 await asyncio.sleep(self._market_retry_sleep(intentos))
                 continue
@@ -134,6 +147,7 @@ class MarketRetryExecutor:
                         pnl=float(resp.get("pnl", 0.0)),
                         status="FAILED",
                         remaining=float(resp.get("restante", cantidad)),
+                        precio_fill_promedio=_parse_precio_fill_promedio(resp),
                     )
                 await asyncio.sleep(self._market_retry_sleep(intentos))
                 continue
@@ -160,6 +174,7 @@ class MarketRetryExecutor:
                 pnl=salida["pnl"],
                 status=status,
                 remaining=remaining,
+                precio_fill_promedio=_parse_precio_fill_promedio(resp),
             )
 
     async def _ejecutar_market_buy(
@@ -171,6 +186,8 @@ class MarketRetryExecutor:
     ) -> ExecutionResult:
         restante = cantidad
         total = total_fee = total_pnl = 0.0
+        vwap_num = 0.0
+        vwap_den = 0.0
         intentos = 0
         sin_progreso = 0
         while restante > 0:
@@ -215,6 +232,15 @@ class MarketRetryExecutor:
             restante = float(resp.get("restante", 0.0))
             total_fee += float(resp.get("fee", 0.0))
             total_pnl += float(resp.get("pnl", 0.0))
+            pf = resp.get("precio_fill")
+            if ejecutado > 0 and pf is not None:
+                try:
+                    pff = float(pf)
+                    if pff > 0:
+                        vwap_num += pff * ejecutado
+                        vwap_den += ejecutado
+                except (TypeError, ValueError):
+                    pass
 
             if math.isclose(restante, restante_previo, rel_tol=1e-09, abs_tol=1e-12):
                 sin_progreso += 1
@@ -240,12 +266,14 @@ class MarketRetryExecutor:
             salida,
         )
         status = "FILLED" if restante <= 1e-8 else "PARTIAL"
+        fill_avg = (vwap_num / vwap_den) if vwap_den > 0 else None
         return ExecutionResult(
             executed=total,
             fee=total_fee,
             pnl=total_pnl,
             status=status,
             remaining=max(restante, 0.0),
+            precio_fill_promedio=fill_avg,
         )
 
     def _market_retry_sleep(self, attempt: int) -> float:

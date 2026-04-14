@@ -1715,6 +1715,8 @@ def _market_sell_retry(
     """
     restante = cantidad
     total = total_fee = total_pnl = 0.0
+    vwap_num = 0.0
+    vwap_den = 0.0
     min_qty = 0.0
     attempt = 0
     last_order_attempt = max(0, int(order_attempt_start) - 1)
@@ -1730,6 +1732,7 @@ def _market_sell_retry(
             precio_senal_bot=precio_senal_bot,
         )
         if str(resp.get("status") or "").upper() == "ERROR":
+            fill_avg = (vwap_num / vwap_den) if vwap_den > 0 else None
             return {
                 "ejecutado": total,
                 "restante": restante,
@@ -1738,6 +1741,7 @@ def _market_sell_retry(
                 "fee": total_fee,
                 "pnl": total_pnl,
                 "last_order_attempt": last_order_attempt,
+                "precio_fill_promedio": fill_avg,
             }
         ejecutado = float(resp.get('ejecutado', 0.0))
         restante = float(resp.get('restante', 0.0))
@@ -1745,11 +1749,22 @@ def _market_sell_retry(
         total += ejecutado
         total_fee += float(resp.get('fee', 0.0))
         total_pnl += float(resp.get('pnl', 0.0))
+        if ejecutado > 0:
+            pf = resp.get("precio_fill")
+            if pf is not None:
+                try:
+                    pff = float(pf)
+                    if pff > 0:
+                        vwap_num += pff * ejecutado
+                        vwap_den += ejecutado
+                except (TypeError, ValueError):
+                    pass
         if ejecutado <= 0:
             break
         if resp.get('status') != 'PARTIAL' or restante < min_qty:
             break
     estado = 'FILLED' if restante < 1e-8 else 'PARTIAL'
+    fill_avg = (vwap_num / vwap_den) if vwap_den > 0 else None
     return {
         'ejecutado': total,
         'restante': restante,
@@ -1758,6 +1773,7 @@ def _market_sell_retry(
         'fee': total_fee,
         'pnl': total_pnl,
         'last_order_attempt': last_order_attempt,
+        'precio_fill_promedio': fill_avg,
     }
 
 
@@ -1797,6 +1813,8 @@ def ejecutar_orden_limit(
     precio_actual = precio
     metricas = {"fee": 0.0, "pnl": 0.0}
     slippage = 0.0
+    vwap_num = 0.0
+    vwap_den = 0.0
 
     for intento in range(1, max_reintentos + 1):
         # Normaliza precio/cantidad para cumplir filtros del exchange
@@ -1858,6 +1876,10 @@ def ejecutar_orden_limit(
             except Exception:
                 pass
 
+        if ejecutado > 0 and precio_fill > 0:
+            vwap_num += precio_fill * ejecutado
+            vwap_den += ejecutado
+
         if restante < min_qty or restante <= 0:
             break
         if intento >= max_reintentos:
@@ -1890,14 +1912,26 @@ def ejecutar_orden_limit(
                 order_attempt=m_attempt,
                 precio_senal_bot=float(precio) if precio else None,
             )
-        ejecutado_total += res_market.get("ejecutado", 0.0)
+        ej_m = float(res_market.get("ejecutado", 0.0) or 0.0)
+        ejecutado_total += ej_m
         restante = res_market.get("restante", 0.0)
         slippage = res_market.get("slippage", slippage)
         if operation_id:
             metricas["fee"] = res_market.get("fee", metricas.get("fee", 0.0))
             metricas["pnl"] = res_market.get("pnl", metricas.get("pnl", 0.0))
+        if ej_m > 0:
+            pf_m = res_market.get("precio_fill")
+            if pf_m is not None:
+                try:
+                    pfm = float(pf_m)
+                    if pfm > 0:
+                        vwap_num += pfm * ej_m
+                        vwap_den += ej_m
+                except (TypeError, ValueError):
+                    pass
 
     status = "FILLED" if restante <= 1e-8 else "PARTIAL"
+    fill_avg = (vwap_num / vwap_den) if vwap_den > 0 else None
     return {
         "ejecutado": ejecutado_total,
         "restante": restante,
@@ -1906,6 +1940,7 @@ def ejecutar_orden_limit(
         "fee": metricas.get("fee", 0.0),
         "pnl": metricas.get("pnl", 0.0),
         "slippage": slippage,
+        "precio_fill_promedio": fill_avg,
     }
 
 

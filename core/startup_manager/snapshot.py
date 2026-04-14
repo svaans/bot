@@ -168,7 +168,7 @@ class SnapshotMixin:
         aunque ``MODO_REAL=true`` en ``claves.env``; además el uso de ``session.get``
         era frágil entre versiones de aiohttp.
         """
-        max_drift = float(os.getenv("CLOCK_DRIFT_MAX_SECONDS", "2.0"))
+        max_drift = float(os.getenv("CLOCK_DRIFT_MAX_SECONDS", "10.0"))
         timeout = aiohttp.ClientTimeout(total=5)
         try:
             async with aiohttp.ClientSession(timeout=timeout) as session:
