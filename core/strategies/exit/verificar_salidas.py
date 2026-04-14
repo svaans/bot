@@ -20,6 +20,7 @@ UTC = timezone.utc
 import asyncio
 import pandas as pd
 from core.utils import configurar_logger
+from core.utils.log_utils import format_exception_for_log
 from core.contexto_externo import obtener_puntaje_contexto
 from indicadores.helpers import get_rsi, get_momentum, get_atr
 from core.strategies.tendencia import obtener_tendencia
@@ -211,7 +212,11 @@ async def _manejar_trailing_stop(trader, orden, df) -> bool:
             orden.to_dict(), precio_cierre, df, config=config_actual
         )
     except (KeyError, ValueError, TypeError) as e:
-        log.warning(f'⚠️ Error en trailing stop para {symbol}: {e}')
+        log.warning(
+            '⚠️ Error en trailing stop para %s: %s',
+            symbol,
+            format_exception_for_log(e),
+        )
         cerrar, motivo = False, ''
     if cerrar:
         if not permitir_cierre_tecnico(symbol, df, precio_cierre, orden.to_dict()):
@@ -308,7 +313,11 @@ async def _aplicar_salidas_adicionales(trader, orden, df) -> bool:
             orden.to_dict(), df, config=config_actual, contexto=contexto
         )
     except (KeyError, ValueError, TypeError) as e:
-        log.warning(f'⚠️ Error evaluando salidas para {symbol}: {e}')
+        log.warning(
+            '⚠️ Error evaluando salidas para %s: %s',
+            symbol,
+            format_exception_for_log(e),
+        )
         resultado = {}
     if resultado.get('break_even'):
         nuevo_sl = resultado.get('nuevo_sl')

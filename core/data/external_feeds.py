@@ -17,6 +17,7 @@ from core.metrics import (
     registrar_feed_funding_missing,
     registrar_feed_open_interest_missing,
 )
+from core.utils.log_utils import format_exception_for_log
 from core.utils.utils import configurar_logger
 
 log = configurar_logger('external_feeds')
@@ -229,7 +230,11 @@ class ExternalFeeds:
                 raise
             except Exception as e:
                 beat('external_feeds', 'backoff')
-                log.warning(f'⚠️ Funding rate falló {symbol}: {e}')
+                log.warning(
+                    '⚠️ Funding rate falló %s: %s',
+                    symbol,
+                    format_exception_for_log(e),
+                )
             await asyncio.sleep(interval)
 
     async def _poll_open_interest(self, symbol: str, interval: int) -> None:
@@ -260,7 +265,11 @@ class ExternalFeeds:
                 raise
             except Exception as e:
                 beat('external_feeds', 'backoff')
-                log.warning(f'⚠️ Open interest falló {symbol}: {e}')
+                log.warning(
+                    '⚠️ Open interest falló %s: %s',
+                    symbol,
+                    format_exception_for_log(e),
+                )
             await asyncio.sleep(interval)
 
     async def _listen_news(self, url: str) -> None:
@@ -275,7 +284,10 @@ class ExternalFeeds:
                 raise
             except Exception as e:
                 beat('external_feeds', 'backoff')
-                log.warning(f'⚠️ Error procesando noticia: {e}')
+                log.warning(
+                    '⚠️ Error procesando noticia: %s',
+                    format_exception_for_log(e),
+                )
 
     async def escuchar(self, symbols: Iterable[str], interval: int = 60, news_url: str | None = None) -> None:
         """Inicia tareas para escuchar los distintos feeds."""

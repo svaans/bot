@@ -10,6 +10,7 @@ import pandas as pd
 
 from core.operational_mode import OperationalMode
 from core.utils.io_metrics import observe_disk_write
+from core.utils.log_utils import format_exception_for_log
 from core.utils.logger import configurar_logger
 from observability.metrics import METRIC_EXPORT_FAILURES_TOTAL
 
@@ -153,7 +154,11 @@ class RegistroMetrico:
                         operation="registro_metrico_csv"
                     ).inc()
                     if intento == intentos:
-                        log.warning(f'⚠️ Error exportando métricas tras {intentos} intentos: {e}')
+                        log.warning(
+                            '⚠️ Error exportando métricas tras %s intentos: %s',
+                            intentos,
+                            format_exception_for_log(e),
+                        )
             time.sleep(1)
 
 

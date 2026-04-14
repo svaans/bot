@@ -4,6 +4,7 @@ from typing import Dict, List
 import pandas as pd
 from indicadores.helpers import get_atr
 from core.utils import configurar_logger
+from core.utils.log_utils import format_exception_for_log
 from core.strategies.exit.salida_utils import resultado_salida
 from core.orders.order_model import ajustar_tick_size
 log = configurar_logger('salida_takeprofit_atr')
@@ -92,7 +93,9 @@ def salida_takeprofit_atr(
             targets=niveles, targets_hit=alcanzados
         )
     except (KeyError, ValueError, TypeError) as e:
-        log.error(f"Error en TP-ATR para {orden.get('symbol', 'SYM')}: {e}")
+        sym = orden.get('symbol', 'SYM')
+        err_msg = format_exception_for_log(e)
+        log.error('Error en TP-ATR para %s: %s', sym, err_msg)
         return resultado_salida(
-            'Take Profit', False, f'Error TP-ATR: {e}', logger=log
+            'Take Profit', False, f'Error TP-ATR: {err_msg}', logger=log
         )

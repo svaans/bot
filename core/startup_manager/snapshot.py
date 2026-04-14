@@ -13,6 +13,8 @@ from typing import Any, Optional
 
 import aiohttp
 
+from core.utils.log_utils import format_exception_for_log
+
 SNAPSHOT_PATH = Path('estado/startup_snapshot.json')
 
 
@@ -49,7 +51,10 @@ class SnapshotMixin:
         except FileNotFoundError:
             return None
         except json.JSONDecodeError as exc:
-            self.log.warning("Snapshot previo ilegible: %s", exc)
+            self.log.warning(
+                "Snapshot previo ilegible: %s",
+                format_exception_for_log(exc),
+            )
             return None
         except Exception as exc:  # pragma: no cover
             self.log.debug("Fallo al leer snapshot previo: %s", exc, exc_info=True)
@@ -129,7 +134,10 @@ class SnapshotMixin:
             with path.open('w', encoding='utf-8') as f:
                 json.dump(data, f, indent=2)
         except Exception as e:
-            self.log.error(f'No se pudo guardar snapshot: {e}')
+            self.log.error(
+                'No se pudo guardar snapshot: %s',
+                format_exception_for_log(e),
+            )
 
     def _restore_persistencia_state(self) -> None:
         trader = self.trader

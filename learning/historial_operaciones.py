@@ -25,6 +25,7 @@ import os
 import pandas as pd
 from dotenv import dotenv_values
 
+from core.utils.log_utils import format_exception_for_log
 from core.utils.utils import configurar_logger
 
 log = configurar_logger("historial_operaciones")
@@ -152,9 +153,10 @@ def cargar_historial_operaciones(
             df = pd.read_parquet(ruta)
         except Exception as exc:  # pragma: no cover - logging defensivo
             log.warning(
-                "⚠️ Historial de operaciones dañado", extra={"ruta": str(ruta), "error": str(exc)}
+                "⚠️ Historial de operaciones dañado",
+                extra={"ruta": str(ruta), "error": format_exception_for_log(exc)},
             )
-            errores.append(f"{ruta}: {exc}")
+            errores.append(f"{ruta}: {format_exception_for_log(exc)}")
             continue
         df = _ordenar_dataframe(df, columnas_orden)
         if max_operaciones is not None and max_operaciones > 0:

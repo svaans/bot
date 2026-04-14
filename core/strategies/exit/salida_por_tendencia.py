@@ -2,6 +2,7 @@ import pandas as pd
 from core.utils.utils import validar_dataframe
 from core.strategies.tendencia import detectar_tendencia
 from core.utils import configurar_logger
+from core.utils.log_utils import format_exception_for_log
 from core.strategies.exit.salida_utils import resultado_salida
 log = configurar_logger('salida_por_tendencia')
 
@@ -26,11 +27,12 @@ def salida_por_tendencia(orden, df):
         else:
             return resultado_salida('Tecnico', False, 'Tendencia estable')
     except (KeyError, ValueError, TypeError) as e:
-        log.error(
-            f"Error evaluando tendencia para {orden.get('symbol', 'SYM')}: {e}"
+        sym = orden.get('symbol', 'SYM')
+        err_msg = format_exception_for_log(e)
+        log.error('Error evaluando tendencia para %s: %s', sym, err_msg)
+        return resultado_salida(
+            'Tecnico', False, f'Error evaluando tendencia: {err_msg}', logger=log
         )
-        return resultado_salida('Tecnico', False,
-            f'Error evaluando tendencia: {e}', logger=log)
 
 
 def verificar_reversion_tendencia(symbol, df, tendencia_anterior):

@@ -19,6 +19,8 @@ from __future__ import annotations
 import asyncio
 from typing import Any, Callable, Optional
 
+from core.utils.log_utils import format_exception_for_log
+
 
 def _emit(on_event: Optional[Callable[[str, dict], None]], evt: str, data: dict) -> None:
     if on_event:
@@ -57,7 +59,11 @@ async def ciclo_aprendizaje_periodico(
             _emit(on_event, "aprendizaje_ok", {})
             backoff = 5
         except Exception as e:  # pragma: no cover
-            _emit(on_event, "aprendizaje_error", {"error": str(e)})
+            _emit(
+                on_event,
+                "aprendizaje_error",
+                {"error": format_exception_for_log(e)},
+            )
             await asyncio.sleep(backoff)
             backoff = min(300, backoff * 2)
         # Espera hasta el próximo ciclo, con latidos periódicos

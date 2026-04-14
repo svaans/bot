@@ -5,6 +5,8 @@ from typing import Dict
 import pandas as pd
 from indicadores.helpers import get_rsi
 from data_feed.candle_builder import backfill
+from core.strategies.pesos_governance import log_pesos_tecnicos_persistidos
+from core.utils.log_utils import format_exception_for_log
 from core.utils.utils import configurar_logger
 log = configurar_logger('eval_tecnico')
 RUTA_PESOS = 'config/pesos_tecnicos.json'
@@ -45,8 +47,10 @@ def _cargar_pesos(symbol: str) ->dict:
                     _pesos_cache = json.load(fh)
             except Exception as e:
                 log.warning(
-                    f'Error leyendo {RUTA_PESOS}: {e}. Usando pesos por defecto'
-                    )
+                    'Error leyendo %s: %s. Usando pesos por defecto',
+                    RUTA_PESOS,
+                    format_exception_for_log(e),
+                )
                 _pesos_cache = {}
         else:
             _pesos_cache = {}
@@ -91,7 +95,11 @@ async def evaluar_puntaje_tecnico(
                         try:
                             t.result()
                         except Exception as exc:  # pragma: no cover - logging de error
-                            log.warning(f'[{sym}] backfill asincrono fallo: {exc}')
+                            log.warning(
+                                '[%s] backfill asincrono fallo: %s',
+                                sym,
+                                format_exception_for_log(exc),
+                            )
                         finally:
                             _backfill_tasks.pop(sym, None)
 
@@ -186,6 +194,12 @@ async def actualizar_pesos_tecnicos(symbol: str, detalles: dict, retorno: float,
                     json.dump(_pesos_cache, fh, indent=2)
             try:
                 await asyncio.to_thread(_escribir_pesos)
+                n_sym = len(_pesos_cache) if isinstance(_pesos_cache, dict) else 0
+                log_pesos_tecnicos_persistidos(symbol, RUTA_PESOS, n_sym)
                 log.info(f'[{symbol}] Pesos tecnicos actualizados')
             except Exception as e:
-                log.warning(f'[{symbol}] Error guardando pesos: {e}')
+                log.warning(
+                    '[%s] Error guardando pesos: %s',
+                    symbol,
+                    format_exception_for_log(e),
+                )

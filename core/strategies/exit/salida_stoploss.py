@@ -6,6 +6,7 @@ from core.adaptador_umbral import calcular_umbral_adaptativo
 from core.strategies.entry.gestor_entradas import evaluar_estrategias
 from core.strategies.pesos import gestor_pesos
 from core.utils import configurar_logger
+from core.utils.log_utils import format_exception_for_log
 from core.strategies.exit.salida_utils import resultado_salida
 from indicadores.helpers import get_rsi, get_momentum, get_slope
 from indicadores.vwap import calcular_vwap
@@ -63,7 +64,10 @@ def validar_sl_tecnico(df: pd.DataFrame, direccion: str='long') ->bool:
             return score >= 2 and (debajo_vwap or debajo_ma) and persistencia
         return True
     except (KeyError, ValueError, TypeError) as e:
-        log.warning(f'Error validando SL técnico: {e}')
+        log.warning(
+            'Error validando SL técnico: %s',
+            format_exception_for_log(e),
+        )
         return True
 
 
@@ -116,9 +120,12 @@ async def salida_stoploss(orden: dict, df: pd.DataFrame, config: dict=None) ->di
         return resultado_salida('Stop Loss', True,
             'Condiciones técnicas débiles para mantener', logger=log)
     except (KeyError, ValueError, TypeError) as e:
-        log.error(f"Error interno en SL para {orden.get('symbol', 'SYM')}: {e}")
-        return resultado_salida('Stop Loss', True,
-            f'Error interno en SL: {e}', logger=log)
+        sym = orden.get('symbol', 'SYM')
+        err_msg = format_exception_for_log(e)
+        log.error('Error interno en SL para %s: %s', sym, err_msg)
+        return resultado_salida(
+            'Stop Loss', True, f'Error interno en SL: {err_msg}', logger=log
+        )
 
 
 async def verificar_salida_stoploss(orden: dict, df: pd.DataFrame, config: (dict |

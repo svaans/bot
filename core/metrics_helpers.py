@@ -9,6 +9,8 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from core.utils.log_utils import format_exception_for_log
+
 logger = logging.getLogger("metrics")
 
 
@@ -25,7 +27,7 @@ def safe_inc(metric: Any, **labels: Any) -> None:
             extra={
                 "metric": getattr(metric, "_name", getattr(metric, "name", str(metric))),
                 "labels": labels,
-                "error": str(exc),
+                "error": format_exception_for_log(exc),
             },
         )
         try:
@@ -47,7 +49,7 @@ def safe_set(gauge: Any, value: float, **labels: Any) -> None:
             extra={
                 "metric": getattr(gauge, "_name", getattr(gauge, "name", str(gauge))),
                 "labels": labels,
-                "error": str(exc),
+                "error": format_exception_for_log(exc),
             },
         )
         try:

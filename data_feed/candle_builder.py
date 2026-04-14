@@ -12,6 +12,7 @@ import asyncio
 import os
 from typing import Any, Awaitable, Callable, Dict, List, Sequence
 
+from core.utils.log_utils import format_exception_for_log
 from core.utils.utils import configurar_logger, intervalo_a_segundos
 
 try:  # pragma: no cover - dependencia opcional en entornos mínimos
@@ -64,7 +65,11 @@ async def _fetch(symbol: str, intervalo: str, faltantes: int, *, fetcher: FetchC
     try:
         raw = await fetcher(cliente, symbol, intervalo, since=None, limit=limit)
     except Exception as exc:  # pragma: no cover - logging defensivo
-        log.warning("[%s] backfill falló al obtener datos: %s", symbol, exc)
+        log.warning(
+            "[%s] backfill falló al obtener datos: %s",
+            symbol,
+            format_exception_for_log(exc),
+        )
         return []
 
     base_ms = intervalo_a_segundos(intervalo) * 1000

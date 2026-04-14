@@ -13,6 +13,8 @@ from core.metrics import (
     BACKFILL_REQUESTS_TOTAL,
 )
 
+from core.utils.log_utils import format_exception_for_log
+
 from ._shared import UTC, _safe_float, log
 from . import events
 
@@ -90,7 +92,11 @@ async def do_backfill(feed: "DataFeed", symbol: str) -> None:
         except Exception as exc:
             log.exception("%s: error backfill (%s)", symbol, exc)
             _note_backfill_status(symbol, timeframe, "error")
-            _emit(feed, "backfill_error", {**base_payload, "error": str(exc)})
+            _emit(
+                feed,
+                "backfill_error",
+                {**base_payload, "error": format_exception_for_log(exc)},
+            )
             return
 
         if not chunk:

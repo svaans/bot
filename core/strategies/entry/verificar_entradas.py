@@ -42,7 +42,7 @@ except Exception:  # pragma: no cover
 
 # Logging estructurado
 from core.utils.logger import configurar_logger
-from core.utils.log_utils import safe_extra
+from core.utils.log_utils import format_exception_for_log, safe_extra
 from core.metrics_helpers import safe_inc, safe_set
 from core.utils.metrics_compat import Counter, Gauge
 from core.utils.feature_flags import is_flag_enabled
@@ -473,7 +473,7 @@ def _apply_persistencia_gate(
                     {
                         **base_extra,
                         "exc_type": type(exc).__name__,
-                        "exc_msg": str(exc),
+                        "exc_msg": format_exception_for_log(exc),
                     }
                 ),
             )
@@ -516,6 +516,52 @@ def _finalize_decision(decision: EntryDecision) -> None:
     log.debug("decision.final", extra=safe_extra(payload))
 
 
+def _config_para_motor(trader: Any, symbol: str) -> dict[str, Any]:
+    """Arma el dict ``config`` para :meth:`StrategyEngine.evaluar_entrada` desde ``trader.config``."""
+
+    cfg = getattr(trader, "config", None)
+    if cfg is None:
+        return {}
+    sym_u = str(symbol or "").strip().upper()
+    keys = (
+        "usar_score_tecnico",
+        "umbral_score_tecnico",
+        "diversidad_minima",
+        "umbral_empate_abs_tol",
+        "regimen_entrada_enabled",
+        "regimen_vol_atr_ratio_alto",
+        "regimen_vol_atr_ratio_bajo",
+        "regimen_atr_periodo",
+        "regimen_mult_umbral_alta",
+        "regimen_mult_umbral_media",
+        "regimen_mult_umbral_baja",
+        "regimen_mult_umbral_score_alta",
+        "regimen_mult_umbral_score_media",
+        "regimen_mult_umbral_score_baja",
+    )
+    out: dict[str, Any] = {}
+    for k in keys:
+        if hasattr(cfg, k):
+            v = getattr(cfg, k)
+            if v is not None:
+                out[k] = v
+    base_usc = float(
+        out.get("umbral_score_tecnico", getattr(cfg, "umbral_score_tecnico", 1.0) or 1.0)
+    )
+    overrides = getattr(cfg, "umbral_score_overrides", None)
+    if isinstance(overrides, dict) and sym_u:
+        raw = overrides.get(sym_u)
+        if raw is None:
+            raw = overrides.get(symbol)
+        if raw is not None:
+            try:
+                base_usc = float(raw)
+            except (TypeError, ValueError):
+                pass
+    out["umbral_score_tecnico"] = base_usc
+    return out
+
+
 async def _evaluar_engine(trader: Any, symbol: str, df: pd.DataFrame, estado: Any, on_event=None) -> Optional[dict]:
     """
     Llama al motor de estrategias si está disponible.
@@ -541,7 +587,9 @@ async def _evaluar_engine(trader: Any, symbol: str, df: pd.DataFrame, estado: An
     if fn is None:
         _emit(on_event, "entry_skip", {"symbol": symbol, "reason": "engine_no_fn"})
         return None
-    
+
+    engine_config = _config_para_motor(trader, symbol)
+
     try:
         signature = inspect.signature(fn)
     except (TypeError, ValueError):
@@ -578,6 +626,8 @@ async def _evaluar_engine(trader: Any, symbol: str, df: pd.DataFrame, estado: An
     def _attempt(*args: Any, **kwargs: Any) -> Callable[[], Any]:
         call_args = tuple(args)
         call_kwargs = dict(kwargs)
+        if signature is not None and "config" in signature.parameters:
+            call_kwargs.setdefault("config", engine_config)
 
         def _runner() -> Any:
             return _call(call_args, call_kwargs)
@@ -782,6 +832,14 @@ async def verificar_entrada(
     side = str(resultado_engine.get("side", "long")).lower()
     if side not in ("long", "short"):
         side = "long"
+
+    risk_sentido = getattr(trader, "risk", None)
+    permite_sentido = getattr(risk_sentido, "permite_cartera_mismo_sentido", None)
+    if callable(permite_sentido) and not permite_sentido(side):
+        return _reject_with_skip(
+            "cartera_limite_sentido",
+            extra={"side": side, "symbol": symbol_norm},
+        )
 
     cfg = getattr(trader, "config", None)
     if cfg is None:

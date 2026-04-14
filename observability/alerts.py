@@ -27,6 +27,7 @@ from typing import Any, Iterable, List, MutableMapping, Sequence
 import httpx
 
 from core.event_bus import EventBus
+from core.utils.log_utils import format_exception_for_log
 from core.utils.logger import configurar_logger
 from observability.metrics import ALERT_NOTIFY_SUPPRESSED_TOTAL, NOTIFICATIONS_TOTAL
 
@@ -155,7 +156,7 @@ class DiscordWebhookChannel(AlertChannel):
             return AlertDeliveryResult(
                 channel=self.name,
                 success=False,
-                error=str(exc),
+                error=format_exception_for_log(exc),
             )
 
         return AlertDeliveryResult(channel=self.name, success=True)
@@ -206,7 +207,7 @@ class SlackWebhookChannel(AlertChannel):
             return AlertDeliveryResult(
                 channel=self.name,
                 success=False,
-                error=str(exc),
+                error=format_exception_for_log(exc),
             )
 
         return AlertDeliveryResult(channel=self.name, success=True)
@@ -448,7 +449,9 @@ class AlertDispatcher:
                 channel.name,
                 exc_info=exc,
             )
-            return AlertDeliveryResult(channel=channel.name, success=False, error=str(exc))
+            return AlertDeliveryResult(
+                channel=channel.name, success=False, error=format_exception_for_log(exc)
+            )
 
     @staticmethod
     def _handle_result(result: AlertDeliveryResult) -> None:

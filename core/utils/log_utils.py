@@ -4,7 +4,13 @@ from __future__ import annotations
 import logging
 from typing import Any, Mapping, MutableMapping
 
-__all__ = ["safe_extra", "log_kv", "truncate_for_log", "summarize_telegram_api_result"]
+__all__ = [
+    "safe_extra",
+    "log_kv",
+    "truncate_for_log",
+    "format_exception_for_log",
+    "summarize_telegram_api_result",
+]
 
 
 # Construimos el set de atributos reservados de ``LogRecord`` en runtime.
@@ -47,6 +53,14 @@ def truncate_for_log(value: Any, max_chars: int = 256) -> str:
     if max_chars <= 3:
         return text[:max_chars]
     return text[: max_chars - 3] + "..."
+
+
+def format_exception_for_log(exc: BaseException | None, max_chars: int = 500) -> str:
+    """Texto corto de una excepción para mensajes de log y contextos persistidos."""
+
+    if exc is None:
+        return "unknown"
+    return truncate_for_log(str(exc), max_chars)
 
 
 def summarize_telegram_api_result(data: Any) -> dict[str, Any]:

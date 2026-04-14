@@ -33,6 +33,8 @@ from collections import defaultdict, deque
 from datetime import datetime, timedelta, timezone
 from typing import Any, Awaitable, Callable, Deque, Dict, Optional
 
+from core.utils.log_utils import truncate_for_log
+
 try:  # pragma: no cover - métrica opcional
     from core.metrics import TASK_TIMEOUT_SECONDS
 except Exception:  # pragma: no cover - entorno sin métricas
@@ -220,7 +222,10 @@ class Supervisor:
     def exception_handler(self, loop: asyncio.AbstractEventLoop, context: dict) -> None:
         exc = context.get("exception")
         if exc:
-            self._emit("loop_exception", {"exc": repr(exc)})
+            self._emit(
+                "loop_exception",
+                {"exc": truncate_for_log(repr(exc), 500)},
+            )
         else:
             self._emit("loop_error", {"message": context.get("message")})
 

@@ -26,7 +26,12 @@ from core.strategies.entry.validadores import (
 )
 from core.strategies.exit.gestor_salidas import evaluar_salidas
 from core.strategies.pesos import gestor_pesos
+from core.strategies.regimen_mercado import (
+    aplicar_multiplicadores_regimen,
+    etiqueta_volatilidad,
+)
 from core.strategies.tendencia import detectar_tendencia
+from core.utils.log_utils import format_exception_for_log
 from core.utils.utils import configurar_logger, validar_dataframe
 from indicadores.helpers import get_momentum, get_rsi, get_slope
 from observability import metrics as obs_metrics
@@ -162,7 +167,11 @@ class StrategyEngine:
             )
             return analisis
         except (ValueError, KeyError) as e:
-            log.error(f"❌ Error de datos evaluando entrada para {symbol}: {e}")
+            log.error(
+                "❌ Error de datos evaluando entrada para %s: %s",
+                symbol,
+                format_exception_for_log(e),
+            )
             return {
                 "permitido": False,
                 "motivo_rechazo": "error",
@@ -201,7 +210,10 @@ class StrategyEngine:
         try:
             return await self._salida_evaluator(orden, df)
         except (ValueError, KeyError) as e:
-            log.error(f"❌ Error de datos evaluando salida: {e}")
+            log.error(
+                "❌ Error de datos evaluando salida: %s",
+                format_exception_for_log(e),
+            )
             return {}
         except Exception:
             log.exception("❌ Error inesperado evaluando salida")
@@ -275,6 +287,16 @@ class StrategyEngine:
         )
         cumple_div = diversidad >= int(config.get("diversidad_minima", 1))
         umbral_score = float(config.get("umbral_score_tecnico", 1.0))
+        periodo_atr = int(config.get("regimen_atr_periodo", 14) or 14)
+        vol_etiqueta = etiqueta_volatilidad(
+            df,
+            umbral_alto=float(config.get("regimen_vol_atr_ratio_alto", 0.025) or 0.025),
+            umbral_bajo=float(config.get("regimen_vol_atr_ratio_bajo", 0.008) or 0.008),
+            periodo_atr=periodo_atr,
+        )
+        umbral, umbral_score = aplicar_multiplicadores_regimen(
+            umbral, umbral_score, vol_etiqueta, config
+        )
         _emp_tol = float(config.get("umbral_empate_abs_tol", 1e-6))
         empate = math.isclose(score_total, umbral, rel_tol=0.0, abs_tol=_emp_tol) or math.isclose(
             score_tec, umbral_score, rel_tol=0.0, abs_tol=_emp_tol
@@ -315,6 +337,7 @@ class StrategyEngine:
             "sinergia": round(sinergia, 2),
             "umbral": umbral,
             "umbral_score_tecnico": umbral_score,
+            "regimen_volatilidad": vol_etiqueta,
             "empate": empate,
             "diversidad": diversidad,
             "tendencia": tendencia,

@@ -8,6 +8,7 @@ from collections import defaultdict
 from datetime import datetime, timezone
 from typing import Any, Awaitable, Callable, Dict, Iterable, List, Optional, Tuple
 
+from core.utils.log_utils import format_exception_for_log
 from core.utils.logger import configurar_logger
 from core.utils.timeframes import TF_MINUTES, ensure_utc, floor_to_tf, tf_to_ms
 
@@ -219,7 +220,13 @@ class BackfillService:
                 self._log_info("ready", symbol, timeframe, buffer_len=buffer_len, min_needed=min_needed)
         except Exception as exc:
             status = "error"
-            self._log_error("error", symbol, timeframe, need=need, details={"error": str(exc)})
+            self._log_error(
+                "error",
+                symbol,
+                timeframe,
+                need=need,
+                details={"error": format_exception_for_log(exc)},
+            )
             raise
         finally:
             elapsed = time.perf_counter() - start_time

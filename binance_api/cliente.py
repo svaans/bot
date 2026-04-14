@@ -32,6 +32,8 @@ from urllib.parse import urlencode
 
 import aiohttp
 
+from core.utils.log_utils import safe_extra, truncate_for_log
+
 from .utils import normalize_symbol_for_rest
 
 __all__ = [
@@ -207,14 +209,18 @@ class BinanceClient:
                 if resp.status != 200:
                     logger.error(
                         "binance_rest_error",
-                        extra={
-                            "event": "binance_rest_error",
-                            "status": resp.status,
-                            "url": path,
-                            "body": text,
-                        },
+                        extra=safe_extra(
+                            {
+                                "event": "binance_rest_error",
+                                "status": resp.status,
+                                "url": path,
+                                "body": truncate_for_log(text, 512),
+                            }
+                        ),
                     )
-                    raise BinanceAPIError(f"Respuesta {resp.status} desde Binance: {text[:200]}")
+                    raise BinanceAPIError(
+                        f"Respuesta {resp.status} desde Binance: {truncate_for_log(text, 200)}"
+                    )
                 if text:
                     return json.loads(text)
                 return None
@@ -223,7 +229,13 @@ class BinanceClient:
         except Exception as exc:  # pragma: no cover - errores de red
             logger.error(
                 "binance_rest_exception",
-                extra={"event": "binance_rest_exception", "error": repr(exc), "url": path},
+                extra=safe_extra(
+                    {
+                        "event": "binance_rest_exception",
+                        "error": truncate_for_log(repr(exc), 400),
+                        "url": path,
+                    }
+                ),
             )
             raise
 

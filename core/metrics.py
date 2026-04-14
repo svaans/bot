@@ -51,6 +51,7 @@ try:
 except Exception:  # pragma: no cover - módulo opcional
     _GUARDRAIL_ORDERS_RETRY_TOTAL = None
 
+from core.utils.log_utils import format_exception_for_log
 from core.utils.logger import configurar_logger
 
 log = configurar_logger("metrics")
@@ -768,7 +769,11 @@ def iniciar_exporter() -> Optional[WSGIServer]:
             log.info("Prometheus no disponible; exporter deshabilitado")
             return None
     except OSError as exc:
-        log.warning("No se pudo iniciar exporter en puerto %s: %s", port, exc)
+        log.warning(
+            "No se pudo iniciar exporter en puerto %s: %s",
+            port,
+            format_exception_for_log(exc),
+        )
         return None
     log.info(f"Prometheus exporter escuchando en puerto {port}")
     return server

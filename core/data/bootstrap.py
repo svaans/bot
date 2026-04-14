@@ -12,6 +12,7 @@ import numpy as np
 from binance_api.cliente import fetch_ohlcv_async, obtener_cliente
 from core.metrics import registrar_warmup_progress
 from core.utils.io_metrics import observe_disk_write
+from core.utils.log_utils import format_exception_for_log
 from core.utils.utils import configurar_logger
 
 log = configurar_logger('bootstrap')
@@ -243,7 +244,11 @@ async def warmup_symbol(
         try:
             ohlcv = await fetch_ohlcv_async(cliente, symbol_u, tf, limit=int(min_bars))
         except Exception as e:
-            log.warning(f'⚠️ Error obteniendo histórico de {symbol_u}: {e}')
+            log.warning(
+                '⚠️ Error obteniendo histórico de %s: %s',
+                symbol_u,
+                format_exception_for_log(e),
+            )
             df = pd.DataFrame()
         else:
             df = pd.DataFrame(
@@ -296,7 +301,10 @@ async def warmup_inicial(
     try:
         cliente = obtener_cliente()
     except Exception as e:
-        log.warning(f'⚠️ No se pudo obtener cliente: {e}')
+        log.warning(
+            '⚠️ No se pudo obtener cliente: %s',
+            format_exception_for_log(e),
+        )
         cliente = None
 
     target = int(min_bars if min_bars is not None else MIN_BARS)

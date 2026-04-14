@@ -3,7 +3,7 @@ import os
 import time
 from typing import Any, Tuple
 import httpx
-from core.utils.log_utils import safe_extra, truncate_for_log
+from core.utils.log_utils import format_exception_for_log, safe_extra, truncate_for_log
 from core.utils.utils import configurar_logger
 from observability.metrics import NOTIFICATIONS_RETRY, NOTIFICATIONS_TOTAL
 from dotenv import load_dotenv
@@ -221,7 +221,10 @@ class Notificador:
                         resumen = alert_manager.format_summary(900)
                         await self.enviar_async(resumen, 'INFO')
             except Exception as e:  # pragma: no cover - defensivo
-                log.error(f'❌ Error escuchando comandos: {e}')
+                log.error(
+                    '❌ Error escuchando comandos: %s',
+                    format_exception_for_log(e),
+                )
             await asyncio.sleep(intervalo)
 
     async def aclose(self) -> None:

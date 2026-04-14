@@ -18,6 +18,7 @@ from core.ajustador_riesgo import (
     MODO_AGRESIVO_SLOPE_THRESHOLD,
     MODO_AGRESIVO_VOL_THRESHOLD,
 )
+from core.utils.log_utils import format_exception_for_log
 from core.utils.utils import configurar_logger
 RUTA_CONFIG_SIMBOLOS = 'config/configuraciones_optimas.json'
 log = configurar_logger('config_service')
@@ -96,7 +97,7 @@ def backup_json(path: str) -> None:
     except PermissionError as exc:
         log.error(
             '❌ Error de permisos al crear backup',
-            extra={"path": str(destino), "error": str(exc)},
+            extra={"path": str(destino), "error": format_exception_for_log(exc)},
         )
         fallback = FALLBACK_DIR / backup_name
         fallback.parent.mkdir(parents=True, exist_ok=True)
@@ -116,13 +117,13 @@ def backup_json(path: str) -> None:
                 '❌ No fue posible crear el backup',
                 extra={
                     "path_origen": str(src),
-                    "error": str(inner_exc),
+                    "error": format_exception_for_log(inner_exc),
                 },
             )
     except OSError as exc:
         log.error(
             '❌ Error de E/S al crear backup',
-            extra={"path": str(destino), "error": str(exc)},
+            extra={"path": str(destino), "error": format_exception_for_log(exc)},
         )
 
 
@@ -169,7 +170,7 @@ class ConfigurationService:
         except json.JSONDecodeError as e:
             log.error(
                 '❌ Error al parsear el archivo JSON',
-                extra={"path": str(objetivo), "error": str(e)},
+                extra={"path": str(objetivo), "error": format_exception_for_log(e)},
             )
             raise
         if not isinstance(configuraciones, dict):
@@ -222,7 +223,7 @@ class ConfigurationService:
         except PermissionError as exc:
             log.error(
                 '❌ Permiso denegado al leer configuración',
-                extra={"path": str(path), "error": str(exc)},
+                extra={"path": str(path), "error": format_exception_for_log(exc)},
             )
             fallback = _fallback_path(path)
             if fallback.exists():
@@ -236,7 +237,7 @@ class ConfigurationService:
         except OSError as exc:
             log.error(
                 '❌ Error de E/S al leer configuración',
-                extra={"path": str(path), "error": str(exc)},
+                extra={"path": str(path), "error": format_exception_for_log(exc)},
             )
             fallback = _fallback_path(path)
             if fallback.exists():
@@ -256,7 +257,7 @@ class ConfigurationService:
         except PermissionError as exc:
             log.error(
                 '❌ Permiso denegado al escribir configuración',
-                extra={"path": str(path), "error": str(exc)},
+                extra={"path": str(path), "error": format_exception_for_log(exc)},
             )
             fallback = _fallback_path(path)
             fallback.parent.mkdir(parents=True, exist_ok=True)
@@ -270,7 +271,7 @@ class ConfigurationService:
         except OSError as exc:
             log.error(
                 '❌ Error de E/S al escribir configuración',
-                extra={"path": str(path), "error": str(exc)},
+                extra={"path": str(path), "error": format_exception_for_log(exc)},
             )
             fallback = _fallback_path(path)
             fallback.parent.mkdir(parents=True, exist_ok=True)
@@ -280,14 +281,17 @@ class ConfigurationService:
             except (OSError, PermissionError) as inner_exc:
                 log.error(
                     '❌ No fue posible persistir la configuración',
-                    extra={"path": str(fallback), "error": str(inner_exc)},
+                    extra={
+                        "path": str(fallback),
+                        "error": format_exception_for_log(inner_exc),
+                    },
                 )
                 raise
             log.warning(
                 '⚠️ Configuración persistida en fallback por error de E/S',
                 extra={
                     "path": str(fallback),
-                    "error_original": str(exc),
+                    "error_original": format_exception_for_log(exc),
                 },
             )
             return fallback

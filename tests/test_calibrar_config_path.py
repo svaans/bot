@@ -6,7 +6,12 @@ from pathlib import Path
 
 import pytest
 
-from learning.config_output_path import _CONFIG_ROOT, _REPO_ROOT, resolve_config_output_path
+from learning.config_output_path import (
+    _CONFIG_ROOT,
+    _REPO_ROOT,
+    resolve_config_output_path,
+    resolve_repo_input_path,
+)
 
 
 def test_resolve_config_output_path_acepta_ruta_relativa_en_config() -> None:
@@ -29,3 +34,27 @@ def test_resolve_config_output_path_rechaza_fuera_de_config() -> None:
 
 def test_resolve_repo_root_es_padre_de_config() -> None:
     assert _CONFIG_ROOT.is_relative_to(_REPO_ROOT)
+
+
+def test_resolve_repo_input_path_acepta_dentro_del_repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Simula repo con un CSV bajo learning/ usando el mismo mecanismo de raíz."""
+    fake_repo = tmp_path / "bot"
+    fake_repo.mkdir()
+    (fake_repo / "learning").mkdir()
+    csv_path = fake_repo / "learning" / "datos.csv"
+    csv_path.write_text("a\n1", encoding="utf-8")
+    monkeypatch.setattr(
+        "learning.config_output_path._REPO_ROOT",
+        fake_repo.resolve(),
+    )
+    monkeypatch.setattr(
+        "learning.config_output_path._CONFIG_ROOT",
+        (fake_repo / "config").resolve(),
+    )
+    p = resolve_repo_input_path(Path("learning/datos.csv"))
+    assert p == csv_path.resolve()
+
+
+def test_resolve_repo_input_path_rechaza_fuera_del_repo() -> None:
+    with pytest.raises(ValueError, match="debe estar dentro del repositorio"):
+        resolve_repo_input_path(Path("/tmp/outside.csv"))

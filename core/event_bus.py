@@ -8,6 +8,7 @@ import time
 from threading import Lock
 from typing import Any, Awaitable, Callable, Deque, Dict, List, Tuple
 from core.utils.logger import configurar_logger
+from core.utils.log_utils import format_exception_for_log
 from core.utils.metrics_compat import Counter, Gauge, Histogram
 
 log = configurar_logger('event_bus', modo_silencioso=True)
@@ -247,7 +248,11 @@ class EventBus:
         try:
             exc = task.exception()
         except Exception as err:  # pragma: no cover - seguridad adicional
-            log.error("❌ Error revisando tarea de '%s': %s", event_type, err)
+            log.error(
+                "❌ Error revisando tarea de '%s': %s",
+                event_type,
+                format_exception_for_log(err),
+            )
             return
         if exc is not None:
             log.error(
@@ -376,7 +381,11 @@ class EventBus:
                 name=f"event_bus:{event_type}:{callback_name}",
             )
         except RuntimeError as exc:
-            log.error(f"❌ Error despachando '{event_type}': {exc}")
+            log.error(
+                "❌ Error despachando '%s': %s",
+                event_type,
+                format_exception_for_log(exc),
+            )
             return
         self._inflight.add(task)
         self._inflight_by_event[event_type] += 1

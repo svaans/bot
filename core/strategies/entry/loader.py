@@ -1,5 +1,6 @@
 import os
 import importlib.util
+from core.utils.log_utils import format_exception_for_log
 from core.utils.utils import configurar_logger
 
 log = configurar_logger("loader_entradas")
@@ -40,7 +41,11 @@ def cargar_estrategias():
             try:
                 spec.loader.exec_module(module_obj)
             except Exception as e:
-                log.error(f"❌ Error ejecutando {nombre_modulo}: {e}")
+                log.error(
+                    "❌ Error ejecutando %s: %s",
+                    nombre_modulo,
+                    format_exception_for_log(e),
+                )
                 continue
 
             func = getattr(module_obj, nombre_modulo, None)
@@ -51,7 +56,11 @@ def cargar_estrategias():
 
         except Exception as e:
             # ¡Ojo! No referenciar `module_obj` aquí si pudo no crearse
-            log.error(f"❌ Error importando {nombre_modulo}: {e}")
+            log.error(
+                "❌ Error importando %s: %s",
+                nombre_modulo,
+                format_exception_for_log(e),
+            )
 
     log.info(f"🧩 Estrategias cargadas: {len(estrategias)}")
     if not estrategias:

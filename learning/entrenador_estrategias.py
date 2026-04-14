@@ -5,12 +5,13 @@ from collections import defaultdict
 from typing import Dict, Iterable, Mapping, Tuple
 from dotenv import dotenv_values
 from core.strategies.pesos import gestor_pesos
+from core.strategies.pesos_governance import EntryWeightSource, persist_entry_weights
+from core.utils.log_utils import format_exception_for_log
 from core.utils.utils import configurar_logger
 from .historial_operaciones import HistorialOperaciones, cargar_historial_operaciones
 from .utils_resultados import distribuir_retorno_por_estrategia, obtener_retorno_total_registro
 CONFIG = dotenv_values('config/claves.env')
 MODO_REAL = CONFIG.get('MODO_REAL', 'False') == 'True'
-RUTA_PESOS = 'config/estrategias_pesos.json'
 MIN_OPERACIONES = 5
 log = configurar_logger('entrenador_estrategias')
 
@@ -39,6 +40,16 @@ def _resumir_metricas(retornos: Iterable[float]) -> Dict[str, float]:
     promedio = sum(retornos) / n
     winrate = sum(1 for r in retornos if r > 0) / n
     return {'n': n, 'promedio': promedio, 'winrate': winrate}
+
+
+def metricas_por_estrategia_desde_ordenes(df: pd.DataFrame) -> Dict[str, Dict[str, float]]:
+    """Devuelve ``{estrategia: {n, promedio, winrate}}`` desde un DataFrame de órdenes."""
+
+    return {
+        estrategia: _resumir_metricas(retornos)
+        for estrategia, retornos in evaluar_estrategias(df).items()
+        if retornos
+    }
 
 
 def calcular_pesos_suavizados(
@@ -136,7 +147,7 @@ def _cargar_historial(symbol: str) -> HistorialOperaciones | None:
         except FileNotFoundError:
             time.sleep(0.3)
         except RuntimeError as exc:
-            errores.append(str(exc))
+            errores.append(format_exception_for_log(exc))
             break
     if errores:
         log.error(
@@ -179,7 +190,12 @@ def actualizar_pesos_estrategias_symbol(symbol: str):
         return
     pesos_totales[symbol] = pesos_suavizados
     gestor_pesos.pesos = pesos_totales
-    gestor_pesos.guardar()
+    persist_entry_weights(
+        gestor_pesos,
+        None,
+        source=EntryWeightSource.ENTRENADOR_SIMBOLO,
+        detail=symbol,
+    )
     origen = os.path.relpath(str(historial.source), os.getcwd())
     print(
         f"✅ Pesos suavizados para {symbol} en modo {'REAL' if MODO_REAL else 'SIMULADO'} "

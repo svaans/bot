@@ -156,6 +156,7 @@ def test_puede_evaluar_entradas_checks_capital_asignado() -> None:
 
 def test_puede_evaluar_entradas_consulta_gestor_riesgo() -> None:
     trader = _build_trader(diversidad_minima=0.2)
+    trader.capital_manager = _StubCapitalManager(libre=True, asignado=True)
     risk = _StubRiskManager(allow=False)
     trader.risk = risk
 

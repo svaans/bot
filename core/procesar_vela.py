@@ -14,6 +14,7 @@ from typing import Any, Deque, Dict, Iterable, Mapping, Optional, Tuple, Union
 
 import pandas as pd
 
+from core.utils.log_utils import format_exception_for_log
 from core.utils.logger import configurar_logger
 from prometheus_client import Gauge
 
@@ -1188,7 +1189,7 @@ async def procesar_vela(trader: Any, vela: dict) -> None:
                     extra={
                         "symbol": symbol or "unknown",
                         "timeframe": timeframe_label,
-                        "error": str(exc),
+                        "error": format_exception_for_log(exc),
                     },
                     exc_info=True,
                 )
@@ -1260,7 +1261,7 @@ async def procesar_vela(trader: Any, vela: dict) -> None:
                     extra={
                         "symbol": symbol,
                         "timeframe": timeframe_label,
-                        "error": str(exc),
+                        "error": format_exception_for_log(exc),
                     },
                 )
 
@@ -1712,7 +1713,7 @@ async def _abrir_orden(
                     "side": side,
                     "attempt": attempt,
                     "max_attempts": attempts,
-                    "error": str(exc),
+                    "error": format_exception_for_log(exc),
                 },
             )
             if opened:

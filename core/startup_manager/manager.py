@@ -9,6 +9,7 @@ from typing import Any, Optional
 
 from core.diag.phase_logger import phase
 from core.trader_modular import Trader
+from core.utils.log_utils import format_exception_for_log
 from core.utils.utils import configurar_logger
 
 from .bootstrap import BootstrapMixin
@@ -136,7 +137,10 @@ class StartupManager(
 
             return self.trader, self.task, self.config  # type: ignore[return-value]
         except Exception as e:
-            self.log.error(f'Fallo en arranque: {e}')
+            self.log.error(
+                'Fallo en arranque: %s',
+                format_exception_for_log(e),
+            )
             for rollback in reversed(executed):
                 with suppress(Exception):
                     await rollback()

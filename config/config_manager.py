@@ -134,6 +134,18 @@ class Config:
     min_order_eur: float
     risk_kill_switch_max_consecutive_losses: int = 5
     diversidad_minima: int = 2
+    max_posiciones_cartera: int = 0
+    max_posiciones_mismo_sentido: int = 0
+    regimen_entrada_enabled: bool = False
+    regimen_vol_atr_ratio_alto: float = 0.025
+    regimen_vol_atr_ratio_bajo: float = 0.008
+    regimen_atr_periodo: int = 14
+    regimen_mult_umbral_alta: float = 1.0
+    regimen_mult_umbral_media: float = 1.0
+    regimen_mult_umbral_baja: float = 1.0
+    regimen_mult_umbral_score_alta: float = 1.0
+    regimen_mult_umbral_score_media: float = 1.0
+    regimen_mult_umbral_score_baja: float = 1.0
     capital_currency: Optional[str] = None
     persistencia_minima: int = 1
     peso_extra_persistencia: float = 0.5
@@ -531,6 +543,63 @@ class ConfigManager:
         )
         min_order_eur = _cargar_float('MIN_ORDER_EUR', defaults.min_order_eur)
         diversidad_minima = _cargar_int('DIVERSIDAD_MINIMA', defaults.diversidad_minima)
+        max_posiciones_cartera = max(
+            0,
+            _cargar_int(
+                'MAX_POSICIONES_CARTERA',
+                getattr(defaults, 'max_posiciones_cartera', 0),
+            ),
+        )
+        max_posiciones_mismo_sentido = max(
+            0,
+            _cargar_int(
+                'MAX_POSICIONES_MISMO_SENTIDO',
+                getattr(defaults, 'max_posiciones_mismo_sentido', 0),
+            ),
+        )
+        regimen_entrada_enabled = _env_bool(
+            'REGIMEN_ENTRADA_ENABLED',
+            getattr(defaults, 'regimen_entrada_enabled', False),
+        )
+        regimen_vol_atr_ratio_alto = _cargar_float(
+            'REGIMEN_VOL_ATR_RATIO_ALTO',
+            getattr(defaults, 'regimen_vol_atr_ratio_alto', 0.025),
+        )
+        regimen_vol_atr_ratio_bajo = _cargar_float(
+            'REGIMEN_VOL_ATR_RATIO_BAJO',
+            getattr(defaults, 'regimen_vol_atr_ratio_bajo', 0.008),
+        )
+        regimen_atr_periodo = max(
+            2,
+            _cargar_int(
+                'REGIMEN_ATR_PERIODO',
+                getattr(defaults, 'regimen_atr_periodo', 14),
+            ),
+        )
+        regimen_mult_umbral_alta = _cargar_float(
+            'REGIMEN_MULT_UMBRAL_ALTA',
+            getattr(defaults, 'regimen_mult_umbral_alta', 1.0),
+        )
+        regimen_mult_umbral_media = _cargar_float(
+            'REGIMEN_MULT_UMBRAL_MEDIA',
+            getattr(defaults, 'regimen_mult_umbral_media', 1.0),
+        )
+        regimen_mult_umbral_baja = _cargar_float(
+            'REGIMEN_MULT_UMBRAL_BAJA',
+            getattr(defaults, 'regimen_mult_umbral_baja', 1.0),
+        )
+        regimen_mult_umbral_score_alta = _cargar_float(
+            'REGIMEN_MULT_UMBRAL_SCORE_ALTA',
+            getattr(defaults, 'regimen_mult_umbral_score_alta', 1.0),
+        )
+        regimen_mult_umbral_score_media = _cargar_float(
+            'REGIMEN_MULT_UMBRAL_SCORE_MEDIA',
+            getattr(defaults, 'regimen_mult_umbral_score_media', 1.0),
+        )
+        regimen_mult_umbral_score_baja = _cargar_float(
+            'REGIMEN_MULT_UMBRAL_SCORE_BAJA',
+            getattr(defaults, 'regimen_mult_umbral_score_baja', 1.0),
+        )
         persistencia_minima = _cargar_int('PERSISTENCIA_MINIMA', defaults.persistencia_minima)
         peso_extra_persistencia = _cargar_float('PESO_EXTRA_PERSISTENCIA', defaults.peso_extra_persistencia)
         modo_capital_bajo = os.getenv('MODO_CAPITAL_BAJO', str(defaults.modo_capital_bajo)).lower() == 'true'
@@ -553,6 +622,18 @@ class ConfigManager:
             umbral_riesgo_diario=umbral_riesgo_diario,
             min_order_eur=min_order_eur,
             diversidad_minima=diversidad_minima,
+            max_posiciones_cartera=max_posiciones_cartera,
+            max_posiciones_mismo_sentido=max_posiciones_mismo_sentido,
+            regimen_entrada_enabled=regimen_entrada_enabled,
+            regimen_vol_atr_ratio_alto=regimen_vol_atr_ratio_alto,
+            regimen_vol_atr_ratio_bajo=regimen_vol_atr_ratio_bajo,
+            regimen_atr_periodo=regimen_atr_periodo,
+            regimen_mult_umbral_alta=regimen_mult_umbral_alta,
+            regimen_mult_umbral_media=regimen_mult_umbral_media,
+            regimen_mult_umbral_baja=regimen_mult_umbral_baja,
+            regimen_mult_umbral_score_alta=regimen_mult_umbral_score_alta,
+            regimen_mult_umbral_score_media=regimen_mult_umbral_score_media,
+            regimen_mult_umbral_score_baja=regimen_mult_umbral_score_baja,
             capital_currency=capital_currency,
             persistencia_minima=persistencia_minima,
             peso_extra_persistencia=peso_extra_persistencia,

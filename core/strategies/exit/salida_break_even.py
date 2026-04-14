@@ -1,6 +1,7 @@
 import pandas as pd
 from indicadores.helpers import get_atr
 from core.utils import configurar_logger
+from core.utils.log_utils import format_exception_for_log
 from config.exit_defaults import load_exit_config
 log = configurar_logger('salida_break_even')
 
@@ -41,5 +42,9 @@ def salida_break_even(orden: dict, df: pd.DataFrame, config: (dict | None)=None
             return {'cerrar': False, 'break_even': True, 'nuevo_sl': entrada}
         return {'cerrar': False}
     except (KeyError, ValueError, TypeError) as e:
-        log.warning(f"Error en salida_break_even para {orden.get('symbol', 'SYM')}: {e}")
+        log.warning(
+            'Error en salida_break_even para %s: %s',
+            orden.get('symbol', 'SYM'),
+            format_exception_for_log(e),
+        )
         return {'cerrar': False}

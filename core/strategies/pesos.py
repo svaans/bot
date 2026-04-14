@@ -8,9 +8,35 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Tuple, Union
 
-# Rutas configurables por entorno (con valores por defecto)
-ESTRATEGIAS_PESOS_PATH = Path(os.getenv("ESTRATEGIAS_PESOS_PATH", "estado/pesos_estrategias.json"))
-PESOS_SALIDAS_PATH = Path(os.getenv("PESOS_SALIDAS_PATH", "estado/pesos_salidas.json"))
+from core.repo_paths import repo_root, resolve_under_repo
+
+# Rutas configurables por entorno; relativas → ancladas al repo (no al CWD).
+
+
+def _resolve_pesos_storage_path(env_key: str, default_relative: str) -> Path:
+    raw = os.getenv(env_key)
+    if raw is None or not str(raw).strip():
+        return (repo_root() / default_relative).resolve()
+    p = Path(os.path.expandvars(os.path.expanduser(str(raw).strip())))
+    if p.is_absolute():
+        return p.resolve()
+    return (repo_root() / p).resolve()
+
+
+ESTRATEGIAS_PESOS_PATH = _resolve_pesos_storage_path(
+    "ESTRATEGIAS_PESOS_PATH",
+    "config/estrategias_pesos.json",
+)
+
+
+def entry_weights_temp_path() -> Path:
+    """Ruta temporal junto al JSON canónico (p. ej. para softmax intermedio)."""
+    p = ESTRATEGIAS_PESOS_PATH
+    return p.parent / f"{p.name}.tmp"
+PESOS_SALIDAS_PATH = _resolve_pesos_storage_path(
+    "PESOS_SALIDAS_PATH",
+    "estado/pesos_salidas.json",
+)
 
 Number = Union[int, float]
 
@@ -111,7 +137,16 @@ class GestorPesos:
                 pesos[symbol] = {k: _safe_float(v, 0.0) for k, v in d.items()}
         return cls(ruta=ruta, total=total, piso=piso, pesos=pesos)
 
-    def guardar(self) -> None:
+    def guardar(self, snapshot: Dict[str, Any] | None = None) -> None:
+        """Persiste ``self.pesos``. Si ``snapshot`` no es ``None``, reemplaza el mapa en memoria."""
+
+        if snapshot is not None:
+            next_pesos: Dict[str, Dict[str, float]] = {}
+            for sym, d in snapshot.items():
+                su = str(sym).upper()
+                if isinstance(d, dict):
+                    next_pesos[su] = {str(k): _safe_float(v, 0.0) for k, v in d.items()}
+            self.pesos = next_pesos
         _atomic_write_json(self.ruta, self.pesos)
 
     # ---- API principal ----
@@ -280,7 +315,7 @@ def cargar_pesos_estrategias(
     """Recarga los pesos de estrategias desde disco y devuelve el gestor global."""
 
     global gestor_pesos
-    ruta_path = Path(ruta) if ruta is not None else gestor_pesos.ruta
+    ruta_path = resolve_under_repo(ruta) if ruta is not None else gestor_pesos.ruta
     gestor_pesos = GestorPesos.from_file(
         ruta_path,
         total=total if total is not None else gestor_pesos.total,

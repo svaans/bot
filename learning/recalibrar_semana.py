@@ -4,13 +4,11 @@ from dotenv import dotenv_values
 from learning.analisis_resultados import analizar_estrategias_en_ordenes
 from learning.entrenador_estrategias import normalizar_scores
 from core.strategies.ajustador_pesos import ajustar_pesos_por_desempeno
-from core.strategies.pesos import gestor_pesos
+from core.strategies.pesos import entry_weights_temp_path, gestor_pesos
+from core.strategies.pesos_governance import EntryWeightSource, persist_entry_weights
 CONFIG = dotenv_values('config/claves.env')
 MODO_REAL = CONFIG.get('MODO_REAL', 'False') == 'True'
 CARPETA_ORDENES = 'ordenes_reales' if MODO_REAL else 'ordenes_simuladas'
-RUTA_PESOS = 'config/estrategias_pesos.json'
-
-
 def recalibrar_pesos_semana() ->None:
     archivos = glob.glob(os.path.join(CARPETA_ORDENES, '*.parquet'))
     if not archivos:
@@ -28,11 +26,16 @@ def recalibrar_pesos_semana() ->None:
     if not resultados:
         print('⚠️ Sin métricas válidas para recalibrar.')
         return
-    temp_path = RUTA_PESOS + '.tmp'
+    temp_path = str(entry_weights_temp_path())
     pesos_crudos = ajustar_pesos_por_desempeno(resultados, temp_path)
     pesos_normalizados = {symbol: normalizar_scores(data) for symbol, data in
         pesos_crudos.items()}
-    gestor_pesos.guardar(pesos_normalizados)
+    persist_entry_weights(
+        gestor_pesos,
+        pesos_normalizados,
+        source=EntryWeightSource.RECALIBRAR_SEMANA,
+        detail="all_symbols_parquet",
+    )
     if os.path.exists(temp_path):
         os.remove(temp_path)
     print('✅ Pesos recalibrados correctamente.')

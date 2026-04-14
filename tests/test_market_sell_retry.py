@@ -7,7 +7,7 @@ from core.orders import real_orders
 def test_market_sell_retry_propagates_error_and_client_attempt_offset(monkeypatch):
     attempts: list[int] = []
 
-    def fake_sell(symbol, cantidad, operation_id, *, order_attempt=1):
+    def fake_sell(symbol, cantidad, operation_id, *, order_attempt=1, precio_senal_bot=None):
         attempts.append(order_attempt)
         return {
             "ejecutado": 0.0,
@@ -29,7 +29,7 @@ def test_market_sell_retry_increments_attempt_across_partial_chain(monkeypatch):
     attempts: list[int] = []
     calls = {"n": 0}
 
-    def fake_sell(symbol, cantidad, operation_id, *, order_attempt=1):
+    def fake_sell(symbol, cantidad, operation_id, *, order_attempt=1, precio_senal_bot=None):
         attempts.append(order_attempt)
         calls["n"] += 1
         if calls["n"] == 1:

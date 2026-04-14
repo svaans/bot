@@ -2,6 +2,7 @@ import os
 import importlib.util
 import inspect
 from core.utils import configurar_logger
+from core.utils.log_utils import format_exception_for_log
 
 log = configurar_logger('loader_salidas')
 CARPETA_SALIDAS = os.path.dirname(__file__)
@@ -13,7 +14,9 @@ def es_estrategia_salida_valida(funcion):
         return len(firma.parameters) <= 3
     except (ValueError, TypeError) as e:
         log.warning(
-            f'Función de salida inválida {getattr(funcion, "__name__", funcion)}: {e}'
+            'Función de salida inválida %s: %s',
+            getattr(funcion, '__name__', funcion),
+            format_exception_for_log(e),
         )
         return False
 
@@ -45,7 +48,10 @@ def cargar_estrategias_salida():
                             )
             except Exception as e:
                 log.error(
-                    f'❌ Error importando {nombre_modulo} desde {ruta}: {e}'
+                    '❌ Error importando %s desde %s: %s',
+                    nombre_modulo,
+                    ruta,
+                    format_exception_for_log(e),
                 )
                 raise
     return funciones

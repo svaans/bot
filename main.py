@@ -27,9 +27,19 @@ try:
             if os.environ.get("DEBUGPY_WAIT_FOR_CLIENT", "0") == "1":
                 debugpy.wait_for_client()
         except Exception as e:
-            print(f"[debugpy] Deshabilitado por error: {e}")
+            try:
+                from core.utils.log_utils import format_exception_for_log as _fmt_exc
+                _dbg = _fmt_exc(e, 400)
+            except Exception:
+                _dbg = str(e)[:400] + ("..." if len(str(e)) > 400 else "")
+            print(f"[debugpy] Deshabilitado por error: {_dbg}")
 except Exception as e:
-    print(f"[debugpy] Deshabilitado por error: {e}")
+    try:
+        from core.utils.log_utils import format_exception_for_log as _fmt_exc
+        _dbg = _fmt_exc(e, 400)
+    except Exception:
+        _dbg = str(e)[:400] + ("..." if len(str(e)) > 400 else "")
+    print(f"[debugpy] Deshabilitado por error: {_dbg}")
 # --- fin debug remoto ---
 
 
@@ -50,6 +60,7 @@ from core.diag.phase_logger import phase
 from core.startup_manager import StartupManager
 from core.metrics import iniciar_exporter
 from core.state import persist_critical_state, restore_critical_state
+from core.utils.log_utils import format_exception_for_log
 
 
 # --- Utilidades internas ---
@@ -69,7 +80,7 @@ def _try_start_alert_dispatcher(trader: Any) -> Any:
             return None
         return AlertDispatcher(bus=bus)
     except Exception as exc:
-        print(f"⚠️ AlertDispatcher no disponible: {exc}")
+        print(f"⚠️ AlertDispatcher no disponible: {format_exception_for_log(exc)}")
         return None
 
 async def _maybe_await(maybe_coro):
@@ -118,7 +129,9 @@ def run_with_optional_aiomonitor(coro):
         try:
             from aiomonitor import Monitor  # puede no estar instalado
         except Exception as e:
-            print(f"⚠️ AIOMONITOR=1, pero no se pudo importar aiomonitor: {e}")
+            print(
+                f"⚠️ AIOMONITOR=1, pero no se pudo importar aiomonitor: {format_exception_for_log(e)}"
+            )
             asyncio.run(coro)
             return
 
@@ -182,7 +195,9 @@ async def main():
                 mode_service = OperationalModeService(config=config, trader=bot, event_bus=bus)
                 mode_service.start()
         except Exception as exc:
-            print(f"⚠️ No se pudo iniciar el servicio de modos operativos: {exc}")
+            print(
+                f"⚠️ No se pudo iniciar el servicio de modos operativos: {format_exception_for_log(exc)}"
+            )
             mode_service = None
     except Exception as e:
         msg = str(e)
@@ -190,7 +205,7 @@ async def main():
             print('❌ Almacenamiento no disponible. '
                   'Verifica los permisos de escritura en el directorio de datos.')
         else:
-            print(f'❌ {msg}')
+            print(f'❌ {format_exception_for_log(e)}')
         traceback.print_exc()
         return
 
@@ -252,7 +267,7 @@ async def main():
     try:
         notificador = crear_notification_manager_desde_env()
     except Exception as e:
-        print(f"⚠️ No se pudo crear el notificador: {e}")
+        print(f"⚠️ No se pudo crear el notificador: {format_exception_for_log(e)}")
         notificador = None
     if bot is not None and hasattr(bot, 'notificador'):
         try:
@@ -317,7 +332,7 @@ async def main():
             if tarea_bot in done:
                 exc = tarea_bot.exception()
                 if exc:
-                    print(f'❌ Error en la tarea del bot: {exc}')
+                    print(f'❌ Error en la tarea del bot: {format_exception_for_log(exc)}')
                     traceback.print_exception(type(exc), exc, exc.__traceback__)
                     retries += 1
                     if retries > max_retries:
@@ -369,11 +384,13 @@ async def main():
                                 mode_service = OperationalModeService(config=config, trader=bot, event_bus=bus)
                                 mode_service.start()
                         except Exception as exc:
-                            print(f"⚠️ No se pudo reiniciar el servicio de modos operativos: {exc}")
+                            print(
+                                f"⚠️ No se pudo reiniciar el servicio de modos operativos: {format_exception_for_log(exc)}"
+                            )
                         if bot is not None:
                             alert_dispatcher = _try_start_alert_dispatcher(bot)
                     except Exception as e:
-                        print(f"❌ Error reiniciando bot: {e}")
+                        print(f"❌ Error reiniciando bot: {format_exception_for_log(e)}")
                         traceback.print_exc()
                         continue  # reintento contará en la siguiente vuelta
                     retries = 0
@@ -420,13 +437,15 @@ async def main():
             if observer:
                 stop_hot_reload(observer)
         except Exception as e:
-            print(f"⚠️ Error deteniendo hot-reload: {e}")
+            print(f"⚠️ Error deteniendo hot-reload: {format_exception_for_log(e)}")
 
         if mode_service is not None:
             try:
                 await mode_service.stop()
             except Exception as exc:
-                print(f"⚠️ Error deteniendo servicio de modos: {exc}")
+                print(
+                    f"⚠️ Error deteniendo servicio de modos: {format_exception_for_log(exc)}"
+                )
 
         if alert_dispatcher is not None:
             try:
@@ -448,7 +467,7 @@ async def main():
         try:
             await _maybe_await(stop_supervision())
         except Exception as e:
-            print(f"⚠️ Error parando supervisor: {e}")
+            print(f"⚠️ Error parando supervisor: {format_exception_for_log(e)}")
 
         try:
             if exporter_server:
@@ -457,7 +476,7 @@ async def main():
                 if hasattr(exporter_server, "server_close"):
                     exporter_server.server_close()
         except Exception as e:
-            print(f"⚠️ Error cerrando exporter: {e}")
+            print(f"⚠️ Error cerrando exporter: {format_exception_for_log(e)}")
 
         print('👋 Bot finalizado correctamente.')
 

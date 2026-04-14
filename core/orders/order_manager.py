@@ -13,7 +13,7 @@ from typing import Any, Dict, Optional
 from core.orders.order_model import Order
 from core.utils.feature_flags import is_flag_enabled
 from core.utils.logger import configurar_logger, log_decision
-from core.utils.log_utils import safe_extra
+from core.utils.log_utils import format_exception_for_log, safe_extra
 from core.orders import real_orders
 # Importamos validadores con nombres más descriptivos.  El módulo
 # ``validators_binance`` centraliza las restricciones de Binance.
@@ -49,6 +49,12 @@ log = configurar_logger('orders', modo_silencioso=True)
 UTC = timezone.utc
 
 MAX_HISTORIAL_ORDENES = 1000
+
+
+def _fmt_exchange_err(exc: BaseException | None, *, limit: int = 500) -> str:
+    """Acorta mensajes de error (p. ej. CCXT) para logs y notificaciones."""
+
+    return format_exception_for_log(exc, limit)
 
 
 async def _fetch_balance_non_blocking(cliente: Any | None) -> Mapping[str, Any]:
@@ -449,7 +455,7 @@ class OrderManager:
             except Exception as exc:  # pragma: no cover - defensivo
                 log.error(
                     "orders.reconcile_trades.error",
-                    extra=safe_extra({"error": str(exc)}),
+                    extra=safe_extra({"error": _fmt_exchange_err(exc)}),
                 )
             try:
                 await asyncio.sleep(self._reconcile_interval)
@@ -497,7 +503,7 @@ class OrderManager:
                         {
                             "symbol": symbol,
                             "side": side,
-                            "reason": str(exc),
+                            "reason": _fmt_exchange_err(exc),
                         }
                     ),
                 )
@@ -717,7 +723,7 @@ class OrderManager:
             EventBus.respond(
                 data,
                 ack=False,
-                error=str(exc),
+                error=_fmt_exchange_err(exc),
                 result=OrderOpenStatus.FAILED.value,
             )
             return
@@ -732,7 +738,7 @@ class OrderManager:
             result = await self.cerrar_async(**data)
         except Exception as exc:
             log.exception("Fallo en handler cerrar_orden (event_bus)")
-            EventBus.respond(data, ack=False, error=str(exc), result=False)
+            EventBus.respond(data, ack=False, error=_fmt_exchange_err(exc), result=False)
             return
         EventBus.respond(data, ack=bool(result), result=result)
 
@@ -741,7 +747,7 @@ class OrderManager:
             result = await self.cerrar_parcial_async(**data)
         except Exception as exc:
             log.exception("Fallo en handler cerrar_parcial (event_bus)")
-            EventBus.respond(data, ack=False, error=str(exc), result=False)
+            EventBus.respond(data, ack=False, error=_fmt_exchange_err(exc), result=False)
             return
         EventBus.respond(data, ack=bool(result), result=result)
 
@@ -781,7 +787,7 @@ class OrderManager:
                 real_orders.reconciliar_ordenes
             )
         except Exception as e:
-            log.error(f'❌ Error sincronizando órdenes: {e}')
+            log.error("❌ Error sincronizando órdenes: %s", _fmt_exchange_err(e))
             registrar_orders_sync_failure(type(e).__name__)
             return False
 
@@ -870,12 +876,13 @@ class OrderManager:
                             },
                         )
                 except Exception as e:
-                    log.error(f'❌ Error registrando orden pendiente {sym}: {e}')
+                    err_t = _fmt_exchange_err(e, limit=400)
+                    log.error("❌ Error registrando orden pendiente %s: %s", sym, err_t)
                     if self.bus:
                         await self.bus.publish(
                             'notify',
                             {
-                                'mensaje': f'❌ Error registrando orden pendiente {sym}: {e}',
+                                'mensaje': f"❌ Error registrando orden pendiente {sym}: {err_t}",
                                 'tipo': 'CRITICAL',
                                 'operation_id': ord_.operation_id,
                             },
@@ -1194,12 +1201,15 @@ class OrderManager:
                             intento,
                             reintentos_sync,
                             symbol,
-                            e,
+                            _fmt_exchange_err(e, limit=400),
                         )
                         if intento < reintentos_sync:
                             await asyncio.sleep(0.25 * intento)
                 if ultimo_error_sync is not None:
-                    log.error(f'❌ Error verificando órdenes abiertas tras reintentos: {ultimo_error_sync}')
+                    log.error(
+                        "❌ Error verificando órdenes abiertas tras reintentos: %s",
+                        _fmt_exchange_err(ultimo_error_sync),
+                    )
                     if self.bus:
                         await self.bus.publish(
                             'notify',
@@ -1251,7 +1261,7 @@ class OrderManager:
                         free_balances = {}
                     disponible = float(free_balances.get(quote, 0.0))
                 except Exception as e:
-                    log.error(f'❌ Error obteniendo balance: {e}')
+                    log.error("❌ Error obteniendo balance: %s", _fmt_exchange_err(e))
                     disponible = 0.0
                 notional = precio * cantidad
                 if not remainder_executable(symbol, precio, cantidad) or notional > disponible:
@@ -1322,7 +1332,12 @@ class OrderManager:
                             symbol,
                             cantidad,
                             operation_id,
-                            {'side': 'buy', 'symbol': symbol, 'cantidad': cantidad},
+                            {
+                                'side': 'buy',
+                                'symbol': symbol,
+                                'cantidad': cantidad,
+                                'precio_senal': precio,
+                            },
 							precio=precio,
                         )
                         # actualiza con lo realmente ejecutado
@@ -1390,26 +1405,31 @@ class OrderManager:
                                     last_error = e
                                     registrar_registro_error()
                                     log.error(
-                                        'Error registrando orden',
-                                        extra={'symbol': symbol, 'error': str(e)},
+                                        "Error registrando orden",
+                                        extra=safe_extra(
+                                            {
+                                                "symbol": symbol,
+                                                "error": _fmt_exchange_err(e),
+                                            }
+                                        ),
                                     )
                             if not registrado:
                                 msg = (
-                                    str(last_error)
+                                    _fmt_exchange_err(last_error)
                                     if last_error is not None
-                                    else 'Error desconocido'
+                                    else "Error desconocido"
                                 )
                                 log.error(
-                                    'Error registrando orden',
-                                    extra={'symbol': symbol, 'error': msg},
+                                    "Error registrando orden",
+                                    extra=safe_extra({"symbol": symbol, "error": msg}),
                                 )
                                 if self.bus:
                                     await self.bus.publish(
-                                        'notify',
+                                        "notify",
                                         {
-                                            'mensaje': f'❌ Error registrando orden {symbol}: {msg}',
-                                            'tipo': 'CRITICAL',
-                                            'operation_id': operation_id,
+                                            "mensaje": f"❌ Error registrando orden {symbol}: {msg}",
+                                            "tipo": "CRITICAL",
+                                            "operation_id": operation_id,
                                         },
                                     )
                                 if self._should_schedule_persistence_retry(last_error):
@@ -1462,11 +1482,15 @@ class OrderManager:
                             self._registro_pendiente_paused.discard(symbol)
 
                 except Exception as e:
-                    log.error(f'❌ No se pudo abrir la orden para {symbol}: {e}')
+                    err_t = _fmt_exchange_err(e)
+                    log.error("❌ No se pudo abrir la orden para %s: %s", symbol, err_t)
                     if self.bus:
                         await self.bus.publish(
-                            'notify',
-                            {'mensaje': f'❌ Error al abrir orden en {symbol}: {e}', 'tipo': 'CRITICAL'},
+                            "notify",
+                            {
+                                "mensaje": f"❌ Error al abrir orden en {symbol}: {err_t}",
+                                "tipo": "CRITICAL",
+                            },
                         )
                     self.ordenes.pop(symbol, None)
                     limpiar_registro_pendiente(symbol)
@@ -1530,21 +1554,27 @@ class OrderManager:
                             symbol,
                             cantidad,
                             operation_id,
-                            {'side': 'buy', 'symbol': symbol, 'cantidad': cantidad},
+                            {
+                                'side': 'buy',
+                                'symbol': symbol,
+                                'cantidad': cantidad,
+                                'precio_senal': precio,
+                            },
 							precio=precio,
                         )
                         cantidad = execution.executed
                         orden.fee_total = getattr(orden, 'fee_total', 0.0) + execution.fee
                         self._apply_realized_pnl_delta(symbol, orden, execution.pnl)
                 except Exception as e:
-                    log.error(f'❌ No se pudo agregar posición real para {symbol}: {e}')
+                    err_t = _fmt_exchange_err(e)
+                    log.error("❌ No se pudo agregar posición real para %s: %s", symbol, err_t)
                     if self.bus:
                         await self.bus.publish(
-                            'notify',
+                            "notify",
                             {
-                                'mensaje': f'❌ Error al agregar posición en {symbol}: {e}',
-                                'tipo': 'CRITICAL',
-                                'operation_id': operation_id,
+                                "mensaje": f"❌ Error al agregar posición en {symbol}: {err_t}",
+                                "tipo": "CRITICAL",
+                                "operation_id": operation_id,
                             },
                         )
                     return False
@@ -1611,7 +1641,12 @@ class OrderManager:
                                 symbol,
                                 cantidad,
                                 operation_id,
-                                {'side': 'sell', 'symbol': symbol, 'cantidad': cantidad},
+                                {
+                                    'side': 'sell',
+                                    'symbol': symbol,
+                                    'cantidad': cantidad,
+                                    'precio_senal': precio_referencia,
+                                },
 								precio=precio,
                             )
                             restante = max(cantidad - execution.executed, 0.0)
@@ -1659,9 +1694,16 @@ class OrderManager:
                             if self.bus and not venta_exitosa:
                                 await self.bus.publish('notify', {'mensaje': f'❌ Venta fallida en {symbol}', 'operation_id': operation_id})
                         except Exception as e:
-                            log.error(f'❌ Error al cerrar orden real en {symbol}: {e}')
+                            err_t = _fmt_exchange_err(e)
+                            log.error("❌ Error al cerrar orden real en %s: %s", symbol, err_t)
                             if self.bus:
-                                await self.bus.publish('notify', {'mensaje': f'❌ Venta fallida en {symbol}: {e}', 'operation_id': operation_id})
+                                await self.bus.publish(
+                                    "notify",
+                                    {
+                                        "mensaje": f"❌ Venta fallida en {symbol}: {err_t}",
+                                        "operation_id": operation_id,
+                                    },
+                                )
                 else:
                     # Modo simulado: calcula PnL por diferencia
                     precio_cierre = precio_referencia
@@ -1796,7 +1838,12 @@ class OrderManager:
                             symbol,
                             cantidad,
                             operation_id,
-                            {'side': 'sell', 'symbol': symbol, 'cantidad': cantidad},
+                            {
+                                'side': 'sell',
+                                'symbol': symbol,
+                                'cantidad': cantidad,
+                                'precio_senal': precio,
+                            },
 							precio=precio,
                         )
                         executed_qty = float(execution.executed or 0.0)
@@ -1842,13 +1889,28 @@ class OrderManager:
                         )
                         orden.pnl_operaciones = getattr(orden, 'pnl_operaciones', 0.0) + execution.pnl
                     except Exception as e:
+                        err_t = _fmt_exchange_err(e)
                         log.error(
-                            'Error en venta parcial',
-                            extra={'symbol': symbol, 'error': str(e)},
+                            "Error en venta parcial",
+                            extra=safe_extra({"symbol": symbol, "error": err_t}),
                         )
                         if self.bus:
-                            await self.bus.publish('notify', {'mensaje': f'❌ Venta parcial fallida en {symbol}: {e}', 'operation_id': operation_id})
-                        log_decision(log, 'cerrar_parcial', operation_id, entrada_log, {}, 'reject', {'reason': str(e)})
+                            await self.bus.publish(
+                                "notify",
+                                {
+                                    "mensaje": f"❌ Venta parcial fallida en {symbol}: {err_t}",
+                                    "operation_id": operation_id,
+                                },
+                            )
+                        log_decision(
+                            log,
+                            "cerrar_parcial",
+                            operation_id,
+                            entrada_log,
+                            {},
+                            "reject",
+                            {"reason": err_t},
+                        )
                         return False
                 else:
                     diff = (precio - orden.precio_entrada) * cantidad
@@ -1916,7 +1978,11 @@ class OrderManager:
                         try:
                             await asyncio.to_thread(real_orders.eliminar_orden, symbol)
                         except Exception as e:
-                            log.error(f'❌ Error eliminando orden {symbol} de SQLite: {e}')
+                            log.error(
+                                "❌ Error eliminando orden %s de SQLite: %s",
+                                symbol,
+                                _fmt_exchange_err(e),
+                            )
                     registrar_orden('closed')
                     log_decision(log, 'cerrar_parcial', operation_id, {'symbol': symbol, 'cantidad': cantidad}, {}, 'accept', {'retorno': retorno})
                     self._actualizar_capital_disponible(symbol)
@@ -2085,7 +2151,13 @@ class OrderManager:
         except Exception as exc:  # pragma: no cover - defensivo
             log.exception(
                 "crear.exception",
-                extra=safe_extra({"symbol": symbol, "side": direccion, "error": str(exc)}),
+                extra=safe_extra(
+                    {
+                        "symbol": symbol,
+                        "side": direccion,
+                        "error": _fmt_exchange_err(exc),
+                    }
+                ),
             )
             return OrderOpenStatus.FAILED
 

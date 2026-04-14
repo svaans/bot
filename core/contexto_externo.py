@@ -19,6 +19,7 @@ import websockets
 # from binance_api.websocket import _keepalive
 
 from binance_api.cliente import BinanceClient, fetch_ohlcv_async, obtener_cliente
+from core.utils.log_utils import format_exception_for_log
 from core.utils.utils import configurar_logger, intervalo_a_segundos
 from core.supervisor import supervised_task, tick
 from core.utils.backoff import calcular_backoff
@@ -170,7 +171,10 @@ class StreamContexto:
         try:
             snapshots = await self._puntajes_store.load_all()
         except Exception as exc:
-            log.warning(f'⚠️ No se pudieron cargar puntajes persistidos: {exc}')
+            log.warning(
+                '⚠️ No se pudieron cargar puntajes persistidos: %s',
+                format_exception_for_log(exc),
+            )
             self._puntajes_loaded = True
             return
         async with self._puntaje_lock:
@@ -190,7 +194,10 @@ class StreamContexto:
             try:
                 self._rest_client = obtener_cliente()
             except Exception as exc:
-                log.warning(f'⚠️ No fue posible inicializar cliente REST: {exc}')
+                log.warning(
+                    '⚠️ No fue posible inicializar cliente REST: %s',
+                    format_exception_for_log(exc),
+                )
                 return None
         return self._rest_client
 
@@ -217,13 +224,21 @@ class StreamContexto:
         try:
             await self._puntajes_store.set(sym, float(puntaje), meta)
         except Exception as exc:
-            log.warning(f'⚠️ No se pudo persistir puntaje {sym}: {exc}')
+            log.warning(
+                '⚠️ No se pudo persistir puntaje %s: %s',
+                sym,
+                format_exception_for_log(exc),
+            )
         if notify and self._handler_actual is not None:
             try:
                 await self._handler_actual(sym, float(puntaje))
                 tick('context_stream' if source == 'ws' else 'context_rest_probe')
             except Exception as exc:
-                log.warning(f'⚠️ Handler contexto {sym} falló: {exc}')
+                log.warning(
+                    '⚠️ Handler contexto %s falló: %s',
+                    sym,
+                    format_exception_for_log(exc),
+                )
 
     async def _apply_rest_snapshot(self, symbol: str, snapshot: dict) -> None:
         open_price = float(snapshot.get('open') or 0.0)
@@ -298,7 +313,11 @@ class StreamContexto:
                         limit=1,
                     )
                 except Exception as exc:
-                    log.warning(f'⚠️ Error consultando REST para {sym}: {exc}')
+                    log.warning(
+                        '⚠️ Error consultando REST para %s: %s',
+                        sym,
+                        format_exception_for_log(exc),
+                    )
                     continue
                 if not candles:
                     continue
@@ -395,12 +414,20 @@ class StreamContexto:
                                     await handler(symbol, puntaje)
                                     tick('context_stream')
                                 except Exception as e:
-                                    log.warning(f'⚠️ Handler contexto {symbol} falló: {e}')
+                                    log.warning(
+                                        '⚠️ Handler contexto %s falló: %s',
+                                        symbol,
+                                        format_exception_for_log(e),
+                                    )
                             except asyncio.CancelledError:
                                 log.info(f'🛑 Stream contexto {symbol} cancelado (mensaje).')
                                 raise
                             except Exception as e:
-                                log.warning(f'⚠️ Error procesando contexto de {symbol}: {e}')
+                                log.warning(
+                                    '⚠️ Error procesando contexto de %s: %s',
+                                    symbol,
+                                    format_exception_for_log(e),
+                                )
                                 self._record_parsing_error(symbol, stage="ws_message", exc=e)
                     finally:
                         # if keeper:
@@ -420,7 +447,7 @@ class StreamContexto:
                     "⚠️ WS contexto %s intento %s falló: %s | backoff %.1fs url=%s",
                     symbol,
                     intentos,
-                    e,
+                    format_exception_for_log(e),
                     backoff,
                     url,
                 )

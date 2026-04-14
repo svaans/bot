@@ -14,6 +14,7 @@ from core.strategies.entry.gestor_entradas import evaluar_estrategias
 from core.adaptador_umbral import calcular_umbral_adaptativo, calcular_umbral_salida_adaptativo
 from core.strategies.pesos import obtener_peso_salida
 from core.utils import configurar_logger
+from core.utils.log_utils import format_exception_for_log
 log = configurar_logger('gestor_salidas')
 UTC = timezone.utc
 from .loader_salidas import cargar_estrategias_salida
@@ -88,7 +89,11 @@ async def evaluar_salidas(orden: dict, df, config=None, contexto=None):
                     }
                 )
         except Exception as e:
-            log.warning(f'[{symbol}] Error evaluando t_max: {e}')
+            log.warning(
+                '[%s] Error evaluando t_max: %s',
+                symbol,
+                format_exception_for_log(e),
+            )
     t_max_loss = cfg.get('t_max_loss')
     if t_max_loss:
         precio_actual = float(df['close'].iloc[-1])
@@ -146,7 +151,10 @@ async def evaluar_salidas(orden: dict, df, config=None, contexto=None):
                 resultado = await resultado
         except Exception as e:
             log.error(
-                f'❌ Error ejecutando estrategia de salida {getattr(f, "__name__", f)} en {symbol}: {e}'
+                '❌ Error ejecutando estrategia de salida %s en %s: %s',
+                getattr(f, '__name__', f),
+                symbol,
+                format_exception_for_log(e),
             )
             continue
 

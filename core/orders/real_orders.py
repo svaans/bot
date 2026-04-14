@@ -12,6 +12,9 @@ concurrentes en el mismo proceso, se recomienda encapsular este estado en una
 clase o crear instancias independientes.
 
 Variables de entorno relevantes:
+- ``ORDENES_DB_PATH``: si se define y es ruta relativa, se resuelve respecto a la
+  raíz del repositorio (:mod:`core.repo_paths`); si es absoluta, se usa tal cual.
+  Por defecto: ``<repo>/ordenes_reales/ordenes.db``.
 - ``MAX_BUFFER_OPERATIONS`` controla cuántas operaciones pueden acumularse en
   memoria antes de forzar un ``flush`` (por defecto ``10``).
 - ``FLUSH_INTERVAL`` define el tiempo máximo en segundos entre ``flush``
@@ -21,6 +24,7 @@ Variables de entorno relevantes:
   ``FLUSH_BATCH_SIZE`` determina cuántas operaciones se persisten por lote
   (por defecto ``100``). Si un ``flush`` supera los 30s, el tamaño del lote se
   reduce automáticamente para disminuir la carga de cada escritura.
+- ``EXECUTION_QUALITY_LOG_*``: ver :mod:`core.diag.execution_quality_log` (log de fills/slippage).
 """
 import os
 import copy
@@ -31,7 +35,8 @@ import atexit
 import threading
 import asyncio
 import inspect
-from typing import Any, Awaitable, Callable, Mapping, TypeVar, Coroutine
+from pathlib import Path
+from typing import Any, Awaitable, Callable, Coroutine, Mapping, TypeVar
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from datetime import datetime, timezone
 
@@ -42,9 +47,12 @@ from .order_model import Order, normalizar_precio_cantidad
 from .order_helpers import extract_ccxt_operation_id
 from core.utils.utils import configurar_logger, guardar_orden_real
 from core.utils.logger import log_decision
+from core.utils.log_utils import format_exception_for_log
 from core.supervisor import tick
 from . import real_orders
 from core.notification_manager import crear_notification_manager_desde_env
+from core.repo_paths import repo_root, resolve_under_repo
+from core.diag.execution_quality_log import append_ejecucion_mercado
 from core.adaptador_dinamico import calcular_tp_sl_adaptativos
 from config.exit_defaults import load_exit_config
 from config import config as app_config
@@ -60,12 +68,12 @@ except ImportError:
         pass
 log = configurar_logger('ordenes')
 notificador = crear_notification_manager_desde_env()
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-ORDENES_DB_PATH = os.getenv(
-    'ORDENES_DB_PATH',
-    os.path.join(BASE_DIR, 'ordenes_reales', 'ordenes.db'),
-)
-RUTA_DB = ORDENES_DB_PATH
+_ORDENES_DB_ENV = os.getenv("ORDENES_DB_PATH", "").strip()
+if _ORDENES_DB_ENV:
+    RUTA_DB = str(resolve_under_repo(Path(_ORDENES_DB_ENV)))
+else:
+    RUTA_DB = str((repo_root() / "ordenes_reales" / "ordenes.db").resolve())
+ORDENES_DB_PATH = RUTA_DB
 _CACHE_ORDENES: dict[str, Order] | None = None
 _CACHE_ORDENES_LOCK = threading.RLock()
 _VENTAS_FALLIDAS: set[str] = set()
@@ -298,7 +306,10 @@ def _connect_db() -> sqlite3.Connection:
         conn.execute('PRAGMA synchronous=NORMAL')
         conn.execute('PRAGMA busy_timeout=5000')
     except sqlite3.Error as e:
-        log.warning(f'⚠️ No se pudieron aplicar PRAGMA en SQLite: {e}')
+        log.warning(
+            '⚠️ No se pudieron aplicar PRAGMA en SQLite: %s',
+            format_exception_for_log(e),
+        )
     return conn
 
 
@@ -322,7 +333,11 @@ def esperar_balance(cliente, symbol: str, cantidad_esperada: float,
     try:
         base = symbol.split('/')[0]
     except Exception as e:
-        log.error(f'❌ Error al interpretar símbolo {symbol}: {e}')
+        log.error(
+            '❌ Error al interpretar símbolo %s: %s',
+            symbol,
+            format_exception_for_log(e),
+        )
         return 0.0
     for intento in range(max_intentos):
         try:
@@ -332,8 +347,11 @@ def esperar_balance(cliente, symbol: str, cantidad_esperada: float,
                 return disponible
         except Exception as e:
             log.warning(
-                f'⚠️ Error al obtener balance en intento {intento + 1}/{max_intentos}: {e}'
-                )
+                '⚠️ Error al obtener balance en intento %s/%s: %s',
+                intento + 1,
+                max_intentos,
+                format_exception_for_log(e),
+            )
         time.sleep(delay)
     log.warning(
         f'⏱️ Tiempo de espera agotado para obtener balance suficiente en {symbol}. Disponible: {disponible}, requerido: {cantidad_esperada}'
@@ -434,7 +452,10 @@ def _init_db() ->None:
                 )
         log.info('🗃️ Tablas de órdenes y operaciones verificadas/creadas.', extra={'symbol': None, 'timeframe': None})
     except sqlite3.Error as e:
-        log.error(f'❌ Error al crear las tablas en SQLite: {e}')
+        log.error(
+            '❌ Error al crear las tablas en SQLite: %s',
+            format_exception_for_log(e),
+        )
         raise
 
 
@@ -461,7 +482,10 @@ def cargar_ordenes() ->dict[str, Order]:
                 extra={'symbol': None, 'timeframe': None},
             )
         except sqlite3.Error as e:
-            log.error(f'❌ Error al cargar órdenes desde SQLite: {e}')
+            log.error(
+                '❌ Error al cargar órdenes desde SQLite: %s',
+                format_exception_for_log(e),
+            )
             return {}
         _CACHE_ORDENES = ordenes
         return _CACHE_ORDENES
@@ -520,7 +544,10 @@ def guardar_ordenes(ordenes: dict[str, Order]) ->None:
                 extra={'symbol': None, 'timeframe': None},
             )
         except (sqlite3.Error, ValueError) as e:
-            log.error(f'❌ Error al guardar órdenes en SQLite: {e}')
+            log.error(
+                '❌ Error al guardar órdenes en SQLite: %s',
+                format_exception_for_log(e),
+            )
             raise
 
 
@@ -528,7 +555,11 @@ def obtener_orden(symbol: str) ->(Order | None):
     try:
         return cargar_ordenes().get(symbol)
     except Exception as e:
-        log.error(f'❌ Error al obtener orden de {symbol}: {e}')
+        log.error(
+            '❌ Error al obtener orden de %s: %s',
+            symbol,
+            format_exception_for_log(e),
+        )
         return None
 
 
@@ -562,7 +593,10 @@ def reconciliar_ordenes(simbolos: list[str] | None = None) -> dict[str, Order]:
                 _resolve_maybe_awaitable(cliente.fetch_open_orders())
             )
     except Exception as e:
-        log.error(f'❌ Error consultando órdenes abiertas: {e}')
+        log.error(
+            '❌ Error consultando órdenes abiertas: %s',
+            format_exception_for_log(e),
+        )
         return local
     exchange: dict[str, dict] = {}
     for o in ordenes_api:
@@ -599,11 +633,19 @@ def reconciliar_ordenes(simbolos: list[str] | None = None) -> dict[str, Order]:
         try:
             registrar_operacion(ord_)
         except Exception as e:
-            log.warning(f'⚠️ No se pudo registrar cierre para {sym}: {e}')
+            log.warning(
+                '⚠️ No se pudo registrar cierre para %s: %s',
+                sym,
+                format_exception_for_log(e),
+            )
         try:
             eliminar_orden(sym)
         except Exception as e:
-            log.warning(f'⚠️ No se pudo eliminar orden local {sym}: {e}')
+            log.warning(
+                '⚠️ No se pudo eliminar orden local %s: %s',
+                sym,
+                format_exception_for_log(e),
+            )
         local.pop(sym, None)
     for sym in exchange_only:
         # ``operation_id`` queda en el objeto :class:`Order` en memoria; el esquema
@@ -625,7 +667,11 @@ def reconciliar_ordenes(simbolos: list[str] | None = None) -> dict[str, Order]:
                 else:
                     sl, tp = tp_calc, sl_calc
         except Exception as e:
-            log.warning(f'⚠️ Error calculando SL/TP para {sym}: {e}')
+            log.warning(
+                '⚠️ Error calculando SL/TP para %s: %s',
+                sym,
+                format_exception_for_log(e),
+            )
         try:
             registrar_orden(
                 sym,
@@ -639,7 +685,11 @@ def reconciliar_ordenes(simbolos: list[str] | None = None) -> dict[str, Order]:
                 info.get('operation_id'),
             )
         except Exception as e:
-            log.warning(f'⚠️ No se pudo registrar orden reconciliada para {sym}: {e}')
+            log.warning(
+                '⚠️ No se pudo registrar orden reconciliada para %s: %s',
+                sym,
+                format_exception_for_log(e),
+            )
     return cargar_ordenes()
 
 
@@ -676,7 +726,10 @@ def sincronizar_ordenes_binance(
                 _resolve_maybe_awaitable(cliente.fetch_open_orders())
             )
     except Exception as e:
-        log.error(f'❌ Error consultando órdenes abiertas: {e}')
+        log.error(
+            '❌ Error consultando órdenes abiertas: %s',
+            format_exception_for_log(e),
+        )
         return cargar_ordenes()
     for o in ordenes_api:
         symbol = o.get('symbol')
@@ -704,7 +757,11 @@ def sincronizar_ordenes_binance(
                 else:
                     sl, tp = tp_calc, sl_calc
         except Exception as e:
-            log.warning(f'⚠️ Error calculando SL/TP para {symbol}: {e}')
+            log.warning(
+                '⚠️ Error calculando SL/TP para %s: %s',
+                symbol,
+                format_exception_for_log(e),
+            )
         op_id = extract_ccxt_operation_id(o)
         registrar_orden(symbol, price, amount, sl, tp, {}, '', direccion, op_id)
     return cargar_ordenes()
@@ -742,16 +799,24 @@ def consultar_ordenes_abiertas(symbol: str) -> list[dict]:
             )
             break
         except AuthenticationError as e:
-            log.error(f'❌ Error de autenticación al consultar órdenes: {e}')
+            log.error(
+                '❌ Error de autenticación al consultar órdenes: %s',
+                format_exception_for_log(e),
+            )
             return []
         except NetworkError as e:
             log.warning(
-                f'⚠️ Fallo de red consultando órdenes (intento {intento}/3): {e}'
+                '⚠️ Fallo de red consultando órdenes (intento %s/3): %s',
+                intento,
+                format_exception_for_log(e),
             )
             time.sleep(0.1 * intento)
             continue
         except Exception as e:
-            log.error(f'❌ Error inesperado consultando órdenes: {e}')
+            log.error(
+                '❌ Error inesperado consultando órdenes: %s',
+                format_exception_for_log(e),
+            )
             return []
 
     if not ordenes_api:
@@ -931,7 +996,10 @@ def reconciliar_trades_binance(
                         persist_exc,
                     )
     except Exception as e:
-        log.error(f'❌ Error al reconciliar trades: {e}')
+        log.error(
+            '❌ Error al reconciliar trades: %s',
+            format_exception_for_log(e),
+        )
 
     if reporter:
         reporter(divergencias)
@@ -988,7 +1056,11 @@ def actualizar_orden(symbol: str, data: (Order | dict)) ->None:
             _CACHE_ORDENES = ordenes
             log.info(f'📌 Order actualizada para {symbol}.', extra={'symbol': symbol, 'timeframe': None})
         except Exception as e:
-            log.error(f'❌ Error al actualizar orden para {symbol}: {e}')
+            log.error(
+                '❌ Error al actualizar orden para %s: %s',
+                symbol,
+                format_exception_for_log(e),
+            )
             raise
 
 
@@ -1012,7 +1084,10 @@ def eliminar_orden(symbol: str, forzar_log: bool=False) ->None:
             _CACHE_ORDENES = ordenes
             log.info(f'🗑️ Order eliminada correctamente para {symbol}.', extra={'symbol': symbol, 'timeframe': None})
         except sqlite3.Error as e:
-            log.error(f'❌ Error eliminando orden de la base de datos: {e}')
+            log.error(
+                '❌ Error eliminando orden de la base de datos: %s',
+                format_exception_for_log(e),
+            )
             raise
 
 
@@ -1089,8 +1164,13 @@ def ejecutar_orden_market(
     operation_id: str | None = None,
     *,
     order_attempt: int = 1,
+    precio_senal_bot: float | None = None,
 ) -> dict:
-    """Ejecuta una compra de mercado y devuelve detalles de la ejecución."""
+    """Ejecuta una compra de mercado y devuelve detalles de la ejecución.
+
+    ``precio_senal_bot`` es el precio que usó el bot al decidir (p. ej. cierre de vela);
+    permite medir slippage respecto al ticker del exchange al enviar la orden.
+    """
     entrada = {'symbol': symbol, 'cantidad': cantidad}
     if cantidad <= 0:
         log.warning(f'⚠️ Cantidad inválida para compra en {symbol}: {cantidad}')
@@ -1176,6 +1256,9 @@ def ejecutar_orden_market(
             metricas = _acumular_metricas(operation_id, response)
         precio_fill = float(response.get('price') or response.get('average') or precio)
         slippage = abs(precio_fill - precio) / precio if precio else 0.0
+        slippage_vs_senal: float | None = None
+        if precio_senal_bot is not None and precio_senal_bot > 0:
+            slippage_vs_senal = abs(precio_fill - precio_senal_bot) / precio_senal_bot
         if slippage > _MAX_SLIPPAGE_PCT:
             log.warning(
                 f'⚠️ Slippage alto en {symbol}: {slippage:.2%} (máx {_MAX_SLIPPAGE_PCT:.2%})'
@@ -1205,12 +1288,39 @@ def ejecutar_orden_market(
             'fee': metricas['fee'],
             'pnl': metricas['pnl'],
             'slippage': slippage,
+            'precio_referencia': precio,
+            'precio_fill': precio_fill,
         }
+        if slippage_vs_senal is not None:
+            salida['slippage_vs_senal'] = slippage_vs_senal
+        if ejecutado > 0:
+            append_ejecucion_mercado(
+                {
+                    'ts': time.time(),
+                    'event': 'market_buy',
+                    'symbol': symbol,
+                    'side': 'buy',
+                    'operation_id': operation_id,
+                    'order_attempt': order_attempt,
+                    'precio_referencia': precio,
+                    'precio_fill': precio_fill,
+                    'slippage_vs_ticker': slippage,
+                    'precio_senal': precio_senal_bot,
+                    'slippage_vs_senal': slippage_vs_senal,
+                    'ejecutado': ejecutado,
+                    'fee': metricas['fee'],
+                }
+            )
         log_decision(log, 'ejecutar_orden_market', operation_id, entrada, {'minimos': True}, 'accept', salida)
         return salida
     except Exception as e:
-        log.error(f'❌ Error en Binance al ejecutar compra en {symbol}: {e}')
-        contexto_decision: dict[str, Any] = {'reason': str(e)}
+        err_msg = format_exception_for_log(e)
+        log.error(
+            '❌ Error en Binance al ejecutar compra en %s: %s',
+            symbol,
+            err_msg,
+        )
+        contexto_decision: dict[str, Any] = {'reason': err_msg}
         ejecucion_confirmada = False
 
         if cliente is not None:
@@ -1218,8 +1328,12 @@ def ejecutar_orden_market(
                 trades = cliente.fetch_my_trades(symbol, limit=1)
                 trade = trades[-1] if trades else None
             except Exception as ver_err:
-                log.error(f'❌ Error verificando trades tras fallo: {ver_err}')
-                contexto_decision['trade_history_error'] = str(ver_err)
+                ver_msg = format_exception_for_log(ver_err)
+                log.error(
+                    '❌ Error verificando trades tras fallo: %s',
+                    ver_msg,
+                )
+                contexto_decision['trade_history_error'] = ver_msg
                 trade = None
             else:
                 ejecutado = (
@@ -1273,8 +1387,12 @@ def ejecutar_orden_market(
                             operation_id,
                         )
                     except Exception as e_reg:
-                        log.error(f'❌ No se pudo registrar orden tras error: {e_reg}')
-                        contexto_decision['registro_error'] = str(e_reg)
+                        reg_msg = format_exception_for_log(e_reg)
+                        log.error(
+                            '❌ No se pudo registrar orden tras error: %s',
+                            reg_msg,
+                        )
+                        contexto_decision['registro_error'] = reg_msg
 
         auditoria_info: dict[str, Any] | None = None
         if not ejecucion_confirmada and cliente is not None:
@@ -1286,8 +1404,13 @@ def ejecutar_orden_market(
                     cantidad,
                 )
             except Exception as audit_err:
-                log.error(f'❌ Auditoría cruzada falló para {symbol}: {audit_err}')
-                contexto_decision['audit_error'] = str(audit_err)
+                aud_msg = format_exception_for_log(audit_err)
+                log.error(
+                    '❌ Auditoría cruzada falló para %s: %s',
+                    symbol,
+                    aud_msg,
+                )
+                contexto_decision['audit_error'] = aud_msg
             else:
                 if auditoria_info:
                     contexto_decision['auditoria'] = auditoria_info.get('source')
@@ -1370,6 +1493,7 @@ def ejecutar_orden_market_sell(
     operation_id: str | None = None,
     *,
     order_attempt: int = 1,
+    precio_senal_bot: float | None = None,
 ) -> dict:
     """Ejecuta una venta de mercado validando saldo y devuelve detalles."""
     entrada = {'symbol': symbol, 'cantidad': cantidad}
@@ -1468,6 +1592,9 @@ def ejecutar_orden_market_sell(
 
         precio_fill = float(response.get('price') or response.get('average') or precio)
         slippage = abs(precio_fill - precio) / precio if precio else 0.0
+        slippage_vs_senal: float | None = None
+        if precio_senal_bot is not None and precio_senal_bot > 0:
+            slippage_vs_senal = abs(precio_fill - precio_senal_bot) / precio_senal_bot
         if slippage > _MAX_SLIPPAGE_PCT:
             log.warning(f'⚠️ Slippage alto en {symbol}: {slippage:.2%} (máx {_MAX_SLIPPAGE_PCT:.2%})')
             try:
@@ -1490,12 +1617,38 @@ def ejecutar_orden_market_sell(
             'fee': metricas['fee'],
             'pnl': metricas['pnl'],
             'slippage': slippage,
+            'precio_referencia': precio,
+            'precio_fill': precio_fill,
         }
+        if slippage_vs_senal is not None:
+            salida['slippage_vs_senal'] = slippage_vs_senal
+        if ejecutado > 0:
+            append_ejecucion_mercado(
+                {
+                    'ts': time.time(),
+                    'event': 'market_sell',
+                    'symbol': symbol,
+                    'side': 'sell',
+                    'operation_id': operation_id,
+                    'order_attempt': order_attempt,
+                    'precio_referencia': precio,
+                    'precio_fill': precio_fill,
+                    'slippage_vs_ticker': slippage,
+                    'precio_senal': precio_senal_bot,
+                    'slippage_vs_senal': slippage_vs_senal,
+                    'ejecutado': ejecutado,
+                    'fee': metricas['fee'],
+                }
+            )
         log_decision(log, 'ejecutar_orden_market_sell', operation_id, entrada, {'minimos': True}, 'accept', salida)
         return salida
 
     except InsufficientFunds as e:
-        log.error(f'❌ Venta rechazada por saldo insuficiente en {symbol}: {e}')
+        log.error(
+            '❌ Venta rechazada por saldo insuficiente en %s: %s',
+            symbol,
+            format_exception_for_log(e),
+        )
         registrar_venta_fallida(symbol)
         try:
             notificador.enviar(f'Venta rechazada por saldo insuficiente en {symbol}', 'CRITICAL')
@@ -1520,8 +1673,21 @@ def ejecutar_orden_market_sell(
         }
 
     except Exception as e:
-        log.error(f'❌ Error en intercambio al vender {symbol}: {e}')
-        log_decision(log, 'ejecutar_orden_market_sell', operation_id, entrada, {}, 'error', {'reason': str(e)})
+        sell_err = format_exception_for_log(e)
+        log.error(
+            '❌ Error en intercambio al vender %s: %s',
+            symbol,
+            sell_err,
+        )
+        log_decision(
+            log,
+            'ejecutar_orden_market_sell',
+            operation_id,
+            entrada,
+            {},
+            'error',
+            {'reason': sell_err},
+        )
         return {
             'ejecutado': 0.0,
             'restante': cantidad,
@@ -1538,6 +1704,8 @@ def _market_sell_retry(
     cantidad: float,
     operation_id: str | None = None,
     order_attempt_start: int = 1,
+    *,
+    precio_senal_bot: float | None = None,
 ) -> dict:
     """Envía ventas de mercado reintentando en caso de fills parciales.
 
@@ -1555,7 +1723,11 @@ def _market_sell_retry(
         oid_att = int(order_attempt_start) + attempt - 1
         last_order_attempt = oid_att
         resp = ejecutar_orden_market_sell(
-            symbol, restante, operation_id, order_attempt=oid_att
+            symbol,
+            restante,
+            operation_id,
+            order_attempt=oid_att,
+            precio_senal_bot=precio_senal_bot,
         )
         if str(resp.get("status") or "").upper() == "ERROR":
             return {
@@ -1658,7 +1830,11 @@ def ejecutar_orden_limit(
             try:
                 estado = cliente.cancel_order(order_id, symbol)
             except Exception as e:
-                log.warning(f"⚠️ No se pudo cancelar orden {order_id}: {e}")
+                log.warning(
+                    "⚠️ No se pudo cancelar orden %s: %s",
+                    order_id,
+                    format_exception_for_log(e),
+                )
                 estado = {}
             if float(estado.get("filled") or estado.get("executedQty") or 0.0) == 0.0:
                 try:
@@ -1700,11 +1876,19 @@ def ejecutar_orden_limit(
         m_attempt = max_reintentos + 1
         if side == "buy":
             res_market = ejecutar_orden_market(
-                symbol, restante, operation_id, order_attempt=m_attempt
+                symbol,
+                restante,
+                operation_id,
+                order_attempt=m_attempt,
+                precio_senal_bot=float(precio) if precio else None,
             )
         else:
             res_market = ejecutar_orden_market_sell(
-                symbol, restante, operation_id, order_attempt=m_attempt
+                symbol,
+                restante,
+                operation_id,
+                order_attempt=m_attempt,
+                precio_senal_bot=float(precio) if precio else None,
             )
         ejecutado_total += res_market.get("ejecutado", 0.0)
         restante = res_market.get("restante", 0.0)
@@ -1767,12 +1951,17 @@ def _persistir_operaciones(operaciones: list[dict]) -> tuple[int, int, list[dict
                     )
                 except sqlite3.Error as e:
                     log.error(
-                        f"❌ Error SQLite al insertar operación para {data.get('symbol')}: {e}"
+                        '❌ Error SQLite al insertar operación para %s: %s',
+                        data.get('symbol'),
+                        format_exception_for_log(e),
                     )
                     errores_sqlite += 1
                     pendientes.append(op)
     except sqlite3.Error as e:
-        log.error(f'❌ Error global al guardar operaciones en SQLite: {e}')
+        log.error(
+            '❌ Error global al guardar operaciones en SQLite: %s',
+            format_exception_for_log(e),
+        )
         errores_sqlite += 1
         pendientes.extend(operaciones)
     for op in operaciones:
@@ -1785,7 +1974,9 @@ def _persistir_operaciones(operaciones: list[dict]) -> tuple[int, int, list[dict
                 guardar_orden_real(symbol, data)
             except Exception as e:
                 log.error(
-                    f'❌ Error guardando operación en Parquet para {symbol}: {e}'
+                    '❌ Error guardando operación en Parquet para %s: %s',
+                    symbol,
+                    format_exception_for_log(e),
                 )
                 errores_parquet += 1
                 if op not in pendientes:
@@ -1901,7 +2092,10 @@ async def flush_periodico(
                 try:
                     _FLUSH_FUTURE.result()
                 except Exception as e:
-                    log.error(f'❌ Error en flush previo: {e}')
+                    log.error(
+                        '❌ Error en flush previo: %s',
+                        format_exception_for_log(e),
+                    )
                 _FLUSH_FUTURE = None
             restante = interval
             while restante > 0:
@@ -1924,7 +2118,10 @@ async def flush_periodico(
                 log.warning('⚠️ flush_operaciones se excedió de tiempo (30s)')
             except Exception as e:
                 fallos_consecutivos += 1
-                log.error(f'❌ Error en flush periódico: {e}')
+                log.error(
+                    '❌ Error en flush periódico: %s',
+                    format_exception_for_log(e),
+                )
                 _FLUSH_FUTURE = None
             if fallos_consecutivos >= max_fallos:
                 mensaje = (

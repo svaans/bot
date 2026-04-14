@@ -1,14 +1,20 @@
-import os
-import pandas as pd
 import json
 from collections import defaultdict
+
+import pandas as pd
+
+from core.repo_paths import resolve_under_repo
 from core.strategies.pesos import gestor_pesos
+from core.strategies.pesos_governance import EntryWeightSource, persist_entry_weights
 
 
-def calcular_pesos_desde_backtest(csv_path=
-    'ordenes_simuladas_con_resultado.csv', output_json=
-    'estrategias_pesos_backtest.json'):
-    df = pd.read_csv(csv_path)
+def calcular_pesos_desde_backtest(
+    csv_path: str = "ordenes_simuladas_con_resultado.csv",
+    output_json: str = "estrategias_pesos_backtest.json",
+):
+    csv_p = resolve_under_repo(csv_path)
+    out_p = resolve_under_repo(output_json)
+    df = pd.read_csv(csv_p)
     df = df[df['status'] == 'cerrada'].copy()
     df['ganancia'] = df['precio_salida'] - df['precio_entrada']
 
@@ -42,14 +48,20 @@ def calcular_pesos_desde_backtest(csv_path=
                 media_ganancia = stats['ganancia_total'] / stats['usos']
                 peso = round(winrate * media_ganancia + 1, 2)
                 pesos_por_symbol[symbol][estrategia] = max(peso, 0.1)
-    if os.path.exists(output_json):
-        with open(output_json, 'r') as f:
+    if out_p.exists():
+        with out_p.open("r", encoding="utf-8") as f:
             datos_anteriores = json.load(f)
     else:
         datos_anteriores = {}
     datos_anteriores.update(pesos_por_symbol)
-    with open(output_json, 'w') as f:
+    out_p.parent.mkdir(parents=True, exist_ok=True)
+    with out_p.open("w", encoding="utf-8") as f:
         json.dump(datos_anteriores, f, indent=4)
-    gestor_pesos.guardar(datos_anteriores)
-    print('✅ Pesos generados y guardados por símbolo en', output_json)
+    persist_entry_weights(
+        gestor_pesos,
+        datos_anteriores,
+        source=EntryWeightSource.ANALISIS_PESOS_BACKTEST,
+        detail=str(out_p),
+    )
+    print("✅ Pesos generados y guardados por símbolo en", out_p)
     return datos_anteriores

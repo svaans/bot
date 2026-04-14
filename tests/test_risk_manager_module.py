@@ -471,3 +471,44 @@ def test_estado_critico_antiguo_sin_campos_kill_switch() -> None:
     otro._load_critical_state({"riesgo_diario": 1.0})
     assert otro._kill_switch_disparado is False
     assert otro._perdidas_consecutivas == 0
+
+
+def test_max_posiciones_cartera_bloquea_permite_entrada() -> None:
+    class OM:
+        ordenes = {
+            "A": SimpleNamespace(direccion="long"),
+            "B": SimpleNamespace(direccion="long"),
+        }
+
+    cap = DummyCapitalManager({"ETH": 100.0})
+    m = RiskManager(
+        0.05,
+        capital_manager=cap,
+        order_manager=OM(),
+        max_posiciones_cartera=2,
+    )
+    assert m.permite_entrada("ETH", {}, diversidad_minima=99) is False
+
+    class OM1:
+        ordenes = {"A": SimpleNamespace(direccion="long")}
+
+    m2 = RiskManager(
+        0.05,
+        capital_manager=cap,
+        order_manager=OM1(),
+        max_posiciones_cartera=3,
+    )
+    assert m2.permite_entrada("ETH", {}, diversidad_minima=99) is True
+
+
+def test_max_posiciones_mismo_sentido() -> None:
+    class OM:
+        ordenes = {
+            "A": SimpleNamespace(direccion="long"),
+            "B": SimpleNamespace(direccion="long"),
+        }
+
+    m = RiskManager(0.05, order_manager=OM(), max_posiciones_mismo_sentido=2)
+    assert m.permite_cartera_mismo_sentido("long") is False
+    assert m.permite_cartera_mismo_sentido("short") is True
+    assert m.resumen_cartera_abierta() == {"total": 2, "long": 2, "short": 0}

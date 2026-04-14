@@ -10,7 +10,7 @@ from typing import Any, Awaitable, Callable, Mapping
 
 from core.utils.feature_flags import is_flag_enabled
 from core.utils.utils import timestamp_alineado, validar_integridad_velas
-from core.utils.log_utils import safe_extra
+from core.utils.log_utils import format_exception_for_log, safe_extra
 from core.adaptador_dinamico import backfill_ventana
 from ._shared import COMBINED_STREAM_KEY, ConsumerState, log
 from . import events
@@ -818,7 +818,11 @@ async def consumer_loop(feed: "DataFeed", symbol: str) -> None:
                 "Error en handler",
                 extra=safe_extra({"symbol": sym, "timestamp": ts}),
             )
-            events.emit_event(feed, "consumer_error", {"symbol": sym, "ts": ts, "error": str(exc)})
+            events.emit_event(
+                feed,
+                "consumer_error",
+                {"symbol": sym, "ts": ts, "error": format_exception_for_log(exc)},
+            )
 
         finally:
             handler_elapsed = 0.0

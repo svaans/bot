@@ -6,11 +6,13 @@ from datetime import datetime, timezone
 UTC = timezone.utc
 import pandas as pd
 from dotenv import dotenv_values
+from core.utils.log_utils import format_exception_for_log
 from core.utils.utils import configurar_logger
 from learning.analisis_resultados import analizar_estrategias_en_ordenes
 from learning.entrenador_estrategias import actualizar_pesos_estrategias_symbol
 from learning.recalibrar_semana import recalibrar_pesos_semana
 from core.strategies.pesos import gestor_pesos
+from core.strategies.pesos_governance import EntryWeightSource, persist_entry_weights
 from config.configuracion import cargar_configuracion_simbolo, guardar_configuracion_simbolo
 from core.adaptador_umbral import calcular_umbral_adaptativo
 from core.adaptador_dinamico import calcular_tp_sl_adaptativos
@@ -33,7 +35,10 @@ def _cargar_feedback(symbol: str) ->dict:
             data = json.load(fh)
         return data.get(symbol, {})
     except Exception as e:
-        log.warning(f'⚠️ Error leyendo feedback manual: {e}')
+        log.warning(
+            '⚠️ Error leyendo feedback manual: %s',
+            format_exception_for_log(e),
+        )
         return {}
 
 
@@ -54,7 +59,12 @@ def _aplicar_feedback_pesos(symbol: str, feedback: dict) ->None:
     if actualizado:
         datos = gestor_pesos.pesos
         datos[symbol] = pesos
-        gestor_pesos.guardar(datos)
+        persist_entry_weights(
+            gestor_pesos,
+            datos,
+            source=EntryWeightSource.FEEDBACK_MANUAL,
+            detail=symbol,
+        )
         log.info(f'📝 Feedback aplicado a pesos de {symbol}')
 
 

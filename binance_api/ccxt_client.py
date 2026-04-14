@@ -12,6 +12,8 @@ import os
 import threading
 from typing import Any
 
+from core.utils.log_utils import truncate_for_log
+
 logger = logging.getLogger(__name__)
 
 BINANCE_CLIENT_ORDER_ID_MAX_LEN = 36
@@ -178,7 +180,7 @@ def obtener_ccxt(config: Any | None = None) -> Any:
         except Exception as exc:
             logger.warning(
                 "ccxt: load_time_difference falló (%s); riesgo de -1021 en la carga inicial",
-                exc,
+                truncate_for_log(str(exc), 400),
             )
 
         exchange.load_markets()

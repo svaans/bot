@@ -99,6 +99,16 @@ class DummyConfig:
         self.backfill_ventana_enabled = False
         self.backfill_ventana_window: int | None = None
         self.backfill_max_candles = 1000
+        self.regimen_entrada_enabled = False
+        self.regimen_vol_atr_ratio_alto = 0.025
+        self.regimen_vol_atr_ratio_bajo = 0.008
+        self.regimen_atr_periodo = 14
+        self.regimen_mult_umbral_alta = 1.0
+        self.regimen_mult_umbral_media = 1.0
+        self.regimen_mult_umbral_baja = 1.0
+        self.regimen_mult_umbral_score_alta = 1.0
+        self.regimen_mult_umbral_score_media = 1.0
+        self.regimen_mult_umbral_score_baja = 1.0
         for key, value in overrides.items():
             setattr(self, key, value)
         if 'modo_operativo' in overrides:

@@ -7,6 +7,8 @@ import inspect
 from contextlib import suppress
 from typing import Any, Optional
 
+from core.utils.log_utils import format_exception_for_log
+
 
 class FeedLifecycleMixin:
     """Funciones relacionadas con el ciclo de vida del DataFeed."""
@@ -52,7 +54,10 @@ class FeedLifecycleMixin:
                 exc = err
                 if self._trader_hold and not self._trader_hold.is_set():
                     self._trader_hold.set()
-                self.log.error("Trader finalizó con error inesperado: %s", err)
+                self.log.error(
+                    "Trader finalizó con error inesperado: %s",
+                    format_exception_for_log(err),
+                )
             finally:
                 if getattr(self, "_trader_hold", None) is not None:
                     with suppress(Exception):
@@ -126,7 +131,11 @@ class FeedLifecycleMixin:
                     else:
                         feed._symbols = symbols_list  # type: ignore[attr-defined]
                         feed._handler = handler  # type: ignore[attr-defined]
-                        feed._cliente = cliente  # type: ignore[attr-defined]
+                        feed._cliente = (  # type: ignore[attr-defined]
+                            getattr(self.trader, "_cliente", None)
+                            if self.trader is not None
+                            else None
+                        )
                 self._set_config_value("ws_managed_by_trader", False)
                 if feed is not None:
                     release = getattr(feed, "set_managed_by_trader", None)

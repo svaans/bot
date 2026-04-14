@@ -15,6 +15,8 @@ import websockets
 if TYPE_CHECKING:  # pragma: no cover - hints opcionales
     from .cliente import BinanceClient
 
+from core.utils.log_utils import truncate_for_log
+
 from .utils import normalize_symbol_for_ws
 
 __all__ = [
@@ -524,7 +526,7 @@ async def _consume_ws_stream(
                             extra={
                                 "event": "ws.recv.json_error",
                                 "url": url,
-                                "error": repr(exc),
+                                "error": truncate_for_log(repr(exc), 400),
                                 "first_bytes": preview,
                             },
                         )
@@ -551,7 +553,12 @@ async def _consume_ws_stream(
         except (websockets.WebSocketException, OSError) as exc:
             logger.warning(
                 "binance_ws_retry",
-                extra={"event": "binance_ws_retry", "url": url, "error": repr(exc), "backoff": round(backoff, 2)},
+                extra={
+                    "event": "binance_ws_retry",
+                    "url": url,
+                    "error": truncate_for_log(repr(exc), 400),
+                    "backoff": round(backoff, 2),
+                },
             )
             await asyncio.sleep(backoff)
             backoff = min(backoff * 2, 30.0)

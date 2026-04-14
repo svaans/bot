@@ -1,6 +1,10 @@
 import json
 from math import isclose
+
 import numpy as np
+
+from core.repo_paths import resolve_under_repo
+from core.utils.log_utils import format_exception_for_log
 from core.utils.utils import configurar_logger
 log = configurar_logger('ajustador_pesos')
 
@@ -34,11 +38,17 @@ def ajustar_pesos_por_desempeno(resultados_backtest: dict, ruta_salida: str
                 valores_validos.items()}
         pesos_ajustados[symbol] = pesos_normalizados
         log.info(f'✅ Pesos calculados para {symbol}: {pesos_normalizados}')
+    path_out = resolve_under_repo(ruta_salida)
     try:
-        with open(ruta_salida, 'w') as f:
+        path_out.parent.mkdir(parents=True, exist_ok=True)
+        with path_out.open("w", encoding="utf-8") as f:
             json.dump(pesos_ajustados, f, indent=4)
-        log.info(f'📁 Pesos ajustados guardados en {ruta_salida}')
+        log.info("📁 Pesos ajustados guardados en %s", path_out)
     except OSError as e:
-        log.error(f'❌ Error al guardar pesos en {ruta_salida}: {e}')
+        log.error(
+            "❌ Error al guardar pesos en %s: %s",
+            path_out,
+            format_exception_for_log(e),
+        )
         raise
     return pesos_ajustados

@@ -178,3 +178,65 @@ def test_strategy_engine_registra_sinergia_y_actualiza_metricas() -> None:
     assert metrics.SYNERGY_CAP_SATURATION.value == pytest.approx(0.7)
     assert metrics.SYNERGY_CAP_P90.value == pytest.approx(0.52)
     assert metrics.SYNERGY_CAP_DISPERSION.value == pytest.approx(dispersion_esperada)
+
+
+@pytest.mark.asyncio
+async def test_regimen_endurece_umbral_score_en_alta_volatilidad() -> None:
+    n = 25
+    close = pd.Series([100.0 + i * 0.01 for i in range(n)], dtype=float)
+    df = pd.DataFrame(
+        {
+            "timestamp": list(range(n)),
+            "open": close,
+            "high": close + 6.0,
+            "low": close - 6.0,
+            "close": close,
+            "volume": [10.0] * n,
+        }
+    )
+
+    async def fake_strategy_evaluator(
+        symbol: str, frame: pd.DataFrame, tendencia: str
+    ) -> Mapping[str, Any]:
+        return {
+            "estrategias_activas": {"estrategia_ema": True},
+            "puntaje_total": 3.0,
+            "diversidad": 1,
+            "sinergia": 0.2,
+        }
+
+    engine = StrategyEngine(
+        peso_provider=lambda _s: {"estrategia_ema": 1.0},
+        strategy_evaluator=fake_strategy_evaluator,
+        tendencia_detector=lambda _s, _f: ("alcista", {}),
+        threshold_calculator=lambda _s, _f, _c: 1.5,
+        technical_scorer=lambda *_args: (2.5, {}),
+        rsi_getter=lambda _f: 55.0,
+        momentum_getter=lambda _f: 0.01,
+        slope_getter=lambda _f: 0.02,
+    )
+    base_cfg: dict[str, Any] = {
+        "usar_score_tecnico": False,
+        "umbral_score_tecnico": 2.0,
+        "diversidad_minima": 1,
+        "regimen_vol_atr_ratio_alto": 0.02,
+        "regimen_vol_atr_ratio_bajo": 0.001,
+    }
+    r_off = await engine.evaluar_entrada(
+        "BTCUSDT", df, config={**base_cfg, "regimen_entrada_enabled": False}
+    )
+    assert r_off["permitido"] is True
+    assert r_off.get("regimen_volatilidad") == "alta"
+
+    r_on = await engine.evaluar_entrada(
+        "BTCUSDT",
+        df,
+        config={
+            **base_cfg,
+            "regimen_entrada_enabled": True,
+            "regimen_mult_umbral_score_alta": 1.3,
+        },
+    )
+    assert r_on["regimen_volatilidad"] == "alta"
+    assert r_on["umbral_score_tecnico"] == pytest.approx(2.6)
+    assert r_on["permitido"] is False

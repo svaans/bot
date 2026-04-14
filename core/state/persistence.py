@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Dict, Mapping, MutableMapping
 
+from core.utils.log_utils import format_exception_for_log
 from core.utils.logger import configurar_logger
 
 PersistenceDump = Callable[[], Mapping[str, Any] | MutableMapping[str, Any] | list | None]
@@ -192,7 +193,11 @@ def persist_critical_state(*, reason: str | None = None) -> CriticalState | None
                 os.fsync(fh.fileno())
             tmp_path.replace(path)
         except OSError as exc:
-            _log.error("No se pudo persistir estado crítico en %s: %s", path, exc)
+            _log.error(
+                "No se pudo persistir estado crítico en %s: %s",
+                path,
+                format_exception_for_log(exc),
+            )
             return None
         _cached_entries.clear()
         _cached_entries.update(entries)

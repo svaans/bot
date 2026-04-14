@@ -20,7 +20,7 @@ from core.operational_mode import OperationalMode
 from core.streams.candle_filter import CandleFilter
 
 from core.utils.feature_flags import is_flag_enabled
-from core.utils.log_utils import safe_extra
+from core.utils.log_utils import format_exception_for_log, safe_extra, truncate_for_log
 from core.utils.utils import configurar_logger
 
 from ._locks import AsyncSymbolLock
@@ -419,6 +419,14 @@ class Trader(TraderLite):
                 max_loss_streak = max(0, int(raw_ks))
         except (TypeError, ValueError):
             max_loss_streak = 5
+        max_pos_cartera = 0
+        max_pos_sentido = 0
+        try:
+            max_pos_cartera = max(0, int(getattr(cfg, "max_posiciones_cartera", 0)))
+            max_pos_sentido = max(0, int(getattr(cfg, "max_posiciones_mismo_sentido", 0)))
+        except (TypeError, ValueError):
+            max_pos_cartera = 0
+            max_pos_sentido = 0
         try:
             from core.risk.risk_manager import RiskManager
 
@@ -428,6 +436,8 @@ class Trader(TraderLite):
                 capital_manager=capital_manager,
                 order_manager=orders,
                 kill_switch_max_perdidas_consecutivas=max_loss_streak,
+                max_posiciones_cartera=max_pos_cartera,
+                max_posiciones_mismo_sentido=max_pos_sentido,
             )
             orders.risk_manager = self.risk
         except Exception:
@@ -974,8 +984,8 @@ class Trader(TraderLite):
                     "timeframe": timeframe_str,
                     "reason": "pipeline_exception",
                     "exception_type": type(error).__name__,
-                    "exception_message": str(error),
-                    "exception_repr": repr(error),
+                    "exception_message": format_exception_for_log(error),
+                    "exception_repr": truncate_for_log(repr(error), 500),
                 }
                 provider = getattr(self, "_verificar_entrada_provider", None)
                 if provider is not None:
@@ -1588,7 +1598,7 @@ class Trader(TraderLite):
 
         if error is not None:
             diagnostics["pipeline_error_type"] = type(error).__name__
-            diagnostics["pipeline_error_message"] = str(error)
+            diagnostics["pipeline_error_message"] = format_exception_for_log(error)
 
         return diagnostics
 

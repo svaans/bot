@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 from types import TracebackType
 from typing import Any, Dict, Mapping, MutableMapping, Optional, Type
 
+from core.utils.log_utils import format_exception_for_log
 from core.utils.logger import configurar_logger
 
 __all__ = ["PhaseLogger", "phase"]
@@ -57,7 +58,7 @@ class PhaseLogger(AbstractContextManager["PhaseLogger"]):
 
         payload = {
             "error_type": exc_type.__name__,
-            "error_message": str(exc) if exc is not None else "",
+            "error_message": format_exception_for_log(exc) if exc is not None else "",
         }
         self._log_event(
             "error",

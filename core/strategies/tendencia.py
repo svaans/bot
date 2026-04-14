@@ -11,6 +11,7 @@ from indicadores.helpers import get_rsi
 from indicadores.adx import calcular_adx
 from core.strategies.entry.gestor_entradas import evaluar_estrategias
 from core.estrategias import obtener_estrategias_por_tendencia
+from core.utils.log_utils import format_exception_for_log
 from core.utils.utils import configurar_logger
 from core.data.bootstrap import (
     MIN_BARS,
@@ -290,7 +291,9 @@ async def señales_repetidas(
                 contador += 1
         except Exception as e:
             log.warning(
-                f"⚠️ Fallo al evaluar repetición de señales en {symbol_dbg}: {e}"
+                '⚠️ Fallo al evaluar repetición de señales en %s: %s',
+                symbol_dbg,
+                format_exception_for_log(e),
             )
             continue
         finally:

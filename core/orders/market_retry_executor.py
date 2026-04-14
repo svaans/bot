@@ -11,6 +11,18 @@ from typing import Any
 from core.metrics import registrar_market_retry_exhausted
 from core.orders import real_orders
 from core.utils.logger import log_decision
+from core.utils.log_utils import format_exception_for_log, safe_extra
+
+
+def _precio_senal_desde_entrada(entrada: dict[str, Any]) -> float | None:
+    v = entrada.get("precio_senal")
+    if v is None:
+        return None
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return None
+    return None if f <= 0 else f
 
 
 @dataclass(slots=True)
@@ -73,16 +85,24 @@ class MarketRetryExecutor:
                         cantidad,
                         operation_id,
                         next_order_attempt,
+                        precio_senal_bot=_precio_senal_desde_entrada(entrada),
                     )
                 )
             except Exception as exc:  # pragma: no cover - defensivo
+                err_msg = format_exception_for_log(exc)
                 self.log.error(
                     "❌ Error ejecutando venta en %s (intento %s/%s): %s",
                     symbol,
                     intentos,
                     self._max_attempts,
-                    exc,
-                    extra={"event": "market_sell_retry_error", "symbol": symbol},
+                    err_msg,
+                    extra=safe_extra(
+                        {
+                            "event": "market_sell_retry_error",
+                            "symbol": symbol,
+                            "error_detail": err_msg,
+                        }
+                    ),
                 )
                 if intentos >= self._max_attempts:
                     await self._manejar_exhausted("sell", symbol, operation_id)
@@ -164,16 +184,24 @@ class MarketRetryExecutor:
                         restante,
                         operation_id,
                         order_attempt=intentos,
+                        precio_senal_bot=_precio_senal_desde_entrada(entrada),
                     )
                 )
             except Exception as exc:  # pragma: no cover - defensivo
+                err_msg = format_exception_for_log(exc)
                 self.log.error(
                     "❌ Error ejecutando compra en %s (intento %s/%s): %s",
                     symbol,
                     intentos,
                     self._max_attempts,
-                    exc,
-                    extra={"event": "market_buy_retry_error", "symbol": symbol},
+                    err_msg,
+                    extra=safe_extra(
+                        {
+                            "event": "market_buy_retry_error",
+                            "symbol": symbol,
+                            "error_detail": err_msg,
+                        }
+                    ),
                 )
                 sin_progreso += 1
                 if self._should_break_retry(intentos, sin_progreso):

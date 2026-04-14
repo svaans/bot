@@ -5,6 +5,7 @@ from datetime import datetime, timedelta, timezone
 UTC = timezone.utc
 from math import isclose
 import pandas as pd
+from core.utils.log_utils import format_exception_for_log
 from core.utils.utils import configurar_logger
 from core.utils.utils import leer_csv_seguro
 log = configurar_logger('kelly')
@@ -29,7 +30,11 @@ def calcular_fraccion_kelly(dias_historia: int=30, fallback: float=0.2
         try:
             fecha = datetime.fromisoformat(archivo.replace('.csv', '')).date()
         except ValueError as e:
-            log.debug(f'Archivo de reporte ignorado {archivo}: {e}')
+            log.debug(
+                'Archivo de reporte ignorado %s: %s',
+                archivo,
+                format_exception_for_log(e, 256),
+            )
             continue
         if fecha < fecha_limite:
             continue
@@ -37,7 +42,11 @@ def calcular_fraccion_kelly(dias_historia: int=30, fallback: float=0.2
             df = leer_csv_seguro(os.path.join(carpeta, archivo),
                 expected_cols=20)
         except (pd.errors.EmptyDataError, pd.errors.ParserError, OSError) as e:
-            log.warning(f'⚠️ No se pudo leer reporte {archivo}: {e}')
+            log.warning(
+                '⚠️ No se pudo leer reporte %s: %s',
+                archivo,
+                format_exception_for_log(e),
+            )
             continue
         if 'retorno_total' in df.columns:
             retornos.extend(df['retorno_total'].dropna().tolist())

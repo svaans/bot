@@ -31,6 +31,7 @@ from core.risk.riesgo import riesgo_superado as _riesgo_superado
 from core.registro_metrico import registro_metrico
 from core.utils.feature_flags import is_flag_enabled
 from core.utils.metrics_compat import Gauge
+from core.utils.log_utils import format_exception_for_log
 from core.utils.utils import configurar_logger
 from config.config import RISK_ALERTA_CAPITAL_PCT
 
@@ -67,6 +68,8 @@ class RiskManager:
         *,
         order_manager: Any | None = None,
         kill_switch_max_perdidas_consecutivas: int = 5,
+        max_posiciones_cartera: int = 0,
+        max_posiciones_mismo_sentido: int = 0,
     ) -> None:
         self.umbral = umbral
         self._factor_kelly_prev = None
@@ -96,6 +99,8 @@ class RiskManager:
         self._latent_stop_triggered: Set[str] = set()
         self.order_manager: Any | None = order_manager
         self.kill_switch_max_perdidas_consecutivas = max(0, int(kill_switch_max_perdidas_consecutivas))
+        self.max_posiciones_cartera = max(0, int(max_posiciones_cartera))
+        self.max_posiciones_mismo_sentido = max(0, int(max_posiciones_mismo_sentido))
         self._perdidas_consecutivas = 0
         self._kill_switch_disparado = False
         self._risk_subscribed_bus_ids: set[int] = set()
@@ -514,6 +519,57 @@ class RiskManager:
                 self.correlaciones[symbol][otro] = (rho, marca)
                 self.correlaciones.setdefault(otro, {})[symbol] = (rho, marca)
 
+    def _conteo_ordenes_abiertas(self) -> tuple[int, int, int]:
+        """(total, longs, shorts) según ``order_manager.ordenes``."""
+
+        om = self.order_manager
+        ordenes = getattr(om, "ordenes", None) if om is not None else None
+        if not isinstance(ordenes, dict):
+            t = len(self.posiciones_abiertas)
+            return t, 0, 0
+        longs = 0
+        shorts = 0
+        for orden in ordenes.values():
+            d = str(getattr(orden, "direccion", "long")).lower()
+            if d in ("short", "venta"):
+                shorts += 1
+            else:
+                longs += 1
+        return len(ordenes), longs, shorts
+
+    def resumen_cartera_abierta(self) -> dict[str, int]:
+        """Totales de posiciones abiertas (diagnóstico / métricas)."""
+
+        total, longs, shorts = self._conteo_ordenes_abiertas()
+        return {"total": total, "long": longs, "short": shorts}
+
+    def permite_cartera_mismo_sentido(self, side: str) -> bool:
+        """Bloquea si ya se alcanzó el máximo de posiciones en ``side`` (long/short)."""
+
+        if self.max_posiciones_mismo_sentido <= 0:
+            return True
+        side_n = str(side or "long").lower()
+        if side_n in ("sell", "venta"):
+            side_n = "short"
+        elif side_n not in ("long", "short"):
+            side_n = "long"
+        _total, longs, shorts = self._conteo_ordenes_abiertas()
+        if side_n == "long" and longs >= self.max_posiciones_mismo_sentido:
+            log.info(
+                "🚫 Límite cartera: %d posiciones long (máx %d)",
+                longs,
+                self.max_posiciones_mismo_sentido,
+            )
+            return False
+        if side_n == "short" and shorts >= self.max_posiciones_mismo_sentido:
+            log.info(
+                "🚫 Límite cartera: %d posiciones short (máx %d)",
+                shorts,
+                self.max_posiciones_mismo_sentido,
+            )
+            return False
+        return True
+
     def correlacion_media(self, symbol: str, correlaciones: dict[str, float]) -> float:
         """Calcula la correlación media absoluta con posiciones abiertas."""
         self._limpiar_correlaciones_expiradas()
@@ -543,6 +599,14 @@ class RiskManager:
         """Determina si se permite una nueva entrada según la correlación media."""
         if self.cooldown_activo:
             log.info('🚫 Cooldown activo, no se permiten nuevas entradas')
+            return False
+        total_abiertas, _, _ = self._conteo_ordenes_abiertas()
+        if self.max_posiciones_cartera > 0 and total_abiertas >= self.max_posiciones_cartera:
+            log.info(
+                '🚫 Límite cartera: %d posiciones abiertas (máx %d)',
+                total_abiertas,
+                self.max_posiciones_cartera,
+            )
             return False
         if self.capital_manager and not self.capital_manager.hay_capital_libre():
             log.info('🚫 Sin capital libre para nuevas posiciones')
@@ -700,7 +764,10 @@ class RiskManager:
             self._ultimo_factor_kelly = factor
             return factor
         except Exception as e:
-            log.warning(f'⚠️ Error calculando multiplicador Kelly: {e}')
+            log.warning(
+                '⚠️ Error calculando multiplicador Kelly: %s',
+                format_exception_for_log(e),
+            )
             return 1.0
 
     def factor_volatilidad(self, volatilidad_actual: float,
@@ -967,7 +1034,11 @@ class RiskManager:
                     cerrado_todo = cerrado_todo and bool(ok)
                 except Exception as e:
                     cerrado_todo = False
-                    log.error(f'❌ Error cerrando {symbol} en kill switch: {e}')
+                    log.error(
+                        '❌ Error cerrando %s en kill switch: %s',
+                        symbol,
+                        format_exception_for_log(e),
+                    )
         finally:
             if self.bus:
                 if not hubo_intento:

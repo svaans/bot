@@ -6,7 +6,8 @@ from datetime import datetime, timezone
 UTC = timezone.utc
 from .analisis_resultados import analizar_estrategias_en_ordenes
 from core.strategies.ajustador_pesos import ajustar_pesos_por_desempeno
-from core.strategies.pesos import gestor_pesos
+from core.strategies.pesos import entry_weights_temp_path, gestor_pesos
+from core.strategies.pesos_governance import EntryWeightSource, persist_entry_weights
 from dotenv import dotenv_values
 
 from .historial_operaciones import normalizar_symbol_parquet_filename
@@ -14,9 +15,6 @@ from .historial_operaciones import normalizar_symbol_parquet_filename
 CONFIG = dotenv_values('config/claves.env')
 MODO_REAL = CONFIG.get('MODO_REAL', 'False') == 'True'
 CARPETA_ORDENES = 'ordenes_reales' if MODO_REAL else 'ordenes_simuladas'
-RUTA_PESOS = 'config/estrategias_pesos.json'
-
-
 def registrar_resultado_trade(orden: dict):
     """
     Guarda la orden ejecutada (real o simulada) y actualiza pesos de estrategias en caliente.
@@ -46,7 +44,7 @@ def registrar_resultado_trade(orden: dict):
         if not df_metricas.empty:
             valores = dict(zip(df_metricas['estrategia'], df_metricas[
                 'retorno_total']))
-            temp_path = RUTA_PESOS + '.tmp'
+            temp_path = str(entry_weights_temp_path())
             calculados = ajustar_pesos_por_desempeno({symbol: valores},
                 temp_path)
             nuevos_pesos = calculados.get(symbol, {})
@@ -57,5 +55,10 @@ def registrar_resultado_trade(orden: dict):
                 pesos_previos = datos.get(symbol, {})
                 pesos_previos.update(nuevos_pesos)
                 datos[symbol] = pesos_previos
-                gestor_pesos.guardar(datos)
+                persist_entry_weights(
+                    gestor_pesos,
+                    datos,
+                    source=EntryWeightSource.GESTOR_APRENDIZAJE_TRADE,
+                    detail=symbol,
+                )
                 print('✅ Pesos actualizados tras operación.')

@@ -2,6 +2,7 @@ import numpy as np
 from math import isclose
 import pandas as pd
 from ta.momentum import RSIIndicator
+from core.utils.log_utils import format_exception_for_log
 from core.utils.utils import configurar_logger
 from indicadores.helpers import get_slope
 log = configurar_logger('persistencia')
@@ -33,7 +34,11 @@ def calcular_persistencia_minima(symbol: str, df: pd.DataFrame, tendencia:
     try:
         rsi = RSIIndicator(close=df['close'], window=14).rsi().iloc[-1]
     except Exception as e:
-        log.warning(f'⚠️ [{symbol}] Error calculando RSI: {e}')
+        log.warning(
+            '⚠️ [%s] Error calculando RSI: %s',
+            symbol,
+            format_exception_for_log(e),
+        )
         rsi = 50
     minimo = base_minimo * (1 + volatilidad * 0.5) * (1 + (vol_factor - 1) *
         0.5)

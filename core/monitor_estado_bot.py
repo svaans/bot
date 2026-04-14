@@ -13,6 +13,7 @@ from binance_api.cliente import BinanceClient, fetch_balance_async
 from config import config as app_config
 from ccxt.base.errors import AuthenticationError, NetworkError
 from core.operational_mode import OperationalMode
+from core.utils.log_utils import format_exception_for_log
 from core.utils.utils import configurar_logger
 from core.orders import real_orders
 from core.reporting import reporter_diario
@@ -53,11 +54,14 @@ def obtener_orden_abierta():
                 except Exception as exc:
                     log.warning(
                         'No se pudo sincronizar órdenes con el exchange: %s',
-                        exc,
+                        format_exception_for_log(exc),
                     )
             return ordenes if ordenes else None
         except (OSError, sqlite3.Error) as e:
-            log.warning(f'⚠️ Error al leer órdenes desde la base de datos: {e}')
+            log.warning(
+                '⚠️ Error al leer órdenes desde la base de datos: %s',
+                format_exception_for_log(e),
+            )
             return None
     return None
 

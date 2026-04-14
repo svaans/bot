@@ -2,6 +2,7 @@ from indicadores.helpers import get_rsi
 from indicadores.macd import calcular_macd
 from config.exit_defaults import load_exit_config
 from core.utils import configurar_logger
+from core.utils.log_utils import format_exception_for_log
 
 log = configurar_logger('filtro_salidas')
 
@@ -28,6 +29,8 @@ def validar_necesidad_de_salida(df, orden, estrategias_activas: dict,
                 return False
     except (KeyError, ValueError, TypeError) as e:
         log.warning(
-            f"⚠️ Error evaluando filtros de salida para {orden.get('symbol', 'SYM')}: {e}"
+            '⚠️ Error evaluando filtros de salida para %s: %s',
+            orden.get('symbol', 'SYM'),
+            format_exception_for_log(e),
         )
     return True

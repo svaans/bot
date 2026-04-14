@@ -12,7 +12,11 @@ from typing import Literal
 import aiohttp
 
 from core.utils.logger import configurar_logger
-from core.utils.log_utils import summarize_telegram_api_result, truncate_for_log
+from core.utils.log_utils import (
+    format_exception_for_log,
+    summarize_telegram_api_result,
+    truncate_for_log,
+)
 from core.utils.metrics_compat import Counter, Gauge, Histogram
 from core.notificador import escape_markdown
 
@@ -127,7 +131,9 @@ class _TelegramBackend:
                         % (status, truncate_for_log(body, 200))
                     ) from exc
         except aiohttp.ClientError as exc:
-            raise NotificationDeliveryError(f"Error de red enviando a Telegram: {exc}") from exc
+            raise NotificationDeliveryError(
+                f"Error de red enviando a Telegram: {format_exception_for_log(exc)}"
+            ) from exc
         except asyncio.TimeoutError as exc:
             raise NotificationDeliveryError("Timeout enviando a Telegram") from exc
 
@@ -549,7 +555,7 @@ def crear_notification_manager_desde_env(on_event: Optional[Callable[[str, dict]
             raise
         log.debug(
             "NotificationManager diferido: %s. Se iniciará la primera vez que se use en un loop.",
-            mensaje,
+            format_exception_for_log(exc),
         )
     return nm
 

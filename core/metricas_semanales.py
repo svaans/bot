@@ -6,6 +6,7 @@ from datetime import datetime, timedelta, timezone
 UTC = timezone.utc
 import pandas as pd
 from core.utils.utils import leer_csv_seguro
+from core.utils.log_utils import format_exception_for_log
 from core.utils.logger import configurar_logger
 
 log = configurar_logger(__name__)
@@ -44,7 +45,11 @@ class MetricasTracker:
                 break
             except Exception as e:
                 if intento == intentos:
-                    log.warning(f'⚠️ No se pudo guardar métricas tras {intentos} intentos: {e}')
+                    log.warning(
+                        '⚠️ No se pudo guardar métricas tras %s intentos: %s',
+                        intentos,
+                        format_exception_for_log(e),
+                    )
                 else:
                     time.sleep(1)
 

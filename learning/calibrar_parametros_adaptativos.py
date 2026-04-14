@@ -7,7 +7,12 @@ import numpy as np
 import pandas as pd
 from scipy.optimize import minimize
 
-from .config_output_path import _CONFIG_ROOT, _REPO_ROOT, resolve_config_output_path
+from .config_output_path import (
+    _CONFIG_ROOT,
+    _REPO_ROOT,
+    resolve_config_output_path,
+    resolve_repo_input_path,
+)
 
 RUTA_CONFIG = _CONFIG_ROOT / "configuraciones_optimas.json"
 
@@ -68,6 +73,7 @@ def calibrar_pesos(
     l2_penalty: float = 1e-3,
 ) -> AdaptiveWeightsCalibration:
     path_config = resolve_config_output_path(path_config)
+    path_datos = resolve_repo_input_path(path_datos)
     df = pd.read_csv(path_datos)
     if not 0 < validation_fraction < 1:
         raise ValueError('validation_fraction debe estar en (0, 1)')
@@ -134,7 +140,7 @@ def main() -> None:
     )
     parser.add_argument(
         'dataset',
-        help='CSV con columnas volatilidad,rango,volumen,momentum,objetivo',
+        help='CSV bajo la raíz del repo; columnas volatilidad,rango,volumen,momentum,objetivo',
     )
     parser.add_argument(
         '--salida',

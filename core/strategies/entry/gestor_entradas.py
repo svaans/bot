@@ -14,6 +14,7 @@ from core.strategies.entry.validador_entradas import verificar_liquidez_orden
 from core.estrategias import obtener_estrategias_por_tendencia, calcular_sinergia
 from core.scoring import calcular_score_tecnico
 from core.utils import configurar_logger
+from core.utils.log_utils import format_exception_for_log
 log = configurar_logger('entradas')
 _FUNCIONES: dict | None = None
 
@@ -59,7 +60,11 @@ async def evaluar_estrategias(symbol: str, df: pd.DataFrame, tendencia: str) -> 
             else:
                 activo = False
         except Exception as exc:
-            log.warning(f'Error ejecutando {nombre}: {exc}')
+            log.warning(
+                'Error ejecutando %s: %s',
+                nombre,
+                format_exception_for_log(exc),
+            )
             activo = False
         finally:
             duracion = (time.perf_counter() - inicio) * 1000

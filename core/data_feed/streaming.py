@@ -16,6 +16,8 @@ from binance_api.websocket import InactividadTimeoutError
 
 from . import escuchar_velas, escuchar_velas_combinado
 
+from core.utils.log_utils import format_exception_for_log
+
 from ._shared import COMBINED_STREAM_KEY, log
 from . import events
 
@@ -202,7 +204,11 @@ async def stream_simple(feed: "DataFeed", symbol: str) -> None:
             events.mark_ws_state(feed, False, drop_payload)
             _emit_ws_drop_signal(feed, drop_payload)
             log.exception("stream simple: error; reintentando", extra={"symbol": symbol})
-            events.emit_event(feed, "ws_error", {"symbol": symbol, "error": str(exc)})
+            events.emit_event(
+                feed,
+                "ws_error",
+                {"symbol": symbol, "error": format_exception_for_log(exc)},
+            )
             if not feed.ws_connected_event.is_set():
                 events.signal_ws_failure(feed, exc)
                 return
@@ -335,7 +341,11 @@ async def stream_combinado(feed: "DataFeed", symbols: List[str]) -> None:
             events.mark_ws_state(feed, False, drop_payload)
             _emit_ws_drop_signal(feed, drop_payload)
             log.exception("stream combinado: error; reintentando")
-            events.emit_event(feed, "ws_error", {"symbols": symbols, "error": str(exc)})
+            events.emit_event(
+                feed,
+                "ws_error",
+                {"symbols": symbols, "error": format_exception_for_log(exc)},
+            )
             if not feed.ws_connected_event.is_set():
                 events.signal_ws_failure(feed, exc)
                 return

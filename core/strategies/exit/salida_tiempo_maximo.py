@@ -3,6 +3,7 @@ from datetime import datetime, timedelta, timezone
 
 UTC = timezone.utc
 from core.utils import configurar_logger
+from core.utils.log_utils import format_exception_for_log
 from core.strategies.exit.salida_utils import resultado_salida
 log = configurar_logger('salida_tiempo_maximo')
 
@@ -30,7 +31,9 @@ def salida_tiempo_maximo(orden: dict, df: pd.DataFrame) ->dict:
         return resultado_salida('Tecnico', False,
             f'Tiempo actual {tiempo_abierta}')
     except (KeyError, ValueError, TypeError) as e:
-        log.error(
-            f"Error en salida_tiempo_maximo para {orden.get('symbol', 'SYM')}: {e}"
+        sym = orden.get('symbol', 'SYM')
+        err_msg = format_exception_for_log(e)
+        log.error('Error en salida_tiempo_maximo para %s: %s', sym, err_msg)
+        return resultado_salida(
+            'Tecnico', False, f'Error en salida por tiempo: {err_msg}', logger=log
         )
-        return resultado_salida('Tecnico', False, f'Error en salida por tiempo: {e}', logger=log)

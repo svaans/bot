@@ -1,6 +1,7 @@
 import pandas as pd
 from indicadores.helpers import get_atr
 from core.utils import configurar_logger
+from core.utils.log_utils import format_exception_for_log
 from core.strategies.exit.salida_utils import resultado_salida
 from config.exit_defaults import load_exit_config
 log = configurar_logger('salida_trailing_stop')
@@ -78,11 +79,12 @@ def salida_trailing_stop(orden: dict, df: pd.DataFrame, config: dict=None
                     , logger=log)
         return resultado_salida('Trailing Stop', False, 'Trailing no activado')
     except (KeyError, ValueError, TypeError) as e:
-        log.error(
-            f"Error en trailing stop para {orden.get('symbol', 'SYM')}: {e}"
+        sym = orden.get('symbol', 'SYM')
+        err_msg = format_exception_for_log(e)
+        log.error('Error en trailing stop para %s: %s', sym, err_msg)
+        return resultado_salida(
+            'Trailing Stop', False, f'Error en trailing stop: {err_msg}', logger=log
         )
-        return resultado_salida('Trailing Stop', False,
-            f'Error en trailing stop: {e}', logger=log)
 
 
 def verificar_trailing_stop(info: dict, precio_actual: float, df: (pd.DataFrame | None) = None, config: dict = None) -> tuple[bool, str]:

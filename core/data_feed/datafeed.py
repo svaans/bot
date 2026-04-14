@@ -19,7 +19,7 @@ import time
 from collections import defaultdict, deque
 from typing import Any, Awaitable, Callable, Dict, Iterable, List, Mapping, Optional
 
-from core.utils.log_utils import log_kv, safe_extra
+from core.utils.log_utils import log_kv, safe_extra, truncate_for_log
 from core.utils.utils import intervalo_a_segundos
 
 from . import backfill as backfill_module
@@ -686,7 +686,10 @@ class DataFeed:
                     log.error(
                         "tarea_finalizo_con_error",
                         extra=safe_extra(
-                            {"task_name": task.get_name(), "error": repr(exc)}
+                            {
+                                "task_name": task.get_name(),
+                                "error": truncate_for_log(repr(exc), 500),
+                            }
                         ),
                     )
 
@@ -713,7 +716,7 @@ class DataFeed:
                             extra=safe_extra(
                                 {
                                     "task_name": task.get_name(),
-                                    "error": repr(result),
+                                    "error": truncate_for_log(repr(result), 500),
                                 }
                             ),
                         )

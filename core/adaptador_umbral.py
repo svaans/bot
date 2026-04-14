@@ -31,6 +31,7 @@ from indicadores.retornos_volatilidad import (
     verificar_consistencia,
     volatilidad_welford,
 )
+from core.utils.log_utils import format_exception_for_log
 from core.utils.utils import configurar_logger, ESTADO_DIR
 log = configurar_logger("adaptador_umbral")
 RUTA_CONFIG = Path("config/configuraciones_optimas.json")
@@ -79,7 +80,10 @@ def cargar_estado() -> None:
             if count:
                 UMBRAL_HISTERESIS_SKIPS.labels(symbol=sym).inc(count)
     except Exception as e:  # pragma: no cover - logging de carga
-        log.warning(f"⚠️ Error cargando estado umbral: {e}")
+        log.warning(
+            "⚠️ Error cargando estado umbral: %s",
+            format_exception_for_log(e),
+        )
 
 
 def guardar_estado() -> None:
@@ -95,7 +99,10 @@ def guardar_estado() -> None:
                 indent=2,
             )
     except Exception as e:  # pragma: no cover - logging de guardado
-        log.warning(f"⚠️ Error guardando estado umbral: {e}")
+        log.warning(
+            "⚠️ Error guardando estado umbral: %s",
+            format_exception_for_log(e),
+        )
 
 
 def _cargar_config() -> Dict[str, dict]:

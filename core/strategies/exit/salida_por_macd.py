@@ -1,6 +1,7 @@
 import pandas as pd
 from ta.trend import MACD
 from core.utils import configurar_logger
+from core.utils.log_utils import format_exception_for_log
 from core.strategies.exit.salida_utils import resultado_salida
 log = configurar_logger('salida_por_macd')
 
@@ -21,7 +22,7 @@ def salida_por_macd(orden, df: pd.DataFrame) ->dict:
                 'Cruce bajista de MACD', logger=log)
         return resultado_salida('Tecnico', False, 'Sin cruce bajista de MACD')
     except (KeyError, ValueError, TypeError) as e:
-        log.error(
-            f"Error en salida_por_macd para {orden.get('symbol', 'SYM')}: {e}"
-        )
-        return resultado_salida('Tecnico', False, f'Error en MACD: {e}', logger=log)
+        sym = orden.get('symbol', 'SYM')
+        err_msg = format_exception_for_log(e)
+        log.error('Error en salida_por_macd para %s: %s', sym, err_msg)
+        return resultado_salida('Tecnico', False, f'Error en MACD: {err_msg}', logger=log)

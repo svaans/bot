@@ -2,6 +2,7 @@
 matplotlib>=3.5.0             # Gráficos y visualizaciones
 numpy==2.2.5                  # Cálculos numéricos y arrays
 pandas==2.2.3                 # Manipulación de datos tabulares
+pyarrow>=14.0.0               # Parquet (órdenes, historiales)
 python-dateutil==2.9.0.post0  # Manejo avanzado de fechas
 scipy>=1.9.0                  # Funciones matemáticas avanzadas
 tqdm==4.67.1

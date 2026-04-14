@@ -16,6 +16,7 @@ from typing import Dict, Optional
 
 from filelock import FileLock
 
+from core.utils.log_utils import format_exception_for_log
 from core.utils.utils import configurar_logger
 
 log = configurar_logger('riesgo')
@@ -34,7 +35,10 @@ def cargar_estado_riesgo_seguro() ->dict:
                     with open(RUTA_ESTADO_BAK, 'r') as f:
                         return json.load(f)
                 except Exception as e:  # pragma: no cover - error de lectura
-                    log.warning(f'⚠️ Backup corrupto: {e}')
+                    log.warning(
+                        '⚠️ Backup corrupto: %s',
+                        format_exception_for_log(e),
+                    )
             return {'fecha': '', 'perdida_acumulada': 0.0}
         try:
             with open(RUTA_ESTADO, 'r') as f:
@@ -43,13 +47,19 @@ def cargar_estado_riesgo_seguro() ->dict:
                 raise ValueError('❌ Formato inválido en estado de riesgo.')
             return estado
         except (OSError, json.JSONDecodeError) as e:
-            log.warning(f'⚠️ Error al cargar estado de riesgo: {e}')
+            log.warning(
+                '⚠️ Error al cargar estado de riesgo: %s',
+                format_exception_for_log(e),
+            )
             if os.path.exists(RUTA_ESTADO_BAK):
                 try:
                     with open(RUTA_ESTADO_BAK, 'r') as f:
                         return json.load(f)
                 except Exception as e2:
-                    log.warning(f'⚠️ Backup también falló: {e2}')
+                    log.warning(
+                        '⚠️ Backup también falló: %s',
+                        format_exception_for_log(e2),
+                    )
             return {'fecha': '', 'perdida_acumulada': 0.0}
 
 
@@ -68,10 +78,16 @@ def guardar_estado_riesgo_seguro(estado: dict) ->None:
             with open(RUTA_ESTADO_BAK, 'w') as fb:
                 json.dump(estado, fb, indent=4)
         except OSError as e:
-            log.warning(f'⚠️ No se pudo escribir backup: {e}')
+            log.warning(
+                '⚠️ No se pudo escribir backup: %s',
+                format_exception_for_log(e),
+            )
         log.info(f'💾 Estado de riesgo actualizado: {estado}')
     except OSError as e:
-        log.error(f'❌ No se pudo guardar estado de riesgo: {e}')
+        log.error(
+            '❌ No se pudo guardar estado de riesgo: %s',
+            format_exception_for_log(e),
+        )
         raise
 
 
@@ -107,6 +123,9 @@ class AsyncRiskPersistence:
         """Coloca una pérdida en cola para persistirla de forma asíncrona."""
         if perdida >= 0:
             return
+        # Marcar pendiente antes del put para que esperar_flush no vea cola vacía
+        # y evento libre en la ventana entre get() y set() en el hilo worker.
+        self._pending_event.set()
         self._queue.put(_LossUpdate(simbolo=simbolo, perdida=abs(perdida)))
 
     def estado_actual(self) -> dict:

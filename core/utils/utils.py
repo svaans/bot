@@ -12,6 +12,7 @@ from typing import Any, Iterable, Mapping, Sequence
 
 import pandas as pd
 
+from .log_utils import format_exception_for_log
 from .logger import configurar_logger
 
 __all__ = [
@@ -182,7 +183,7 @@ def guardar_orden_real(symbol: str, data: Mapping[str, Any], *, carpeta: Path | 
     except PermissionError as exc:
         log.error(
             "❌ Permiso denegado al escribir orden real",
-            extra={"path": str(path), "error": str(exc)},
+            extra={"path": str(path), "error": format_exception_for_log(exc)},
         )
         fallback = _IO_FALLBACK_DIR / path.name
         fallback.parent.mkdir(parents=True, exist_ok=True)
@@ -197,7 +198,7 @@ def guardar_orden_real(symbol: str, data: Mapping[str, Any], *, carpeta: Path | 
     except OSError as exc:
         log.error(
             "❌ Error de E/S al escribir orden real",
-            extra={"path": str(path), "error": str(exc)},
+            extra={"path": str(path), "error": format_exception_for_log(exc)},
         )
         fallback = _IO_FALLBACK_DIR / path.name
         fallback.parent.mkdir(parents=True, exist_ok=True)
@@ -208,12 +209,18 @@ def guardar_orden_real(symbol: str, data: Mapping[str, Any], *, carpeta: Path | 
         except (OSError, PermissionError) as inner_exc:
             log.error(
                 "❌ No fue posible persistir la orden",
-                extra={"path": str(fallback), "error": str(inner_exc)},
+                extra={
+                    "path": str(fallback),
+                    "error": format_exception_for_log(inner_exc),
+                },
             )
             raise
         log.warning(
             "⚠️ Orden persistida en fallback por error de E/S",
-            extra={"path": str(fallback), "error_original": str(exc)},
+            extra={
+                "path": str(fallback),
+                "error_original": format_exception_for_log(exc),
+            },
         )
         return fallback
 

@@ -3,16 +3,17 @@ import pandas as pd
 from collections import defaultdict
 from dotenv import dotenv_values
 from core.strategies.pesos import gestor_pesos
+from core.strategies.pesos_governance import EntryWeightSource, persist_entry_weights
 from core.adaptador_umbral import calcular_umbral_adaptativo
 from core.adaptador_dinamico import calcular_tp_sl_adaptativos
 from config.configuracion import cargar_configuracion_simbolo, guardar_configuracion_simbolo
+from core.utils.log_utils import format_exception_for_log
 from core.utils.utils import configurar_logger
 from .utils_resultados import (distribuir_retorno_por_estrategia,
     obtener_retorno_total_registro, parsear_estrategias_activas)
 from .historial_operaciones import normalizar_symbol_parquet_filename
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CARPETA_OPERACIONES = os.path.join(BASE_DIR, 'ultimas_operaciones')
-RUTA_PESOS = 'config/estrategias_pesos.json'
 MAX_OPERACIONES = 30
 MIN_OPERACIONES = 5
 VENTANA_ACTUALIZACION = 10
@@ -26,7 +27,10 @@ def registrar_resultado_trade(symbol: str, orden: dict, ganancia: float):
     try:
         fname = normalizar_symbol_parquet_filename(symbol)
     except ValueError as exc:
-        log.warning('símbolo inválido para historial aprendizaje_en_linea: %s', exc)
+        log.warning(
+            'símbolo inválido para historial aprendizaje_en_linea: %s',
+            format_exception_for_log(exc),
+        )
         return
     archivo = os.path.join(CARPETA_OPERACIONES, fname)
     historial = []
@@ -36,7 +40,8 @@ def registrar_resultado_trade(symbol: str, orden: dict, ganancia: float):
             historial = df_prev.to_dict('records')
         except Exception as e:
             print(
-                f'⚠️ Archivo dañado: {archivo} — se sobrescribirá. Error: {e}')
+                f'⚠️ Archivo dañado: {archivo} — se sobrescribirá. Error: {format_exception_for_log(e)}'
+            )
             historial = []
     estrategias_activas = parsear_estrategias_activas(orden.get(
         'estrategias_activas', {}))
@@ -78,7 +83,12 @@ def actualizar_pesos_dinamicos(symbol: str, historial: list):
         nuevos_pesos[estrategia] = peso_anterior * 0.98 + peso_objetivo * 0.02
     pesos_totales = gestor_pesos.pesos
     pesos_totales[symbol] = nuevos_pesos
-    gestor_pesos.guardar(pesos_totales)
+    persist_entry_weights(
+        gestor_pesos,
+        pesos_totales,
+        source=EntryWeightSource.APRENDIZAJE_EN_LINEA,
+        detail=symbol,
+    )
     print(f'\n🧠 Pesos ajustados dinámicamente para {symbol}:')
     for estrategia, peso in nuevos_pesos.items():
         print(f'  - {estrategia}: {peso:.3f}')
