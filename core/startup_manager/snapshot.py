@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import inspect
 import json
 import os
 import time
@@ -163,21 +162,27 @@ class SnapshotMixin:
                 )
 
     async def _check_clock_drift(self) -> bool:
+        """Comprueba desfase local vs Binance. Solo fuerza fallo si el drift es alto.
+
+        Antes, cualquier excepción no tipada devolvía False y pasabas a modo papel
+        aunque ``MODO_REAL=true`` en ``claves.env``; además el uso de ``session.get``
+        era frágil entre versiones de aiohttp.
+        """
+        max_drift = float(os.getenv("CLOCK_DRIFT_MAX_SECONDS", "2.0"))
+        timeout = aiohttp.ClientTimeout(total=5)
         try:
-            async with aiohttp.ClientSession() as session:
-                request = session.get("https://api.binance.com/api/v3/time", timeout=5)
-                ctx = await request if inspect.isawaitable(request) else request
-                if hasattr(ctx, "__aenter__"):
-                    async with ctx as resp:
-                        data = await resp.json()
-                elif hasattr(ctx, "json"):
-                    data = await ctx.json()
-                else:
-                    text = await ctx.text() if hasattr(ctx, "text") else "{}"
-                    data = json.loads(text or "{}")
-            server = data.get("serverTime", 0) / 1000
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                async with session.get("https://api.binance.com/api/v3/time") as resp:
+                    resp.raise_for_status()
+                    data = await resp.json()
+            server_ms = data.get("serverTime")
+            if not server_ms:
+                self.log.warning(
+                    "Respuesta /api/v3/time sin serverTime; omitiendo comprobación estricta de reloj."
+                )
+                return True
+            server = float(server_ms) / 1000.0
             drift = abs(server - time.time())
-            max_drift = float(os.getenv("CLOCK_DRIFT_MAX_SECONDS", "2.0"))
             if drift >= max_drift:
                 self.log.error(
                     "Desfase de reloj frente a Binance: %.3fs (máximo %.3fs). "
@@ -193,18 +198,20 @@ class SnapshotMixin:
                     drift,
                 )
             return True
+        except (aiohttp.ClientError, asyncio.TimeoutError) as e:
+            self.log.warning(
+                "No se pudo obtener la hora de Binance: %s. Omitiendo verificación de reloj.",
+                e,
+            )
+            return True
         except Exception as e:
-            client_error = getattr(aiohttp, "ClientError", ())
-            if not isinstance(client_error, tuple):
-                client_error = (client_error,)
-            tolerable = client_error + (asyncio.TimeoutError,)
-            if isinstance(e, tolerable):
-                self.log.warning(
-                    "No se pudo obtener la hora de Binance: %s. Omitiendo verificación de reloj.",
-                    e,
-                )
-                return True
-            return False
+            self.log.warning(
+                "Error inesperado en comprobación de reloj (%s): %s. "
+                "Se continúa sin forzar modo papel (respeta MODO_REAL del entorno).",
+                type(e).__name__,
+                e,
+            )
+            return True
 
     async def _check_storage(self) -> bool:
         try:

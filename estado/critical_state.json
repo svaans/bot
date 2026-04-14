@@ -1,5 +1,5 @@
 {
-  "timestamp": 1776127159.4465983,
+  "timestamp": 1776127526.171921,
   "reason": "hot_reload",
   "entries": {
     "risk_manager": {
@@ -24,4 +24,4 @@
       "fecha_actual": "2026-04-12"
     }
   }
-}
+}}

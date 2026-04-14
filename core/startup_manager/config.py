@@ -72,9 +72,12 @@ class ConfigMixin:
 
     async def _apply_clock_drift_safety(self) -> None:
         """Desactiva el modo real cuando la verificación de reloj falla."""
+        prev_real = bool(getattr(self.config, "modo_real", False)) if self.config is not None else False
         self.log.warning(
             "Arranque en modo papel por desfase de reloj respecto a Binance "
-            "(ajusta hora del sistema o relaja CLOCK_DRIFT_MAX_SECONDS)."
+            "(ajusta hora del sistema o relaja CLOCK_DRIFT_MAX_SECONDS). "
+            "modo_real_previo=%s",
+            prev_real,
         )
         if self.config is not None:
             if is_dataclass(self.config):
