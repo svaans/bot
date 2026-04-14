@@ -1,5 +1,5 @@
 {
-  "timestamp": 1776127526.171921,
+  "timestamp": 1776207412.8741078,
   "reason": "hot_reload",
   "entries": {
     "risk_manager": {
@@ -8,7 +8,7 @@
       "kill_switch_disparado": false,
       "perdidas_consecutivas": 0,
       "riesgo_diario": 0.0,
-      "fecha_riesgo": "2026-04-12",
+      "fecha_riesgo": "2026-04-14",
       "cooldown_fin": null,
       "capital_alerta_activa": false,
       "capital_alerta_fecha": null,
@@ -21,7 +21,7 @@
     },
     "reporter_diario": {
       "ultimas_operaciones": {},
-      "fecha_actual": "2026-04-12"
+      "fecha_actual": "2026-04-14"
     }
   }
-}}
+}

@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
 from core.orders.order_model import Order
+from core.orders.order_open_status import OrderOpenStatus
 from core.utils.feature_flags import is_flag_enabled
 from core.utils.logger import configurar_logger, log_decision
 from core.utils.log_utils import format_exception_for_log, safe_extra

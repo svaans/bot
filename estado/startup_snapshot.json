@@ -6,9 +6,9 @@
     "SOL/EUR",
     "BNB/EUR"
   ],
-  "modo_real": false,
-  "modo_operativo": "paper_trading",
-  "timestamp": 1776127572.4779108,
+  "modo_real": true,
+  "modo_operativo": "real",
+  "timestamp": 1776207417.7534878,
   "persistencia_tecnica": {
     "minimo": 1,
     "peso_extra": 0.5,
