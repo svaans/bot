@@ -7,6 +7,7 @@ import json
 import logging
 import sys
 import textwrap
+import threading
 import time
 from pathlib import Path
 
@@ -159,6 +160,38 @@ def test_reloader_persists_state_before_restart(monkeypatch, tmp_path):
         handler._maybe_restart()
 
     assert calls["reason"] == "hot_reload"
+
+
+def test_perform_restart_skips_when_restart_in_progress(monkeypatch, tmp_path):
+    """Un segundo reinicio concurrente no debe llamar a execv (evita doble proceso en Windows)."""
+    handler = _build_handler(tmp_path)
+    monkeypatch.setattr("core.hot_reload.persist_critical_state", lambda **_: None)
+    started = threading.Event()
+    proceed = threading.Event()
+    execv_calls = {"n": 0}
+
+    def fake_execv(*_a, **_k):
+        execv_calls["n"] += 1
+        started.set()
+        assert proceed.wait(timeout=5)
+        raise SystemExit(0)
+
+    monkeypatch.setattr("core.hot_reload.os.execv", fake_execv)
+
+    def blocked_restart() -> None:
+        try:
+            handler._perform_restart()
+        except SystemExit:
+            pass
+
+    th = threading.Thread(target=blocked_restart, daemon=True)
+    th.start()
+    assert started.wait(timeout=2), "execv debería haber arrancado"
+    handler._perform_restart()
+    assert execv_calls["n"] == 1
+    proceed.set()
+    th.join(timeout=5)
+    assert not th.is_alive()
 
 
 def test_hot_reload_metrics_recorded(monkeypatch, tmp_path, patched_timer):

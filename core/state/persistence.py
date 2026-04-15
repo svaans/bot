@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import errno
 import json
 import os
 import threading
@@ -187,11 +188,20 @@ def persist_critical_state(*, reason: str | None = None) -> CriticalState | None
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
             tmp_path = path.with_suffix(".tmp")
-            with tmp_path.open("w", encoding="utf-8") as fh:
-                json.dump(payload, fh, indent=2, ensure_ascii=False)
-                fh.flush()
-                os.fsync(fh.fileno())
-            tmp_path.replace(path)
+            for attempt in range(8):
+                try:
+                    with tmp_path.open("w", encoding="utf-8") as fh:
+                        json.dump(payload, fh, indent=2, ensure_ascii=False)
+                        fh.flush()
+                        os.fsync(fh.fileno())
+                    tmp_path.replace(path)
+                    break
+                except OSError as exc:
+                    win_share = getattr(exc, "winerror", None) == 32
+                    busy = exc.errno in (errno.EACCES, errno.EPERM, errno.EBUSY) or win_share
+                    if not busy or attempt >= 7:
+                        raise
+                    time.sleep(0.05 * (attempt + 1))
         except OSError as exc:
             _log.error(
                 "No se pudo persistir estado crítico en %s: %s",

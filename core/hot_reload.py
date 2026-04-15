@@ -522,6 +522,7 @@ class _DebouncedReloader(PatternMatchingEventHandler):
 
         self._timer: Optional[threading.Timer] = None
         self._lock = threading.Lock()
+        self._restart_singleton_lock = threading.Lock()
         self._last_event_ts: float = 0.0
         self._last_path: Optional[Path] = None
         self._last_restart_ts: float = 0.0
@@ -670,34 +671,49 @@ class _DebouncedReloader(PatternMatchingEventHandler):
         self._perform_restart()
 
     def _perform_restart(self) -> None:
+        # Evita dos timers / dos callbacks de watchdog lanzando dos procesos (Windows).
+        if not self._restart_singleton_lock.acquire(blocking=False):
+            self._logger.debug(
+                "hot_reload_restart_skipped_duplicate",
+                extra={"reason": "restart_already_in_progress"},
+            )
+            return
 
         # Reinicio de proceso: reemplaza el binario actual y preserva argv/env
         python = sys.executable
         argv = [python] + sys.argv
         try:
-            persist_critical_state(reason="hot_reload")
-        except Exception:
-            HOT_RELOAD_ERRORS_TOTAL.labels(stage="persist_state").inc()
-            logging.getLogger("hot_reload").exception(
-                "No se pudo persistir el estado crítico antes del reinicio"
-            )
-        # Asegura flush de stdout/stderr
-        try:
-            sys.stdout.flush()
-            sys.stderr.flush()
-        except Exception:
-            pass
+            try:
+                persist_critical_state(reason="hot_reload")
+            except Exception:
+                HOT_RELOAD_ERRORS_TOTAL.labels(stage="persist_state").inc()
+                logging.getLogger("hot_reload").exception(
+                    "No se pudo persistir el estado crítico antes del reinicio"
+                )
+            # Asegura flush de stdout/stderr
+            try:
+                sys.stdout.flush()
+                sys.stderr.flush()
+            except Exception:
+                pass
 
-        # En Windows, os.execv no reemplaza el proceso como en POSIX,
-        # pero sigue siendo la vía más directa. Si falla, fallback a exit+spawn.
-        try:
-            os.execv(python, argv)
-        except Exception:
-            HOT_RELOAD_ERRORS_TOTAL.labels(stage="execv").inc()
-            import subprocess
+            # En Windows, os.execv no reemplaza el proceso como en POSIX,
+            # pero sigue siendo la vía más directa. Si falla, fallback a exit+spawn.
+            try:
+                os.execv(python, argv)
+            except Exception:
+                HOT_RELOAD_ERRORS_TOTAL.labels(stage="execv").inc()
+                import subprocess
 
-            subprocess.Popen(argv, env=os.environ.copy(), close_fds=False)
-            os._exit(0)
+                subprocess.Popen(argv, env=os.environ.copy(), close_fds=False)
+                self._restart_singleton_lock.release()
+                os._exit(0)
+        except SystemExit:
+            self._restart_singleton_lock.release()
+            raise
+        except BaseException:
+            self._restart_singleton_lock.release()
+            raise
 
 def _schedule_observer(
     observer,
