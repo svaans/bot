@@ -15,6 +15,11 @@ from core.adaptador_dinamico import backfill_ventana
 from ._shared import COMBINED_STREAM_KEY, ConsumerState, log
 from . import events
 
+# Skips de alto volumen en operación normal (no suelen requerir acción inmediata en consola INFO).
+_CONSUMER_SKIP_DEBUG_REASONS = frozenset(
+    {"duplicate_bar", "warmup", "waiting_close", "engine_denegado"}
+)
+
 try:  # pragma: no cover - métricas opcionales
     from core.metrics import (
         CONSUMER_SKIPPED_EXPECTED_TOTAL,
@@ -538,7 +543,7 @@ async def handle_candle(
         extra=safe_extra({"symbol": symbol, "timestamp": ts, "queue_size": queue_size_before}),
     )
 
-    log.info(
+    log.debug(
         "queue.enqueue.pending",
         extra=safe_extra(
             {
@@ -613,7 +618,7 @@ async def handle_candle(
                     continue
 
 
-    log.info(
+    log.debug(
         "queue.enqueue",
         extra=safe_extra(
             {
@@ -917,6 +922,8 @@ async def consumer_loop(feed: "DataFeed", symbol: str) -> None:
                         CONSUMER_SKIPPED_EXPECTED_TOTAL.labels(sym, timeframe_label, skip_reason).inc()
                     except Exception:
                         pass
+                    log_method = log.debug
+                elif skip_reason in _CONSUMER_SKIP_DEBUG_REASONS:
                     log_method = log.debug
                 log_method("consumer.skip", extra=safe_extra(payload))
                 log.debug(

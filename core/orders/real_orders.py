@@ -621,9 +621,9 @@ def reconciliar_ordenes(simbolos: list[str] | None = None) -> dict[str, Order]:
     local_only = sorted(local_symbols - exchange_symbols)
     exchange_only = sorted(exchange_symbols - local_symbols)
     both = sorted(local_symbols & exchange_symbols)
-    log.info(f'local_only: {local_only}', extra={'symbol': None, 'timeframe': None})
-    log.info(f'exchange_only: {exchange_only}', extra={'symbol': None, 'timeframe': None})
-    log.info(f'both: {both}', extra={'symbol': None, 'timeframe': None})
+    log.debug(f'local_only: {local_only}', extra={'symbol': None, 'timeframe': None})
+    log.debug(f'exchange_only: {exchange_only}', extra={'symbol': None, 'timeframe': None})
+    log.debug(f'both: {both}', extra={'symbol': None, 'timeframe': None})
     for sym in local_only:
         ord_ = local.get(sym)
         if not ord_:

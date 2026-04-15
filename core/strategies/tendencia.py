@@ -200,7 +200,7 @@ def detectar_tendencia(
         else estrategias if isinstance(estrategias, dict) else {}
     )
     if emitir_log:
-        log.info(
+        log.debug(
             {
                 "evento": "deteccion_tendencia",
                 "symbol": symbol,

@@ -195,7 +195,7 @@ async def test_datafeed_consumer_skip_expected_downgrades_log_and_counts(
 
 
 @pytest.mark.asyncio
-async def test_datafeed_consumer_skip_non_expected_logs_info(
+async def test_datafeed_consumer_skip_warmup_logs_debug(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     symbol = "BTCUSDT"
@@ -250,6 +250,75 @@ async def test_datafeed_consumer_skip_non_expected_logs_info(
         await asyncio.sleep(0.01)
     else:
         raise AssertionError("Skip no esperado no registrado")
+
+    skip_calls = [call for call in dummy_log.calls if call[1] == "consumer.skip"]
+    assert skip_calls, "Se esperaba log consumer.skip"
+    assert skip_calls[-1][0] == "debug"
+
+    feed._running = False
+    consumer.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await consumer
+
+
+@pytest.mark.asyncio
+async def test_datafeed_consumer_skip_actionable_still_logs_info(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Skips con impacto operativo (p. ej. orden) siguen en INFO."""
+
+    symbol = "BTCUSDT"
+
+    class DummyLog:
+        def __init__(self) -> None:
+            self.calls: List[tuple[str, str, dict[str, Any]]] = []
+
+        def _record(self, level: str, message: str, *args: Any, **kwargs: Any) -> None:
+            extra = kwargs.get("extra")
+            if isinstance(extra, dict):
+                payload = dict(extra)
+            else:
+                payload = {"extra": extra}
+            self.calls.append((level, message, payload))
+
+        def debug(self, message: str, *args: Any, **kwargs: Any) -> None:
+            self._record("debug", message, *args, **kwargs)
+
+        def info(self, message: str, *args: Any, **kwargs: Any) -> None:
+            self._record("info", message, *args, **kwargs)
+
+        def warning(self, message: str, *args: Any, **kwargs: Any) -> None:
+            self._record("warning", message, *args, **kwargs)
+
+        def error(self, message: str, *args: Any, **kwargs: Any) -> None:
+            self._record("error", message, *args, **kwargs)
+
+        def exception(self, message: str, *args: Any, **kwargs: Any) -> None:
+            self._record("exception", message, *args, **kwargs)
+
+    dummy_log = DummyLog()
+    monkeypatch.setattr(df_handlers, "log", dummy_log)
+
+    async def handler(candle: dict) -> None:
+        candle["_df_skip_reason"] = "crear_failed"
+
+    feed = DataFeed("1m", handler_timeout=1.0)
+    feed._symbols = [symbol]
+    feed._queues[symbol] = asyncio.Queue()
+    feed._handler = handler
+    feed._running = True
+
+    consumer = asyncio.create_task(feed._consumer(symbol))
+
+    candle = {"symbol": symbol, "timestamp": 1_700_000_002}
+    await feed._queues[symbol].put(candle)
+
+    for _ in range(100):
+        if feed._stats[symbol]["skipped"]:
+            break
+        await asyncio.sleep(0.01)
+    else:
+        raise AssertionError("Skip no registrado")
 
     skip_calls = [call for call in dummy_log.calls if call[1] == "consumer.skip"]
     assert skip_calls, "Se esperaba log consumer.skip"
