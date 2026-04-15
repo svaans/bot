@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+import errno
 import json
 import os
+import secrets
 import time
 from importlib import import_module
 from pathlib import Path
@@ -214,12 +216,64 @@ class SnapshotMixin:
             return True
 
     async def _check_storage(self) -> bool:
+        """Comprueba que el directorio del snapshot sea creable y escribible.
+
+        Usa un nombre de fichero único y reintentos al borrar para evitar falsos
+        negativos en Windows (archivo bloqueado / WinError 32) frente al nombre
+        fijo ``tmp_check`` y procesos concurrentes.
+        """
+        path = _current_snapshot_path()
         try:
-            path = _current_snapshot_path()
-            path.parent.mkdir(parents=True, exist_ok=True)
-            tmp = path.parent / 'tmp_check'
-            tmp.write_text('ok')
-            tmp.unlink()
-            return True
-        except Exception:
+            directory = path.resolve().parent
+        except OSError as exc:
+            self.log.error(
+                "Storage: ruta de snapshot inválida (%s): %s",
+                path,
+                format_exception_for_log(exc),
+            )
             return False
+        try:
+            directory.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            self.log.error(
+                "Storage: no se pudo crear el directorio %s: %s",
+                directory,
+                format_exception_for_log(exc),
+            )
+            return False
+        tmp = directory / f".storage_probe_{secrets.token_hex(8)}"
+        try:
+            tmp.write_text("ok", encoding="utf-8")
+        except OSError as exc:
+            self.log.error(
+                "Storage: no se pudo escribir en %s (permisos, ruta o cuota): %s",
+                directory,
+                format_exception_for_log(exc),
+            )
+            return False
+        for attempt in range(8):
+            try:
+                tmp.unlink()
+                return True
+            except OSError as exc:
+                win_share = getattr(exc, "winerror", None) == 32
+                busy = exc.errno in (errno.EACCES, errno.EPERM, errno.EBUSY) or win_share
+                if not busy:
+                    self.log.error(
+                        "Storage: no se pudo borrar el fichero temporal %s: %s",
+                        tmp,
+                        format_exception_for_log(exc),
+                    )
+                    return False
+                if attempt >= 7:
+                    self.log.warning(
+                        "Storage: escritura verificada en %s pero no se pudo borrar "
+                        "el temporal %s tras reintentos (%s). Puedes eliminar ese "
+                        "archivo si queda huérfano.",
+                        directory,
+                        tmp,
+                        format_exception_for_log(exc),
+                    )
+                    return True
+                time.sleep(0.05 * (attempt + 1))
+        return True

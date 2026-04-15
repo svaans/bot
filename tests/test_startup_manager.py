@@ -61,6 +61,20 @@ class _TestOpenStreamsError(RuntimeError):
 
 
 @pytest.mark.asyncio
+async def test_check_storage_succeeds_in_writable_directory(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """La comprobación de almacenamiento debe pasar si el directorio del snapshot es escribible."""
+    snapshot_path = tmp_path / "estado" / "startup_snapshot.json"
+    monkeypatch.setattr(startup_module, "SNAPSHOT_PATH", snapshot_path)
+    manager = StartupManager(trader=_DummyTrader(SimpleNamespace()))
+    manager.log = _CapturingLogger()
+    assert await manager._check_storage() is True
+    assert not manager.log.error_calls
+
+
+@pytest.mark.asyncio
 async def test_wait_ws_with_asyncio_event() -> None:
     """``_wait_ws`` debe desbloquearse tan pronto se active ``asyncio.Event``."""
 

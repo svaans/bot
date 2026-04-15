@@ -18,6 +18,7 @@ from core.hot_reload import (
     ModularReloadController,
     ModularReloadRule,
     _DebouncedReloader,
+    _minimal_watch_roots,
     _NOISY_WATCHDOG_LOGGERS,
     _configure_watchdog_logging,
     _log_hot_reload_event,
@@ -70,6 +71,19 @@ def patched_timer(monkeypatch):
 
     monkeypatch.setattr("core.hot_reload.threading.Timer", factory)
     return starts
+
+
+def test_minimal_watch_roots_collapses_nested_paths(tmp_path: Path) -> None:
+    """No vigilar raíz y subcarpeta a la vez: un solo cambio no debe duplicarse."""
+    root = tmp_path.resolve()
+    core = (tmp_path / "core").resolve()
+    data = (tmp_path / "data_feed").resolve()
+    (tmp_path / "core").mkdir(exist_ok=True)
+    (tmp_path / "data_feed").mkdir(exist_ok=True)
+    assert _minimal_watch_roots([core, root, data]) == [root]
+    nested = core / "strategies"
+    nested.mkdir(parents=True)
+    assert _minimal_watch_roots([nested, core]) == [core]
 
 
 def _build_handler(tmp_path: Path, **kwargs) -> _DebouncedReloader:

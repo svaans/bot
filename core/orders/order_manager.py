@@ -1715,6 +1715,7 @@ class OrderManager:
                 )
             )
             precio_cierre_mtm = float(precio) if precio is not None else float(precio_referencia)
+            execution: ExecutionResult | None = None
             try:
                 venta_exitosa = True
 
@@ -1827,6 +1828,17 @@ class OrderManager:
                 # Venta exitosa: cerrar y registrar
                 if self.modo_real:
                     precio_cierre_registro = precio if precio is not None else precio_referencia
+                    fill_salida = (
+                        execution.precio_fill_promedio
+                        if execution is not None
+                        else None
+                    )
+                    if (
+                        fill_salida is not None
+                        and is_valid_number(fill_salida)
+                        and float(fill_salida) > 0
+                    ):
+                        precio_cierre_registro = float(fill_salida)
                 else:
                     precio_cierre_registro = precio_cierre_mtm
                 orden.precio_cierre = precio_cierre_registro
@@ -1928,6 +1940,7 @@ class OrderManager:
 
                 operation_id = self._generar_operation_id(symbol)
                 precio_mtm = float(precio)
+                execution: ExecutionResult | None = None
 
                 if self.modo_real:
                     try:
@@ -1986,6 +1999,13 @@ class OrderManager:
                             emit=False,
                         )
                         orden.pnl_operaciones = getattr(orden, 'pnl_operaciones', 0.0) + execution.pnl
+                        fill_px = execution.precio_fill_promedio
+                        if (
+                            fill_px is not None
+                            and is_valid_number(fill_px)
+                            and float(fill_px) > 0
+                        ):
+                            precio_mtm = float(fill_px)
                     except Exception as e:
                         err_t = _fmt_exchange_err(e)
                         log.error(

@@ -466,6 +466,35 @@ def _path_matches_whitelist(path: Path, allowed: Path) -> bool:
         return False
 
 
+def _path_is_same_or_descendant(path: Path, ancestor: Path) -> bool:
+    """True si ``path`` es igual a ``ancestor`` o está dentro de ese directorio."""
+    try:
+        path.relative_to(ancestor)
+        return True
+    except ValueError:
+        return False
+
+
+def _minimal_watch_roots(paths: Sequence[Path]) -> list[Path]:
+    """Elimina rutas redundantes cuando una está contenida en otra.
+
+    Si el mismo ``Observer`` programa ``schedule()`` sobre la raíz del repo y
+    además sobre ``core/``, Windows entrega **varias** notificaciones por el
+    mismo guardado de un .py bajo ``core`` (log duplicado, debounce ruidoso y
+    varios reinicios concurrentes).
+    """
+    if not paths:
+        return []
+    resolved = sorted({Path(p).resolve() for p in paths}, key=lambda p: len(p.parts))
+    minimal: list[Path] = []
+    for p in resolved:
+        if any(_path_is_same_or_descendant(p, a) for a in minimal):
+            continue
+        minimal = [m for m in minimal if not _path_is_same_or_descendant(m, p)]
+        minimal.append(p)
+    return minimal
+
+
 class _DebouncedReloader(PatternMatchingEventHandler):
     """
     Observa cambios en *.py y reinicia el proceso tras un periodo de quietud (debounce).
@@ -868,6 +897,8 @@ def start_hot_reload(
         if not watch_whitelist:
             watch_whitelist = [root]
             watch_whitelist_set = {root}
+
+    schedule_targets = _minimal_watch_roots(schedule_targets)
 
     ignore_patterns_set: Set[str] = set()
     for item in excludes:

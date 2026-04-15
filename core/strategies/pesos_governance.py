@@ -56,8 +56,9 @@ de ``umbral`` y ``umbral_score_tecnico`` (``REGIMEN_ENTRADA_ENABLED=true`` y
 línea JSON en ``logs/ejecuciones.jsonl`` (``EXECUTION_QUALITY_LOG_PATH``,
 ``EXECUTION_QUALITY_LOG_ENABLED``). Incluye precio ticker previo al envío,
 precio de fill, slippage vs ticker y vs precio de señal del bot. Resumen por
-símbolo: ``python -m core.diag.informe_ejecucion``. Tras compra real, el
-``OrderManager`` actualiza ``precio_entrada`` con el VWAP de fill
+símbolo: ``python -m core.diag.informe_ejecucion``. Tras compra/venta real, el
+``OrderManager`` usa el VWAP de fill en ``precio_entrada`` y en
+``precio_cierre`` cuando existe
 (:class:`core.orders.market_retry_executor.ExecutionResult`). En backtest/sim,
 ``BACKTEST_SLIPPAGE_BPS`` desplaza entrada y salida en contra del trader (long:
 compra más cara y vende más barato).
