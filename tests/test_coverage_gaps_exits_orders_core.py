@@ -2,14 +2,10 @@
 
 from __future__ import annotations
 
-import asyncio
-import importlib
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
-from unittest import mock
-
 import numpy as np
 import pandas as pd
 import pytest
@@ -366,7 +362,7 @@ def test_ajustador_pesos_softmax_collapse(tmp_path: Path, monkeypatch: pytest.Mo
     from core.strategies import ajustador_pesos as ap
 
     monkeypatch.chdir(tmp_path)
-    r = ap.ajustar_pesos_por_desempeno({"X": {"a": 0.0, "b": 0.0}}, "out/p2.json")
+    r = ap.ajustar_pesos_por_desempeno({"X": {"a": -1.0, "b": -2.0}}, "out/p2.json")
     assert r == {}
 
 
