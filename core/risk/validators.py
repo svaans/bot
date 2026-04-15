@@ -2,6 +2,7 @@ from __future__ import annotations
 
 """Rutinas compartidas para validar niveles de stop-loss y take-profit."""
 
+import math
 from decimal import Decimal, ROUND_CEILING, ROUND_DOWN, ROUND_HALF_UP, InvalidOperation
 from typing import Literal
 
@@ -157,7 +158,17 @@ def validate_levels(
     min_dist_pct = max(float(min_dist_pct), 0.0)
     min_distance = max(entry * min_dist_pct, exchange_min)
 
-    if abs(entry - sl_adj) < min_distance or abs(tp_adj - entry) < min_distance:
+    def _dist_meets_min(dist: float, min_d: float) -> bool:
+        if min_d <= 0:
+            return True
+        if dist >= min_d:
+            return True
+        tol = max(1e-9, min_d * 1e-9)
+        return math.isclose(dist, min_d, rel_tol=0.0, abs_tol=tol)
+
+    if not _dist_meets_min(abs(entry - sl_adj), min_distance) or not _dist_meets_min(
+        abs(tp_adj - entry), min_distance
+    ):
         contexto["min_distance"] = min_distance
         raise LevelValidationError("min_distance", contexto)
 

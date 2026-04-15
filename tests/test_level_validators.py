@@ -65,3 +65,21 @@ def test_direction_mismatch_when_neither_geometry_fits() -> None:
             step_size=0.0,
         )
     assert exc.value.reason == "direction_mismatch"
+
+
+def test_short_min_distance_accepts_float_edge_after_sl_tp_swap() -> None:
+    """Tras intercambiar SL/TP, la distancia TP–entrada puede ser == min_distance en float."""
+    entry = 1994.5
+    sl_wrong = 1993.50275
+    tp_wrong = 1996.4944999999998
+    e, sl, tp = validate_levels(
+        "short",
+        entry,
+        sl_wrong,
+        tp_wrong,
+        min_dist_pct=0.0005,
+        tick_size=0.0,
+        step_size=0.0,
+    )
+    assert e == entry
+    assert tp < entry < sl
