@@ -10,6 +10,13 @@ Endurecimientos aplicados:
 - Reintentos con backoff exponencial y cierre ordenado con timeouts.
 - Manejo robusto de señales (UNIX) y KeyboardInterrupt cross-platform.
 - ``try``/``finally`` global: cualquier salida de ``main()`` ejecuta apagado idempotente.
+
+Reintentos (``max_retries`` / ``retries``):
+- ``retries`` cuenta **caídas distintas** de la tarea principal del bot (se usa
+  ``id(tarea_bot)`` para no volver a incrementar al reobservar la misma Task
+  muerta mientras fallan reinicios de ``StartupManager``).
+- Tras un reinicio **exitoso**, ``retries`` se pone a 0 (nueva ola).
+- ``max_retries`` es el tope de esas caídas antes de salir del bucle con aviso.
 """
 
 # --- Debug remoto opcional (endurecido) ---
@@ -52,6 +59,8 @@ import traceback
 from pathlib import Path
 from typing import Any, Optional, Tuple
 
+from core.utils.logger import configurar_logger
+
 # Dependencias internas (protegidas en tiempo de uso)
 from core.hot_reload import ModularReloadRule, start_hot_reload, stop_hot_reload
 from core.supervisor import start_supervision, stop_supervision
@@ -62,6 +71,8 @@ from core.startup_manager import StartupManager
 from core.metrics import iniciar_exporter
 from core.state import persist_critical_state, restore_critical_state
 from core.utils.log_utils import format_exception_for_log
+
+_log = configurar_logger("entrypoint")
 
 
 # --- Utilidades internas ---
@@ -81,7 +92,9 @@ def _try_start_alert_dispatcher(trader: Any) -> Any:
             return None
         return AlertDispatcher(bus=bus)
     except Exception as exc:
-        print(f"⚠️ AlertDispatcher no disponible: {format_exception_for_log(exc)}")
+        _log.warning(
+            "AlertDispatcher no disponible: %s", format_exception_for_log(exc)
+        )
         return None
 
 
@@ -101,7 +114,10 @@ def _safe_call(obj: Any, method: str):
         if callable(fn):
             return fn()
     except Exception:
-        traceback.print_exc()
+        _log.exception(
+            "Fallo en llamada defensiva sync",
+            extra={"phase": {"event": "safe_call", "method": method, "obj": repr(obj)}},
+        )
 
 
 async def _safe_acall(obj: Any, method: str, timeout: Optional[float] = None):
@@ -120,9 +136,15 @@ async def _safe_acall(obj: Any, method: str, timeout: Optional[float] = None):
         # sync
         return result
     except asyncio.TimeoutError:
-        print(f"⏰ Timeout en {obj}.{method}()")
+        _log.warning(
+            "Timeout en llamada async defensiva",
+            extra={"phase": {"event": "safe_acall", "method": method, "obj": repr(obj)}},
+        )
     except Exception:
-        traceback.print_exc()
+        _log.exception(
+            "Fallo en llamada defensiva async",
+            extra={"phase": {"event": "safe_acall", "method": method, "obj": repr(obj)}},
+        )
 
 
 def _normalize_tarea_bot(tarea_bot: Any) -> asyncio.Task:
@@ -149,10 +171,34 @@ def _start_mode_service_safe(
         mode_service.start()
         return mode_service
     except Exception as exc:
-        print(
-            f"⚠️ No se pudo iniciar el servicio de modos operativos: {format_exception_for_log(exc)}"
+        _log.warning(
+            "No se pudo iniciar el servicio de modos operativos: %s",
+            format_exception_for_log(exc),
         )
         return None
+
+
+def _set_bot_notificador(bot: Any, notificador: Any) -> None:
+    """Asigna ``notificador`` al trader si expone el atributo."""
+    if bot is None or not hasattr(bot, "notificador"):
+        return
+    try:
+        setattr(bot, "notificador", notificador)
+    except Exception:
+        _log.exception(
+            "No se pudo asignar notificador al trader",
+            extra={"phase": {"event": "bind_notificador"}},
+        )
+
+
+def _bind_trader_after_restart(
+    bot: Any, config: Any, notificador: Any
+) -> tuple[OperationalModeService | None, Any]:
+    """Tras un ``StartupManager.run`` exitoso en reinicio: notificador, modos, alertas."""
+    _set_bot_notificador(bot, notificador)
+    mode = _start_mode_service_safe(bot, config)
+    alerts = _try_start_alert_dispatcher(bot) if bot is not None else None
+    return mode, alerts
 
 
 # --- Runner con aiomonitor opcional (cierre limpio del loop) ---
@@ -244,14 +290,17 @@ async def main():
             try:
                 stop_hot_reload(obs)
             except Exception as e:
-                print(f"⚠️ Error deteniendo hot-reload: {format_exception_for_log(e)}")
+                _log.warning(
+                    "Error deteniendo hot-reload: %s", format_exception_for_log(e)
+                )
 
         if mode_service is not None:
             try:
                 await mode_service.stop()
             except Exception as exc:
-                print(
-                    f"⚠️ Error deteniendo servicio de modos: {format_exception_for_log(exc)}"
+                _log.warning(
+                    "Error deteniendo servicio de modos: %s",
+                    format_exception_for_log(exc),
                 )
             mode_service = None
 
@@ -265,14 +314,14 @@ async def main():
         try:
             persist_critical_state(reason="shutdown")
         except Exception:
-            traceback.print_exc()
+            _log.exception("Fallo persistiendo estado crítico en apagado")
 
         await _safe_acall(bot, "cerrar", timeout=15)
 
         try:
             await _maybe_await(stop_supervision())
         except Exception as e:
-            print(f"⚠️ Error parando supervisor: {format_exception_for_log(e)}")
+            _log.warning("Error parando supervisor: %s", format_exception_for_log(e))
 
         exp = exporter_server
         exporter_server = None
@@ -283,9 +332,9 @@ async def main():
                 if hasattr(exp, "server_close"):
                     exp.server_close()
             except Exception as e:
-                print(f"⚠️ Error cerrando exporter: {format_exception_for_log(e)}")
+                _log.warning("Error cerrando exporter: %s", format_exception_for_log(e))
 
-        print("👋 Bot finalizado correctamente.")
+        _log.info("Apagado del entrypoint completado")
 
     try:
         # 1) Arranque del bot
@@ -357,11 +406,7 @@ async def main():
         except Exception as e:
             print(f"⚠️ No se pudo crear el notificador: {format_exception_for_log(e)}")
             notificador = None
-        if bot is not None and hasattr(bot, "notificador"):
-            try:
-                setattr(bot, "notificador", notificador)
-            except Exception:
-                traceback.print_exc()
+        _set_bot_notificador(bot, notificador)
 
         if bot is not None:
             alert_dispatcher = _try_start_alert_dispatcher(bot)
@@ -371,6 +416,10 @@ async def main():
         tarea_stop = asyncio.create_task(stop_event.wait())
 
         def detener_bot():
+            _log.info(
+                "Parada solicitada (handler interno)",
+                extra={"phase": {"event": "shutdown_request", "source": "detener_bot"}},
+            )
             print("\n🛑 Señal de detención recibida (solicitando parada)…")
             if stop_event is not None:
                 stop_event.set()
@@ -379,6 +428,10 @@ async def main():
         if platform.system() == "Windows":
 
             def _win_sigint(_signum, _frame):
+                _log.info(
+                    "SIGINT recibida (Windows)",
+                    extra={"phase": {"event": "shutdown_request", "source": "SIGINT"}},
+                )
                 print("\n🛑 SIGINT recibida (Windows); solicitando parada…")
                 if stop_event is not None:
                     stop_event.set()
@@ -392,16 +445,29 @@ async def main():
         if platform.system() != "Windows":
             try:
                 loop = asyncio.get_running_loop()
-                loop.add_signal_handler(
-                    signal.SIGINT, lambda: (print("\n🛑 SIGINT recibida"), detener_bot())
-                )
-                loop.add_signal_handler(
-                    signal.SIGTERM, lambda: (print("\n🛑 SIGTERM recibida"), detener_bot())
-                )
+
+                def _on_sigint():
+                    _log.info(
+                        "SIGINT recibida",
+                        extra={"phase": {"event": "shutdown_request", "source": "SIGINT"}},
+                    )
+                    print("\n🛑 SIGINT recibida")
+                    detener_bot()
+
+                def _on_sigterm():
+                    _log.info(
+                        "SIGTERM recibida",
+                        extra={"phase": {"event": "shutdown_request", "source": "SIGTERM"}},
+                    )
+                    print("\n🛑 SIGTERM recibida")
+                    detener_bot()
+
+                loop.add_signal_handler(signal.SIGINT, _on_sigint)
+                loop.add_signal_handler(signal.SIGTERM, _on_sigterm)
             except NotImplementedError:
                 pass
 
-        # 5) Bucle de vida y reintentos
+        # 5) Bucle de vida y reintentos (semántica de ``retries`` / ``max_retries``: ver docstring del módulo)
         max_retries = 5
         retries = 0
         backoff_base = 5
@@ -460,11 +526,9 @@ async def main():
                             )
                         bot, tarea_bot, config = triple
                         tarea_bot = _normalize_tarea_bot(tarea_bot)
-                        if bot and hasattr(bot, "notificador"):
-                            setattr(bot, "notificador", notificador)
-                        mode_service = _start_mode_service_safe(bot, config)
-                        if bot is not None:
-                            alert_dispatcher = _try_start_alert_dispatcher(bot)
+                        mode_service, alert_dispatcher = _bind_trader_after_restart(
+                            bot, config, notificador
+                        )
                     except Exception as e:
                         print(f"❌ Error reiniciando bot: {format_exception_for_log(e)}")
                         traceback.print_exc()
