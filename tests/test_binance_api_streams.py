@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Dict
+from typing import Any, Dict
 
 import pytest
 
@@ -165,6 +165,68 @@ def test_init_state_aligns_to_interval_boundary(monkeypatch: pytest.MonkeyPatch)
 
     assert state.ultimo_ts % 60000 == 0
     assert state.ultimo_ts == ((now_ms // 60000) - 1) * 60000
+
+
+@pytest.mark.asyncio
+async def test_escuchar_velas_combinado_ccxt_keys_dispatch(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Claves estilo CCXT en el mapping deben resolverse frente a kline['s'] sin barra."""
+
+    class _RealClient:
+        simulated = False
+
+    payload = {
+        "stream": "etheur@kline_1m",
+        "data": {
+            "e": "kline",
+            "k": {
+                "s": "ETHEUR",
+                "i": "1m",
+                "x": True,
+                "t": 60000,
+                "T": 120000,
+                "o": "1",
+                "h": "2",
+                "l": "0.5",
+                "c": "1.5",
+                "v": "10",
+            },
+        },
+    }
+
+    async def fake_consume(
+        url: str,
+        handler: Any,
+        *,
+        timeout_inactividad: float,
+        mensaje_timeout: float | None,
+    ) -> None:
+        await handler(payload)
+
+    monkeypatch.setattr(ws, "_consume_ws_stream", fake_consume)
+
+    hit: Dict[str, Any] = {}
+    received = asyncio.Event()
+
+    async def eth_handler(candle: Dict[str, Any]) -> None:
+        hit["symbol"] = candle.get("symbol")
+        received.set()
+
+    task = asyncio.create_task(
+        ws.escuchar_velas_combinado(
+            ["ETH/EUR"],
+            "1m",
+            {"ETH/EUR": eth_handler},
+            {},
+            timeout_inactividad=5.0,
+            _heartbeat=1.0,
+            cliente=_RealClient(),
+        )
+    )
+
+    await asyncio.wait_for(received.wait(), timeout=2.0)
+    await task
+
+    assert hit.get("symbol") == "ETHEUR"
 
 
 @pytest.mark.asyncio

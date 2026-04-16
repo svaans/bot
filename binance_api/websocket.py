@@ -17,7 +17,7 @@ if TYPE_CHECKING:  # pragma: no cover - hints opcionales
 
 from core.utils.log_utils import truncate_for_log
 
-from .utils import normalize_symbol_for_ws
+from .utils import normalize_symbol_for_rest, normalize_symbol_for_ws
 
 __all__ = [
     "InactividadTimeoutError",
@@ -425,6 +425,14 @@ async def _escuchar_velas_combinado_real(
         async def dispatch(symbol: str, candle: Dict[str, Any]) -> None:
             symbol_upper = symbol.upper()
             fn = handler.get(symbol_upper) or handler.get(symbol)
+            if fn is None:
+                for key, candidate in handler.items():
+                    try:
+                        if normalize_symbol_for_rest(str(key)) == symbol_upper:
+                            fn = candidate
+                            break
+                    except Exception:
+                        continue
             if fn is None:
                 return
             result = fn(candle)

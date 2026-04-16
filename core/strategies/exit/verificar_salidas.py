@@ -72,21 +72,27 @@ async def _manejar_stop_loss(trader, orden, df) -> bool:
 
     symbol = orden.symbol
     precio_min = float(df['low'].iloc[-1])
+    precio_max = float(df['high'].iloc[-1])
     precio_cierre = float(df['close'].iloc[-1])
+    es_short = str(getattr(orden, "direccion", "long")).lower() in ('short', 'venta')
     sl_emergencia = getattr(orden, 'sl_emergencia', None)
     if sl_emergencia is not None:
         cond_emergencia = (
-            orden.direccion in ('long', 'compra') and precio_min <= sl_emergencia
+            not es_short and precio_min <= sl_emergencia
         ) or (
-            orden.direccion in ('short', 'venta') and precio_min >= sl_emergencia
+            es_short and precio_max >= sl_emergencia
         )
         if cond_emergencia:
             await trader._cerrar_y_reportar(
                 orden, precio_cierre, 'Stop Loss de emergencia', df=df
             )
             return True
-    if precio_min > orden.stop_loss:
-        return False
+    if not es_short:
+        if precio_min > orden.stop_loss:
+            return False
+    else:
+        if precio_max < orden.stop_loss:
+            return False
     config_actual = trader.config_por_simbolo.get(
         symbol, load_exit_config(symbol)
     )
@@ -121,11 +127,9 @@ async def _manejar_stop_loss(trader, orden, df) -> bool:
             establecer_sl_emergencia()
             if getattr(orden, 'sl_emergencia', None) is not None:
                 cond = (
-                    orden.direccion in ('long', 'compra')
-                    and precio_min <= orden.sl_emergencia
+                    not es_short and precio_min <= orden.sl_emergencia
                 ) or (
-                    orden.direccion in ('short', 'venta')
-                    and precio_min >= orden.sl_emergencia
+                    es_short and precio_max >= orden.sl_emergencia
                 )
                 if cond:
                     await trader._cerrar_y_reportar(
@@ -154,11 +158,9 @@ async def _manejar_stop_loss(trader, orden, df) -> bool:
         establecer_sl_emergencia()
         if getattr(orden, 'sl_emergencia', None) is not None:
             cond = (
-                orden.direccion in ('long', 'compra')
-                and precio_min <= orden.sl_emergencia
+                not es_short and precio_min <= orden.sl_emergencia
             ) or (
-                orden.direccion in ('short', 'venta')
-                and precio_min >= orden.sl_emergencia
+                es_short and precio_max >= orden.sl_emergencia
             )
             if cond:
                 await trader._cerrar_y_reportar(
@@ -176,8 +178,14 @@ async def _procesar_take_profit(trader, orden, df) -> bool:
 
     symbol = orden.symbol
     precio_max = float(df['high'].iloc[-1])
-    if precio_max < orden.take_profit:
-        return False
+    precio_min = float(df['low'].iloc[-1])
+    es_short = str(getattr(orden, "direccion", "long")).lower() in ('short', 'venta')
+    if es_short:
+        if precio_min > orden.take_profit:
+            return False
+    else:
+        if precio_max < orden.take_profit:
+            return False
     precio_cierre = float(df['close'].iloc[-1])
     config_actual = trader.config_por_simbolo.get(symbol, load_exit_config(symbol))
     if not getattr(orden, 'parcial_cerrado', False) and orden.cantidad_abierta > 0:
@@ -202,8 +210,13 @@ async def _manejar_trailing_stop(trader, orden, df) -> bool:
 
     symbol = orden.symbol
     precio_cierre = float(df['close'].iloc[-1])
+    precio_min_bar = float(df['low'].iloc[-1])
     config_actual = trader.config_por_simbolo.get(symbol, load_exit_config(symbol))
-    if precio_cierre > orden.max_price:
+    es_short = str(getattr(orden, "direccion", "long")).lower() in ('short', 'venta')
+    if es_short:
+        cur = float(getattr(orden, "max_price", precio_cierre) or precio_cierre)
+        orden.max_price = min(cur, precio_min_bar, precio_cierre)
+    elif precio_cierre > orden.max_price:
         orden.max_price = precio_cierre
     config_actual = adaptar_configuracion(symbol, df, config_actual)
     trader.config_por_simbolo[symbol] = config_actual

@@ -1023,6 +1023,54 @@ def _resolve_buffer_manager(trader: Any) -> BufferManager:
     return _buffers
 
 
+async def _maybe_verificar_salidas_vela(trader: Any, symbol: str, df: Any, cfg: Any) -> None:
+    """Evalúa reglas de salida (SL/TP, trailing, etc.) si hay posición abierta.
+
+    Se ejecuta antes del fastpath de entradas para que los cierres no queden
+    bloqueados cuando se omiten evaluaciones de entrada por presión.
+    """
+    orders = getattr(trader, "orders", None)
+    obtener = getattr(orders, "obtener", None) if orders is not None else None
+    if not callable(obtener):
+        return
+    try:
+        if obtener(symbol) is None:
+            return
+    except Exception:
+        log.debug("salidas.skip_obtener", extra={"symbol": symbol}, exc_info=True)
+        return
+    if not isinstance(df, pd.DataFrame) or df.empty:
+        return
+    try:
+        from core.strategies.exit.verificar_salidas import verificar_salidas
+    except Exception:
+        log.warning(
+            "salidas.import_failed",
+            extra={"symbol": symbol, "error": "verificar_salidas no importable"},
+        )
+        return
+    timeout_raw = getattr(cfg, "timeout_verificar_salidas", None) if cfg is not None else None
+    if timeout_raw is None:
+        timeout_sec = 20.0
+    else:
+        try:
+            timeout_sec = float(timeout_raw)
+        except (TypeError, ValueError):
+            timeout_sec = 20.0
+    timeout_sec = max(5.0, min(timeout_sec, 120.0))
+    try:
+        await asyncio.wait_for(verificar_salidas(trader, symbol, df), timeout=timeout_sec)
+    except asyncio.TimeoutError:
+        log.warning(
+            "verificar_salidas.timeout",
+            extra={"symbol": symbol, "timeout_sec": timeout_sec},
+        )
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        log.exception("verificar_salidas.error", extra={"symbol": symbol})
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 # Pipeline principal
 # ──────────────────────────────────────────────────────────────────────────────
@@ -1034,6 +1082,7 @@ async def procesar_vela(trader: Any, vela: dict) -> None:
       - atributos: config, spread_guard (opcional), orders (OrderManager), estado (dict) si quieres estados extra
       - método: evaluar_condiciones_de_entrada(symbol, df, estado)
       - método opcional: enqueue_notification(mensaje, nivel, dedup_key=..., **meta)
+      - con posición abierta: ``verificar_salidas`` (salidas) vía ``_cerrar_y_reportar`` / ``_piramidar`` en :class:`core.trader.trader.Trader`
     """
     t0 = time.perf_counter()
     symbol = ""
@@ -1297,6 +1346,9 @@ async def procesar_vela(trader: Any, vela: dict) -> None:
                 )
         except Exception:
             pass
+
+        # 4b) Salidas (SL/TP, trailing, contexto macro) si hay posición — antes del fastpath de entradas
+        await _maybe_verificar_salidas_vela(trader, symbol, df, cfg)
 
         # 5) Fast-path si estás bajo presión con histéresis configurable
         fast_enabled = bool(getattr(cfg, "trader_fastpath_enabled", True))

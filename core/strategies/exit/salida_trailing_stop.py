@@ -104,13 +104,24 @@ def verificar_trailing_stop(info: dict, precio_actual: float, df: (pd.DataFrame 
     """
     entrada = info['precio_entrada']
     max_price = info.get('max_price', entrada)
+    direccion = info.get('direccion', 'long')
     cfg = load_exit_config(info.get('symbol', 'SYM'))
     if config:
         cfg.update(config)
     buffer_pct = cfg['trailing_buffer']
-    if precio_actual > max_price * (1 + buffer_pct):
-        info['max_price'] = precio_actual
-        max_price = precio_actual
+    is_long = direccion in ('long', 'compra')
+    if is_long:
+        if precio_actual > max_price * (1 + buffer_pct):
+            info['max_price'] = precio_actual
+            max_price = precio_actual
+    else:
+        # Short: el extremo favorable es el mínimo; se reutiliza la clave `max_price`.
+        if max_price <= 0 or precio_actual <= 0:
+            info['max_price'] = precio_actual
+            max_price = precio_actual
+        elif precio_actual < max_price * (1 - buffer_pct) or precio_actual < max_price:
+            info['max_price'] = min(max_price, precio_actual)
+            max_price = float(info['max_price'])
     trailing_start_ratio = cfg['trailing_start_ratio']
     atr_mult = cfg['atr_multiplicador']
     usar_atr = cfg['trailing_por_atr']
@@ -118,7 +129,6 @@ def verificar_trailing_stop(info: dict, precio_actual: float, df: (pd.DataFrame 
     atr = get_atr(df) if df is not None else None
     if atr is None:
         return False, 'ATR no disponible'
-    direccion = info.get('direccion', 'long')
     if activacion:
         trigger_price = entrada + activacion if direccion in ('long', 'compra') else entrada - activacion
     else:

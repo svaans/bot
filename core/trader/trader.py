@@ -659,6 +659,140 @@ class Trader(TraderLite):
             extra=safe_extra({"symbol": key, "seconds": sec}),
         )
 
+    def es_salida_parcial_valida(
+        self,
+        orden: Any,
+        precio_tp: float,
+        config: dict[str, Any],
+        df: pd.DataFrame,
+    ) -> bool:
+        """Indica si aplica cierre parcial al TP (p. ej. posición fraccionada)."""
+        _ = (precio_tp, config, df)
+        if getattr(orden, "cantidad_abierta", 0) <= 0:
+            return False
+        if getattr(orden, "fracciones_totales", 1) <= 1:
+            return False
+        if getattr(orden, "parcial_cerrado", False):
+            return False
+        return True
+
+    async def _cerrar_y_reportar(
+        self,
+        orden: Any,
+        precio: float,
+        motivo: str,
+        *,
+        df: pd.DataFrame | None = None,
+        tendencia: str | None = None,
+    ) -> bool:
+        """Cierra la posición vía :meth:`OrderManager.cerrar_async` (simulado o real)."""
+        _ = df
+        orders = getattr(self, "orders", None)
+        cerrar = getattr(orders, "cerrar_async", None) if orders is not None else None
+        if not callable(cerrar):
+            log.warning(
+                "cerrar_y_reportar.no_orders",
+                extra=safe_extra({"motivo": motivo}),
+            )
+            return False
+        symbol = getattr(orden, "symbol", None)
+        if not symbol:
+            return False
+        if tendencia is not None:
+            try:
+                setattr(orden, "tendencia", str(tendencia))
+            except Exception:
+                log.debug("cerrar_y_reportar.tendencia_skip", exc_info=True)
+        try:
+            px = float(precio)
+        except (TypeError, ValueError):
+            return False
+        try:
+            return bool(await cerrar(symbol, px, str(motivo)))
+        except Exception:
+            log.exception(
+                "cerrar_y_reportar.failed",
+                extra=safe_extra({"symbol": symbol, "motivo": motivo}),
+            )
+            return False
+
+    async def _cerrar_parcial_y_reportar(
+        self,
+        orden: Any,
+        cantidad: float,
+        precio: float,
+        motivo: str,
+        *,
+        df: pd.DataFrame | None = None,
+    ) -> bool:
+        """Cierra parcialmente vía :meth:`OrderManager.cerrar_parcial_async`."""
+        _ = df
+        orders = getattr(self, "orders", None)
+        fn = getattr(orders, "cerrar_parcial_async", None) if orders is not None else None
+        if not callable(fn):
+            return False
+        symbol = getattr(orden, "symbol", None)
+        if not symbol:
+            return False
+        try:
+            qty = float(cantidad)
+            px = float(precio)
+        except (TypeError, ValueError):
+            return False
+        if qty <= 0:
+            return False
+        try:
+            return bool(await fn(symbol, qty, px, str(motivo)))
+        except Exception:
+            log.exception(
+                "cerrar_parcial_y_reportar.failed",
+                extra=safe_extra({"symbol": symbol, "motivo": motivo}),
+            )
+            return False
+
+    async def _piramidar(self, symbol: str, orden: Any, df: pd.DataFrame) -> None:
+        """Incrementa tamaño de la posición si la pirámide está habilitada en config."""
+        try:
+            from core.gestor_capital import aplicar_piramidacion
+        except Exception:
+            return
+        cfg = getattr(self, "config", None)
+        if cfg is None:
+            return
+        try:
+            fr = int(getattr(cfg, "fracciones_piramide", 1) or 1)
+            paso = float(getattr(cfg, "umbral_piramide", 0.006) or 0.006)
+            reserva = float(getattr(cfg, "reserva_piramide", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            return
+        max_adds = max(0, fr - 1)
+        if max_adds <= 0 or paso <= 0:
+            return
+        try:
+            precio_actual = float(df["close"].iloc[-1])
+        except Exception:
+            return
+        params = {
+            "paso": paso,
+            "max_adds": max_adds,
+            "riesgo_max": max(0.01, 1.0 - min(reserva, 0.99)),
+        }
+        try:
+            nueva = aplicar_piramidacion(orden, precio_actual, params)
+        except Exception:
+            log.debug("piramidar.eval_failed", extra=safe_extra({"symbol": symbol}), exc_info=True)
+            return
+        if nueva is None or float(nueva) <= 0:
+            return
+        orders = getattr(self, "orders", None)
+        add_fn = getattr(orders, "agregar_parcial_async", None) if orders is not None else None
+        if not callable(add_fn):
+            return
+        try:
+            await add_fn(str(symbol), precio_actual, float(nueva))
+        except Exception:
+            log.debug("piramidar.add_failed", extra=safe_extra({"symbol": symbol}), exc_info=True)
+
     async def evaluar_condiciones_de_entrada(
         self,
         symbol: str,

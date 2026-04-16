@@ -12,6 +12,7 @@ import random
 import time
 from typing import List
 
+from binance_api.utils import normalize_symbol_for_rest
 from binance_api.websocket import InactividadTimeoutError
 
 from . import escuchar_velas, escuchar_velas_combinado
@@ -259,7 +260,10 @@ async def stream_combinado(feed: "DataFeed", symbols: List[str]) -> None:
 
                 return _handler
 
-            handlers = {s: await wrap(s) for s in symbols}
+            # Las claves deben coincidir con kline["s"] de Binance (p. ej. ETHEUR), no con CCXT (ETH/EUR).
+            handlers = {
+                normalize_symbol_for_rest(s): await wrap(s) for s in symbols
+            }
 
             await escuchar_velas_combinado(
                 symbols,
