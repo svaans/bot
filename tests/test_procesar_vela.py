@@ -10,6 +10,7 @@ import pytest
 
 from core import procesar_vela as procesar_vela_mod
 from core.procesar_vela import procesar_vela
+from core.vela import pipeline as vela_pipeline
 from core.operational_mode import OperationalMode
 from core.orders.order_open_status import OrderOpenStatus
 from indicadores.atr import calcular_atr
@@ -168,7 +169,7 @@ def reset_buffers() -> Generator[Any, None, None]:
 
     metric = DummyMetric()
     originals = {
-        name: getattr(procesar_vela_mod, name)
+        name: getattr(vela_pipeline, name)
         for name in (
             "ENTRADAS_CANDIDATAS",
             "ENTRADAS_ABIERTAS",
@@ -187,7 +188,7 @@ def reset_buffers() -> Generator[Any, None, None]:
         )
     }
     for name in originals:
-        setattr(procesar_vela_mod, name, metric)
+        setattr(vela_pipeline, name, metric)
 
     yield
 
@@ -195,7 +196,7 @@ def reset_buffers() -> Generator[Any, None, None]:
     procesar_vela_mod._buffers._locks.clear()
     procesar_vela_mod._DEFAULT_ORDER_CIRCUIT_STORE.clear()
     for name, value in originals.items():
-        setattr(procesar_vela_mod, name, value)
+        setattr(vela_pipeline, name, value)
 
 
 def _build_candle(close: float) -> dict[str, Any]:
@@ -316,8 +317,8 @@ async def test_procesar_vela_registra_metricas_spread_guard_missing() -> None:
     candle = _build_candle(30_000.0)
 
     metric = RecordingMetric()
-    original_metric = procesar_vela_mod.SPREAD_GUARD_MISSING
-    procesar_vela_mod.SPREAD_GUARD_MISSING = metric
+    original_metric = vela_pipeline.SPREAD_GUARD_MISSING
+    vela_pipeline.SPREAD_GUARD_MISSING = metric
 
     logger = logging.getLogger("procesar_vela")
     records: list[logging.LogRecord] = []
@@ -332,7 +333,7 @@ async def test_procesar_vela_registra_metricas_spread_guard_missing() -> None:
     try:
         await procesar_vela(trader, candle)
     finally:
-        procesar_vela_mod.SPREAD_GUARD_MISSING = original_metric
+        vela_pipeline.SPREAD_GUARD_MISSING = original_metric
         logger.removeHandler(handler)
 
     assert metric.calls == [{"symbol": "BTCUSDT", "timeframe": "1m"}]

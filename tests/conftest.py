@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+# Asegura ``asyncio.TaskGroup`` en Python < 3.11 antes de cualquier test
+# (parche aplicado en ``core.__init__``; ver ``core.utils.asyncio_compat``).
+import core  # noqa: F401
+
 import datetime as dt
 import time
 from collections import deque

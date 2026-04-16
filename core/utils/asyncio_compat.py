@@ -1,4 +1,14 @@
-"""Compat utilities for bridging asyncio features across Python versions."""
+"""Compat utilities for bridging asyncio features across Python versions.
+
+``asyncio.TaskGroup`` se registra **una sola vez** al importar el paquete
+:mod:`core` (ver :mod:`core.__init__`). No usar :file:`sitecustomize.py` en
+este proyecto: depende del orden de ``sys.path``, no aplica con ``python -I``,
+y duplicaba la lógica.
+
+Para herramientas que ejecuten código sin pasar por ``import core``, importar
+explícitamente ``core`` o ``core.utils.asyncio_compat`` antes de usar
+``asyncio.TaskGroup`` en intérpretes < 3.11.
+"""
 
 from __future__ import annotations
 

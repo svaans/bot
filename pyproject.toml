@@ -1,0 +1,6 @@
+[tool.vulture]
+# Ejecutar desde la raíz del repo: ``python -m vulture`` (sin PATH extra).
+# Incluye ``vulture_whitelist.py`` para cargas dinámicas / falsos positivos.
+paths = [".", "vulture_whitelist.py"]
+min_confidence = 80
+exclude = [".venv", "venv", "__pycache__"]

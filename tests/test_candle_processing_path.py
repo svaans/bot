@@ -8,6 +8,7 @@ from typing import Any, Iterable, Sequence
 import pytest
 
 import core.procesar_vela as procesar_vela_mod
+from core.vela import pipeline as vela_pipeline
 from tests.fake_feed import mk_candle_in_range
 from tests.log_sanitizer import has_event, parse_records
 from tests.spies import spy_trader
@@ -276,7 +277,7 @@ async def test_metricas_no_rompen_por_labels(
     }
 
     for name, metric in replacements.items():
-        monkeypatch.setattr(procesar_vela_mod, name, metric)
+        monkeypatch.setattr(vela_pipeline, name, metric)
 
     _enable_caplog(caplog)
     caplog.set_level(logging.WARNING, logger="metrics")

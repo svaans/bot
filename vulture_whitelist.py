@@ -1,4 +1,16 @@
-"""Whitelist para Vulture que cubre cargas dinámicas y persistencias."""
+"""Módulo solo para Vulture: símbolos “usados” vía imports (carga dinámica, etc.).
+
+**No** es una whitelist de seguridad ni de red. Solo evita falsos positivos de
+dead code.
+
+Uso (desde la raíz del repo): ``python -m vulture`` — la configuración en
+``pyproject.toml`` ya incluye ``.`` y este archivo. Equivalente manual::
+
+    python -m vulture . vulture_whitelist.py
+
+Importar este módulo en runtime de producción fuerza cargas innecesarias;
+no lo referenciéis desde la aplicación.
+"""
 
 from __future__ import annotations
 

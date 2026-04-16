@@ -3,63 +3,52 @@
 ## 1. Introducción General
 1. Este bot de trading está diseñado para operar de forma autónoma en mercados de criptomonedas.
 2. El objetivo principal es ejecutar estrategias cuantitativas con gestión de riesgo adaptable.
-3. El proyecto abarca backend, frontend, motor de trading, módulos de aprendizaje y backtesting.
+3. Este repositorio concentra el **motor de trading** (`core/`, `main.py`), **data feed**, **aprendizaje** (`learning/`), **backtesting** y **tests**; no incluye backend Django ni frontend React (ver §4–5).
 4. La arquitectura modular permite extender componentes sin afectar el núcleo.
 5. Se prioriza la transparencia para que cualquier desarrollador pueda entender el sistema.
 
 ## 2. Visión de Arquitectura
 6. El **núcleo** (`core/`) contiene el motor de estrategias, alimentación de datos y gestión de órdenes.
-7. El **backend** (`backend/`) ofrece APIs y panel administrativo basados en Django.
-8. El **frontend** (`frontend/`) es una aplicación React con TailwindCSS para visualizar métricas y estado.
+7. Un **backend** HTTP o panel web, si lo usáis, vive **fuera** de este monorepo (no hay carpeta `backend/` aquí).
+8. Un **frontend** de dashboard, si lo usáis, también es **proyecto aparte** (no hay `frontend/` aquí).
 9. El **aprendizaje** (`learning/`) incluye scripts de calibración y entrenamiento continuo.
 10. El **backtesting** (`backtesting/`) permite validar estrategias con datos históricos.
-11. Los **indicadores** (`indicators/` y `core/indicadores/`) calculan señales técnicas.
+11. Los **indicadores** en tiempo real están en el paquete `indicadores/` (raíz del repo); conviven con indicadores usados vía la librería `ta` en estrategias.
 12. Las **configuraciones** (`config/`) controlan parámetros globales y pesos dinámicos.
 13. El **directorio de estado** (`estado/`) persiste capital y cierres para continuidad operacional.
-14. El **directorio de scripts** (`scripts/`) alberga utilidades administrativas.
+14. La carpeta **`tools/`** incluye utilidades puntuales (p. ej. auditoría de persistencia, saneo de logs); no hay `scripts/` en este árbol.
 15. Los **tests** (`tests/`) cubren integración, reconexiones, capital y watchdog.
 
 ## 3. Estructura de Carpetas
 16. `backtesting/` ejecuta simulaciones históricas.
-17. `backend/` contiene el servidor web y tareas programadas.
+17. **`backend/`** no está en este repositorio; si mantenéis un API Django, gestionad sus dependencias por separado.
 18. `binance_api/` implementa comunicación con Binance: `cliente.py`, `filters.py` y `websocket.py`.
 19. `config/` gestiona configuraciones y pesos con archivos JSON y Python.
 20. `core/` implementa el motor de trading modular.
-21. `docs/` almacena documentación auxiliar.
+21. Documentación ad-hoc puede vivir en `docs/` si la creáis; no hay conjunto de guías obligatorio versionado aquí.
 22. `estado/` mantiene el capital y cierre de operaciones entre ejecuciones.
-23. `frontend/` provee el panel de control interactivo.
-24. `indicators/` define indicadores técnicos reutilizables.
+23. **`frontend/`** no está en este repositorio.
+24. **`indicadores/`** (raíz) define indicadores técnicos reutilizables por el motor.
 25. `learning/` orquesta procesos de aprendizaje automático.
-26. `scripts/` aloja utilidades como auditorías y migraciones.
+26. `tools/` aloja utilidades de línea de comandos (p. ej. `log_stream`, auditoría).
 27. `tests/` incluye pruebas automatizadas.
-28. `main.py` inicia el bot unificando todos los componentes.
-29. `requirements.txt` lista dependencias Python globales.
-30. `SECURITY.md` detalla políticas de seguridad.
+28. `main.py` inicia el bot unificando supervisión, hot-reload y arranque del `Trader`.
+29. `requirements.txt` lista dependencias de **runtime**; `requirements-dev.txt` añade pytest, vulture, etc.
+30. `pyproject.toml` configura herramientas (p. ej. `[tool.vulture]` con `vulture_whitelist.py`).
+31. `SECURITY.md` describe divulgación responsable y riesgos operativos del bot.
 
-## 4. Backend (Django)
-31. El backend sigue el patrón estándar de Django para crear APIs seguras.
-32. `backend/manage.py` expone comandos administrativos.
-33. `backend/backend/` aloja la configuración del proyecto Django.
-34. Dentro del proyecto se definen middlewares y settings por ambiente.
-35. El submódulo `tareas/` implementa jobs periódicos.
-36. El submódulo `users/` gestiona autenticación y modelos de usuario.
-37. Las dependencias específicas se listan en `backend/requirements.txt`.
-38. Las APIs permiten consultar estrategias, métricas y configuración.
-39. El panel administrativo facilita la gestión manual de datos.
-40. Las tareas programadas interactúan con el motor central mediante colas o HTTP.
+## 4. Backend y frontend (fuera de este monorepo)
 
-## 5. Frontend (React + Tailwind)
-41. El frontend ofrece un dashboard para monitorear el bot.
-42. Se inicia con `npm start --prefix frontend`.
-43. `frontend/src/` contiene componentes React organizados por vistas.
-44. `frontend/public/` aloja archivos estáticos y `index.html`.
-45. `package.json` define scripts de desarrollo y build.
-46. `tailwind.config.js` configura estilos utilitarios.
-47. `postcss.config.js` habilita procesamiento CSS.
-48. El entorno incluye pruebas básicas ejecutadas con `npm test --prefix frontend`.
-49. El panel muestra capital, posiciones, registros y alertas.
-50. Las llamadas al backend usan `fetch` o bibliotecas HTTP.
-51. El frontend permite ajustar parámetros y visualizar logs.
+Las secciones históricas que describían `backend/` (Django) y `frontend/` (React)
+**no aplican** a la copia actual del código: esas carpetas **no existen** en el
+árbol. Cualquier panel, API o `manage.py` debe documentarse en el repositorio
+donde realmente viváis esos componentes.
+
+## 5. Herramientas de análisis estático
+
+- **Vulture**: desde la raíz, `python -m vulture` (lee `pyproject.toml` y
+  `vulture_whitelist.py`). Ver comentarios en `vulture_whitelist.py`: **no** es
+  una whitelist de seguridad.
 
 ## 6. Motor de Trading (core/)
 52. `core/trader_modular.py` implementa la clase `Trader` que orquesta la sesión.
@@ -96,7 +85,7 @@
 78. `core/scoring.py` combina resultados de múltiples estrategias.
 79. `core/metricas_semanales.py` resume estadísticas semanales.
 80. `core/procesar_vela.py` transforma velas brutas en eventos de análisis.
-81. `core/hot_reload.py` permite recargar módulos sin detener el bot.
+81. `core/hot_reload.py` vigila cambios en `.py` y, por defecto, **reinicia el proceso** (`os.execv`) tras un debounce; opcionalmente puede usarse recarga modular de módulos (`importlib.reload`) para casos acotados.
 82. `core/contexto_externo.py` provee datos externos para estrategias.
 83. `core/mode.py` selecciona entre modos real y simulado.
 84. `core/market_regime.py` detecta el régimen del mercado actual.
@@ -117,16 +106,13 @@
 - El `TraderLite` inicializa el servicio y sólo evalúa estrategias cuando `is_symbol_ready()` devuelve `True`.
 88. `core/config_manager/` centraliza lectura de parámetros en ejecución.
 89. La comunicación interna se basa en `asyncio` para operación concurrente.
-77. `core/scoring.py` produce un score global a partir de señales.
-78. `core/metricas_semanales.py` resume estadísticas semanales.
-79. `core/procesar_vela.py` transforma velas brutas en eventos de análisis.
-80. `core/hot_reload.py` permite recargar módulos sin detener el bot.
-81. `core/contexto_externo.py` provee datos externos para estrategias.
-82. `core/mode.py` selecciona entre modos real y simulado.
-83. `core/market_regime.py` detecta el régimen del mercado actual.
-84. `core/persistencia_tecnica.py` guarda resultados de indicadores en almacenamiento.
-85. `core/data/` aloja datos auxiliares utilizados por el motor.
-86. `core/utils/` contiene funciones generales de apoyo.
+
+## 7. Indicadores (`indicadores/`)
+
+Los archivos bajo `indicadores/` (p. ej. `rsi.py`, `macd.py`, `vwap.py`) son los
+que el README enumeraba antes como lista plana; conviven con helpers en
+`indicadores/incremental.py` y similares.
+
 101. `ichimoku.py` implementa el sistema de Ichimoku Kinko Hyo.
 102. `incremental.py` gestiona cálculos incrementales eficientes.
 103. `macd.py` produce la convergencia y divergencia de medias móviles.
@@ -146,7 +132,7 @@
 115. `config/config.py` define estructuras de configuración.
 116. `config/configuracion.py` centraliza valores por defecto.
 117. `development.py` y `production.py` establecen ajustes por entorno.
-118. `claves.env` almacena claves de API cifradas.
+118. `config/claves.env` (y variables de entorno) cargan claves con `python-dotenv`: deben tratarse como **secretos en texto**; no versionar el archivo real (usar `claves.env.example` como plantilla).
 119. `configuraciones_base.json` recopila valores iniciales.
 120. `configuraciones_optimas.json` guarda resultados de calibraciones.
 121. `estrategias_pesos.json` define pesos por estrategia.
@@ -163,8 +149,8 @@
 130. `estado/capital.json` rastrea el balance disponible del bot.
 131. `estado/historial_cierres.json` registra operaciones cerradas para análisis.
 132. `core/persistencia_tecnica.py` escribe resultados de indicadores en el disco.
-133. `docs/storage_consistency.md` documenta la consistencia del almacenamiento.
-134. Se recomienda ejecutar auditorías periódicas mediante `scripts/auditor.py`.
+133. La consistencia de almacenamiento se documenta donde el equipo mantenga guías internas (no hay `docs/storage_consistency.md` fijado en este árbol).
+134. Herramienta relacionada: `python tools/audit_persistencia.py` (auditoría ligera en temp; revisar el script para ampliar alcance).
 135. La persistencia de datos históricos se realiza en formato Parquet o bases de datos.
 
 ## 10. Módulos de Aprendizaje (learning/)
@@ -176,7 +162,7 @@
 141. `recalibrar_semana.py` ajusta pesos semanalmente según resultados.
 142. `reset_configuracion.py` restaura configuraciones predeterminadas.
 143. `reset_pesos.py` limpia ponderaciones de indicadores bajo ciertas condiciones.
-144. `async_learning_manager.py` y `trade_results_manager.py` coordinan procesos de aprendizaje y registro.
+144. `trade_results_manager.py` y `gestor_aprendizaje.py` coordinan resultados y flujos de aprendizaje en el árbol actual.
 145. `calibrar_parametros_adaptativos.py` busca valores óptimos para adaptadores.
 146. Los módulos de aprendizaje se integran con `core` mediante APIs internas.
 147. Los resultados se guardan en `configuraciones_optimas.json` para uso posterior.
@@ -190,36 +176,37 @@
 153. Las simulaciones permiten evaluar rendimiento y ajustar parámetros antes de producción.
 154. Los resultados alimentan los archivos de configuración óptima.
 
-## 12. Scripts Utilitarios
-155. `scripts/benchmark_flush.py` mide desempeño de operaciones de escritura.
-156. `scripts/migrate_parquet_to_db.py` migra datos Parquet a bases de datos.
-157. `scripts/refactor_imports.py` reorganiza importaciones automáticamente.
-158. `scripts/parche.py` aplica correcciones rápidas sobre datos o config.
-159. `scripts/reporte_semanal.py` genera un informe semanal de métricas clave.
-160. `scripts/auditor.py` revisa integridad de datos y estados.
-161. `scripts/cancell.py` cancela órdenes pendientes en masa si es necesario.
+## 12. Scripts y herramientas
+
+No hay carpeta `scripts/` versionada en este repositorio. Utilidades puntuales:
+
+155. `tools/log_stream.py` — saneo y pretty-print de logs JSON (`python -m tools.log_stream --help`).
+156. `tools/audit_persistencia.py` — auditoría de persistencia (`python -m tools.audit_persistencia --help`).
+
+Si añadís scripts propios, documentad rutas y dependencias en el mismo README o
+en el repositorio donde viváis el tooling.
 
 ## 13. Pruebas Automatizadas
 162. `tests/conftest.py` define fixtures compartidas para pytest.
 163. `tests/test_capital.py` valida cálculos de capital y riesgo.
-164. `tests/test_e2e.py` cubre un flujo de extremo a extremo del bot.
+164. Los tests de flujo amplio siguen la convención `tests/test_*.py` (no hay un único `test_e2e.py` obligatorio; revisad la suite disponible).
 165. `tests/test_reconexiones.py` verifica la reconexión al exchange tras fallos.
 166. `tests/test_tendencia.py` comprueba la detección de tendencias.
 167. `tests/test_watchdog.py` asegura que el bot responde a caídas de procesos.
-168. Las pruebas se ejecutan con `pytest` desde la raíz del proyecto.
-169. Se recomienda ejecutar `python backend/manage.py test` para validar el backend.
-170. El frontend se prueba con `npm test --prefix frontend`.
+168. Instalad dependencias de desarrollo: `pip install -r requirements-dev.txt` (incluye `pytest`, cobertura, vulture, etc.).
+169. Ejecutad la suite: `pytest` desde la raíz del proyecto.
+170. No hay suite `npm`/frontend en este repositorio.
 
 ## 14. Ejecución del Bot
-171. Clonar el repositorio y crear un entorno virtual con Python 3.10 o superior.
-172. Instalar dependencias con `pip install -r requirements.txt`.
-173. Configurar variables de entorno en `config/claves.env` y archivos JSON.
-174. Opcional: instalar dependencias del backend y frontend.
+171. Clonar el repositorio y crear un entorno virtual. Se recomienda **Python 3.11+** (objetivo de producción; en 3.10 el paquete `core` instala compat de `asyncio.TaskGroup`).
+172. Instalar runtime: `pip install -r requirements.txt`.
+173. Copiar `config/claves.env.example` → `config/claves.env` y completar secretos; revisar JSON bajo `config/` según el entorno.
+174. Para desarrollo/CI: `pip install -r requirements-dev.txt`.
 175. Ejecutar `python main.py` para iniciar el bot.
-176. El script inicializa supervisión, hot reload y carga de configuración.
+176. El script inicializa exporter Prometheus (si aplica), supervisión, hot-reload y `StartupManager`.
 177. Al iniciar, se muestran mensajes indicando si el modo es real o simulado.
 178. El bot escucha señales `SIGINT` y `SIGTERM` para detenerse limpiamente.
-179. Se pueden reiniciar módulos sin detener el proceso gracias a `hot_reload`.
+179. Tras cambios en código vigilado, `hot_reload` puede **reiniciar el proceso** del bot (comportamiento por defecto) o usar recarga modular donde esté habilitada.
 180. Logs detallados se imprimen en consola y se persisten en archivos de auditoría.
 
 ## 15. Despliegue y Operación
@@ -231,7 +218,7 @@
 186. Actualizar dependencias de manera controlada en entornos aislados.
 
 ## 16. Seguridad
-187. Las claves de API se guardan en `claves.env` y nunca se versionan.
+187. Las claves de API se guardan en `config/claves.env` (local, no versionado) y nunca deben subirse al repositorio.
 188. `SECURITY.md` define políticas de manejo de credenciales.
 189. Limitar permisos de la cuenta de exchange a lo estrictamente necesario.
 190. Evitar ejecutar el bot con privilegios de superusuario.
@@ -262,7 +249,7 @@
 ## 19. Gestión de Errores
 210. `rejection_handler.py` reintenta órdenes rechazadas con backoff.
 211. Excepciones críticas se registran en `auditoria.py`.
-212. Hot reload se detiene automáticamente ante errores persistentes.
+212. Hot-reload y supervisor tienen debounce, cooldown y métricas; ante fallos repetidos el proceso puede reiniciarse o detenerse según configuración (ver `core/hot_reload.py` y `main.py`).
 213. `supervisor.py` reinicia el bot si detecta bloqueos.
 214. Las estrategias deben manejar sus propias excepciones para no detener el flujo global.
 215. Los logs incluyen trazas completas para facilitar debugging.
@@ -282,8 +269,8 @@
 225. Los informes se integran con el frontend y el backend.
 
 ## 22. Hot Reload y Supervisión
-226. `hot_reload.py` observa cambios en archivos Python.
-227. Al detectar modificaciones, recarga módulos sin reiniciar el proceso.
+226. `hot_reload.py` observa cambios en archivos Python configurados.
+227. El flujo por defecto **reinicia el proceso** del intérprete tras quietud (debounce); la recarga modular sin reinicio es opcional y acotada.
 228. `supervisor.py` crea tareas supervisadas y reinicia componentes caídos.
 229. `monitor_estado_bot.py` expone el estado a través de un puerto configurable.
 230. El flujo de supervisión está pensado para alta disponibilidad.
@@ -306,7 +293,7 @@
 243. Los módulos de riesgo trabajan coordinados con configuraciones externas.
 
 ## 25. Indicadores Internos del Núcleo
-244. `core/indicadores/` incluye versiones optimizadas para el motor en tiempo real.
+244. El motor usa el paquete `indicadores/` (raíz) y módulos bajo `core/strategies/`; no hay un subpaquete `core/indicadores/` en este árbol.
 245. Estos indicadores se calculan de forma incremental para eficiencia.
 246. Los resultados se integran con `evaluacion_tecnica.py`.
 247. `indicadores` externos pueden ser adaptados para uso interno.
@@ -327,18 +314,15 @@
 ## 28. Administración de Sesión
 257. `main.py` es el punto de entrada del sistema.
 258. Inicializa hot reload, supervisor y configuración.
-259. Llama a `Trader.ejecutar()` para iniciar el ciclo principal.
+259. `StartupManager` construye el `Trader` y devuelve la tarea asyncio principal del ciclo de mercado (ver `core/startup_manager/manager.py`).
 260. Maneja señales del sistema para apagarlo ordenadamente.
 261. Después de cada parada se limpia el estado y se cierran conexiones.
 262. Los banner y mensajes de inicio ayudan a identificar modo y versión.
 
 ## 29. Utilidades Generales
 263. `core/utils/` alberga funciones auxiliares como manejo de fechas y formateo.
-264. `scripts/refactor_imports.py` ayuda a mantener un estilo coherente.
-265. `docs/debugging.py` ofrece herramientas para depurar.
-266. `docs/exit_flow.md` describe el flujo de salida de operaciones.
-267. `docs/calibracion_parametros.md` explica el proceso de calibración de parámetros.
-268. `binance_api/filters.py` garantiza que las órdenes cumplan reglas del exchange.
+264. Los documentos citados históricamente (`docs/debugging.py`, `docs/exit_flow.md`, etc.) **no** están versionados aquí; creadlos si el equipo los necesita.
+265. `binance_api/filters.py` garantiza que las órdenes cumplan reglas del exchange.
 
 ## 30. Ciclo de Vida de Estrategias
 269. Las estrategias se inician al cargar el `Trader`.
@@ -354,9 +338,9 @@
 277. Se aceptan Pull Requests que sigan estándares de estilo y pruebas.
 278. Documentar cualquier nueva carpeta o módulo agregado.
 279. Mantener este README actualizado con nuevas funcionalidades.
-280. Añadir indicadores personalizados en `indicators/` o `core/indicadores/`.
-281. Extender el frontend con vistas adicionales para nuevas métricas.
-282. Crear endpoints en el backend para integraciones externas.
+280. Añadir indicadores personalizados en `indicadores/` (y cablearlos desde `core/strategies/`).
+281. Si mantenéis un frontend propio, extendédlos allí (no hay `frontend/` en este repo).
+282. Si mantenéis un backend propio, añadid endpoints allí (no hay `backend/` en este repo).
 283. Incluir pruebas que cubran todos los caminos críticos.
 284. Ejecutar linters y formateadores antes de contribuir.
 
@@ -389,7 +373,7 @@
 306. Cada símbolo mantiene filtros (`estado.candle_filter`) y buffers validados antes de activar estrategias.
 307. `TraderLite.is_symbol_ready` bloquea la evaluación hasta completar el backfill histórico configurado.
 308. `StrategyEngine.evaluar_entrada` nunca retorna `permitido=None`; marca `False` y motivo `"error"` ante fallos.
-309. Consulte `docs/integridad_flujo_datos.md` para obtener la explicación completa de estas salvaguardas.
+309. Para profundizar en salvaguardas, documentadlas en `docs/` o en issues de arquitectura; no hay `docs/integridad_flujo_datos.md` fijado en este árbol.
 
 
 ## 35. Observabilidad y Formateo de Logs JSON
