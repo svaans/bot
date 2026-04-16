@@ -475,24 +475,49 @@ def _path_is_same_or_descendant(path: Path, ancestor: Path) -> bool:
         return False
 
 
-def _minimal_watch_roots(paths: Sequence[Path]) -> list[Path]:
-    """Elimina rutas redundantes cuando una está contenida en otra.
+def _path_is_strict_descendant(path: Path, ancestor: Path) -> bool:
+    """True si ``path`` está estrictamente dentro de ``ancestor`` (no es el mismo path)."""
+    if path == ancestor:
+        return False
+    return _path_is_same_or_descendant(path, ancestor)
 
-    Si el mismo ``Observer`` programa ``schedule()`` sobre la raíz del repo y
-    además sobre ``core/``, Windows entrega **varias** notificaciones por el
-    mismo guardado de un .py bajo ``core`` (log duplicado, debounce ruidoso y
-    varios reinicios concurrentes).
+
+def _maximal_watched_under(s: Set[Path], ancestor: Path) -> Set[Path]:
+    """Entre las rutas vigiladas que cuelgan de ``ancestor``, las que no son hijas de otra."""
+    under = {x for x in s if x != ancestor and _path_is_strict_descendant(x, ancestor)}
+    maximal: Set[Path] = set()
+    for x in under:
+        if any(x != y and _path_is_same_or_descendant(x, y) for y in under):
+            continue
+        maximal.add(x)
+    return maximal
+
+
+def _minimal_watch_roots(paths: Sequence[Path]) -> list[Path]:
+    """Reduce la lista de raíces a observar sin sustituir subcarpetas por todo el repo.
+
+    1. Si un ancestro (p. ej. la raíz del repo) tiene **al menos dos** rutas
+       vigiladas bajo él que no son la una hija de la otra (p. ej. ``core/`` y
+       ``data_feed/``), se **elimina ese ancestro** para no hacer ``schedule``
+       recursivo sobre todo el monorepo.
+    2. Se **eliminan descendientes** cuando su ancestro ya está en el conjunto
+       (p. ej. ``core/strategies`` y ``core`` → queda ``core``).
+
+    Así se evita el colapso a un único ``schedule`` sobre la raíz del proyecto
+    (que disparaba reinicios ante cualquier ``.py``, p. ej. en ``tests/``).
     """
     if not paths:
         return []
-    resolved = sorted({Path(p).resolve() for p in paths}, key=lambda p: len(p.parts))
-    minimal: list[Path] = []
-    for p in resolved:
-        if any(_path_is_same_or_descendant(p, a) for a in minimal):
-            continue
-        minimal = [m for m in minimal if not _path_is_same_or_descendant(m, p)]
-        minimal.append(p)
-    return minimal
+    s = {Path(p).resolve() for p in paths if p}
+    # Quitar ancestros “demasiado anchos” (p. ej. cwd) cuando ya hay varias ramas explícitas.
+    for p in list(s):
+        if len(_maximal_watched_under(s, p)) >= 2:
+            s.discard(p)
+    # Quitar descendientes cuando su ancestro también está en el conjunto.
+    for p in list(s):
+        if any(p != a and _path_is_same_or_descendant(p, a) for a in s):
+            s.discard(p)
+    return sorted(s, key=lambda p: (len(p.parts), str(p)))
 
 
 class _DebouncedReloader(PatternMatchingEventHandler):

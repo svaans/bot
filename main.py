@@ -9,6 +9,7 @@ Endurecimientos aplicados:
 - Comprobaciones defensivas de interfaces (bot/exporter/supervisor/hot-reload).
 - Reintentos con backoff exponencial y cierre ordenado con timeouts.
 - Manejo robusto de señales (UNIX) y KeyboardInterrupt cross-platform.
+- ``try``/``finally`` global: cualquier salida de ``main()`` ejecuta apagado idempotente.
 """
 
 # --- Debug remoto opcional (endurecido) ---
@@ -83,6 +84,7 @@ def _try_start_alert_dispatcher(trader: Any) -> Any:
         print(f"⚠️ AlertDispatcher no disponible: {format_exception_for_log(exc)}")
         return None
 
+
 async def _maybe_await(maybe_coro):
     """Await si es coroutine/awaitable; si no, devuelve tal cual."""
     if inspect.isawaitable(maybe_coro):
@@ -121,6 +123,36 @@ async def _safe_acall(obj: Any, method: str, timeout: Optional[float] = None):
         print(f"⏰ Timeout en {obj}.{method}()")
     except Exception:
         traceback.print_exc()
+
+
+def _normalize_tarea_bot(tarea_bot: Any) -> asyncio.Task:
+    """Convierte la tarea devuelta por StartupManager en :class:`asyncio.Task`."""
+    if tarea_bot is None:
+        raise RuntimeError("tarea_bot es None")
+    if isinstance(tarea_bot, asyncio.Task):
+        return tarea_bot
+    if inspect.iscoroutine(tarea_bot):
+        return asyncio.create_task(tarea_bot)
+    if callable(getattr(tarea_bot, "__await__", None)):
+        return asyncio.create_task(tarea_bot)  # type: ignore[arg-type]
+    raise RuntimeError("tarea_bot no es Task ni coroutine")
+
+
+def _start_mode_service_safe(
+    bot: Any, config: Any
+) -> OperationalModeService | None:
+    try:
+        if bot is None or config is None:
+            return None
+        bus = getattr(bot, "event_bus", None) or getattr(bot, "bus", None)
+        mode_service = OperationalModeService(config=config, trader=bot, event_bus=bus)
+        mode_service.start()
+        return mode_service
+    except Exception as exc:
+        print(
+            f"⚠️ No se pudo iniciar el servicio de modos operativos: {format_exception_for_log(exc)}"
+        )
+        return None
 
 
 # --- Runner con aiomonitor opcional (cierre limpio del loop) ---
@@ -169,162 +201,211 @@ async def main():
     config = None
     mode_service: OperationalModeService | None = None
     alert_dispatcher: Any = None
+    stop_event: Optional[asyncio.Event] = None
+    tarea_stop: Optional[asyncio.Task] = None
+    last_pending: set[asyncio.Task] = set()
+    notificador: Any = None
+    last_counted_crash_task_id: Optional[int] = None
 
-    # 1) Arranque del bot
-    try:
-        restore_critical_state()
-        startup = StartupManager()
-        # Timeout alineado con ``startup.startup_timeout`` + margen (mismo criterio que reinicios).
-        with phase("StartupManager.run"):
-            triple: Tuple[Any, Any, Any] = await _startup_run_with_timeout(startup)
-        if not isinstance(triple, tuple) or len(triple) != 3:
-            raise RuntimeError("StartupManager.run() no devolvió (bot, tarea_bot, config)")
-        bot, tarea_bot, config = triple
+    async def shutdown_runtime() -> None:
+        """Apagado idempotente: se ejecuta siempre al salir de ``main()``."""
+        nonlocal observer, exporter_server, mode_service, alert_dispatcher
 
-        # Normalizar: si tarea_bot es coroutine, envolver en Task
-        if tarea_bot is not None and not isinstance(tarea_bot, asyncio.Task):
-            if inspect.iscoroutine(tarea_bot):
-                tarea_bot = asyncio.create_task(tarea_bot)
-            elif callable(getattr(tarea_bot, "__await__", None)):
-                tarea_bot = asyncio.create_task(tarea_bot)  # type: ignore
-            else:
-                raise RuntimeError("tarea_bot no es Task ni coroutine")
+        if stop_event is not None and not stop_event.is_set():
+            stop_event.set()
+
+        _safe_call(bot, "solicitar_parada")
+
         try:
-            if bot is not None and config is not None:
-                bus = getattr(bot, "event_bus", None) or getattr(bot, "bus", None)
-                mode_service = OperationalModeService(config=config, trader=bot, event_bus=bus)
-                mode_service.start()
-        except Exception as exc:
-            print(
-                f"⚠️ No se pudo iniciar el servicio de modos operativos: {format_exception_for_log(exc)}"
-            )
+            if tarea_bot is not None and not tarea_bot.done():
+                await asyncio.wait_for(tarea_bot, timeout=10)
+        except Exception:
+            pass
+
+        if tarea_stop is not None and not tarea_stop.done():
+            tarea_stop.cancel()
+            try:
+                await tarea_stop
+            except Exception:
+                pass
+
+        if last_pending:
+            for t in list(last_pending):
+                if not t.done():
+                    t.cancel()
+            try:
+                await asyncio.gather(*last_pending, return_exceptions=True)
+            except Exception:
+                pass
+
+        obs = observer
+        observer = None
+        if obs is not None:
+            try:
+                stop_hot_reload(obs)
+            except Exception as e:
+                print(f"⚠️ Error deteniendo hot-reload: {format_exception_for_log(e)}")
+
+        if mode_service is not None:
+            try:
+                await mode_service.stop()
+            except Exception as exc:
+                print(
+                    f"⚠️ Error deteniendo servicio de modos: {format_exception_for_log(exc)}"
+                )
             mode_service = None
-    except Exception as e:
-        msg = str(e)
-        if 'Storage no disponible' in msg:
-            print('❌ Almacenamiento no disponible. '
-                  'Verifica los permisos de escritura en el directorio de datos.')
-        else:
-            print(f'❌ {format_exception_for_log(e)}')
-        traceback.print_exc()
-        return
 
-    # 2) Infraestructura auxiliar (exporter, supervisor, hot-reload)
-    try:
-        exporter_server = iniciar_exporter()
-        # start_supervision puede ser sync o async en tu implementación
-        await _maybe_await(start_supervision())
-        observer = start_hot_reload(
-            path=Path.cwd(),
-            modules=None,
-            watch_paths=(
-                "core",
-                "data_feed",
-                "indicadores",
-                "trader_modular.py",
-                "main.py",
-            ),
-            modular_reload=(
-                ModularReloadRule(
-                    module="indicadores",
-                    aliases=("indicators",),
-                ),
-            ),
-        )
-    except Exception:
-        print('❌ Fallo durante la inicialización de infraestructura:')
-        traceback.print_exc()
-        # Limpieza defensiva si algo arrancó parcialmente
-        try:
-            if observer:
-                stop_hot_reload(observer)
-        except Exception:
-            pass
-        try:
-            await _maybe_await(stop_supervision())
-        except Exception:
-            pass
-        try:
-            if exporter_server:
-                if hasattr(exporter_server, "shutdown"):
-                    exporter_server.shutdown()
-                if hasattr(exporter_server, "server_close"):
-                    exporter_server.server_close()
-        except Exception:
-            pass
-        return
+        if alert_dispatcher is not None:
+            try:
+                await alert_dispatcher.aclose()
+            except Exception:
+                pass
+            alert_dispatcher = None
 
-    # 3) Notificación de modo y banner
-    if getattr(config, "modo_real", False):
-        print('🟢 Modo REAL activado')
-    else:
-        print('🟡 Modo SIMULADO activado')
-        print(
-            '   Si esperabas REAL: en config/claves.env pon MODO_REAL=true '
-            '(o MODO_OPERATIVO=real), o BOT_ENV=production. '
-            'Sin eso, development usa paper por defecto. '
-            'Si ya tenías REAL y ves esto, revisa desfase de reloj (CLOCK_DRIFT).'
-        )
-
-    mostrar_banner()
-    print(f'🚀 Iniciando bot de trading... Modo real: {getattr(config, "modo_real", False)}')
-
-    # Notificador
-    try:
-        notificador = crear_notification_manager_desde_env()
-    except Exception as e:
-        print(f"⚠️ No se pudo crear el notificador: {format_exception_for_log(e)}")
-        notificador = None
-    if bot is not None and hasattr(bot, 'notificador'):
         try:
-            setattr(bot, 'notificador', notificador)
+            persist_critical_state(reason="shutdown")
         except Exception:
             traceback.print_exc()
 
-    if bot is not None:
-        alert_dispatcher = _try_start_alert_dispatcher(bot)
-
-    # 4) Señales/parada
-    stop_event = asyncio.Event()
-    tarea_stop = asyncio.create_task(stop_event.wait())
-
-    def detener_bot():
-        print('\n🛑 Señal de detención recibida (solicitando parada)…')
-        stop_event.set()
-        _safe_call(bot, 'solicitar_parada')
-
-    # Windows no soporta loop.add_signal_handler; signal.signal al menos captura Ctrl+C.
-    if platform.system() == 'Windows':
-        def _win_sigint(_signum, _frame):
-            print('\n🛑 SIGINT recibida (Windows); solicitando parada…')
-            stop_event.set()
-            _safe_call(bot, 'solicitar_parada')
+        await _safe_acall(bot, "cerrar", timeout=15)
 
         try:
-            signal.signal(signal.SIGINT, _win_sigint)
-        except (ValueError, OSError):
-            pass
+            await _maybe_await(stop_supervision())
+        except Exception as e:
+            print(f"⚠️ Error parando supervisor: {format_exception_for_log(e)}")
 
-    if platform.system() != 'Windows':
-        try:
-            loop = asyncio.get_running_loop()
-            loop.add_signal_handler(
-                signal.SIGINT, lambda: (print("\n🛑 SIGINT recibida"), detener_bot())
-            )
-            loop.add_signal_handler(
-                signal.SIGTERM, lambda: (print("\n🛑 SIGTERM recibida"), detener_bot())
-            )
-        except NotImplementedError:
-            # Algunos entornos (p.ej., ciertos contenedores) no permiten add_signal_handler
-            pass
+        exp = exporter_server
+        exporter_server = None
+        if exp is not None:
+            try:
+                if hasattr(exp, "shutdown"):
+                    exp.shutdown()
+                if hasattr(exp, "server_close"):
+                    exp.server_close()
+            except Exception as e:
+                print(f"⚠️ Error cerrando exporter: {format_exception_for_log(e)}")
 
-    # 5) Bucle de vida y reintentos
-    last_pending: set[asyncio.Task] = set()
-    max_retries = 5
-    retries = 0
-    backoff_base = 5
+        print("👋 Bot finalizado correctamente.")
 
     try:
+        # 1) Arranque del bot
+        try:
+            restore_critical_state()
+            startup = StartupManager()
+            with phase("StartupManager.run"):
+                triple: Tuple[Any, Any, Any] = await _startup_run_with_timeout(startup)
+            if not isinstance(triple, tuple) or len(triple) != 3:
+                raise RuntimeError("StartupManager.run() no devolvió (bot, tarea_bot, config)")
+            bot, tarea_bot, config = triple
+            tarea_bot = _normalize_tarea_bot(tarea_bot)
+            mode_service = _start_mode_service_safe(bot, config)
+        except Exception as e:
+            msg = str(e)
+            if "Storage no disponible" in msg:
+                print(
+                    "❌ Almacenamiento no disponible. "
+                    "Verifica los permisos de escritura en el directorio de datos."
+                )
+            else:
+                print(f"❌ {format_exception_for_log(e)}")
+            traceback.print_exc()
+            return
+
+        # 2) Infraestructura auxiliar (exporter, supervisor, hot-reload)
+        try:
+            exporter_server = iniciar_exporter()
+            await _maybe_await(start_supervision())
+            observer = start_hot_reload(
+                path=Path.cwd(),
+                modules=None,
+                watch_paths=(
+                    "core",
+                    "data_feed",
+                    "indicadores",
+                    "trader_modular.py",
+                    "main.py",
+                ),
+                modular_reload=(
+                    ModularReloadRule(
+                        module="indicadores",
+                        aliases=("indicators",),
+                    ),
+                ),
+            )
+        except Exception:
+            print("❌ Fallo durante la inicialización de infraestructura:")
+            traceback.print_exc()
+            return
+
+        # 3) Notificación de modo y banner
+        if getattr(config, "modo_real", False):
+            print("🟢 Modo REAL activado")
+        else:
+            print("🟡 Modo SIMULADO activado")
+            print(
+                "   Si esperabas REAL: en config/claves.env pon MODO_REAL=true "
+                "(o MODO_OPERATIVO=real), o BOT_ENV=production. "
+                "Sin eso, development usa paper por defecto. "
+                "Si ya tenías REAL y ves esto, revisa desfase de reloj (CLOCK_DRIFT)."
+            )
+
+        mostrar_banner()
+        print(f"🚀 Iniciando bot de trading... Modo real: {getattr(config, 'modo_real', False)}")
+
+        try:
+            notificador = crear_notification_manager_desde_env()
+        except Exception as e:
+            print(f"⚠️ No se pudo crear el notificador: {format_exception_for_log(e)}")
+            notificador = None
+        if bot is not None and hasattr(bot, "notificador"):
+            try:
+                setattr(bot, "notificador", notificador)
+            except Exception:
+                traceback.print_exc()
+
+        if bot is not None:
+            alert_dispatcher = _try_start_alert_dispatcher(bot)
+
+        # 4) Señales/parada
+        stop_event = asyncio.Event()
+        tarea_stop = asyncio.create_task(stop_event.wait())
+
+        def detener_bot():
+            print("\n🛑 Señal de detención recibida (solicitando parada)…")
+            if stop_event is not None:
+                stop_event.set()
+            _safe_call(bot, "solicitar_parada")
+
+        if platform.system() == "Windows":
+
+            def _win_sigint(_signum, _frame):
+                print("\n🛑 SIGINT recibida (Windows); solicitando parada…")
+                if stop_event is not None:
+                    stop_event.set()
+                _safe_call(bot, "solicitar_parada")
+
+            try:
+                signal.signal(signal.SIGINT, _win_sigint)
+            except (ValueError, OSError):
+                pass
+
+        if platform.system() != "Windows":
+            try:
+                loop = asyncio.get_running_loop()
+                loop.add_signal_handler(
+                    signal.SIGINT, lambda: (print("\n🛑 SIGINT recibida"), detener_bot())
+                )
+                loop.add_signal_handler(
+                    signal.SIGTERM, lambda: (print("\n🛑 SIGTERM recibida"), detener_bot())
+                )
+            except NotImplementedError:
+                pass
+
+        # 5) Bucle de vida y reintentos
+        max_retries = 5
+        retries = 0
+        backoff_base = 5
+
         while True:
             if tarea_bot is None:
                 raise RuntimeError("tarea_bot es None tras el arranque")
@@ -334,32 +415,33 @@ async def main():
                 return_when=asyncio.FIRST_COMPLETED,
             )
 
-            # Ruta: terminó la tarea principal del bot
             if tarea_bot in done:
                 exc = tarea_bot.exception()
                 if exc:
-                    print(f'❌ Error en la tarea del bot: {format_exception_for_log(exc)}')
-                    traceback.print_exception(type(exc), exc, exc.__traceback__)
-                    retries += 1
+                    tid = id(tarea_bot)
+                    if last_counted_crash_task_id != tid:
+                        last_counted_crash_task_id = tid
+                        retries += 1
+                        print(f"❌ Error en la tarea del bot: {format_exception_for_log(exc)}")
+                        traceback.print_exception(type(exc), exc, exc.__traceback__)
                     if retries > max_retries:
-                        print('🚨 Número máximo de reintentos alcanzado. Deteniendo bot.')
+                        print("🚨 Número máximo de reintentos alcanzado. Deteniendo bot.")
                         try:
                             if notificador and hasattr(notificador, "enviar"):
                                 notificador.enviar(
-                                    'Bot detenido tras errores consecutivos', 'CRITICAL'
+                                    "Bot detenido tras errores consecutivos", "CRITICAL"
                                 )
                         except Exception:
                             pass
                         break
 
                     delay = min(backoff_base * 2 ** (retries - 1), 300)
-                    print(f'⏳ Reinicio del bot en {delay}s (intento {retries}/{max_retries})')
+                    print(f"⏳ Reinicio del bot en {delay}s (intento {retries}/{max_retries})")
 
-                    # Intentar cerrar bot previo con timeout
-                    await _safe_acall(bot, 'cerrar', timeout=15)
+                    await _safe_acall(bot, "cerrar", timeout=15)
 
                     await asyncio.sleep(delay)
-                    print('🔄 Reiniciando bot…')
+                    print("🔄 Reiniciando bot…")
                     try:
                         if mode_service is not None:
                             await mode_service.stop()
@@ -373,127 +455,44 @@ async def main():
                         startup = StartupManager()
                         triple = await _startup_run_with_timeout(startup)
                         if not isinstance(triple, tuple) or len(triple) != 3:
-                            raise RuntimeError("StartupManager.run() no devolvió (bot, tarea_bot, config)")
-                        bot, tarea_bot, config = triple
-                        if tarea_bot is not None and not isinstance(tarea_bot, asyncio.Task):
-                            if inspect.iscoroutine(tarea_bot):
-                                tarea_bot = asyncio.create_task(tarea_bot)
-                            elif callable(getattr(tarea_bot, "__await__", None)):
-                                tarea_bot = asyncio.create_task(tarea_bot)  # type: ignore
-                            else:
-                                raise RuntimeError("tarea_bot no es Task ni coroutine")
-                        if bot and hasattr(bot, 'notificador'):
-                            setattr(bot, 'notificador', notificador)
-                        try:
-                            if bot is not None and config is not None:
-                                bus = getattr(bot, "event_bus", None) or getattr(bot, "bus", None)
-                                mode_service = OperationalModeService(config=config, trader=bot, event_bus=bus)
-                                mode_service.start()
-                        except Exception as exc:
-                            print(
-                                f"⚠️ No se pudo reiniciar el servicio de modos operativos: {format_exception_for_log(exc)}"
+                            raise RuntimeError(
+                                "StartupManager.run() no devolvió (bot, tarea_bot, config)"
                             )
+                        bot, tarea_bot, config = triple
+                        tarea_bot = _normalize_tarea_bot(tarea_bot)
+                        if bot and hasattr(bot, "notificador"):
+                            setattr(bot, "notificador", notificador)
+                        mode_service = _start_mode_service_safe(bot, config)
                         if bot is not None:
                             alert_dispatcher = _try_start_alert_dispatcher(bot)
                     except Exception as e:
                         print(f"❌ Error reiniciando bot: {format_exception_for_log(e)}")
                         traceback.print_exc()
-                        continue  # reintento contará en la siguiente vuelta
+                        continue
+                    last_counted_crash_task_id = None
                     retries = 0
                     continue
-                else:
-                    print('✅ Bot finalizado sin errores.')
-                    break
+                print("✅ Bot finalizado sin errores.")
+                break
 
-            # Ruta: se solicitó parada (tarea_stop)
-            if tarea_stop in done:
-                _safe_call(bot, 'solicitar_parada')
+            if tarea_stop is not None and tarea_stop in done:
+                _safe_call(bot, "solicitar_parada")
                 break
 
     except asyncio.CancelledError:
-        print('🛑 Cancelación detectada.')
+        print("🛑 Cancelación detectada.")
+        raise
     except KeyboardInterrupt:
-        print('🛑 Interrupción por teclado detectada.')
+        print("🛑 Interrupción por teclado detectada.")
     finally:
-        # Secuencia de apagado ordenada
-        stop_event.set()
-
-        # 1) Pedir parada explícita (si existe)
-        _safe_call(bot, 'solicitar_parada')
-
-        # 2) Dar tiempo a que la tarea principal salga sola
-        try:
-            if tarea_bot and not tarea_bot.done():
-                await asyncio.wait_for(tarea_bot, timeout=10)
-        except Exception:
-            pass  # puede haberse cancelado o terminado ya
-
-        # 3) Cancelar lo que quede pendiente
-        if last_pending:
-            for t in list(last_pending):
-                if not t.done():
-                    t.cancel()
-            try:
-                await asyncio.gather(*last_pending, return_exceptions=True)
-            except Exception:
-                pass
-
-        # 4) Hot-reload
-        try:
-            if observer:
-                stop_hot_reload(observer)
-        except Exception as e:
-            print(f"⚠️ Error deteniendo hot-reload: {format_exception_for_log(e)}")
-
-        if mode_service is not None:
-            try:
-                await mode_service.stop()
-            except Exception as exc:
-                print(
-                    f"⚠️ Error deteniendo servicio de modos: {format_exception_for_log(exc)}"
-                )
-
-        if alert_dispatcher is not None:
-            try:
-                await alert_dispatcher.aclose()
-            except Exception:
-                pass
-            alert_dispatcher = None
-
-        # 4b) Estado crítico en disco (riesgo, etc.) mientras el trader sigue en memoria
-        try:
-            persist_critical_state(reason="shutdown")
-        except Exception:
-            traceback.print_exc()
-
-        # 5) Cierre del bot con timeout
-        await _safe_acall(bot, 'cerrar', timeout=15)
-
-        # 6) Supervisor y exporter con guardas
-        try:
-            await _maybe_await(stop_supervision())
-        except Exception as e:
-            print(f"⚠️ Error parando supervisor: {format_exception_for_log(e)}")
-
-        try:
-            if exporter_server:
-                if hasattr(exporter_server, "shutdown"):
-                    exporter_server.shutdown()
-                if hasattr(exporter_server, "server_close"):
-                    exporter_server.server_close()
-        except Exception as e:
-            print(f"⚠️ Error cerrando exporter: {format_exception_for_log(e)}")
-
-        print('👋 Bot finalizado correctamente.')
+        await shutdown_runtime()
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     try:
         run_with_optional_aiomonitor(main())
     except KeyboardInterrupt:
-        print('\n🛑 Bot detenido manualmente.')
+        print("\n🛑 Bot detenido manualmente.")
     except Exception:
-        print('\n❌ Error inesperado:')
+        print("\n❌ Error inesperado:")
         traceback.print_exc()
-
-

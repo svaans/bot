@@ -127,6 +127,23 @@ def _sim_aplicar_slippage_entrada_salida(
     return float(precio * factor)
 
 
+def _is_short_direction(direccion: str | None) -> bool:
+    d = (direccion or "").lower()
+    return d in ("short", "venta", "sell")
+
+
+def _exchange_side_open_position(direccion: str | None) -> str:
+    """Spot/margen típico: abrir o aumentar long -> ``buy``; short -> ``sell``."""
+
+    return "sell" if _is_short_direction(direccion) else "buy"
+
+
+def _exchange_side_reduce_position(direccion: str | None) -> str:
+    """Reducir long -> ``sell``; cubrir short -> ``buy``."""
+
+    return "buy" if _is_short_direction(direccion) else "sell"
+
+
 class OrderManager:
     """Abstrae la creación y cierre de órdenes.
 
@@ -909,8 +926,9 @@ class OrderManager:
                     log.info(f'🟢 Orden registrada tras reintento para {sym}')
                     if self.bus:
                         estrategias_txt = ', '.join(ord_.estrategias_activas.keys())
+                        etiq = "Venta" if _is_short_direction(getattr(ord_, "direccion", None)) else "Compra"
                         mensaje = (
-                            f"""🟢 Compra {sym}\nPrecio: {ord_.precio_entrada:.2f} Cantidad: {ord_.cantidad_abierta or ord_.cantidad}\nSL: {ord_.stop_loss:.2f} TP: {ord_.take_profit:.2f}\nEstrategias: {estrategias_txt}"""
+                            f"""🟢 {etiq} {sym}\nPrecio: {ord_.precio_entrada:.2f} Cantidad: {ord_.cantidad_abierta or ord_.cantidad}\nSL: {ord_.stop_loss:.2f} TP: {ord_.take_profit:.2f}\nEstrategias: {estrategias_txt}"""
                         )
                         await self.bus.publish(
                             'notify',
@@ -1367,8 +1385,9 @@ class OrderManager:
 
                 if self.bus:
                     estrategias_txt = ', '.join(estrategias.keys())
+                    accion = "Venta" if _is_short_direction(direccion) else "Compra"
                     msg_pendiente = (
-                        f"""📝 Compra creada (pendiente de registro) {symbol}
+                        f"""📝 {accion} creada (pendiente de registro) {symbol}
                         Precio: {precio:.2f} Cantidad: {cantidad}
                         SL: {sl:.2f} TP: {tp:.2f}
                         Estrategias: {estrategias_txt}"""
@@ -1377,13 +1396,14 @@ class OrderManager:
 
                 try:
                     if self.modo_real and is_valid_number(cantidad) and cantidad > 0:
+                        side_open = _exchange_side_open_position(direccion)
                         execution = await self._execute_real_order(
-                            'buy',
+                            side_open,
                             symbol,
                             cantidad,
                             operation_id,
                             {
-                                'side': 'buy',
+                                'side': side_open,
                                 'symbol': symbol,
                                 'cantidad': cantidad,
                                 'precio_senal': precio_senal,
@@ -1403,10 +1423,13 @@ class OrderManager:
                         ):
                             precio_registro = float(fill_px)
                             orden.precio_entrada = precio_registro
-                            orden.max_price = max(
-                                precio_registro,
-                                float(getattr(orden, "max_price", precio_registro) or precio_registro),
+                            prev_ext = float(
+                                getattr(orden, "max_price", precio_registro) or precio_registro
                             )
+                            if _is_short_direction(direccion):
+                                orden.max_price = min(precio_registro, prev_ext)
+                            else:
+                                orden.max_price = max(precio_registro, prev_ext)
                             if orden.entradas and isinstance(orden.entradas[0], dict):
                                 orden.entradas[0]["precio"] = precio_registro
                             orden.precio_ultima_piramide = precio_registro
@@ -1437,7 +1460,7 @@ class OrderManager:
                                 extra=safe_extra(
                                     {
                                         'symbol': symbol,
-                                        'side': 'buy',
+                                        'side': side_open,
                                         'remaining': execution.remaining,
                                         'operation_id': operation_id,
                                     }
@@ -1586,8 +1609,9 @@ class OrderManager:
             log.info(f'🟢 Orden abierta para {symbol} @ {precio:.2f}')
             if self.bus and self.modo_real:
                 estrategias_txt = ', '.join(estrategias.keys())
+                etiq_ok = "Venta" if _is_short_direction(direccion) else "Compra"
                 mensaje = (
-                    f"""🟢 Compra {symbol}\nPrecio: {precio:.2f} Cantidad: {cantidad}\nSL: {sl:.2f} TP: {tp:.2f}\nEstrategias: {estrategias_txt}"""
+                    f"""🟢 {etiq_ok} {symbol}\nPrecio: {precio:.2f} Cantidad: {cantidad}\nSL: {sl:.2f} TP: {tp:.2f}\nEstrategias: {estrategias_txt}"""
                 )
                 await self.bus.publish('notify', {'mensaje': mensaje, 'operation_id': operation_id})
 
@@ -1606,25 +1630,26 @@ class OrderManager:
     async def agregar_parcial_async(self, symbol: str, precio: float, cantidad: float) -> bool:
         lock = self._locks.setdefault(symbol, asyncio.Lock())
         async with lock:
-            """Aumenta la posición abierta agregando una compra parcial."""
+            """Aumenta la posición abierta (long: compra adicional; short: venta adicional)."""
             orden = self.ordenes.get(symbol)
             if not orden:
                 return False
             
             operation_id = self._generar_operation_id(symbol)
             execution: ExecutionResult | None = None
+            side_add = _exchange_side_open_position(getattr(orden, "direccion", None))
 
             if self.modo_real:
                 try:
                     if cantidad > 0:
                         precio_senal_py = float(precio)
                         execution = await self._execute_real_order(
-                            'buy',
+                            side_add,
                             symbol,
                             cantidad,
                             operation_id,
                             {
-                                'side': 'buy',
+                                'side': side_add,
                                 'symbol': symbol,
                                 'cantidad': cantidad,
                                 'precio_senal': precio_senal_py,
@@ -1682,7 +1707,11 @@ class OrderManager:
             else:
                 orden.precio_entrada = px_nueva  # fallback defensivo
 
-            orden.max_price = max(getattr(orden, 'max_price', px_nueva), px_nueva)
+            prev_ext = float(getattr(orden, "max_price", px_nueva) or px_nueva)
+            if _is_short_direction(getattr(orden, "direccion", None)):
+                orden.max_price = min(prev_ext, float(px_nueva))
+            else:
+                orden.max_price = max(prev_ext, float(px_nueva))
             if not getattr(orden, 'entradas', None):
                 orden.entradas = []
             orden.entradas.append({'precio': px_nueva, 'cantidad': cantidad})
@@ -1729,13 +1758,14 @@ class OrderManager:
 
                     if cantidad > 1e-08:
                         try:
+                            side_close = _exchange_side_reduce_position(getattr(orden, "direccion", None))
                             execution = await self._execute_real_order(
-                                'sell',
+                                side_close,
                                 symbol,
                                 cantidad,
                                 operation_id,
                                 {
-                                    'side': 'sell',
+                                    'side': side_close,
                                     'symbol': symbol,
                                     'cantidad': cantidad,
                                     'precio_senal': precio_referencia,
@@ -1868,8 +1898,13 @@ class OrderManager:
                 log.info(f'📤 Orden cerrada para {symbol} @ {precio_cierre_registro:.2f} | {motivo}')
                 if self.bus:
                     if self.modo_real:
+                        accion_cierre = (
+                            "Compra"
+                            if _is_short_direction(getattr(orden, "direccion", None))
+                            else "Venta"
+                        )
                         mensaje = (
-                            f"""📤 Venta {symbol}\nEntrada: {orden.precio_entrada:.2f} Salida: {precio_cierre_registro:.2f}\nRetorno: {retorno * 100:.2f}%\nMotivo: {motivo}"""
+                            f"""📤 {accion_cierre} {symbol}\nEntrada: {orden.precio_entrada:.2f} Salida: {precio_cierre_registro:.2f}\nRetorno: {retorno * 100:.2f}%\nMotivo: {motivo}"""
                         )
                         await self.bus.publish('notify', {'mensaje': mensaje, 'operation_id': operation_id})
                     else:
@@ -1944,13 +1979,14 @@ class OrderManager:
 
                 if self.modo_real:
                     try:
+                        side_pc = _exchange_side_reduce_position(getattr(orden, "direccion", None))
                         execution = await self._execute_real_order(
-                            'sell',
+                            side_pc,
                             symbol,
                             cantidad,
                             operation_id,
                             {
-                                'side': 'sell',
+                                'side': side_pc,
                                 'symbol': symbol,
                                 'cantidad': cantidad,
                                 'precio_senal': precio,

@@ -130,10 +130,28 @@ def verificar_trailing_stop(info: dict, precio_actual: float, df: (pd.DataFrame 
     if atr is None:
         return False, 'ATR no disponible'
     if activacion:
-        trigger_price = entrada + activacion if direccion in ('long', 'compra') else entrada - activacion
+        if is_long:
+            trigger_price = entrada + activacion
+            trailing_armed = max_price >= trigger_price
+        else:
+            trigger_price = entrada - activacion
+            trailing_armed = max_price <= trigger_price
     else:
-        trigger_price = entrada * trailing_start_ratio
-    if max_price >= trigger_price:
+        try:
+            ratio = float(trailing_start_ratio)
+        except (TypeError, ValueError):
+            ratio = 1.0
+        if ratio <= 0:
+            ratio = 1.0
+        if is_long:
+            trigger_price = entrada * ratio
+            trailing_armed = max_price >= trigger_price
+        else:
+            # Short: ``max_price`` acumula el mínimo favorable; activar si el precio
+            # ha bajado al menos ~``ratio`` respecto a la entrada (p. ej. 1.015 → -1.5%).
+            trigger_price = entrada / ratio
+            trailing_armed = max_price <= trigger_price
+    if trailing_armed:
         if usar_atr:
             trailing_dist = atr * atr_mult
         else:
@@ -147,17 +165,21 @@ def verificar_trailing_stop(info: dict, precio_actual: float, df: (pd.DataFrame 
         ratio_fuerte = cfg.get('trailing_senal_fuerte_ratio', 0)
         mult_fuerte = cfg.get('trailing_senal_fuerte_mult', 1.0)
         cond_fuerte = (
-            (direccion in ('long', 'compra') and max_price >= entrada * ratio_fuerte)
-            or (direccion not in ('long', 'compra') and max_price <= entrada / ratio_fuerte if ratio_fuerte else False)
+            (is_long and ratio_fuerte and max_price >= entrada * ratio_fuerte)
+            or (
+                not is_long
+                and ratio_fuerte
+                and max_price <= entrada / ratio_fuerte
+            )
         )
         if ratio_fuerte and cond_fuerte:
             trailing_dist *= mult_fuerte
 
-        trailing_stop = max_price - trailing_dist if direccion in ('long', 'compra') else max_price + trailing_dist
+        trailing_stop = max_price - trailing_dist if is_long else max_price + trailing_dist
         if cfg['uso_trailing_technico'] and df is not None and len(df) >= 5:
             soporte = df['low'].rolling(window=5).min().iloc[-1]
             resistencia = df['high'].rolling(window=5).max().iloc[-1]
-            if direccion in ('long', 'compra'):
+            if is_long:
                 trailing_stop = max(trailing_stop, soporte)
             else:
                 trailing_stop = min(trailing_stop, resistencia)
@@ -166,20 +188,24 @@ def verificar_trailing_stop(info: dict, precio_actual: float, df: (pd.DataFrame 
         if sl_actual is None:
             info['sl_trailing'] = trailing_stop
         else:
-            movimiento = trailing_stop - sl_actual if direccion in ('long', 'compra') else sl_actual - trailing_stop
-            if movimiento >= 2 * tick and ((direccion in ('long', 'compra') and trailing_stop > sl_actual) or (direccion not in ('long', 'compra') and trailing_stop < sl_actual)):
+            movimiento = trailing_stop - sl_actual if is_long else sl_actual - trailing_stop
+            if movimiento >= 2 * tick and (
+                (is_long and trailing_stop > sl_actual)
+                or (not is_long and trailing_stop < sl_actual)
+            ):
                 info['sl_trailing'] = trailing_stop
         sl_usar = info.get('sl_trailing', trailing_stop)
-        if direccion in ('long', 'compra'):
+        extremo = "Máximo" if is_long else "Mínimo"
+        if is_long:
             if precio_actual <= sl_usar:
                 return (True,
-                    f'Trailing Stop activado — Máximo: {max_price:.2f}, Límite: {sl_usar:.2f}, Precio actual: {precio_actual:.2f}'
+                    f'Trailing Stop activado — {extremo}: {max_price:.2f}, Límite: {sl_usar:.2f}, Precio actual: {precio_actual:.2f}'
                     )
         elif precio_actual >= sl_usar:
             return (True,
-                f'Trailing Stop activado — Mínimo: {max_price:.2f}, Límite: {sl_usar:.2f}, Precio actual: {precio_actual:.2f}'
+                f'Trailing Stop activado — {extremo}: {max_price:.2f}, Límite: {sl_usar:.2f}, Precio actual: {precio_actual:.2f}'
                 )
         return (False,
-            f'Trailing supervisando — Máx {max_price:.2f}, Límite {sl_usar:.2f}'
+            f'Trailing supervisando — {extremo} {max_price:.2f}, límite {sl_usar:.2f}'
             )
     return False, ''

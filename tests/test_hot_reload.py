@@ -74,13 +74,13 @@ def patched_timer(monkeypatch):
 
 
 def test_minimal_watch_roots_collapses_nested_paths(tmp_path: Path) -> None:
-    """No vigilar raíz y subcarpeta a la vez: un solo cambio no debe duplicarse."""
+    """Con raíz y subcarpetas explícitas, no colapsar a la raíz: vigilar solo lo pedido."""
     root = tmp_path.resolve()
     core = (tmp_path / "core").resolve()
     data = (tmp_path / "data_feed").resolve()
     (tmp_path / "core").mkdir(exist_ok=True)
     (tmp_path / "data_feed").mkdir(exist_ok=True)
-    assert _minimal_watch_roots([core, root, data]) == [root]
+    assert set(_minimal_watch_roots([core, root, data])) == {core, data}
     nested = core / "strategies"
     nested.mkdir(parents=True)
     assert _minimal_watch_roots([nested, core]) == [core]

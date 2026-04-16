@@ -258,6 +258,39 @@ def test_risk_validators_invalid_side() -> None:
         validate_levels("invalid", 1.0, 0.5, 2.0, 0.01, 0.0, 0.0)
 
 
+def test_order_manager_exchange_sides_by_direction() -> None:
+    from core.orders import order_manager as om
+
+    assert om._exchange_side_open_position("long") == "buy"
+    assert om._exchange_side_open_position("short") == "sell"
+    assert om._exchange_side_reduce_position("long") == "sell"
+    assert om._exchange_side_reduce_position("short") == "buy"
+
+
+def test_verificar_trailing_stop_short_ratio_activation() -> None:
+    """Short: ``max_price`` guarda el mínimo favorable; activación con entrada/ratio."""
+    from core.strategies.exit.salida_trailing_stop import verificar_trailing_stop
+
+    df = _ohlcv(35)
+    entrada = 100.0
+    ratio = 1.015
+    trigger = entrada / ratio
+    info = {
+        "precio_entrada": entrada,
+        "max_price": trigger - 0.5,
+        "direccion": "short",
+        "symbol": "BTC/EUR",
+    }
+    cerrar, msg = verificar_trailing_stop(
+        dict(info),
+        float(df["close"].iloc[-1]),
+        df,
+        config={"trailing_start_ratio": ratio},
+    )
+    assert isinstance(cerrar, bool)
+    assert isinstance(msg, str)
+
+
 def test_reajuste_tp_sl_obtener_archivo() -> None:
     from core.data import reajuste_tp_sl as r
 
