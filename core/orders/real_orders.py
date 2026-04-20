@@ -34,9 +34,8 @@ import time
 import atexit
 import threading
 import asyncio
-import inspect
 from pathlib import Path
-from typing import Any, Awaitable, Callable, Coroutine, Mapping, TypeVar
+from typing import Any, Callable, Mapping
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from datetime import datetime, timezone
 
@@ -49,7 +48,6 @@ from core.utils.utils import configurar_logger, guardar_orden_real
 from core.utils.logger import log_decision
 from core.utils.log_utils import format_exception_for_log
 from core.supervisor import tick
-from . import real_orders
 from core.notification_manager import crear_notification_manager_desde_env
 from core.repo_paths import repo_root, resolve_under_repo
 from core.diag.execution_quality_log import append_ejecucion_mercado
@@ -59,6 +57,15 @@ from config import config as app_config
 from config.config_manager import Config
 import pandas as pd
 import math
+
+from core.orders.real_orders_async import as_coroutine as _as_coroutine
+from core.orders.real_orders_async import resolve_maybe_awaitable as _resolve_maybe_awaitable
+from core.orders.real_orders_async import run_coroutine_sync as _run_coroutine_sync
+from core.orders.real_orders_parse import coerce_open_orders as _coerce_open_orders
+from core.orders.real_orders_parse import coincide_operation_id as _coincide_operation_id
+from core.orders.real_orders_parse import extraer_float as _extraer_float
+from core.orders.real_orders_parse import extraer_valor as _extraer_valor
+
 try:
     from ccxt.base.errors import InsufficientFunds
 except ImportError:
@@ -79,106 +86,6 @@ _CACHE_ORDENES_LOCK = threading.RLock()
 _VENTAS_FALLIDAS: set[str] = set()
 _VENTAS_FALLIDAS_LOCK = threading.Lock()
 _BUFFER_OPERACIONES: list[dict] = []
-
-T = TypeVar("T")
-
-
-def _as_coroutine(awaitable: Awaitable[T]) -> Coroutine[Any, Any, T]:
-    if asyncio.iscoroutine(awaitable):
-        return awaitable  # type: ignore[return-value]
-
-    async def _wrapper() -> T:
-        return await awaitable
-
-    return _wrapper()
-
-
-def _run_coroutine_sync(awaitable: Awaitable[T]) -> T:
-    coro = _as_coroutine(awaitable)
-    try:
-        loop = asyncio.get_running_loop()
-    except RuntimeError:
-        return asyncio.run(coro)
-    if loop.is_running():
-        new_loop = asyncio.new_event_loop()
-        try:
-            return new_loop.run_until_complete(coro)
-        finally:
-            new_loop.close()
-    return loop.run_until_complete(coro)
-
-
-def _resolve_maybe_awaitable(value: Any) -> Any:
-    if inspect.isawaitable(value):
-        return _run_coroutine_sync(value)
-    return value
-
-
-def _coerce_open_orders(value: Any) -> list[dict]:
-    if not value:
-        return []
-    if isinstance(value, list):
-        return value
-    return list(value)
-
-
-def _extraer_valor(mapeo: Mapping[str, Any] | None, claves: tuple[str, ...]) -> Any | None:
-    """Obtiene el primer valor válido encontrado en ``claves`` dentro del mapeo.
-
-    También revisa el campo ``info`` (estilo CCXT) para cubrir más formatos.
-    """
-
-    if not isinstance(mapeo, Mapping):
-        return None
-    for clave in claves:
-        valor = mapeo.get(clave)
-        if valor not in (None, ""):
-            return valor
-    info = mapeo.get('info')
-    if isinstance(info, Mapping):
-        for clave in claves:
-            valor = info.get(clave)
-            if valor not in (None, ""):
-                return valor
-    return None
-
-
-def _extraer_float(mapeo: Mapping[str, Any] | None, claves: tuple[str, ...]) -> float:
-    """Convierte a ``float`` el primer valor encontrado en ``claves``."""
-
-    valor = _extraer_valor(mapeo, claves)
-    try:
-        if valor is None:
-            return 0.0
-        return float(valor)
-    except (TypeError, ValueError):
-        return 0.0
-
-
-def _coincide_operation_id(
-    mapeo: Mapping[str, Any] | None,
-    operation_id: str | None,
-) -> bool:
-    """Comprueba si ``operation_id`` coincide con el identificador de cliente."""
-
-    if not operation_id or not isinstance(mapeo, Mapping):
-        return False
-    candidate = _extraer_valor(
-        mapeo,
-        (
-            'clientOrderId',
-            'origClientOrderId',
-            'clientOrderID',
-            'orderId',
-            'id',
-        ),
-    )
-    if candidate is None:
-        return False
-    try:
-        return str(candidate) == str(operation_id)
-    except Exception:
-        return False
 
 
 def _auditar_operacion_post_error(

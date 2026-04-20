@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import asyncio
-import inspect
 import os
 import random
 import sqlite3
@@ -39,49 +38,26 @@ from core.metrics import (
 	subscribe_order_pnl_metrics,
 )
 from core.registro_metrico import registro_metrico
-from binance_api.cliente import BinanceClient, fetch_balance_async
 from binance_api.ccxt_client import obtener_ccxt as obtener_cliente
 from config import config as app_config
 from core.orders.market_retry_executor import ExecutionResult, MarketRetryExecutor
 from core.orders.order_helpers import coerce_float, coerce_int, lookup_meta
 from core.orders.quantity_resolver import QuantityResolver
+from core.orders.order_manager_helpers import (
+    backtest_slippage_bps as _backtest_slippage_bps,
+    exchange_side_open_position as _exchange_side_open_position,
+    exchange_side_reduce_position as _exchange_side_reduce_position,
+    fetch_balance_non_blocking as _fetch_balance_non_blocking,
+    fmt_exchange_err as _fmt_exchange_err,
+    is_short_direction as _is_short_direction,
+    sim_aplicar_slippage_entrada_salida as _sim_aplicar_slippage_entrada_salida,
+)
+from core.orders import order_manager_abrir, order_manager_execution, order_manager_sync
 
 log = configurar_logger('orders', modo_silencioso=True)
 UTC = timezone.utc
 
 MAX_HISTORIAL_ORDENES = 1000
-
-
-def _fmt_exchange_err(exc: BaseException | None, *, limit: int = 500) -> str:
-    """Acorta mensajes de error (p. ej. CCXT) para logs y notificaciones."""
-
-    return format_exception_for_log(exc, limit)
-
-
-async def _fetch_balance_non_blocking(cliente: Any | None) -> Mapping[str, Any]:
-    """Obtiene el balance evitando bloquear el loop principal."""
-
-    if cliente is None:
-        return await fetch_balance_async(None)
-
-    fetch_balance = getattr(cliente, "fetch_balance", None)
-    if callable(fetch_balance):
-        if inspect.iscoroutinefunction(fetch_balance):
-            return await fetch_balance()
-        resultado = await asyncio.to_thread(fetch_balance)
-        if inspect.isawaitable(resultado):
-            return await resultado
-        return resultado
-
-    fetch_balance_async_attr = getattr(cliente, "fetch_balance_async", None)
-    if callable(fetch_balance_async_attr):
-        return await fetch_balance_async_attr()
-
-    if isinstance(cliente, BinanceClient):
-        return await fetch_balance_async(cliente)
-
-    return {}
-
 
 
 _PERSISTENCE_ERRORS: tuple[type[BaseException], ...] = (OSError,)
@@ -98,56 +74,10 @@ _PERSISTENCE_ERROR_KEYWORDS = (
 )
 
 
-def _backtest_slippage_bps() -> float:
-    try:
-        v = float(os.getenv("BACKTEST_SLIPPAGE_BPS", "0") or 0)
-    except (TypeError, ValueError):
-        return 0.0
-    return max(0.0, v)
-
-
-def _sim_aplicar_slippage_entrada_salida(
-    precio: float,
-    direccion: str,
-    *,
-    es_entrada: bool,
-) -> float:
-    """Ajusta precio en backtest: long compra más caro / vende más barato; short al revés."""
-
-    bps = _backtest_slippage_bps()
-    if bps <= 0 or not is_valid_number(precio) or precio <= 0:
-        return precio
-    k = bps / 10000.0
-    d = (direccion or "long").lower()
-    short = d in ("short", "venta")
-    if not short:
-        factor = (1.0 + k) if es_entrada else (1.0 - k)
-    else:
-        factor = (1.0 - k) if es_entrada else (1.0 + k)
-    return float(precio * factor)
-
-
-def _is_short_direction(direccion: str | None) -> bool:
-    d = (direccion or "").lower()
-    return d in ("short", "venta", "sell")
-
-
-def _exchange_side_open_position(direccion: str | None) -> str:
-    """Spot/margen típico: abrir o aumentar long -> ``buy``; short -> ``sell``."""
-
-    return "sell" if _is_short_direction(direccion) else "buy"
-
-
-def _exchange_side_reduce_position(direccion: str | None) -> str:
-    """Reducir long -> ``sell``; cubrir short -> ``buy``."""
-
-    return "buy" if _is_short_direction(direccion) else "sell"
-
-
 class OrderManager:
     """Abstrae la creación y cierre de órdenes.
 
-    En **modo real**, el bucle ``_sync_loop`` llama a
+    En **modo real**, el bucle de sync (véase :mod:`core.orders.order_manager_sync`) llama a
     :func:`real_orders.reconciliar_ordenes`, que fusiona SQLite con órdenes
     abiertas del exchange. Si la API falla, la reconciliación no modifica el
     estado persistido (solo se registra error). Las métricas
@@ -529,66 +459,9 @@ class OrderManager:
         *,
         precio: float | None = None,
     ) -> ExecutionResult:
-        policy = self._resolve_execution_policy(symbol, side)
-        if policy == "limit" and precio is not None and self._limit_enabled:
-            try:
-                resultado = await asyncio.to_thread(
-                    real_orders.ejecutar_orden_limit,
-                    symbol,
-                    side,
-                    float(precio),
-                    float(cantidad),
-                    operation_id,
-                    self._limit_timeout,
-                    self._limit_offset,
-                    self._limit_max_retry,
-                )
-            except Exception as exc:  # pragma: no cover - defensivo
-                log.error(
-                    "orders.limit_execution.error",
-                    extra=safe_extra(
-                        {
-                            "symbol": symbol,
-                            "side": side,
-                            "reason": _fmt_exchange_err(exc),
-                        }
-                    ),
-                )
-                return ExecutionResult(0.0, 0.0, 0.0, "ERROR", remaining=float(cantidad))
-            executed = float(resultado.get("ejecutado", 0.0))
-            fee = float(resultado.get("fee", 0.0))
-            pnl = float(resultado.get("pnl", 0.0))
-            remaining = float(resultado.get("restante", 0.0))
-            status = str(resultado.get("status") or "FILLED").upper()
-            fill_avg = resultado.get("precio_fill_promedio")
-            try:
-                fill_avg_f = float(fill_avg) if fill_avg is not None else None
-            except (TypeError, ValueError):
-                fill_avg_f = None
-            if fill_avg_f is not None and fill_avg_f <= 0:
-                fill_avg_f = None
-            if remaining > 0:
-                log.warning(
-                    "orders.limit_execution.partial",
-                    extra=safe_extra(
-                        {
-                            "symbol": symbol,
-                            "side": side,
-                            "remaining": remaining,
-                            "operation_id": operation_id,
-                        }
-                    ),
-                )
-            return ExecutionResult(
-                executed,
-                fee,
-                pnl,
-                status,
-                remaining=remaining,
-                precio_fill_promedio=fill_avg_f,
-            )
-
-        return await self._market_executor.ejecutar(side, symbol, cantidad, operation_id, entrada)
+        return await order_manager_execution.execute_real_order(
+            self, side, symbol, cantidad, operation_id, entrada, precio=precio
+        )
 
     def _capital_comprometido(self, orden: Order | None) -> float:
         if orden is None:
@@ -839,149 +712,13 @@ class OrderManager:
             return
         if loop.is_running():
             # Solo arrancamos el loop; dentro se hace un _sync_once inicial.
-            self._sync_task = loop.create_task(self._sync_loop())
+            self._sync_task = loop.create_task(order_manager_sync.run_sync_loop(self))
 
     async def _sync_once(self) -> bool:
-        actuales = set(self.ordenes.keys())
-        try:
-            ordenes_reconciliadas: Dict[str, Order] = await asyncio.to_thread(
-                real_orders.reconciliar_ordenes
-            )
-        except Exception as e:
-            log.error("❌ Error sincronizando órdenes: %s", _fmt_exchange_err(e))
-            registrar_orders_sync_failure(type(e).__name__)
-            return False
-
-        reconciliadas = set(ordenes_reconciliadas.keys())
-        local_only = actuales - reconciliadas
-        exchange_only = reconciliadas - actuales
-
-        if local_only or exchange_only:
-            for sym in local_only:
-                log.warning(f'⚠️ Orden local {sym} ausente en exchange; cerrada.')
-                if self.bus:
-                    await self.bus.publish(
-                        'notify',
-                        {
-                            'mensaje': f'⚠️ Orden local {sym} cerrada por reconciliación',
-                            'tipo': 'WARNING',
-                        },
-                    )
-            for sym in exchange_only:
-                log.warning(f'⚠️ Orden {sym} encontrada en exchange y añadida.')
-                if self.bus:
-                    await self.bus.publish(
-                        'notify',
-                        {
-                            'mensaje': f'🔄 Orden sincronizada desde Binance: {sym}',
-                            'tipo': 'WARNING',
-                        },
-                    )
-            registro_metrico.registrar(
-                'discrepancia_ordenes',
-                {'local': len(local_only), 'exchange': len(exchange_only)},
-                    )
-
-        merged: Dict[str, Order] = {}
-
-        # Actualiza/mezcla las que existen en remoto
-        for sym, remoto in ordenes_reconciliadas.items():
-            local = self.ordenes.get(sym)
-            if local:
-                # Preserva flags locales si aplican
-                setattr(
-                    remoto,
-                    'registro_pendiente',
-                    getattr(local, 'registro_pendiente', False)
-                    or getattr(remoto, 'registro_pendiente', False),
-                )
-                # Si tienes otros campos efímeros, mapéalos aquí
-            merged[sym] = remoto
-
-        self.ordenes = merged
-
-        # Intenta registrar las que quedaron pendientes
-        errores_registro = False
-        for sym, ord_ in list(self.ordenes.items()):
-            if getattr(ord_, 'registro_pendiente', False):
-                self._registro_pendiente_paused.add(sym)
-                registrar_registro_pendiente(sym)
-                try:
-                    await asyncio.to_thread(
-                        real_orders.registrar_orden,
-                        sym,
-                        ord_.precio_entrada,
-                        ord_.cantidad_abierta or ord_.cantidad,
-                        ord_.stop_loss,
-                        ord_.take_profit,
-                        ord_.estrategias_activas,
-                        ord_.tendencia,
-                        ord_.direccion,
-                        ord_.operation_id,
-                    )
-                    ord_.registro_pendiente = False
-                    limpiar_registro_pendiente(sym)
-                    self._registro_pendiente_paused.discard(sym)
-                    registrar_orden('opened')
-                    log.info(f'🟢 Orden registrada tras reintento para {sym}')
-                    if self.bus:
-                        estrategias_txt = ', '.join(ord_.estrategias_activas.keys())
-                        etiq = "Venta" if _is_short_direction(getattr(ord_, "direccion", None)) else "Compra"
-                        mensaje = (
-                            f"""🟢 {etiq} {sym}\nPrecio: {ord_.precio_entrada:.2f} Cantidad: {ord_.cantidad_abierta or ord_.cantidad}\nSL: {ord_.stop_loss:.2f} TP: {ord_.take_profit:.2f}\nEstrategias: {estrategias_txt}"""
-                        )
-                        await self.bus.publish(
-                            'notify',
-                            {
-                                'mensaje': mensaje,
-                                'operation_id': ord_.operation_id,
-                            },
-                        )
-                except Exception as e:
-                    err_t = _fmt_exchange_err(e, limit=400)
-                    log.error("❌ Error registrando orden pendiente %s: %s", sym, err_t)
-                    if self.bus:
-                        await self.bus.publish(
-                            'notify',
-                            {
-                                'mensaje': f"❌ Error registrando orden pendiente {sym}: {err_t}",
-                                'tipo': 'CRITICAL',
-                                'operation_id': ord_.operation_id,
-                            },
-                        )
-                    registrar_orders_sync_failure(type(e).__name__)
-                    errores_registro = True
-
-        if errores_registro:
-            return False
-
-        registrar_orders_sync_success()
-        return True
-
+        return await order_manager_sync.run_sync_once(self)
 
     async def _sync_loop(self) -> None:
-        while True:
-            try:
-                success = await self._sync_once()
-            except asyncio.CancelledError:
-                raise
-            delay = self._compute_next_sync_delay(success)
-            # Evita la sensación de “consola colgada”: tras reconciliar no hay más
-            # mensajes hasta minutos después (sleep largo) mientras el resto del bot sigue en el loop.
-            log.info(
-                "orders.background_sync_idle",
-                extra=safe_extra(
-                    {
-                        "sync_ok": success,
-                        "next_sync_in_sec": round(delay, 1),
-                        "ordenes_en_memoria": len(self.ordenes),
-                    }
-                ),
-            )
-            try:
-                await asyncio.sleep(delay)
-            except asyncio.CancelledError:
-                raise
+        await order_manager_sync.run_sync_loop(self)
 
     async def aclose_background_tasks(self) -> None:
         """Cancela tareas periódicas (flush, reconciliación, sync) y reintentos de registro."""
@@ -1002,20 +739,7 @@ class OrderManager:
 
     def _compute_next_sync_delay(self, success: bool) -> float:
         """Calcula el próximo retardo del loop de sincronización."""
-        if success:
-            self._sync_failures = 0
-            self._sync_interval = self._sync_base_interval
-        else:
-            self._sync_failures += 1
-            next_interval = self._sync_base_interval * (
-                self._sync_backoff_factor ** self._sync_failures
-            )
-            self._sync_interval = min(self._sync_max_interval, next_interval)
-        delay = max(self._sync_min_interval, self._sync_interval)
-        if self._sync_jitter > 0:
-            jitter = random.uniform(-self._sync_jitter, self._sync_jitter)
-            delay *= 1 + jitter
-        return max(self._sync_min_interval, min(delay, self._sync_max_interval))
+        return order_manager_sync.compute_next_sync_delay(self, success)
 
     def _should_schedule_persistence_retry(self, exc: Exception | None) -> bool:
         if not self._registro_retry_enabled or exc is None:
@@ -1150,483 +874,29 @@ class OrderManager:
         candle_close_ts: int | None = None,   # reservado (no usado aquí)
         strategy_version: str | None = None,  # reservado (no usado aquí)
     ) -> OrderOpenStatus:
-        operation_id = self._generar_operation_id(symbol)
-        tick_size_value = float(tick_size or 0.0)
-        step_size_value = float(step_size or 0.0)
-        try:
-            min_dist_pct_value = float(min_dist_pct) if min_dist_pct is not None else 0.0
-        except (TypeError, ValueError):
-            min_dist_pct_value = 0.0
+        return await order_manager_abrir.abrir_async(
+            self,
+            symbol,
+            precio,
+            sl,
+            tp,
+            estrategias,
+            tendencia,
+            direccion=direccion,
+            cantidad=cantidad,
+            puntaje=puntaje,
+            umbral=umbral,
+            score_tecnico=score_tecnico,
+            objetivo=objetivo,
+            fracciones=fracciones,
+            detalles_tecnicos=detalles_tecnicos,
+            tick_size=tick_size,
+            step_size=step_size,
+            min_dist_pct=min_dist_pct,
+            candle_close_ts=candle_close_ts,
+            strategy_version=strategy_version,
+        )
 
-        try:
-            precio, sl, tp = validate_levels(
-                direccion,
-                precio,
-                sl,
-                tp,
-                min_dist_pct_value,
-                tick_size_value,
-                step_size_value,
-            )
-        except LevelValidationError as exc:
-            contexto = dict(exc.context)
-            contexto.update({'symbol': symbol, 'reason': exc.reason})
-            entrada_log = {
-                'symbol': symbol,
-                'precio': contexto.get('entry', precio),
-                'sl': contexto.get('sl', sl),
-                'tp': contexto.get('tp', tp),
-                'cantidad': cantidad,
-            }
-            log.warning(
-                f'⚠️ {symbol}: validación SL/TP fallida ({exc.reason})',
-                extra=contexto,
-            )
-            log_decision(
-                log,
-                'abrir',
-                operation_id,
-                entrada_log,
-                {'niveles_validos': False},
-                'reject',
-                {'reason': 'invalid_levels', 'contexto': contexto},
-            )
-            registrar_orden('rejected')
-            return OrderOpenStatus.FAILED
-        
-        entrada_log = {
-            'symbol': symbol,
-            'precio': precio,
-            'sl': sl,
-            'tp': tp,
-            'cantidad': cantidad,
-        }
-        lock = self._locks.setdefault(symbol, asyncio.Lock())
-        async with lock:
-            # Evitar duplicados si ya se está abriendo o existe localmente
-            if symbol in self.abriendo or symbol in self.ordenes:
-                if symbol not in self._dup_warned:
-                    log.warning(f'⚠️ Orden duplicada evitada para {symbol}')
-                    self._dup_warned.add(symbol)
-                log_decision(
-                    log,
-                    'abrir',
-                    operation_id,
-                    entrada_log,
-                    {'duplicada': True},
-                    'reject',
-                    {'reason': 'duplicate'},
-                )
-                return OrderOpenStatus.FAILED
-            if symbol in self._registro_pendiente_paused:
-                log.warning(
-                    '🚫 Apertura bloqueada para %s por registro pendiente persistente',
-                    symbol,
-                )
-                if self.bus:
-                    await self.bus.publish(
-                        'notify',
-                        {
-                            'mensaje': f'🚫 Apertura bloqueada en {symbol} por registro pendiente',
-                            'tipo': 'WARNING',
-                            'operation_id': operation_id,
-                        },
-                    )
-                registrar_orden('rejected')
-                log_decision(
-                    log,
-                    'abrir',
-                    operation_id,
-                    entrada_log,
-                    {'registro': 'bloqueado'},
-                    'reject',
-                    {'reason': 'registro_pendiente_bloqueado'},
-                )
-                return OrderOpenStatus.FAILED
-            ordenes_api = {}
-            if self.modo_real:
-                reintentos_sync = 3
-                ultimo_error_sync: Exception | None = None
-                for intento in range(1, reintentos_sync + 1):
-                    try:
-                        ordenes_api = await asyncio.to_thread(
-                            real_orders.sincronizar_ordenes_binance,
-                            [symbol],
-                            modo_real=self.modo_real,
-                        )
-                        ultimo_error_sync = None
-                        break
-                    except Exception as e:
-                        ultimo_error_sync = e
-                        log.warning(
-                            '⚠️ Error verificando órdenes abiertas (intento %s/%s) para %s: %s',
-                            intento,
-                            reintentos_sync,
-                            symbol,
-                            _fmt_exchange_err(e, limit=400),
-                        )
-                        if intento < reintentos_sync:
-                            await asyncio.sleep(0.25 * intento)
-                if ultimo_error_sync is not None:
-                    log.error(
-                        "❌ Error verificando órdenes abiertas tras reintentos: %s",
-                        _fmt_exchange_err(ultimo_error_sync),
-                    )
-                    if self.bus:
-                        await self.bus.publish(
-                            'notify',
-                            {
-                                'mensaje': f'⚠️ No se pudo verificar órdenes abiertas en {symbol}',
-                                'tipo': 'WARNING',
-                                'operation_id': operation_id,
-                            },
-                        )
-                    log_decision(
-                        log,
-                        'abrir',
-                        operation_id,
-                        entrada_log,
-                        {'verificacion': 'error'},
-                        'reject',
-                        {'reason': 'sync_error', 'intentos': reintentos_sync},
-                    )
-                    return OrderOpenStatus.FAILED
-                
-            if symbol in ordenes_api:
-                self.ordenes[symbol] = ordenes_api[symbol]
-                if symbol not in self._dup_warned:
-                    log.warning(f'⚠️ Orden duplicada evitada para {symbol}')
-                    self._dup_warned.add(symbol)
-                if self.bus:
-                    await self.bus.publish(
-                        'notify',
-                        {'mensaje': f'⚠️ Orden ya abierta en Binance para {symbol}', 'operation_id': operation_id},
-                    )
-                log_decision(
-                    log,
-                    'abrir',
-                    operation_id,
-                    entrada_log,
-                    {'duplicada': True},
-                    'reject',
-                    {'reason': 'already_open'},
-                )
-                return OrderOpenStatus.FAILED
-            
-            if self.modo_real:
-                try:
-                    cliente = obtener_cliente()
-                    balance = await _fetch_balance_non_blocking(cliente)
-                    quote = symbol.split('/')[1]
-                    free_balances = balance.get('free', {}) if isinstance(balance, Mapping) else {}
-                    if not isinstance(free_balances, Mapping):
-                        free_balances = {}
-                    disponible = float(free_balances.get(quote, 0.0))
-                except Exception as e:
-                    log.error("❌ Error obteniendo balance: %s", _fmt_exchange_err(e))
-                    disponible = 0.0
-                notional = precio * cantidad
-                if not remainder_executable(symbol, precio, cantidad) or notional > disponible:
-                    if self.bus:
-                        await self.bus.publish(
-                            'notify', {'mensaje': 'insuficiente', 'tipo': 'WARNING', 'operation_id': operation_id}
-                        )
-                    registrar_buy_rejected_insufficient_funds()
-                    registrar_orden('rejected')
-                    log_decision(
-                        log,
-                        'abrir',
-                        operation_id,
-                        entrada_log,
-                        {
-                            'saldo_disponible': disponible,
-                            'notional': notional,
-                        },
-                        'reject',
-                        {'reason': 'insufficient_funds'},
-                    )
-                    return OrderOpenStatus.FAILED
-
-            self.abriendo.add(symbol)
-            try:
-                precio_senal = float(precio)
-                if not self.modo_real:
-                    precio = _sim_aplicar_slippage_entrada_salida(
-                        precio, direccion, es_entrada=True
-                    )
-                objetivo = objetivo if objetivo is not None else cantidad
-                orden = Order(
-                    symbol=symbol,
-                    precio_entrada=precio,
-                    cantidad=objetivo,
-                    cantidad_abierta=cantidad,
-                    stop_loss=sl,
-                    take_profit=tp,
-                    estrategias_activas=estrategias,
-                    tendencia=tendencia,
-                    timestamp=datetime.now(UTC).isoformat(),
-                    max_price=precio,
-                    direccion=direccion,
-                    entradas=[{'precio': precio, 'cantidad': cantidad}],
-                    fracciones_totales=fracciones,
-                    fracciones_restantes=max(fracciones - 1, 0),
-                    precio_ultima_piramide=precio,
-                    puntaje_entrada=puntaje,
-                    umbral_entrada=umbral,
-					score_tecnico=score_tecnico,
-                    detalles_tecnicos=detalles_tecnicos,
-                    break_even_activado=False,
-                    duracion_en_velas=0,
-                    registro_pendiente=True,
-                    operation_id=operation_id,
-                )
-                self.ordenes[symbol] = orden
-                precio_para_registro = float(precio)
-
-                if self.bus:
-                    estrategias_txt = ', '.join(estrategias.keys())
-                    accion = "Venta" if _is_short_direction(direccion) else "Compra"
-                    msg_pendiente = (
-                        f"""📝 {accion} creada (pendiente de registro) {symbol}
-                        Precio: {precio:.2f} Cantidad: {cantidad}
-                        SL: {sl:.2f} TP: {tp:.2f}
-                        Estrategias: {estrategias_txt}"""
-                    )
-                    await self.bus.publish('notify', {'mensaje': msg_pendiente, 'operation_id': operation_id})
-
-                try:
-                    if self.modo_real and is_valid_number(cantidad) and cantidad > 0:
-                        side_open = _exchange_side_open_position(direccion)
-                        execution = await self._execute_real_order(
-                            side_open,
-                            symbol,
-                            cantidad,
-                            operation_id,
-                            {
-                                'side': side_open,
-                                'symbol': symbol,
-                                'cantidad': cantidad,
-                                'precio_senal': precio_senal,
-                            },
-							precio=precio_senal,
-                        )
-                        # actualiza con lo realmente ejecutado
-                        cantidad = float(execution.executed)
-                        orden.fee_total = getattr(orden, 'fee_total', 0.0) + execution.fee
-                        self._apply_realized_pnl_delta(symbol, orden, execution.pnl)
-                        precio_registro = precio_senal
-                        fill_px = execution.precio_fill_promedio
-                        if (
-                            fill_px is not None
-                            and is_valid_number(fill_px)
-                            and float(fill_px) > 0
-                        ):
-                            precio_registro = float(fill_px)
-                            orden.precio_entrada = precio_registro
-                            prev_ext = float(
-                                getattr(orden, "max_price", precio_registro) or precio_registro
-                            )
-                            if _is_short_direction(direccion):
-                                orden.max_price = min(precio_registro, prev_ext)
-                            else:
-                                orden.max_price = max(precio_registro, prev_ext)
-                            if orden.entradas and isinstance(orden.entradas[0], dict):
-                                orden.entradas[0]["precio"] = precio_registro
-                            orden.precio_ultima_piramide = precio_registro
-                        if cantidad <= 0:
-                            if self.bus:
-                                await self.bus.publish(
-                                    'notify',
-                                    {
-                                        'mensaje': f'❌ Orden real no ejecutada en {symbol}',
-                                        'tipo': 'CRITICAL',
-                                        'operation_id': operation_id,
-                                    },
-                                )
-                            registrar_orden('rejected')
-                            log_decision(
-                                log,
-                                'abrir',
-                                operation_id,
-                                entrada_log,
-                                {'ejecucion': 'sin_fills'},
-                                'reject',
-                                {'reason': 'no_fills'},
-                            )
-                            return OrderOpenStatus.FAILED
-                        if execution.status == 'PARTIAL' and execution.remaining > 0:
-                            log.warning(
-                                'orders.execution.partial',
-                                extra=safe_extra(
-                                    {
-                                        'symbol': symbol,
-                                        'side': side_open,
-                                        'remaining': execution.remaining,
-                                        'operation_id': operation_id,
-                                    }
-                                ),
-                            )
-                        precio_para_registro = precio_registro
-                    else:
-                        # Simulado: el “coste” inicial lo cargamos como PnL negativo hasta el cierre
-                        self._apply_realized_pnl_delta(symbol, orden, -(precio * cantidad))
-
-                    if cantidad > 0:
-                        if self.modo_real:
-                            registrado = False
-                            last_error: Exception | None = None
-                            for _ in range(3):
-                                try:
-                                    await asyncio.to_thread(
-                                        real_orders.registrar_orden,
-                                        symbol,
-                                        precio_para_registro,
-                                        cantidad,
-                                        sl,
-                                        tp,
-                                        estrategias,
-                                        tendencia,
-                                        direccion,
-                                        operation_id,
-                                    )
-                                    registrado = True
-                                    break
-                                except Exception as e:
-                                    last_error = e
-                                    registrar_registro_error()
-                                    log.error(
-                                        "Error registrando orden",
-                                        extra=safe_extra(
-                                            {
-                                                "symbol": symbol,
-                                                "error": _fmt_exchange_err(e),
-                                            }
-                                        ),
-                                    )
-                            if not registrado:
-                                msg = (
-                                    _fmt_exchange_err(last_error)
-                                    if last_error is not None
-                                    else "Error desconocido"
-                                )
-                                log.error(
-                                    "Error registrando orden",
-                                    extra=safe_extra({"symbol": symbol, "error": msg}),
-                                )
-                                if self.bus:
-                                    await self.bus.publish(
-                                        "notify",
-                                        {
-                                            "mensaje": f"❌ Error registrando orden {symbol}: {msg}",
-                                            "tipo": "CRITICAL",
-                                            "operation_id": operation_id,
-                                        },
-                                    )
-                                if self._should_schedule_persistence_retry(last_error):
-                                    reason_label = type(last_error).__name__ if last_error else 'unknown'
-                                    self._schedule_registro_retry(symbol, reason=reason_label)
-                            await asyncio.sleep(1)
-
-                            if registrado:
-                                orden.registro_pendiente = False
-                                limpiar_registro_pendiente(symbol)
-                                self._registro_pendiente_paused.discard(symbol)
-                            else:
-                                registrar_orden('failed')  # mantenemos etiqueta por compatibilidad
-                                if self.bus:
-                                    await self.bus.publish(
-                                        'notify',
-                                        {
-                                            'mensaje': (
-                                                f'⚠️ Orden {symbol} ejecutada pero registro pendiente; '
-                                                'nuevas entradas pausadas hasta sincronización'
-                                            ),
-											'tipo': 'WARNING',
-											'operation_id': operation_id,
-                                        },
-                                    )
-                                registrar_registro_pendiente(symbol)
-                                self._registro_pendiente_paused.add(symbol)
-
-                            orden.cantidad_abierta = cantidad
-                            orden.entradas[0]['cantidad'] = cantidad
-                        
-                        else:
-                            if self.bus:
-                                await self.bus.publish(
-                                    'orden_simulada_creada',
-                                    {
-                                        'symbol': symbol,
-                                        'precio': precio,
-                                        'cantidad': cantidad,
-                                        'sl': sl,
-                                        'tp': tp,
-                                        'estrategias': estrategias,
-                                        'direccion': direccion,
-                                        'operation_id': operation_id,
-                                        'orden': orden.to_parquet_record(),
-                                    },
-                                )
-                            orden.registro_pendiente = False
-                            limpiar_registro_pendiente(symbol)
-                            self._registro_pendiente_paused.discard(symbol)
-
-                except Exception as e:
-                    err_t = _fmt_exchange_err(e)
-                    log.error("❌ No se pudo abrir la orden para %s: %s", symbol, err_t)
-                    if self.bus:
-                        await self.bus.publish(
-                            "notify",
-                            {
-                                "mensaje": f"❌ Error al abrir orden en {symbol}: {err_t}",
-                                "tipo": "CRITICAL",
-                            },
-                        )
-                    self.ordenes.pop(symbol, None)
-                    limpiar_registro_pendiente(symbol)
-                    self._registro_pendiente_paused.discard(symbol)
-                    registrar_orden('failed')
-                    return OrderOpenStatus.FAILED
-
-            finally:
-                self.abriendo.discard(symbol)
-                self._dup_warned.discard(symbol)
-
-            if orden.registro_pendiente:
-                log.warning(f'⚠️ Orden {symbol} pendiente de registro')
-                log_decision(
-                    log,
-                    'abrir',
-                    operation_id,
-                    entrada_log,
-                    {'registro': 'pendiente'},
-                    'reject',
-                    {'reason': 'registro_pendiente'},
-                )
-                return OrderOpenStatus.PENDING_REGISTRATION
-
-            registrar_orden('opened')
-            log.info(f'🟢 Orden abierta para {symbol} @ {precio:.2f}')
-            if self.bus and self.modo_real:
-                estrategias_txt = ', '.join(estrategias.keys())
-                etiq_ok = "Venta" if _is_short_direction(direccion) else "Compra"
-                mensaje = (
-                    f"""🟢 {etiq_ok} {symbol}\nPrecio: {precio:.2f} Cantidad: {cantidad}\nSL: {sl:.2f} TP: {tp:.2f}\nEstrategias: {estrategias_txt}"""
-                )
-                await self.bus.publish('notify', {'mensaje': mensaje, 'operation_id': operation_id})
-
-            log_decision(
-                log,
-                'abrir',
-                operation_id,
-                entrada_log,
-                {'validaciones': 'ok'},
-                'accept',
-                {'cantidad': cantidad},
-            )
-            self._actualizar_capital_disponible(symbol, orden)
-            return OrderOpenStatus.OPENED
-				
     async def agregar_parcial_async(self, symbol: str, precio: float, cantidad: float) -> bool:
         lock = self._locks.setdefault(symbol, asyncio.Lock())
         async with lock:

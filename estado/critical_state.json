@@ -1,6 +1,6 @@
 {
-  "timestamp": 1776303794.9281554,
-  "reason": "hot_reload",
+  "timestamp": 1776304030.486578,
+  "reason": "shutdown",
   "entries": {
     "risk_manager": {
       "posiciones_abiertas": [],
