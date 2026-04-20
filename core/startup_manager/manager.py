@@ -100,6 +100,12 @@ class StartupManager(
     async def run(self) -> tuple[Trader, asyncio.Task, Config]:
         executed = [self._stop_trader, self._stop_streams]
         try:
+            # Sincronizar el reloj del SO ANTES de abrir cualquier cliente CCXT
+            # o WebSocket. Si se hace más tarde, CCXT ya habría cacheado el
+            # ``timeDifference`` con el reloj viejo y, al saltar el reloj, las
+            # peticiones firmadas fallan con Binance -1021.
+            await self._auto_sync_system_clock()
+
             await self._load_config()
 
             with phase("_bootstrap", extra={"timeout": self.bootstrap_timeout}):

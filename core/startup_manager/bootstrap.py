@@ -59,21 +59,10 @@ class BootstrapMixin:
     async def _enable_strategies(self) -> None:
         assert self.trader is not None and self.config is not None
 
-        if os.getenv("BINANCE_SYNC_SYSTEM_TIME", "").strip().lower() in {"1", "true", "yes", "on"}:
-            from core.utils.binance_time_sync import try_sync_windows_system_time_from_binance
-
-            synced = await asyncio.to_thread(try_sync_windows_system_time_from_binance)
-            if synced:
-                self.log.info(
-                    "Reloj del sistema alineado con la hora UTC de Binance (SetSystemTime)."
-                )
-            else:
-                self.log.warning(
-                    "BINANCE_SYNC_SYSTEM_TIME activo pero no se pudo fijar la hora del SO. "
-                    "El bot debe ejecutarse como administrador en Windows, o lanza manualmente: "
-                    "python -m core.utils.binance_time_sync"
-                )
-
+        # La sincronización del reloj ya se hizo al principio de
+        # ``StartupManager.run`` (antes de crear CCXT / abrir WS) para evitar
+        # que un salto de reloj deje obsoleto el ``timeDifference`` cacheado
+        # por CCXT y dispare Binance -1021. Aquí solo verificamos el drift.
         with phase("_check_clock_drift"):
             clock_ok = await asyncio.wait_for(self._check_clock_drift(), timeout=5)
         if not clock_ok:
@@ -91,7 +80,8 @@ class BootstrapMixin:
                 self.log.error(
                     "Desfase de reloj frente a Binance por encima del umbral; "
                     "se mantiene el modo del .env (CLOCK_DRIFT_FORCE_PAPER no está activo). "
-                    "Sincroniza NTP en Windows, sube CLOCK_DRIFT_MAX_SECONDS o pon "
+                    "Sincroniza NTP en Windows, sube CLOCK_DRIFT_MAX_SECONDS, pon "
+                    "BINANCE_SYNC_SYSTEM_TIME=elevate para auto-elevar, o "
                     "CLOCK_DRIFT_FORCE_PAPER=true para forzar modo papel."
                 )
 
@@ -106,3 +96,84 @@ class BootstrapMixin:
             self.log.debug("Trader sin habilitar_estrategias(); se omite la activación.")
 
         self._snapshot()
+
+    async def _auto_sync_system_clock(self) -> None:
+        """Intenta sincronizar el reloj del SO con la hora UTC de Binance.
+
+        Lee ``BINANCE_SYNC_SYSTEM_TIME`` y delega en
+        :func:`core.utils.binance_time_sync.auto_sync_system_clock_from_binance`.
+        No propaga excepciones: cualquier fallo solo se registra para no abortar
+        el arranque del bot.
+        """
+        try:
+            from core.utils.binance_time_sync import (
+                auto_sync_system_clock_from_binance,
+            )
+
+            outcome = await asyncio.to_thread(auto_sync_system_clock_from_binance)
+        except Exception as exc:  # pragma: no cover - defensivo
+            self.log.debug(
+                "auto_sync_system_clock_from_binance falló: %s", exc, exc_info=True
+            )
+            return
+
+        mode = outcome.get("mode")
+        method = outcome.get("method")
+        synced = bool(outcome.get("synced"))
+
+        if mode == "off":
+            return
+
+        if synced:
+            self.log.info(
+                "Reloj del sistema alineado con la hora UTC de Binance.",
+                extra={"event": "clock.autosync.ok", "clock_sync": outcome},
+            )
+            # Si CCXT ya había cacheado ``timeDifference`` con el reloj viejo,
+            # refrescarlo ahora evita un Binance -1021 en la primera llamada
+            # firmada tras el salto de reloj.
+            await asyncio.to_thread(self._refresh_ccxt_time_difference)
+            return
+
+        if method == "SetSystemTime:requires_admin":
+            self.log.warning(
+                "Sincronización automática omitida: el proceso no es administrador. "
+                "Relanza el bot como admin o define BINANCE_SYNC_SYSTEM_TIME=elevate "
+                "para aceptar un popup UAC en cada arranque.",
+                extra={"event": "clock.autosync.skip", "clock_sync": outcome},
+            )
+            return
+
+        self.log.warning(
+            "No se pudo sincronizar el reloj automáticamente (%s).",
+            method,
+            extra={"event": "clock.autosync.fail", "clock_sync": outcome},
+        )
+
+    def _refresh_ccxt_time_difference(self) -> None:
+        """Refresca el ``timeDifference`` del singleton CCXT si ya existe.
+
+        Tras un salto de reloj del SO, el offset cacheado por CCXT queda
+        obsoleto; si se deja así, Binance responde ``-1021`` en la primera
+        petición firmada. Este helper es no-op si el cliente aún no se ha
+        creado (caso normal cuando la sync se ejecuta al inicio del arranque).
+        """
+        try:
+            from binance_api import ccxt_client as _cc
+        except Exception:
+            return
+        exchange = getattr(_cc, "_EXCHANGE", None)
+        if exchange is None:
+            return
+        try:
+            exchange.load_time_difference()
+            self.log.info(
+                "CCXT.timeDifference refrescado tras sincronización de reloj.",
+                extra={"event": "clock.autosync.ccxt_refresh"},
+            )
+        except Exception as exc:  # pragma: no cover - red externa
+            self.log.debug(
+                "No se pudo refrescar CCXT.timeDifference tras sync: %s",
+                exc,
+                exc_info=True,
+            )

@@ -440,6 +440,85 @@ def test_binance_time_sync_skips_non_windows() -> None:
     assert bts.try_sync_windows_system_time_from_binance() is False
 
 
+def test_binance_time_sync_normalize_mode() -> None:
+    from core.utils import binance_time_sync as bts
+
+    assert bts._normalize_mode(None) == "auto"
+    assert bts._normalize_mode("") == "auto"
+    assert bts._normalize_mode("true") == "auto"
+    assert bts._normalize_mode("on") == "auto"
+    assert bts._normalize_mode("AUTO") == "auto"
+    assert bts._normalize_mode("off") == "off"
+    assert bts._normalize_mode("FALSE") == "off"
+    assert bts._normalize_mode("no") == "off"
+    assert bts._normalize_mode("elevate") == "elevate"
+    assert bts._normalize_mode("UAC") == "elevate"
+    assert bts._normalize_mode("runas") == "elevate"
+
+
+def test_binance_time_sync_auto_off_short_circuits(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from core.utils import binance_time_sync as bts
+
+    called = {"n": 0}
+
+    def _boom(*_a, **_k) -> bool:
+        called["n"] += 1
+        return True
+
+    monkeypatch.setattr(bts, "try_sync_windows_system_time_from_binance", _boom)
+    monkeypatch.setattr(bts, "try_sync_via_w32tm_elevated", _boom)
+    monkeypatch.setattr(bts, "_try_sync_unix", _boom)
+
+    outcome = bts.auto_sync_system_clock_from_binance(mode="off")
+
+    assert outcome["synced"] is False
+    assert outcome["method"] == "skipped"
+    assert outcome["mode"] == "off"
+    assert called["n"] == 0
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="solo Windows")
+def test_binance_time_sync_auto_non_admin_reports_requires_admin(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from core.utils import binance_time_sync as bts
+
+    monkeypatch.setattr(bts, "is_windows_admin", lambda: False)
+    monkeypatch.setattr(
+        bts,
+        "try_sync_windows_system_time_from_binance",
+        lambda *a, **k: False,
+    )
+
+    outcome = bts.auto_sync_system_clock_from_binance(mode="auto")
+
+    assert outcome["synced"] is False
+    assert outcome["method"] == "SetSystemTime:requires_admin"
+    assert outcome["mode"] == "auto"
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="solo Windows")
+def test_binance_time_sync_auto_admin_calls_setsystemtime(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from core.utils import binance_time_sync as bts
+
+    monkeypatch.setattr(bts, "is_windows_admin", lambda: True)
+    monkeypatch.setattr(
+        bts,
+        "try_sync_windows_system_time_from_binance",
+        lambda *a, **k: True,
+    )
+
+    outcome = bts.auto_sync_system_clock_from_binance(mode="auto")
+
+    assert outcome["synced"] is True
+    assert outcome["method"] == "SetSystemTime"
+    assert outcome["elevated"] is True
+
+
 def test_learning_trade_results_reexport() -> None:
     from learning.trade_results_manager import registrar_resultado_trade
 
