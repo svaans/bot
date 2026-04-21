@@ -11,6 +11,7 @@ from typing import Any, Awaitable, Callable, Mapping
 from core.utils.feature_flags import is_flag_enabled
 from core.utils.utils import timestamp_alineado, validar_integridad_velas
 from core.utils.log_utils import format_exception_for_log, safe_extra
+from core.utils.logger import _should_log
 from core.adaptador_dinamico import backfill_ventana
 from ._shared import COMBINED_STREAM_KEY, ConsumerState, log
 from . import events
@@ -426,7 +427,44 @@ async def handle_candle(
     if not candle.get("is_closed", False):
         if metrics_enabled:
             registrar_vela_rechazada(symbol_label, "not_closed", timeframe_label)
+        # --- DIAGNÓSTICO TEMPORAL — REVERTIR ------------------------------
+        # Confirmamos que ``handle_candle`` recibe ticks intra-vela (is_closed=False).
+        # Si NUNCA aparece en logs significa que el WS no está llamando aquí.
+        if not _from_backfill and _should_log(
+            f"df.handle.not_closed:{symbol_label}", every=30.0
+        ):
+            log.info(
+                "df.recv.not_closed",
+                extra=safe_extra(
+                    {
+                        "symbol": symbol_label,
+                        "tf": timeframe_label,
+                        "stage": "DataFeed.handle_candle",
+                    }
+                ),
+            )
+        # ------------------------------------------------------------------
         return
+
+    # --- DIAGNÓSTICO TEMPORAL — REVERTIR ----------------------------------
+    # Log INFO de toda vela cerrada recibida por ``handle_candle`` (excluye
+    # backfill). Bajo volumen (~1/min para 5 símbolos en 5m). Sirve para
+    # confirmar que el WS combinado empuja velas cerradas a este handler.
+    if not _from_backfill:
+        log.info(
+            "df.recv.closed",
+            extra=safe_extra(
+                {
+                    "symbol": symbol_label,
+                    "tf": timeframe_label,
+                    "stage": "DataFeed.handle_candle",
+                    "open_time": candle.get("open_time") or candle.get("openTime"),
+                    "close_time": candle.get("close_time") or candle.get("closeTime"),
+                }
+            ),
+        )
+    # ----------------------------------------------------------------------
+
     ts = candle.get("timestamp")
     if ts is None:
         for key in (
@@ -501,6 +539,28 @@ async def handle_candle(
     if last is not None and ts <= last:
         if metrics_enabled:
             registrar_vela_rechazada(symbol_label, "stale", timeframe_label)
+        # --- DIAGNÓSTICO TEMPORAL — REVERTIR ------------------------------
+        # Tras procesar el caché local ``feed._last_close_ts`` queda en el
+        # último ``open_time`` visto. Si el WS vuelve a mandar la misma vela
+        # o una anterior, se descarta aquí silenciosamente. Sacarlo a INFO
+        # nos permite ver si velas NUEVAS del WS también caen como stale
+        # (lo que indicaría un bug de ``_maybe_run_backfill_window`` o de
+        # actualización prematura de ``_last_close_ts``).
+        if not _from_backfill:
+            log.info(
+                "df.recv.stale",
+                extra=safe_extra(
+                    {
+                        "symbol": symbol_label,
+                        "tf": timeframe_label,
+                        "stage": "DataFeed.handle_candle",
+                        "incoming_ts": ts,
+                        "last_ts": last,
+                        "gap_ms": int(last) - int(ts),
+                    }
+                ),
+            )
+        # ------------------------------------------------------------------
         return
 
     maybe_attach_spread = getattr(feed, "_maybe_attach_spread", None)
@@ -694,6 +754,29 @@ async def consumer_loop(feed: "DataFeed", symbol: str) -> None:
                     }
                 ),
             )
+        # --- DIAGNÓSTICO TEMPORAL — REVERTIR ------------------------------
+        # Log de toda vela dequeued. Sirve para confirmar que hay tráfico
+        # entre queue y handler (complementa ``procesar_vela.attempt`` del
+        # trader: si vemos esto y NO vemos attempt, el problema está en la
+        # llamada al handler; si no vemos esto, la vela no se encoló).
+        else:
+            log.info(
+                "consumer.recv",
+                extra=safe_extra(
+                    {
+                        "symbol": symbol,
+                        "tf": feed.intervalo,
+                        "stage": "DataFeed._consumer",
+                        "timestamp": (
+                            candle.get("timestamp")
+                            or candle.get("close_time")
+                            or candle.get("open_time")
+                        ),
+                        "queue_size_after_get": queue.qsize(),
+                    }
+                ),
+            )
+        # ------------------------------------------------------------------
         sym = str(candle.get("symbol") or symbol).upper()
         ts = candle.get("timestamp") or candle.get("close_time") or candle.get("open_time")
         timeframe = candle.get("timeframe") or candle.get("interval") or candle.get("tf")

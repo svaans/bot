@@ -489,6 +489,25 @@ async def _escuchar_velas_combinado_real(
                     "close_time": candle.get("close_time"),
                 },
             )
+        # --- DIAGNÓSTICO TEMPORAL — REVERTIR ------------------------------
+        # Log INFO de TODA vela cerrada dispatchada (no solo la primera).
+        # Volumen bajo: ~1/min para 5 símbolos en 5m. Permite comparar con
+        # ``df.recv.closed`` en el DataFeed: si la vela se loguea aquí pero
+        # no llega a ``df.recv.closed`` es un problema de propagación del
+        # handler; si llega a ``df.recv.closed`` pero no pasa de ``stale``
+        # es un bug de ``_last_close_ts``/backfill_window.
+        logger.info(
+            "ws.closed_candle",
+            extra={
+                "event": "ws.closed_candle",
+                "symbol": symbol,
+                "stream": stream_name,
+                "interval": interval,
+                "open_time": candle.get("open_time"),
+                "close_time": candle.get("close_time"),
+            },
+        )
+        # ------------------------------------------------------------------
         await dispatch(symbol, candle)
 
     await _consume_ws_stream(

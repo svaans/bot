@@ -233,9 +233,11 @@ def _set_minimum_level(logger_name: str, min_level: int) -> None:
 # vaciar estos sets (o borrarlos) y dejar que el operador controle el detalle
 # por entorno.
 # ---------------------------------------------------------------------------
+# Nota: no incluir ``binance_api.websocket`` aquí: ``_configure_noisy_loggers``
+# debe poder elevarlo a INFO (tests + menos ruido). Para DEBUG puntual usar
+# ``DEBUG_LOGGERS=binance_api.websocket`` o ``BOT_LOG_LEVEL=DEBUG``.
 _DEBUG_DIAG_DEFAULT: set[str] = {
     "datafeed",
-    "binance_api.websocket",
     "procesar_vela",
 }
 _UNSILENCE_DIAG_DEFAULT: set[str] = {
@@ -336,6 +338,18 @@ def configurar_logger(nombre: str, *, modo_silencioso: bool | None = None, nivel
         modo_silencioso = False
     if modo_silencioso:
         logger.setLevel(max(logger.level, logging.WARNING))
+    # Override DEBUG aplicado DESPUÉS del resto: si el operador pidió este
+    # logger en ``DEBUG_LOGGERS`` (o está en ``_DEBUG_DIAG_DEFAULT``) debe
+    # quedar en DEBUG independientemente de lo que haga el módulo cliente.
+    # Sin esto, cada ``configurar_logger(...)`` recién importado resetea al
+    # nivel base (``BOT_LOG_LEVEL``) y el override inicial se pierde.
+    if nombre in _debug_loggers_override():
+        logger.setLevel(logging.DEBUG)
+        for handler in logger.handlers:
+            try:
+                handler.setLevel(logging.DEBUG)
+            except Exception:
+                continue
     return logger
 
 
