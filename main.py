@@ -71,6 +71,12 @@ from core.startup_manager import StartupManager
 from core.metrics import iniciar_exporter
 from core.state import persist_critical_state, restore_critical_state
 from core.utils.log_utils import format_exception_for_log
+from core.utils.pid_lock import (
+    PidLock,
+    PidLockError,
+    acquire_pid_lock,
+    release_pid_lock,
+)
 
 _log = configurar_logger("entrypoint")
 
@@ -252,10 +258,11 @@ async def main():
     last_pending: set[asyncio.Task] = set()
     notificador: Any = None
     last_counted_crash_task_id: Optional[int] = None
+    pid_lock: Optional[PidLock] = None
 
     async def shutdown_runtime() -> None:
         """Apagado idempotente: se ejecuta siempre al salir de ``main()``."""
-        nonlocal observer, exporter_server, mode_service, alert_dispatcher
+        nonlocal observer, exporter_server, mode_service, alert_dispatcher, pid_lock
 
         if stop_event is not None and not stop_event.is_set():
             stop_event.set()
@@ -334,9 +341,27 @@ async def main():
             except Exception as e:
                 _log.warning("Error cerrando exporter: %s", format_exception_for_log(e))
 
+        if pid_lock is not None:
+            try:
+                release_pid_lock(pid_lock)
+            except Exception as e:  # pragma: no cover - best effort
+                _log.debug(
+                    "Fallo liberando PID lock: %s", format_exception_for_log(e)
+                )
+            pid_lock = None
+
         _log.info("Apagado del entrypoint completado")
 
     try:
+        # 0) Lock exclusivo de instancia: evita dos ``python main.py`` pisándose.
+        # Si ya hay otra vivo, abortamos antes de tocar ccxt, DB o WS.
+        try:
+            pid_lock = acquire_pid_lock()
+        except PidLockError as exc:
+            print(f"❌ {exc}")
+            _log.error("PID lock rechazado: %s", exc)
+            return
+
         # 1) Arranque del bot
         try:
             restore_critical_state()
@@ -364,23 +389,64 @@ async def main():
         try:
             exporter_server = iniciar_exporter()
             await _maybe_await(start_supervision())
-            observer = start_hot_reload(
-                path=Path.cwd(),
-                modules=None,
-                watch_paths=(
-                    "core",
-                    "data_feed",
-                    "indicadores",
-                    "trader_modular.py",
-                    "main.py",
-                ),
-                modular_reload=(
-                    ModularReloadRule(
-                        module="indicadores",
-                        aliases=("indicators",),
+
+            # Hot reload: solo tiene sentido en desarrollo. En modo REAL un
+            # reinicio espurio (por indexador del IDE, antivirus, sincronización
+            # OneDrive, etc. tocando archivos aunque no los hayas editado) puede
+            # dejar órdenes huérfanas o duplicadas. Por eso lo desactivamos por
+            # defecto cuando ``modo_real`` está activo; el usuario puede forzarlo
+            # con ``HOT_RELOAD_ENABLED=true`` si sabe lo que hace.
+            hr_env = os.environ.get("HOT_RELOAD_ENABLED", "").strip().lower()
+            if hr_env in ("1", "true", "yes", "on"):
+                hot_reload_enabled = True
+            elif hr_env in ("0", "false", "no", "off"):
+                hot_reload_enabled = False
+            else:
+                hot_reload_enabled = not bool(getattr(config, "modo_real", False))
+
+            if hot_reload_enabled:
+                observer = start_hot_reload(
+                    path=Path.cwd(),
+                    modules=None,
+                    watch_paths=(
+                        "core",
+                        "data_feed",
+                        "indicadores",
+                        "trader_modular.py",
+                        "main.py",
                     ),
-                ),
-            )
+                    # ``startup_manager`` requiere reconstruir el manager entero
+                    # (importlib.reload no basta). Los archivos de arranque
+                    # ``binance_time_sync.py`` y ``pid_lock.py`` también se
+                    # ejecutan solo al inicio, así que un hot reload en ellos
+                    # provoca reinicio completo y reconexión WS a Binance: no
+                    # compensa. Además hemos visto eventos espurios del watcher
+                    # de Windows sobre estos ficheros cuando el IDE/antivirus
+                    # los abre para indexar, provocando reinicios inesperados.
+                    exclude=(
+                        "startup_manager",
+                        "binance_time_sync.py",
+                        "pid_lock.py",
+                    ),
+                    modular_reload=(
+                        ModularReloadRule(
+                            module="indicadores",
+                            aliases=("indicators",),
+                        ),
+                    ),
+                )
+            else:
+                observer = None
+                reason = (
+                    "HOT_RELOAD_ENABLED=false"
+                    if hr_env in ("0", "false", "no", "off")
+                    else "modo_real=True"
+                )
+                _log.info(
+                    "Hot reload desactivado (%s). Reinicia el bot manualmente"
+                    " tras editar código.",
+                    reason,
+                )
         except Exception:
             print("❌ Fallo durante la inicialización de infraestructura:")
             traceback.print_exc()

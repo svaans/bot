@@ -223,6 +223,47 @@ def _set_minimum_level(logger_name: str, min_level: int) -> None:
         logger.setLevel(min_level)
 
 
+# ---------------------------------------------------------------------------
+# BLOQUE DE DIAGNÓSTICO TEMPORAL — REVERTIR CUANDO TERMINE LA DEPURACIÓN.
+#
+# Durante la fase actual de auditoría del flujo de ejecución del bot queremos
+# ver en consola sin tener que exportar variables de entorno desde la shell.
+# Los sets siguientes se SUMAN a lo que venga por env var (``DEBUG_LOGGERS`` /
+# ``UNSILENCE_LOGGERS``). Para volver al comportamiento normal basta con
+# vaciar estos sets (o borrarlos) y dejar que el operador controle el detalle
+# por entorno.
+# ---------------------------------------------------------------------------
+_DEBUG_DIAG_DEFAULT: set[str] = {
+    "datafeed",
+    "binance_api.websocket",
+    "procesar_vela",
+}
+_UNSILENCE_DIAG_DEFAULT: set[str] = {
+    "orders",
+    "engine",
+    "entry_verifier",
+    "risk",
+    "capital_manager",
+    "entradas",
+    "filtro_entradas",
+}
+# ---------------------------------------------------------------------------
+
+
+def _debug_loggers_override() -> set[str]:
+    """Loggers que el operador quiere forzar a DEBUG (env ``DEBUG_LOGGERS``).
+
+    Útil para depurar puntualmente (p. ej. ``DEBUG_LOGGERS=binance_api.websocket,datafeed``)
+    sin tener que bajar todo el runtime con ``BOT_LOG_LEVEL=DEBUG`` (que inunda
+    la consola con ruido de terceros). También se fusiona con
+    ``_DEBUG_DIAG_DEFAULT`` mientras dure el bloque de diagnóstico temporal.
+    """
+
+    raw = os.getenv("DEBUG_LOGGERS", "") or ""
+    env_set = {item.strip() for item in raw.split(",") if item.strip()}
+    return env_set | _DEBUG_DIAG_DEFAULT
+
+
 def _configure_noisy_loggers() -> None:
     """Ajusta loggers ruidosos de terceros para no quedar por debajo de la consola."""
 
@@ -232,11 +273,39 @@ def _configure_noisy_loggers() -> None:
         "websockets.protocol": floor,
         "binance_api.websocket": floor,
     }
+    overrides = _debug_loggers_override()
     for name, min_level in noisy_loggers.items():
+        if name in overrides:
+            logging.getLogger(name).setLevel(logging.DEBUG)
+            continue
         _set_minimum_level(name, min_level)
+
+    # Loggers explícitamente pedidos en DEBUG aunque no estén en la lista de ruidosos.
+    for name in overrides:
+        if name in noisy_loggers:
+            continue
+        logging.getLogger(name).setLevel(logging.DEBUG)
 
 
 _configure_noisy_loggers()
+
+
+def _unsilence_loggers_override() -> set[str]:
+    """Loggers para los que se ignora ``modo_silencioso=True`` (env ``UNSILENCE_LOGGERS``).
+
+    Permite reactivar a INFO loggers de componentes que por defecto están
+    silenciados (``orders``, ``engine``, ``entry_verifier``, …) sin tocar los
+    archivos donde se crean. Uso típico para diagnóstico:
+
+        UNSILENCE_LOGGERS=orders,engine,entry_verifier python main.py
+
+    Mientras dure el bloque de diagnóstico temporal también se fusiona con
+    ``_UNSILENCE_DIAG_DEFAULT`` para no depender de variables de entorno.
+    """
+
+    raw = os.getenv("UNSILENCE_LOGGERS", "") or ""
+    env_set = {item.strip() for item in raw.split(",") if item.strip()}
+    return env_set | _UNSILENCE_DIAG_DEFAULT
 
 
 def configurar_logger(nombre: str, *, modo_silencioso: bool | None = None, nivel: int | None = None) -> logging.Logger:
@@ -261,6 +330,10 @@ def configurar_logger(nombre: str, *, modo_silencioso: bool | None = None, nivel
         logger.setLevel(nivel)
     if modo_silencioso is None:
         modo_silencioso = os.getenv("BOT_SILENT_LOGGERS", "").lower() in {"1", "true", "yes"}
+    # Escape de diagnóstico: si el operador pide un logger en ``UNSILENCE_LOGGERS``
+    # ignoramos cualquier ``modo_silencioso=True`` hardcoded en el módulo cliente.
+    if modo_silencioso and nombre in _unsilence_loggers_override():
+        modo_silencioso = False
     if modo_silencioso:
         logger.setLevel(max(logger.level, logging.WARNING))
     return logger

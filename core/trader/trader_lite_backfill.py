@@ -25,7 +25,7 @@ from core.utils.timeframes import tf_to_ms
 from core.utils.utils import configurar_logger
 
 
-log = configurar_logger("trader_modular", modo_silencioso=True)
+log = configurar_logger("trader_modular")
 
 
 class TraderLiteBackfillMixin:

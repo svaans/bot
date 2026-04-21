@@ -669,8 +669,31 @@ async def consumer_loop(feed: "DataFeed", symbol: str) -> None:
         extra=safe_extra({"symbol": symbol, "tf": feed.intervalo, "stage": "DataFeed._consumer"}),
     )
 
+    # Diagnóstico: confirma que el consumidor recibe la PRIMERA vela real de
+    # la cola. Es el punto en el que el pipeline WS -> queue -> handler deja
+    # de ser teórico; si nunca se emite, o bien no llegan velas cerradas, o
+    # la cola está en otra instancia (bug de reentrada en ``escuchar``).
+    first_candle_logged = False
+
     while feed._running:
         candle = await queue.get()
+        if not first_candle_logged:
+            first_candle_logged = True
+            log.info(
+                "consumer.first_candle",
+                extra=safe_extra(
+                    {
+                        "symbol": symbol,
+                        "tf": feed.intervalo,
+                        "stage": "DataFeed._consumer",
+                        "timestamp": (
+                            candle.get("timestamp")
+                            or candle.get("close_time")
+                            or candle.get("open_time")
+                        ),
+                    }
+                ),
+            )
         sym = str(candle.get("symbol") or symbol).upper()
         ts = candle.get("timestamp") or candle.get("close_time") or candle.get("open_time")
         timeframe = candle.get("timeframe") or candle.get("interval") or candle.get("tf")

@@ -141,7 +141,7 @@ async def test_schedule_registro_retry_on_persistence_failure(monkeypatch: pytes
         metric_calls.append((sym, reason))
 
     monkeypatch.setattr(
-        "core.orders.order_manager.registrar_orders_retry_scheduled",
+        "core.orders.order_manager_registro_retry.registrar_orders_retry_scheduled",
         fake_registrar_metric,
     )
 
@@ -157,10 +157,13 @@ async def test_schedule_registro_retry_on_persistence_failure(monkeypatch: pytes
         return func(*args, **kwargs)
 
     monkeypatch.setattr(
-        "core.orders.order_manager.real_orders.registrar_orden",
+        "core.orders.real_orders.registrar_orden",
         fake_registrar_orden,
     )
-    monkeypatch.setattr("core.orders.order_manager.asyncio.to_thread", fake_to_thread)
+    monkeypatch.setattr(
+        "core.orders.order_manager_registro_retry.asyncio.to_thread",
+        fake_to_thread,
+    )
 
     order = types.SimpleNamespace(
         precio_entrada=1.0,
@@ -250,7 +253,10 @@ async def test_cerrar_parcial_no_fill_reenqueues_without_side_effects(
     def fake_registrar_orden(*_args: Any, **_kwargs: Any) -> None:
         registrar_calls.append('called')
 
-    monkeypatch.setattr(order_manager_module, 'registrar_orden', fake_registrar_orden)
+    monkeypatch.setattr(
+        "core.orders.order_manager_cerrar.registrar_orden",
+        fake_registrar_orden,
+    )
 
     capital_updates: list[tuple[Any, Any]] = []
 

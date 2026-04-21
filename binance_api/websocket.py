@@ -444,6 +444,12 @@ async def _escuchar_velas_combinado_real(
             if asyncio.iscoroutine(result):
                 await result
 
+    # Diagnóstico: deja traza INFO de la PRIMERA vela cerrada dispatchada por
+    # símbolo. Permite verificar en producción que el pipeline WS -> trader se
+    # activa realmente tras ``binance_ws_connected`` sin tener que subir todo a
+    # DEBUG. El set vive en el closure del consumidor combinado.
+    first_closed_seen: set[str] = set()
+
     async def process_combined(payload: Dict[str, Any]) -> None:
         stream_name = str(payload.get("stream") or "")
         data = payload.get("data", {})
@@ -471,6 +477,18 @@ async def _escuchar_velas_combinado_real(
         symbol = str(kline.get("s") or stream_name.split("@", 1)[0]).upper()
         candle.setdefault("stream", stream_name)
         _log_parsed(stream_name, data.get("e"), candle)
+        if symbol not in first_closed_seen:
+            first_closed_seen.add(symbol)
+            logger.info(
+                "ws.first_closed_candle",
+                extra={
+                    "event": "ws.first_closed_candle",
+                    "symbol": symbol,
+                    "stream": stream_name,
+                    "interval": interval,
+                    "close_time": candle.get("close_time"),
+                },
+            )
         await dispatch(symbol, candle)
 
     await _consume_ws_stream(
@@ -501,6 +519,11 @@ async def _consume_ws_stream(
                     extra={"event": "binance_ws_connected", "url": url},
                 )
                 backoff = 1.0
+                # Diagnóstico: contador de frames recibidos en esta sesión WS.
+                # Permite confirmar tráfico en vivo con una traza INFA cada
+                # ``frames_log_every`` mensajes, sin bajar el resto a DEBUG.
+                frames_received = 0
+                frames_log_every = 100
                 while True:
                     try:
                         raw = await asyncio.wait_for(ws.recv(), timeout=inactivity)
@@ -508,6 +531,16 @@ async def _consume_ws_stream(
                         raise InactividadTimeoutError(
                             f"Sin mensajes de Binance en {inactivity}s"
                         ) from exc
+                    frames_received += 1
+                    if frames_received == 1 or frames_received % frames_log_every == 0:
+                        logger.info(
+                            "ws.frames.progress",
+                            extra={
+                                "event": "ws.frames.progress",
+                                "url": url,
+                                "frames": frames_received,
+                            },
+                        )
                     preview: str
                     if isinstance(raw, bytes):
                         preview = raw[:64].decode("utf-8", "ignore")

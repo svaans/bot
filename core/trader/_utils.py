@@ -27,7 +27,7 @@ __all__ = [
 ]
 
 
-log = configurar_logger("trader_modular", modo_silencioso=True)
+log = configurar_logger("trader_modular")
 
 
 def _is_awaitable(x: Any) -> bool:

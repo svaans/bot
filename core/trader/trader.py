@@ -42,7 +42,7 @@ if TYPE_CHECKING:  # pragma: no cover
 
 
 UTC = timezone.utc
-log = configurar_logger("trader_modular", modo_silencioso=True)
+log = configurar_logger("trader_modular")
 
 
 class HistorialPorSimbolo(MutableMapping[str, Any]):

@@ -21,7 +21,7 @@ from core.utils.utils import configurar_logger
 from ._utils import _normalize_timestamp, _reason_none, tf_seconds
 
 
-log = configurar_logger("trader_modular", modo_silencioso=True)
+log = configurar_logger("trader_modular")
 
 
 class TraderLiteProcessingMixin:
@@ -737,6 +737,17 @@ class TraderLiteProcessingMixin:
                 )
 
     def _resolve_min_bars_requirement(self) -> int:
+        # ATENCIÓN: el fallback es 0 a propósito. El ``estado.buffer`` que
+        # mide este gate (``buffer_len_after`` en ``_update_estado_con_candle``)
+        # se alimenta sólo con las velas que circulan por el consumer del
+        # DataFeed — no incluye las velas del backfill, que viven en el
+        # ``BufferManager`` del pipeline. Elevar este valor a ``DEFAULT_MIN_BARS``
+        # (400) haría que el trader entrase en warmup durante ~33h con
+        # velas de 5m antes de invocar al pipeline. El gate real sobre el
+        # tamaño de buffer ocurre en ``core.vela.pipeline_procesar`` con
+        # ``_resolve_min_bars``, que sí mira ``len(df)`` del BufferManager.
+        # Si quieres imponer un mínimo local en el trader, fíjalo por
+        # config (``min_bars`` / ``min_velas`` / ``min_buffer_candles``).
         candidatos: List[Any] = [getattr(self, "min_bars", None)]
         cfg = getattr(self, "config", None)
         if cfg is not None:

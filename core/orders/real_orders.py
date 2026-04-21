@@ -4,9 +4,13 @@ El archivo Parquet se protege de escrituras concurrentes entre procesos
 Las órdenes se almacenan en una pequeña base SQLite para facilitar la
 persistencia entre reinicios del bot.
 
-⚠️ **Estado global**: este módulo utiliza cachés y buffers globales como
-``_CACHE_ORDENES`` o ``_BUFFER_OPERACIONES``. El caché SQLite en memoria se
-serializa con ``_CACHE_ORDENES_LOCK`` entre hilos; sigue siendo una sola
+⚠️ **Estado global**: cachés como ``_CACHE_ORDENES``; buffer de operaciones en
+:mod:`core.orders.real_orders_operaciones`; reconciliación/exchange en
+:mod:`core.orders.real_orders_reconcile`; ejecución mercado/límite en
+:mod:`core.orders.real_orders_execution`; métricas por ``operation_id`` en
+:mod:`core.orders.real_orders_metrics`; auditoría post-error en
+:mod:`core.orders.real_orders_audit`. El caché SQLite en memoria se serializa con
+``_CACHE_ORDENES_LOCK`` entre hilos; sigue siendo una sola
 instancia del bot por proceso. Si se desean ejecutar múltiples bots o tests
 concurrentes en el mismo proceso, se recomienda encapsular este estado en una
 clase o crear instancias independientes.
@@ -27,7 +31,6 @@ Variables de entorno relevantes:
 - ``EXECUTION_QUALITY_LOG_*``: ver :mod:`core.diag.execution_quality_log` (log de fills/slippage).
 """
 import os
-import copy
 import json
 import sqlite3
 import time
@@ -36,35 +39,33 @@ import threading
 import asyncio
 from pathlib import Path
 from typing import Any, Callable, Mapping
-from concurrent.futures import ProcessPoolExecutor, as_completed
 from datetime import datetime, timezone
 
 UTC = timezone.utc
-from binance_api.ccxt_client import binance_spot_client_order_id, obtener_ccxt as obtener_cliente
+from binance_api.ccxt_client import obtener_ccxt as obtener_cliente
 from binance_api.filters import get_symbol_filters
-from .order_model import Order, normalizar_precio_cantidad
-from .order_helpers import extract_ccxt_operation_id
+from .order_model import Order
+from core.orders.real_orders_parse import coerce_open_orders as _coerce_open_orders
+from core.orders.real_orders_parse import coincide_operation_id as _coincide_operation_id
+from core.orders.real_orders_parse import extraer_float as _extraer_float
+from core.orders.real_orders_parse import extraer_valor as _extraer_valor
 from core.utils.utils import configurar_logger, guardar_orden_real
 from core.utils.logger import log_decision
 from core.utils.log_utils import format_exception_for_log
 from core.supervisor import tick
 from core.notification_manager import crear_notification_manager_desde_env
 from core.repo_paths import repo_root, resolve_under_repo
-from core.diag.execution_quality_log import append_ejecucion_mercado
-from core.adaptador_dinamico import calcular_tp_sl_adaptativos
-from config.exit_defaults import load_exit_config
-from config import config as app_config
 from config.config_manager import Config
-import pandas as pd
-import math
+from core.orders import real_orders_audit
+from core.orders import real_orders_execution
+from core.orders import real_orders_metrics
+from core.orders import real_orders_operaciones
+from core.orders import real_orders_reconcile
+from core.orders import real_orders_sqlite
 
-from core.orders.real_orders_async import as_coroutine as _as_coroutine
-from core.orders.real_orders_async import resolve_maybe_awaitable as _resolve_maybe_awaitable
-from core.orders.real_orders_async import run_coroutine_sync as _run_coroutine_sync
-from core.orders.real_orders_parse import coerce_open_orders as _coerce_open_orders
-from core.orders.real_orders_parse import coincide_operation_id as _coincide_operation_id
-from core.orders.real_orders_parse import extraer_float as _extraer_float
-from core.orders.real_orders_parse import extraer_valor as _extraer_valor
+# Compat tests / introspección: mismo buffer y troceo que en ``real_orders_operaciones``.
+_chunked = real_orders_operaciones._chunked
+_BUFFER_OPERACIONES = real_orders_operaciones._BUFFER_OPERACIONES
 
 try:
     from ccxt.base.errors import InsufficientFunds
@@ -85,87 +86,6 @@ _CACHE_ORDENES: dict[str, Order] | None = None
 _CACHE_ORDENES_LOCK = threading.RLock()
 _VENTAS_FALLIDAS: set[str] = set()
 _VENTAS_FALLIDAS_LOCK = threading.Lock()
-_BUFFER_OPERACIONES: list[dict] = []
-
-
-def _auditar_operacion_post_error(
-    cliente: Any,
-    symbol: str,
-    operation_id: str | None,
-    cantidad_esperada: float,
-) -> dict[str, Any] | None:
-    """Intenta confirmar ejecuciones usando fuentes alternativas tras un fallo REST."""
-
-    if not operation_id:
-        return None
-
-    try:
-        cerradas = cliente.fetch_closed_orders(symbol, limit=10)
-    except Exception as cerr_err:
-        log.warning(
-            f'⚠️ Auditoría: error al consultar órdenes cerradas para {symbol}: {cerr_err}'
-        )
-        cerradas = []
-    for orden in cerradas or []:
-        if not isinstance(orden, Mapping):
-            continue
-        if not _coincide_operation_id(orden, operation_id):
-            continue
-        ejecutado = max(
-            _extraer_float(orden, ('filled', 'amount', 'executedQty')),
-            0.0,
-        )
-        restante = max(
-            _extraer_float(orden, ('remaining', 'remainingQty')),
-            cantidad_esperada - ejecutado,
-            0.0,
-        )
-        precio = _extraer_float(orden, ('average', 'price', 'stopPrice'))
-        if ejecutado > 0:
-            return {
-                'ejecutado': ejecutado,
-                'restante': restante,
-                'precio': precio,
-                'source': 'closed_orders',
-                'raw': orden,
-            }
-
-    try:
-        abiertas = consultar_ordenes_abiertas(symbol)
-    except Exception as abiertas_err:
-        log.warning(
-            f'⚠️ Auditoría: error al consultar órdenes abiertas para {symbol}: {abiertas_err}'
-        )
-        abiertas = []
-    for orden in abiertas or []:
-        if not isinstance(orden, Mapping):
-            continue
-        if not _coincide_operation_id(orden, operation_id):
-            continue
-        ejecutado = max(
-            _extraer_float(orden, ('filled', 'executedQty', 'cummulativeQuoteQty')),
-            0.0,
-        )
-        total = _extraer_float(orden, ('amount', 'origQty', 'quantity'))
-        restante = max(total - ejecutado, 0.0)
-        precio = _extraer_float(orden, ('average', 'price'))
-        if ejecutado > 0:
-            return {
-                'ejecutado': ejecutado,
-                'restante': restante,
-                'precio': precio,
-                'source': 'open_orders',
-                'raw': orden,
-            }
-        return {
-            'ejecutado': 0.0,
-            'restante': restante if restante > 0 else total,
-            'precio': precio,
-            'source': 'open_orders_pending',
-            'raw': orden,
-        }
-
-    return None
 
 
 def venta_fallida(symbol: str) -> bool:
@@ -184,54 +104,24 @@ def limpiar_venta_fallida(symbol: str) -> None:
     """Elimina `symbol` del registro de ventas fallidas."""
     with _VENTAS_FALLIDAS_LOCK:
         _VENTAS_FALLIDAS.discard(symbol)
-_BUFFER_LOCK = threading.RLock()
-_MAX_BUFFER = int(os.getenv('MAX_BUFFER_OPERATIONS', '10') or 10)
-_FLUSH_INTERVAL = int(os.getenv('FLUSH_INTERVAL', '300') or 300)
-_ULTIMO_FLUSH = time.time()
-_SLOW_FLUSHES = 0
-_SLOW_FLUSH_THRESHOLD = 30
-_SLOW_FLUSH_LIMIT = 3
-_USE_PROCESS_POOL = os.getenv('USE_PROCESS_POOL', '0').lower() in {'1', 'true', 'yes'}
+
+
 _FLUSH_FUTURE: asyncio.Future | None = None
-_FLUSH_BATCH_SIZE = int(os.getenv('FLUSH_BATCH_SIZE', '100') or 100)
-"""Número máximo de operaciones a persistir por lote."""
-_METRICAS_OPERACION: dict[str, dict[str, float]] = {}
 
-_MAX_SLIPPAGE_PCT = float(os.getenv('MAX_SLIPPAGE_PCT', '0.05') or 0.05)
-_LIMIT_TIMEOUT = float(os.getenv('LIMIT_ORDER_TIMEOUT', '10') or 10)
-_OFFSET_REPRICE = float(os.getenv('OFFSET_REPRICE', '0.001') or 0.001)
-_LIMIT_MAX_RETRY = int(os.getenv('LIMIT_ORDER_MAX_RETRY', '3') or 3)
-_RECONCILE_QTY_TOLERANCE = float(os.getenv('ORDERS_RECONCILE_QTY_TOLERANCE', '0.01') or 0.01)
-
+_METRICAS_OPERACION = real_orders_metrics.METRICAS_OPERACION
+_acumular_metricas = real_orders_metrics.acumular_metricas
+_auditar_operacion_post_error = real_orders_audit.auditar_operacion_post_error
+_market_sell_retry = real_orders_execution._market_sell_retry
 
 
 def _connect_db() -> sqlite3.Connection:
     """Abre la conexión SQLite aplicando configuraciones de rendimiento."""
-    conn = sqlite3.connect(RUTA_DB)
-    try:
-        conn.execute('PRAGMA journal_mode=WAL')
-        conn.execute('PRAGMA synchronous=NORMAL')
-        conn.execute('PRAGMA busy_timeout=5000')
-    except sqlite3.Error as e:
-        log.warning(
-            '⚠️ No se pudieron aplicar PRAGMA en SQLite: %s',
-            format_exception_for_log(e),
-        )
-    return conn
+    return real_orders_sqlite.connect_db(RUTA_DB)
 
 
 def _validar_datos_orden(data: Mapping[str, Any]) -> dict:
     """Valida campos mínimos requeridos para persistir una orden."""
-    d = data.to_dict() if isinstance(data, Order) else dict(data)
-    symbol = d.get('symbol')
-    if not isinstance(symbol, str) or not symbol:
-        raise ValueError("Orden inválida: 'symbol' es obligatorio")
-    for campo in ('precio_entrada', 'cantidad'):
-        try:
-            d[campo] = float(d[campo])
-        except (TypeError, ValueError, KeyError):
-            raise ValueError(f"Orden inválida: '{campo}' debe ser numérico")
-    return d
+    return real_orders_sqlite.validar_datos_orden(data)
 
 
 def esperar_balance(cliente, symbol: str, cantidad_esperada: float,
@@ -266,196 +156,35 @@ def esperar_balance(cliente, symbol: str, cantidad_esperada: float,
     return disponible
 
 
-def _acumular_metricas(operation_id: str, response: dict) -> dict[str, float]:
-    """Acumula comisiones y PnL por ``operation_id`` a partir de la respuesta.
-
-    Para cada trade se calcula el PnL con el signo correcto según ``side`` y se
-    deduce la comisión de forma proporcional a la base correspondiente
-    (notional o cantidad) dependiendo de la moneda en la que se cobra la fee.
-    """
-
-    metricas = _METRICAS_OPERACION.setdefault(
-        operation_id, {"fee": 0.0, "pnl": 0.0}
-    )
-
-    symbol = (
-        response.get("symbol")
-        or response.get("info", {}).get("symbol")
-        or ""
-    )
-    base, quote = (symbol.split("/") if "/" in symbol else ("", ""))
-
-    trades = response.get("trades") or []
-    for trade in trades:
-        side = trade.get("side") or ""
-        price = float(trade.get("price") or 0.0)
-        amount = float(trade.get("amount") or 0.0)
-        cost = float(trade.get("cost") or price * amount)
-
-        # Fees
-        fee_info = trade.get("fee") or {}
-        fee_cost = fee_info.get("cost")
-        currency = fee_info.get("currency")
-        if fee_cost is None:
-            rate = fee_info.get("rate")
-            if rate is not None:
-                if currency == base:
-                    fee_cost = float(rate) * amount
-                elif currency == quote:
-                    fee_cost = float(rate) * cost
-                else:
-                    fee_cost = 0.0
-        elif currency not in (base, quote):
-            fee_cost = 0.0
-        fee_cost = float(fee_cost or 0.0)
-        metricas["fee"] += fee_cost
-
-        # PnL sign: buys are negative cash flow, sells positive
-        pnl = cost if side == "sell" else -cost
-        pnl -= fee_cost
-        metricas["pnl"] += pnl
-
-    # Some responses include aggregated fees outside of ``trades``
-    for fee in response.get("fees", []) or []:
-        try:
-            currency = fee.get("currency")
-            if currency not in (base, quote):
-                continue
-            costo = float(fee.get("cost") or 0.0)
-        except Exception:
-            continue
-        metricas["fee"] += costo
-        metricas["pnl"] -= costo
-        
-    return metricas
-
-
-def _init_db() ->None:
+def _init_db() -> None:
     """Crea la tabla de órdenes y operaciones si no existen."""
-    os.makedirs(os.path.dirname(RUTA_DB), exist_ok=True)
-    schema_base = """
-        symbol TEXT,
-        precio_entrada REAL,
-        cantidad REAL,
-        stop_loss REAL,
-        take_profit REAL,
-        timestamp TEXT,
-        estrategias_activas TEXT,
-        tendencia TEXT,
-        max_price REAL,
-        direccion TEXT,
-        precio_cierre REAL,
-        fecha_cierre TEXT,
-        motivo_cierre TEXT,
-        retorno_total REAL
-    """
-    try:
-        with _connect_db() as conn:
-            conn.execute(
-                f'CREATE TABLE IF NOT EXISTS ordenes ({schema_base}, PRIMARY KEY(symbol))'
-                )
-            conn.execute(
-                f'CREATE TABLE IF NOT EXISTS operaciones (id INTEGER PRIMARY KEY AUTOINCREMENT, {schema_base})'
-                )
-        log.info('🗃️ Tablas de órdenes y operaciones verificadas/creadas.', extra={'symbol': None, 'timeframe': None})
-    except sqlite3.Error as e:
-        log.error(
-            '❌ Error al crear las tablas en SQLite: %s',
-            format_exception_for_log(e),
-        )
-        raise
+    real_orders_sqlite.init_db(RUTA_DB)
 
 
-def cargar_ordenes() ->dict[str, Order]:
+def cargar_ordenes() -> dict[str, Order]:
     """Carga las órdenes almacenadas desde la base de datos SQLite."""
     global _CACHE_ORDENES
     with _CACHE_ORDENES_LOCK:
         if _CACHE_ORDENES is not None:
             return _CACHE_ORDENES
-        _init_db()
-        ordenes: dict[str, Order] = {}
         try:
-            with _connect_db() as conn:
-                conn.row_factory = sqlite3.Row
-                filas = conn.execute(
-                    "SELECT * FROM ordenes WHERE fecha_cierre IS NULL OR fecha_cierre = ''"
-                ).fetchall()
-                for row in filas:
-                    data = dict(row)
-                    orden = Order.from_dict(data)
-                    ordenes[orden.symbol] = orden
-            log.info(
-                f'📥 {len(ordenes)} órdenes abiertas cargadas desde la base de datos.',
-                extra={'symbol': None, 'timeframe': None},
-            )
-        except sqlite3.Error as e:
-            log.error(
-                '❌ Error al cargar órdenes desde SQLite: %s',
-                format_exception_for_log(e),
-            )
+            ordenes = real_orders_sqlite.load_open_orders(RUTA_DB)
+        except sqlite3.Error:
             return {}
         _CACHE_ORDENES = ordenes
         return _CACHE_ORDENES
 
 
-def guardar_ordenes(ordenes: dict[str, Order]) ->None:
+def guardar_ordenes(ordenes: dict[str, Order]) -> None:
     """Guarda las órdenes en la base de datos si han cambiado respecto al caché."""
     global _CACHE_ORDENES
-
-    def ordenar_dict(d):
-        return json.dumps({k: o.to_dict() for k, o in d.items()}, sort_keys
-            =True)
     with _CACHE_ORDENES_LOCK:
-        if _CACHE_ORDENES and ordenar_dict(_CACHE_ORDENES) == ordenar_dict(ordenes
-            ):
+        if _CACHE_ORDENES and real_orders_sqlite.orders_stable_json(
+            _CACHE_ORDENES
+        ) == real_orders_sqlite.orders_stable_json(ordenes):
             return
-        _init_db()
-        try:
-            with _connect_db() as conn:
-                with conn:
-                    for orden in ordenes.values():
-                        data = _validar_datos_orden(orden)
-                        if isinstance(data.get('estrategias_activas'), dict):
-                            data['estrategias_activas'] = json.dumps(
-                                data['estrategias_activas']
-                            )
-                        conn.execute(
-                            """
-                            INSERT OR REPLACE INTO ordenes (
-                                symbol, precio_entrada, cantidad, stop_loss, take_profit,
-                                timestamp, estrategias_activas, tendencia, max_price,
-                                direccion, precio_cierre, fecha_cierre, motivo_cierre,
-                                retorno_total
-                            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                            """,
-                            (
-                                data.get('symbol'),
-                                data.get('precio_entrada'),
-                                data.get('cantidad'),
-                                data.get('stop_loss'),
-                                data.get('take_profit'),
-                                data.get('timestamp'),
-                                data.get('estrategias_activas'),
-                                data.get('tendencia'),
-                                data.get('max_price'),
-                                data.get('direccion'),
-                                data.get('precio_cierre'),
-                                data.get('fecha_cierre'),
-                                data.get('motivo_cierre'),
-                                data.get('retorno_total'),
-                            ),
-                        )
-            _CACHE_ORDENES = ordenes
-            log.info(
-                f'💾 {len(ordenes)} órdenes guardadas correctamente en la base de datos.',
-                extra={'symbol': None, 'timeframe': None},
-            )
-        except (sqlite3.Error, ValueError) as e:
-            log.error(
-                '❌ Error al guardar órdenes en SQLite: %s',
-                format_exception_for_log(e),
-            )
-            raise
+        real_orders_sqlite.persist_orders(RUTA_DB, ordenes)
+        _CACHE_ORDENES = ordenes
 
 
 def obtener_orden(symbol: str) ->(Order | None):
@@ -475,129 +204,7 @@ def obtener_todas_las_ordenes():
 
 
 def reconciliar_ordenes(simbolos: list[str] | None = None) -> dict[str, Order]:
-    # Copia profunda: la reconciliación muta órdenes y hace I/O larga; no debe
-    # tocar las instancias en caché ni bloquear el lock durante fetch a Binance.
-    #
-    # Si ``fetch_open_orders`` falla, se devuelve una copia del estado local **sin**
-    # aplicar cierres ni altas desde el exchange (evita borrar posiciones locales
-    # por error transitorio de red).
-    local = copy.deepcopy(cargar_ordenes())
-    cfg = getattr(app_config, "cfg", None)
-    if simbolos is None:
-        simbolos = list(getattr(cfg, "symbols", None) or ())
-    try:
-        cliente = obtener_cliente()
-        ordenes_api: list[dict] = []
-        if simbolos:
-            for s in simbolos:
-                fetched = _coerce_open_orders(
-                    _resolve_maybe_awaitable(cliente.fetch_open_orders(s))
-                )
-                if fetched:
-                    ordenes_api.extend(fetched)
-        else:
-            ordenes_api = _coerce_open_orders(
-                _resolve_maybe_awaitable(cliente.fetch_open_orders())
-            )
-    except Exception as e:
-        log.error(
-            '❌ Error consultando órdenes abiertas: %s',
-            format_exception_for_log(e),
-        )
-        return local
-    exchange: dict[str, dict] = {}
-    for o in ordenes_api:
-        symbol = o.get('symbol')
-        if not symbol:
-            continue
-        filtros = get_symbol_filters(symbol, cliente)
-        min_amount = filtros.get('min_qty', 0.0)
-        min_cost = filtros.get('min_notional', 0.0)
-        price = float(o.get('price') or o.get('average') or 0.0)
-        amount = float(o.get('amount') or o.get('remaining') or 0.0)
-        if amount < min_amount or price * amount < min_cost:
-            continue
-        exchange[symbol] = {
-            'price': price,
-            'amount': amount,
-            'side': o.get('side', 'buy').lower(),
-            'operation_id': extract_ccxt_operation_id(o),
-        }
-    local_symbols = set(local.keys())
-    exchange_symbols = set(exchange.keys())
-    local_only = sorted(local_symbols - exchange_symbols)
-    exchange_only = sorted(exchange_symbols - local_symbols)
-    both = sorted(local_symbols & exchange_symbols)
-    log.debug(f'local_only: {local_only}', extra={'symbol': None, 'timeframe': None})
-    log.debug(f'exchange_only: {exchange_only}', extra={'symbol': None, 'timeframe': None})
-    log.debug(f'both: {both}', extra={'symbol': None, 'timeframe': None})
-    for sym in local_only:
-        ord_ = local.get(sym)
-        if not ord_:
-            continue
-        ord_.fecha_cierre = datetime.now(UTC).isoformat()
-        ord_.motivo_cierre = 'closed_by_reconciliation'
-        try:
-            registrar_operacion(ord_)
-        except Exception as e:
-            log.warning(
-                '⚠️ No se pudo registrar cierre para %s: %s',
-                sym,
-                format_exception_for_log(e),
-            )
-        try:
-            eliminar_orden(sym)
-        except Exception as e:
-            log.warning(
-                '⚠️ No se pudo eliminar orden local %s: %s',
-                sym,
-                format_exception_for_log(e),
-            )
-        local.pop(sym, None)
-    for sym in exchange_only:
-        # ``operation_id`` queda en el objeto :class:`Order` en memoria; el esquema
-        # SQLite actual no persiste esa columna (se pierde al recargar desde disco).
-        info = exchange[sym]
-        side = info['side']
-        direccion = 'long' if side == 'buy' else 'short'
-        sl = tp = 0.0
-        try:
-            ohlcv = cliente.fetch_ohlcv(sym, timeframe='1h', limit=120)
-            if ohlcv:
-                df = pd.DataFrame(
-                    ohlcv, columns=['ts', 'open', 'high', 'low', 'close', 'volume']
-                )
-                cfg = load_exit_config(sym)
-                sl_calc, tp_calc = calcular_tp_sl_adaptativos(sym, df, cfg)
-                if direccion == 'long':
-                    sl, tp = sl_calc, tp_calc
-                else:
-                    sl, tp = tp_calc, sl_calc
-        except Exception as e:
-            log.warning(
-                '⚠️ Error calculando SL/TP para %s: %s',
-                sym,
-                format_exception_for_log(e),
-            )
-        try:
-            registrar_orden(
-                sym,
-                info['price'],
-                info['amount'],
-                sl,
-                tp,
-                {},
-                '',
-                direccion,
-                info.get('operation_id'),
-            )
-        except Exception as e:
-            log.warning(
-                '⚠️ No se pudo registrar orden reconciliada para %s: %s',
-                sym,
-                format_exception_for_log(e),
-            )
-    return cargar_ordenes()
+    return real_orders_reconcile.reconciliar_ordenes(simbolos)
 
 
 def sincronizar_ordenes_binance(
@@ -611,153 +218,14 @@ def sincronizar_ordenes_binance(
     reinicia y la base de datos local no contiene todas las operaciones
     abiertas. Devuelve el diccionario de órdenes resultante.
     """
-    config = config or getattr(app_config, "cfg", None)
-    if modo_real is None:
-        modo_real = getattr(config, "modo_real", True)
-    if not modo_real:
-        return cargar_ordenes()
-    if simbolos is None and config is not None:
-        simbolos = list(getattr(config, "symbols", None) or ())
-    try:
-        cliente = obtener_cliente(config)
-        ordenes_api = []
-        if simbolos:
-            for s in simbolos:
-                fetched = _coerce_open_orders(
-                    _resolve_maybe_awaitable(cliente.fetch_open_orders(s))
-                )
-                if fetched:
-                    ordenes_api.extend(fetched)
-        else:
-            ordenes_api = _coerce_open_orders(
-                _resolve_maybe_awaitable(cliente.fetch_open_orders())
-            )
-    except Exception as e:
-        log.error(
-            '❌ Error consultando órdenes abiertas: %s',
-            format_exception_for_log(e),
-        )
-        return cargar_ordenes()
-    for o in ordenes_api:
-        symbol = o.get('symbol')
-        if not symbol:
-            continue
-        filtros = get_symbol_filters(symbol, cliente)
-        min_amount = filtros.get('min_qty', 0.0)
-        min_cost = filtros.get('min_notional', 0.0)
-        price = float(o.get('price') or o.get('average') or 0)
-        amount = float(o.get('amount') or o.get('remaining') or 0)
-        if amount < min_amount or price * amount < min_cost:
-            continue
-        side = o.get('side', 'buy').lower()
-        direccion = 'long' if side == 'buy' else 'short'
-        sl = 0.0
-        tp = 0.0
-        try:
-            ohlcv = cliente.fetch_ohlcv(symbol, timeframe='1h', limit=120)
-            if ohlcv:
-                df = pd.DataFrame(ohlcv, columns=['ts', 'open', 'high', 'low', 'close', 'volume'])
-                cfg = load_exit_config(symbol)
-                sl_calc, tp_calc = calcular_tp_sl_adaptativos(symbol, df, cfg)
-                if direccion == 'long':
-                    sl, tp = sl_calc, tp_calc
-                else:
-                    sl, tp = tp_calc, sl_calc
-        except Exception as e:
-            log.warning(
-                '⚠️ Error calculando SL/TP para %s: %s',
-                symbol,
-                format_exception_for_log(e),
-            )
-        op_id = extract_ccxt_operation_id(o)
-        registrar_orden(symbol, price, amount, sl, tp, {}, '', direccion, op_id)
-    return cargar_ordenes()
-
-_ULTIMO_OPEN_ORDERS: dict[str, list] = {}
-_ULTIMO_OPEN_TS: dict[str, float] = {}
-_ULTIMO_OPEN_ORDERS_LOCK = threading.Lock()
-_ULTIMO_OPEN_TS_LOCK = threading.Lock()
+    return real_orders_reconcile.sincronizar_ordenes_binance(
+        simbolos, config, modo_real
+    )
 
 
 def consultar_ordenes_abiertas(symbol: str) -> list[dict]:
     """Consulta órdenes abiertas actuales para `symbol` con reintentos y registro detallado."""
-    from ccxt.base.errors import AuthenticationError, NetworkError
-
-    config = getattr(app_config, "cfg", None)
-    modo_real = getattr(config, "modo_real", True) if config else True
-    if not modo_real:
-        log.info(f'🔍 Modo simulado: sin órdenes reales para {symbol}')
-        return []
-
-    cliente = obtener_cliente(config)
-    now = time.time()
-    with _ULTIMO_OPEN_TS_LOCK:
-        last_ts = _ULTIMO_OPEN_TS.get(symbol)
-        if last_ts and (now - last_ts) < 0.5:
-            with _ULTIMO_OPEN_ORDERS_LOCK:
-                return list(_ULTIMO_OPEN_ORDERS.get(symbol, []))
-        _ULTIMO_OPEN_TS[symbol] = now
-
-    ordenes_api: list[dict] = []
-    for intento in range(1, 4):
-        try:
-            ordenes_api = _coerce_open_orders(
-                _resolve_maybe_awaitable(cliente.fetch_open_orders(symbol))
-            )
-            break
-        except AuthenticationError as e:
-            log.error(
-                '❌ Error de autenticación al consultar órdenes: %s',
-                format_exception_for_log(e),
-            )
-            return []
-        except NetworkError as e:
-            log.warning(
-                '⚠️ Fallo de red consultando órdenes (intento %s/3): %s',
-                intento,
-                format_exception_for_log(e),
-            )
-            time.sleep(0.1 * intento)
-            continue
-        except Exception as e:
-            log.error(
-                '❌ Error inesperado consultando órdenes: %s',
-                format_exception_for_log(e),
-            )
-            return []
-
-    if not ordenes_api:
-        log.info(f'⚠️ No hay órdenes abiertas para {symbol}')
-        with _ULTIMO_OPEN_ORDERS_LOCK:
-            _ULTIMO_OPEN_ORDERS[symbol] = []
-        return []
-
-    filtros = get_symbol_filters(symbol, cliente)
-    min_qty = filtros.get('min_qty', 0.0)
-    min_cost = filtros.get('min_notional', 0.0)
-    step = filtros.get('step_size', None)
-    tick = filtros.get('tick_size', None)
-    log.info(
-        f'🔎 Filtros {symbol}: min_qty={min_qty}, min_notional={min_cost}, stepSize={step}, tickSize={tick}'
-    )
-
-    ordenes_validas: list[dict] = []
-    for o in ordenes_api:
-        price = float(o.get('price') or o.get('average') or 0.0)
-        amount = float(o.get('amount') or o.get('remaining') or 0.0)
-        if amount < min_qty or price * amount < min_cost:
-            log.info(
-                f'⚠️ Orden abierta omitida {symbol}: cantidad {amount}, notional {price * amount:.2f} (< mínimos)'
-            )
-            continue
-        ordenes_validas.append(o)
-
-    with _ULTIMO_OPEN_ORDERS_LOCK:
-        _ULTIMO_OPEN_ORDERS[symbol] = ordenes_validas
-    log.info(
-        f'🔍 Órdenes abiertas encontradas para {symbol}: {len(ordenes_validas)}'
-    )
-    return ordenes_validas
+    return real_orders_reconcile.consultar_ordenes_abiertas(symbol)
 
 
 def reconciliar_trades_binance(
@@ -786,139 +254,9 @@ def reconciliar_trades_binance(
     list[dict[str, Any]]
         Detalles de cada divergencia detectada.
     """
-
-    divergencias: list[dict[str, Any]] = []
-    try:
-        cliente = obtener_cliente()
-        if simbolos is None:
-            simbolos = list(cliente.load_markets().keys())
-        for s in simbolos:
-            filtros = get_symbol_filters(s, cliente)
-            min_amount = filtros.get('min_qty', 0.0)
-            min_cost = filtros.get('min_notional', 0.0)
-            try:
-                trades = cliente.fetch_my_trades(s, limit=limit)
-            except Exception as exc:
-                log.warning(
-                    '⚠️ No se pudieron obtener trades para %s: %s',
-                    s,
-                    exc,
-                )
-                continue
-
-            orden_local = obtener_orden(s)
-            local_qty = 0.0
-            if orden_local is not None:
-                local_qty = float(
-                    getattr(orden_local, 'cantidad_abierta', None)
-                    or getattr(orden_local, 'cantidad', 0.0)
-                )
-              
-            for t in trades:
-                try:
-                    price = float(t.get('price') or 0)
-                    amount = float(t.get('amount') or t.get('qty') or 0)
-                except (TypeError, ValueError):
-                    continue
-                cost = price * amount
-                if amount < min_amount or cost < min_cost:
-                    continue
-                side = t.get('side', 'buy').lower()
-                timestamp_value = datetime.fromtimestamp(
-                    t.get('timestamp', 0) / 1000,
-                    timezone.utc,
-                ).isoformat()
-
-                reason: str | None = None
-                if side == 'buy':
-                    if local_qty <= 0:
-                        reason = 'missing_local_order'
-                    else:
-                        diff = abs(local_qty - amount)
-                        threshold = max(local_qty, amount) * _RECONCILE_QTY_TOLERANCE
-                        if diff > threshold:
-                            reason = 'quantity_mismatch'
-                elif side == 'sell' and local_qty > 0:
-                    reason = 'unexpected_sell_trade_with_open_order'
-
-                if not reason:
-                    continue
-
-                entry = {
-                    'symbol': s,
-                    'side': side,
-                    'price': price,
-                    'amount': amount,
-                    'timestamp': timestamp_value,
-                    'local_amount': local_qty,
-                    'reason': reason,
-                }
-                divergencias.append(entry)
-
-                if not apply_changes:
-                    continue
-
-                try:
-                    sl = tp = 0.0
-                    if side == 'buy':
-                        ohlcv = cliente.fetch_ohlcv(s, timeframe='1h', limit=100)
-                        if ohlcv:
-                            df = pd.DataFrame(
-                                ohlcv,
-                                columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'],
-                            )
-                            cfg = load_exit_config(s)
-                            sl, tp = calcular_tp_sl_adaptativos(
-                                s,
-                                df,
-                                cfg,
-                                precio_actual=price,
-                            )
-                    data = {
-                        'symbol': s,
-                        'precio_entrada': price,
-                        'cantidad': amount,
-                        'timestamp': timestamp_value,
-                        'stop_loss': sl,
-                        'take_profit': tp,
-                        'estrategias_activas': {},
-                        'tendencia': '',
-                        'max_price': price,
-                        'direccion': 'long' if side == 'buy' else 'short',
-                    }
-                    guardar_orden_real(s, data)
-                    if side == 'buy' and amount > 0 and not obtener_orden(s):
-                        try:
-                            registrar_orden(s, price, amount, sl, tp, {}, '', 'long', None)
-                        except Exception as reg_exc:
-                            log.warning(
-                                '⚠️ No se pudo registrar orden reconciliada para %s: %s',
-                                s,
-                                reg_exc,
-                            )
-                except Exception as persist_exc:
-                    log.error(
-                        '❌ Error aplicando reconciliación para %s: %s',
-                        s,
-                        persist_exc,
-                    )
-    except Exception as e:
-        log.error(
-            '❌ Error al reconciliar trades: %s',
-            format_exception_for_log(e),
-        )
-
-    if reporter:
-        reporter(divergencias)
-    else:
-        if divergencias:
-            log.warning(
-                'orders.reconcile_trades.divergences_detected',
-                extra={'count': len(divergencias)},
-            )
-        else:
-            log.info('orders.reconcile_trades.sin_divergencias')
-    return divergencias
+    return real_orders_reconcile.reconciliar_trades_binance(
+        simbolos, limit, apply_changes, reporter
+    )
 
 
 def actualizar_orden(symbol: str, data: (Order | dict)) ->None:
@@ -1041,28 +379,7 @@ def registrar_orden(symbol: str, precio: float, cantidad: float, sl: float,
 
 def registrar_operacion(data: (dict | Order)) ->None:
     """Agrega una operación ejecutada al buffer. Se persistirá automáticamente."""
-    global _ULTIMO_FLUSH
-    registro = data.to_dict() if isinstance(data, Order) else data
-    symbol = registro.get('symbol')
-    if not symbol:
-        log.warning(
-            '⚠️ Registro sin símbolo recibido en registrar_operacion(), ignorado.'
-            )
-        return
-    with _BUFFER_LOCK:
-        _BUFFER_OPERACIONES.append(registro)
-        log.debug(f'📥 Operación registrada en buffer para {symbol}', extra={'symbol': symbol, 'timeframe': None})
-        ahora = time.time()
-        if (
-            len(_BUFFER_OPERACIONES) >= _MAX_BUFFER
-            or ahora - _ULTIMO_FLUSH >= _FLUSH_INTERVAL
-        ):
-            log.debug(
-                '🔁 Buffer de operaciones lleno o expirado, iniciando flush...',
-                extra={'symbol': symbol, 'timeframe': None},
-            )
-            flush_operaciones()
-            _ULTIMO_FLUSH = ahora
+    real_orders_operaciones.registrar_operacion_en_buffer(data, RUTA_DB)
 
 
 def ejecutar_orden_market(
@@ -1078,320 +395,13 @@ def ejecutar_orden_market(
     ``precio_senal_bot`` es el precio que usó el bot al decidir (p. ej. cierre de vela);
     permite medir slippage respecto al ticker del exchange al enviar la orden.
     """
-    entrada = {'symbol': symbol, 'cantidad': cantidad}
-    if cantidad <= 0:
-        log.warning(f'⚠️ Cantidad inválida para compra en {symbol}: {cantidad}')
-        log_decision(log, 'ejecutar_orden_market', operation_id, entrada, {'cantidad_valida': False}, 'reject', {'ejecutado': 0})
-        return {'ejecutado': 0.0, 'restante': 0.0, 'status': 'FILLED', 'min_qty': 0.0, 'fee': 0.0, 'pnl': 0.0}
-    cliente = None
-    precio = 0.0
-    try:
-        cliente = obtener_cliente()
-        filtros = get_symbol_filters(symbol, cliente)
-        step_size = filtros.get('step_size', 0.0)
-        min_cost = filtros.get('min_notional', 0.0)
-        ticker = cliente.fetch_ticker(symbol)
-        precio = float(ticker.get('last') or ticker.get('close') or 0)
-        precio, cantidad = normalizar_precio_cantidad(filtros, precio, cantidad, 'compra')
-        if cantidad <= 0:
-            log.error(f'⛔ Cantidad ajustada inválida para {symbol}: {cantidad}')
-            log_decision(log, 'ejecutar_orden_market', operation_id, entrada, {'ajuste_valido': False}, 'reject', {'ejecutado': 0})
-            return {'ejecutado': 0.0, 'restante': 0.0, 'status': 'FILLED', 'min_qty': 0.0, 'fee': 0.0, 'pnl': 0.0}
-        min_amount = filtros.get('min_qty', 0.0)
-        quote = symbol.split('/')[1]
-        balance = cliente.fetch_balance()
-        disponible_quote = balance.get('free', {}).get(quote, 0)
-        if precio:
-            costo = cantidad * precio
-            if costo > disponible_quote:
-                cantidad_ajustada = math.floor((disponible_quote / precio) / step_size) * step_size
-                cantidad_ajustada = normalizar_precio_cantidad(filtros, precio, cantidad_ajustada, 'compra')[1]
-                if cantidad_ajustada <= 0:
-                    log.error(
-                        f'⛔ Compra cancelada por saldo insuficiente en {symbol}. Requerido: {costo:.2f} {quote}, disponible: {disponible_quote:.2f}'
-                    )
-                    try:
-                        notificador.enviar(
-                            f'Compra cancelada por saldo insuficiente en {symbol}',
-                            'CRITICAL',
-                        )
-                    except Exception:
-                        pass
-                    log_decision(log, 'ejecutar_orden_market', operation_id, entrada, {'saldo_suficiente': False}, 'reject', {'ejecutado': 0})
-                    return {'ejecutado': 0.0, 'restante': 0.0, 'status': 'FILLED', 'min_qty': min_amount, 'fee': 0.0, 'pnl': 0.0}
-                log.warning(
-                    f'⚠️ Cantidad ajustada por saldo insuficiente en {symbol}. Requerido: {costo:.2f} {quote}, disponible: {disponible_quote:.2f}, nueva cantidad: {cantidad_ajustada}'
-                )
-                cantidad = cantidad_ajustada
-        if cantidad < min_amount or precio and cantidad * precio < min_cost:
-            log.error(
-                f'⛔ Compra inválida para {symbol}. Cantidad: {cantidad}, Precio: {precio}, Mínimos → amount: {min_amount}, notional: {min_cost}'
-                )
-            try:
-                notificador.enviar(
-                    f'Compra inválida para {symbol}', 'WARNING'
-                )
-            except Exception:
-                pass
-            log_decision(log, 'ejecutar_orden_market', operation_id, entrada, {'minimos': False}, 'reject', {'ejecutado': 0})
-            return {'ejecutado': 0.0, 'restante': 0.0, 'status': 'FILLED', 'min_qty': min_amount, 'fee': 0.0, 'pnl': 0.0}
-        log.debug(
-            f'📤 Enviando orden de compra para {symbol} | Cantidad: {cantidad} | Precio estimado: {precio:.4f}',
-            extra={'symbol': symbol, 'timeframe': None},
-        )
-        params = {}
-        cid = binance_spot_client_order_id(operation_id, attempt=order_attempt)
-        if cid:
-            params['newClientOrderId'] = cid
-        response = cliente.create_market_buy_order(symbol, cantidad, params)
-        ejecutado = float(response.get('amount') or response.get('filled') or 0)
-        if ejecutado <= 0:
-            log.warning(
-                '⚠️ Compra %s: exchange devolvió filled=0; no se asume ejecución completa.',
-                symbol,
-                extra={'symbol': symbol, 'timeframe': None},
-            )
-            restante = cantidad
-            status = 'PARTIAL'
-        else:
-            restante = max(cantidad - ejecutado, 0.0)
-            status = 'FILLED'
-            if restante > 1e-8:
-                status = 'PARTIAL'
-        metricas = {'fee': 0.0, 'pnl': 0.0}
-        if operation_id:
-            metricas = _acumular_metricas(operation_id, response)
-        precio_fill = float(response.get('price') or response.get('average') or precio)
-        slippage = abs(precio_fill - precio) / precio if precio else 0.0
-        slippage_vs_senal: float | None = None
-        if precio_senal_bot is not None and precio_senal_bot > 0:
-            slippage_vs_senal = abs(precio_fill - precio_senal_bot) / precio_senal_bot
-        if slippage > _MAX_SLIPPAGE_PCT:
-            log.warning(
-                f'⚠️ Slippage alto en {symbol}: {slippage:.2%} (máx {_MAX_SLIPPAGE_PCT:.2%})'
-            )
-            try:
-                notificador.enviar(
-                    f'Slippage alto en {symbol}: {slippage:.2%}', 'WARNING'
-                )
-            except Exception:
-                pass
-        if ejecutado > 0:
-            log.info(
-                f'🟢 Order real ejecutada: {symbol}, cantidad: {ejecutado}',
-                extra={'symbol': symbol, 'timeframe': None},
-            )
-        else:
-            log.warning(
-                '⚠️ Compra %s sin fills reportados en la respuesta.',
-                symbol,
-                extra={'symbol': symbol, 'timeframe': None},
-            )
-        salida = {
-            'ejecutado': ejecutado,
-            'restante': restante,
-            'status': status,
-            'min_qty': min_amount,
-            'fee': metricas['fee'],
-            'pnl': metricas['pnl'],
-            'slippage': slippage,
-            'precio_referencia': precio,
-            'precio_fill': precio_fill,
-        }
-        if slippage_vs_senal is not None:
-            salida['slippage_vs_senal'] = slippage_vs_senal
-        if ejecutado > 0:
-            append_ejecucion_mercado(
-                {
-                    'ts': time.time(),
-                    'event': 'market_buy',
-                    'symbol': symbol,
-                    'side': 'buy',
-                    'operation_id': operation_id,
-                    'order_attempt': order_attempt,
-                    'precio_referencia': precio,
-                    'precio_fill': precio_fill,
-                    'slippage_vs_ticker': slippage,
-                    'precio_senal': precio_senal_bot,
-                    'slippage_vs_senal': slippage_vs_senal,
-                    'ejecutado': ejecutado,
-                    'fee': metricas['fee'],
-                }
-            )
-        log_decision(log, 'ejecutar_orden_market', operation_id, entrada, {'minimos': True}, 'accept', salida)
-        return salida
-    except Exception as e:
-        err_msg = format_exception_for_log(e)
-        log.error(
-            '❌ Error en Binance al ejecutar compra en %s: %s',
-            symbol,
-            err_msg,
-        )
-        contexto_decision: dict[str, Any] = {'reason': err_msg}
-        ejecucion_confirmada = False
-
-        if cliente is not None:
-            try:
-                trades = cliente.fetch_my_trades(symbol, limit=1)
-                trade = trades[-1] if trades else None
-            except Exception as ver_err:
-                ver_msg = format_exception_for_log(ver_err)
-                log.error(
-                    '❌ Error verificando trades tras fallo: %s',
-                    ver_msg,
-                )
-                contexto_decision['trade_history_error'] = ver_msg
-                trade = None
-            else:
-                ejecutado = (
-                    float(trade.get('amount') or trade.get('qty') or 0) if trade else 0.0
-                )
-                if ejecutado > 0:
-                    ejecucion_confirmada = True
-                    contexto_decision.update(
-                        {
-                            'fallback': 'trade_history',
-                            'ejecutado': ejecutado,
-                        }
-                    )
-                    precio_trade = (
-                        float(trade.get('price') or 0) if trade else precio
-                    )
-                    log.warning(
-                        f'⚠️ Operación detectada tras error vía trades: {ejecutado} {symbol}'
-                    )
-                    try:
-                        notificador.enviar(
-                            f'Orden ejecutada tras error en {symbol}', 'WARNING'
-                        )
-                    except Exception:
-                        pass
-                    try:
-                        guardar_orden_real(
-                            symbol,
-                            {
-                                'symbol': symbol,
-                                'precio_entrada': precio_trade,
-                                'cantidad': ejecutado,
-                                'timestamp': datetime.now(UTC).isoformat(),
-                                'stop_loss': 0.0,
-                                'take_profit': 0.0,
-                                'estrategias_activas': {},
-                                'tendencia': '',
-                                'max_price': precio_trade,
-                                'direccion': 'long',
-                            },
-                        )
-                        registrar_orden(
-                            symbol,
-                            precio_trade,
-                            ejecutado,
-                            0.0,
-                            0.0,
-                            {},
-                            '',
-                            'long',
-                            operation_id,
-                        )
-                    except Exception as e_reg:
-                        reg_msg = format_exception_for_log(e_reg)
-                        log.error(
-                            '❌ No se pudo registrar orden tras error: %s',
-                            reg_msg,
-                        )
-                        contexto_decision['registro_error'] = reg_msg
-
-        auditoria_info: dict[str, Any] | None = None
-        if not ejecucion_confirmada and cliente is not None:
-            try:
-                auditoria_info = _auditar_operacion_post_error(
-                    cliente,
-                    symbol,
-                    operation_id,
-                    cantidad,
-                )
-            except Exception as audit_err:
-                aud_msg = format_exception_for_log(audit_err)
-                log.error(
-                    '❌ Auditoría cruzada falló para %s: %s',
-                    symbol,
-                    aud_msg,
-                )
-                contexto_decision['audit_error'] = aud_msg
-            else:
-                if auditoria_info:
-                    contexto_decision['auditoria'] = auditoria_info.get('source')
-                    contexto_decision['ejecutado'] = auditoria_info.get('ejecutado', 0.0)
-                    contexto_decision['restante'] = auditoria_info.get('restante')
-                    if auditoria_info.get('ejecutado', 0.0) > 0:
-                        ejecucion_confirmada = True
-                        precio_confirmado = auditoria_info.get('precio') or precio
-                        log.warning(
-                            '⚠️ Auditoría confirmó ejecución en %s (%s): %.6f',
-                            symbol,
-                            auditoria_info.get('source'),
-                            auditoria_info.get('ejecutado', 0.0),
-                        )
-                        try:
-                            notificador.enviar(
-                                f'Orden confirmada por auditoría en {symbol}',
-                                'WARNING',
-                            )
-                        except Exception:
-                            pass
-                        try:
-                            guardar_orden_real(
-                                symbol,
-                                {
-                                    'symbol': symbol,
-                                    'precio_entrada': precio_confirmado,
-                                    'cantidad': float(
-                                        auditoria_info.get('ejecutado', 0.0)
-                                    ),
-                                    'timestamp': datetime.now(UTC).isoformat(),
-                                    'stop_loss': 0.0,
-                                    'take_profit': 0.0,
-                                    'estrategias_activas': {},
-                                    'tendencia': '',
-                                    'max_price': precio_confirmado,
-                                    'direccion': 'long',
-                                },
-                            )
-                            registrar_orden(
-                                symbol,
-                                precio_confirmado,
-                                float(auditoria_info.get('ejecutado', 0.0)),
-                                0.0,
-                                0.0,
-                                {},
-                                '',
-                                'long',
-                                operation_id,
-                            )
-                        except Exception as audit_reg_err:
-                            log.error(
-                                f'❌ No se pudo registrar orden confirmada por auditoría: {audit_reg_err}'
-                            )
-                            contexto_decision['registro_error'] = str(audit_reg_err)
-                    elif auditoria_info.get('source') == 'open_orders_pending':
-                        log.warning(
-                            '⚠️ Auditoría detectó orden pendiente para %s tras el fallo',
-                            symbol,
-                        )
-
-        if cliente is None:
-            contexto_decision['cliente'] = 'no_disponible'
-
-        log_decision(
-            log,
-            'ejecutar_orden_market',
-            operation_id,
-            entrada,
-            {},
-            'error',
-            contexto_decision,
-        )
-        raise
+    return real_orders_execution.ejecutar_orden_market(
+        symbol,
+        cantidad,
+        operation_id,
+        order_attempt=order_attempt,
+        precio_senal_bot=precio_senal_bot,
+    )
 
 
 def ejecutar_orden_market_sell(
@@ -1403,207 +413,13 @@ def ejecutar_orden_market_sell(
     precio_senal_bot: float | None = None,
 ) -> dict:
     """Ejecuta una venta de mercado validando saldo y devuelve detalles."""
-    entrada = {'symbol': symbol, 'cantidad': cantidad}
-
-    if venta_fallida(symbol):
-        log.warning(f'⏭️ Venta omitida para {symbol} por intento previo fallido de saldo.')
-        log_decision(
-            log,
-            'ejecutar_orden_market_sell',
-            operation_id,
-            entrada,
-            {'venta_omitida': True},
-            'reject',
-            {'ejecutado': 0},
-        )
-        return {
-            'ejecutado': 0.0,
-            'restante': cantidad,
-            'status': 'FILLED',
-            'min_qty': 0.0,
-            'fee': 0.0,
-            'pnl': 0.0,
-        }
-
-    try:
-        cliente = obtener_cliente()
-        balance = cliente.fetch_balance()
-        base = symbol.split('/')[0]
-        disponible = balance.get('free', {}).get(base, 0)
-
-        if disponible <= 0:
-            log_decision(log, 'ejecutar_orden_market_sell', operation_id, entrada, {'saldo': 0}, 'reject', {'ejecutado': 0})
-            raise InsufficientFunds(f'Saldo 0 disponible para {symbol}')
-
-        filtros = get_symbol_filters(symbol, cliente)
-        step_size = filtros.get('step_size', 0.0)
-        cantidad_vender = math.floor(disponible / step_size) * step_size
-        cantidad_vender = min(cantidad, cantidad_vender)
-
-        if cantidad_vender <= 0:
-            log_decision(log, 'ejecutar_orden_market_sell', operation_id, entrada, {'cantidad_valida': False}, 'reject', {'ejecutado': 0})
-            raise ValueError(f'Cantidad inválida ({cantidad_vender}) para vender en {symbol}')
-
-        min_amount = filtros.get('min_qty', 0.0)
-        min_cost = filtros.get('min_notional', 0.0)
-        ticker = cliente.fetch_ticker(symbol)
-        precio = float(ticker.get('last') or ticker.get('close') or 0)
-        precio, cantidad_vender = normalizar_precio_cantidad(filtros, precio, cantidad_vender, 'venta')
-
-        if cantidad_vender < min_amount or (precio and cantidad_vender * precio < min_cost):
-            log.error(
-                f'⛔ Venta rechazada por mínimos: {symbol} → cantidad: {cantidad_vender:.8f}, '
-                f'mínimos: amount={min_amount}, notional={min_cost}'
-            )
-            registrar_venta_fallida(symbol)
-            try:
-                notificador.enviar(f'Venta rechazada por mínimos en {symbol}', 'WARNING')
-            except Exception:
-                pass
-            log_decision(log, 'ejecutar_orden_market_sell', operation_id, entrada, {'minimos': False}, 'reject', {'ejecutado': 0})
-            return {
-                'ejecutado': 0.0,
-                'restante': cantidad_vender,
-                'status': 'FILLED',
-                'min_qty': min_amount,
-                'fee': 0.0,
-                'pnl': 0.0,
-            }
-
-        log.info(
-            f'💱 Ejecutando venta real en {symbol}: {cantidad_vender:.8f} unidades (precio estimado: {precio:.2f})',
-            extra={'symbol': symbol, 'timeframe': None},
-        )
-
-        params = {}
-        cid = binance_spot_client_order_id(operation_id, attempt=order_attempt)
-        if cid:
-            params['newClientOrderId'] = cid
-
-        response = cliente.create_market_sell_order(symbol, cantidad_vender, params)
-        ejecutado = float(response.get('amount') or response.get('filled') or 0)
-        if ejecutado <= 0:
-            log.warning(
-                '⚠️ Venta %s: exchange devolvió filled=0; no se asume ejecución completa.',
-                symbol,
-                extra={'symbol': symbol, 'timeframe': None},
-            )
-            ejecutado = 0.0
-
-        restante = max(cantidad_vender - ejecutado, 0.0)
-        status = 'FILLED' if restante <= 1e-8 else 'PARTIAL'
-
-        metricas = {'fee': 0.0, 'pnl': 0.0}
-        if operation_id:
-            metricas = _acumular_metricas(operation_id, response)
-
-        precio_fill = float(response.get('price') or response.get('average') or precio)
-        slippage = abs(precio_fill - precio) / precio if precio else 0.0
-        slippage_vs_senal: float | None = None
-        if precio_senal_bot is not None and precio_senal_bot > 0:
-            slippage_vs_senal = abs(precio_fill - precio_senal_bot) / precio_senal_bot
-        if slippage > _MAX_SLIPPAGE_PCT:
-            log.warning(f'⚠️ Slippage alto en {symbol}: {slippage:.2%} (máx {_MAX_SLIPPAGE_PCT:.2%})')
-            try:
-                notificador.enviar(f'Slippage alto en {symbol}: {slippage:.2%}', 'WARNING')
-            except Exception:
-                pass
-
-        log.info(
-            f'🔴 Orden de venta ejecutada: {symbol}, cantidad: {ejecutado:.8f}',
-            extra={'symbol': symbol, 'timeframe': None},
-        )
-
-        limpiar_venta_fallida(symbol)
-
-        salida = {
-            'ejecutado': ejecutado,
-            'restante': restante,
-            'status': status,
-            'min_qty': min_amount,
-            'fee': metricas['fee'],
-            'pnl': metricas['pnl'],
-            'slippage': slippage,
-            'precio_referencia': precio,
-            'precio_fill': precio_fill,
-        }
-        if slippage_vs_senal is not None:
-            salida['slippage_vs_senal'] = slippage_vs_senal
-        if ejecutado > 0:
-            append_ejecucion_mercado(
-                {
-                    'ts': time.time(),
-                    'event': 'market_sell',
-                    'symbol': symbol,
-                    'side': 'sell',
-                    'operation_id': operation_id,
-                    'order_attempt': order_attempt,
-                    'precio_referencia': precio,
-                    'precio_fill': precio_fill,
-                    'slippage_vs_ticker': slippage,
-                    'precio_senal': precio_senal_bot,
-                    'slippage_vs_senal': slippage_vs_senal,
-                    'ejecutado': ejecutado,
-                    'fee': metricas['fee'],
-                }
-            )
-        log_decision(log, 'ejecutar_orden_market_sell', operation_id, entrada, {'minimos': True}, 'accept', salida)
-        return salida
-
-    except InsufficientFunds as e:
-        log.error(
-            '❌ Venta rechazada por saldo insuficiente en %s: %s',
-            symbol,
-            format_exception_for_log(e),
-        )
-        registrar_venta_fallida(symbol)
-        try:
-            notificador.enviar(f'Venta rechazada por saldo insuficiente en {symbol}', 'CRITICAL')
-        except Exception:
-            pass
-        log_decision(
-            log,
-            'ejecutar_orden_market_sell',
-            operation_id,
-            entrada,
-            {'saldo_insuficiente': True},
-            'reject',
-            {'ejecutado': 0},
-        )
-        return {
-            'ejecutado': 0.0,
-            'restante': cantidad,
-            'status': 'FILLED',
-            'min_qty': 0.0,
-            'fee': 0.0,
-            'pnl': 0.0,
-        }
-
-    except Exception as e:
-        sell_err = format_exception_for_log(e)
-        log.error(
-            '❌ Error en intercambio al vender %s: %s',
-            symbol,
-            sell_err,
-        )
-        log_decision(
-            log,
-            'ejecutar_orden_market_sell',
-            operation_id,
-            entrada,
-            {},
-            'error',
-            {'reason': sell_err},
-        )
-        return {
-            'ejecutado': 0.0,
-            'restante': cantidad,
-            'status': 'ERROR',
-            'min_qty': 0.0,
-            'fee': 0.0,
-            'pnl': 0.0,
-        }
-
+    return real_orders_execution.ejecutar_orden_market_sell(
+        symbol,
+        cantidad,
+        operation_id,
+        order_attempt=order_attempt,
+        precio_senal_bot=precio_senal_bot,
+    )
 
 
 def _market_sell_retry(
@@ -1620,68 +436,13 @@ def _market_sell_retry(
     (p. ej. :class:`MarketRetryExecutor`): cada llamada a Binance debe usar un
     id de cliente distinto aunque este bucle se reinicie tras un error.
     """
-    restante = cantidad
-    total = total_fee = total_pnl = 0.0
-    vwap_num = 0.0
-    vwap_den = 0.0
-    min_qty = 0.0
-    attempt = 0
-    last_order_attempt = max(0, int(order_attempt_start) - 1)
-    while restante > 0:
-        attempt += 1
-        oid_att = int(order_attempt_start) + attempt - 1
-        last_order_attempt = oid_att
-        resp = ejecutar_orden_market_sell(
-            symbol,
-            restante,
-            operation_id,
-            order_attempt=oid_att,
-            precio_senal_bot=precio_senal_bot,
-        )
-        if str(resp.get("status") or "").upper() == "ERROR":
-            fill_avg = (vwap_num / vwap_den) if vwap_den > 0 else None
-            return {
-                "ejecutado": total,
-                "restante": restante,
-                "status": "ERROR",
-                "min_qty": float(resp.get("min_qty", 0.0)),
-                "fee": total_fee,
-                "pnl": total_pnl,
-                "last_order_attempt": last_order_attempt,
-                "precio_fill_promedio": fill_avg,
-            }
-        ejecutado = float(resp.get('ejecutado', 0.0))
-        restante = float(resp.get('restante', 0.0))
-        min_qty = float(resp.get('min_qty', 0.0))
-        total += ejecutado
-        total_fee += float(resp.get('fee', 0.0))
-        total_pnl += float(resp.get('pnl', 0.0))
-        if ejecutado > 0:
-            pf = resp.get("precio_fill")
-            if pf is not None:
-                try:
-                    pff = float(pf)
-                    if pff > 0:
-                        vwap_num += pff * ejecutado
-                        vwap_den += ejecutado
-                except (TypeError, ValueError):
-                    pass
-        if ejecutado <= 0:
-            break
-        if resp.get('status') != 'PARTIAL' or restante < min_qty:
-            break
-    estado = 'FILLED' if restante < 1e-8 else 'PARTIAL'
-    fill_avg = (vwap_num / vwap_den) if vwap_den > 0 else None
-    return {
-        'ejecutado': total,
-        'restante': restante,
-        'status': estado,
-        'min_qty': min_qty,
-        'fee': total_fee,
-        'pnl': total_pnl,
-        'last_order_attempt': last_order_attempt,
-        'precio_fill_promedio': fill_avg,
-    }
+    return real_orders_execution._market_sell_retry(
+        symbol,
+        cantidad,
+        operation_id,
+        order_attempt_start,
+        precio_senal_bot=precio_senal_bot,
+    )
 
 
 def ejecutar_orden_limit(
@@ -1700,322 +461,35 @@ def ejecutar_orden_limit(
     re-precia usando `offset_reprice`. Tras `max_reintentos` intentos fallidos,
     envía una orden de mercado.
     """
-    if side not in {"buy", "sell"}:
-        raise ValueError('side debe ser "buy" o "sell"')
-
-    timeout = timeout or _LIMIT_TIMEOUT
-    offset_reprice = offset_reprice or _OFFSET_REPRICE
-    max_reintentos = max_reintentos or _LIMIT_MAX_RETRY
-
-    cliente = obtener_cliente()
-    cliente.load_markets()  # asegura markets en ccxt
-
-    params_base: dict[str, Any] = {}
-
-    filtros = get_symbol_filters(symbol, cliente)
-    min_qty = filtros.get("min_qty", 0.0)
-
-    restante = cantidad
-    ejecutado_total = 0.0
-    precio_actual = precio
-    metricas = {"fee": 0.0, "pnl": 0.0}
-    slippage = 0.0
-    vwap_num = 0.0
-    vwap_den = 0.0
-
-    for intento in range(1, max_reintentos + 1):
-        # Normaliza precio/cantidad para cumplir filtros del exchange
-        precio_actual, cantidad_norm = normalizar_precio_cantidad(
-            filtros, precio_actual, restante, "compra" if side == "buy" else "venta"
-        )
-
-        params = params_base.copy()
-        cid = binance_spot_client_order_id(operation_id, attempt=intento)
-        if cid:
-            params["newClientOrderId"] = cid
-
-        if side == "buy":
-            orden = cliente.create_limit_buy_order(symbol, cantidad_norm, precio_actual, params)
-        else:
-            orden = cliente.create_limit_sell_order(symbol, cantidad_norm, precio_actual, params)
-
-        order_id = orden.get("id")
-        inicio = time.time()
-        estado: dict[str, Any] = orden
-
-        # Espera activa hasta timeout comprobando fills
-        while time.time() - inicio < timeout:
-            estado = cliente.fetch_order(order_id, symbol)
-            filled_tmp = float(estado.get("filled") or 0.0)
-            if estado.get("status") in {"closed", "canceled"} or filled_tmp >= cantidad_norm:
-                break
-            time.sleep(1)
-        else:
-            # timeout -> cancelar y obtener estado final
-            try:
-                estado = cliente.cancel_order(order_id, symbol)
-            except Exception as e:
-                log.warning(
-                    "⚠️ No se pudo cancelar orden %s: %s",
-                    order_id,
-                    format_exception_for_log(e),
-                )
-                estado = {}
-            if float(estado.get("filled") or estado.get("executedQty") or 0.0) == 0.0:
-                try:
-                    estado = cliente.fetch_order(order_id, symbol)
-                except Exception:
-                    estado = {}
-
-        ejecutado = float(estado.get("filled") or estado.get("executedQty") or 0.0)
-        ejecutado_total += ejecutado
-        restante = max(restante - ejecutado, 0.0)
-
-        if operation_id:
-            metricas = _acumular_metricas(operation_id, estado)
-
-        precio_fill = float(estado.get("price") or estado.get("average") or precio_actual)
-        slippage = abs(precio_fill - precio_actual) / precio_actual if precio_actual else 0.0
-        if slippage > _MAX_SLIPPAGE_PCT:
-            log.warning(f"⚠️ Slippage alto en {symbol}: {slippage:.2%} (máx {_MAX_SLIPPAGE_PCT:.2%})")
-            try:
-                notificador.enviar(f"Slippage alto en {symbol}: {slippage:.2%}", "WARNING")
-            except Exception:
-                pass
-
-        if ejecutado > 0 and precio_fill > 0:
-            vwap_num += precio_fill * ejecutado
-            vwap_den += ejecutado
-
-        if restante < min_qty or restante <= 0:
-            break
-        if intento >= max_reintentos:
-            break
-
-        # Ajustar precio y continuar con la cantidad restante
-        if side == "buy":
-            precio_actual *= 1 + offset_reprice
-        else:
-            precio_actual *= 1 - offset_reprice
-
-    if restante >= min_qty:
-        log.warning(
-            f"⚠️ Fallback a orden de mercado en {symbol} tras {max_reintentos} intentos limit fallidos"
-        )
-        m_attempt = max_reintentos + 1
-        if side == "buy":
-            res_market = ejecutar_orden_market(
-                symbol,
-                restante,
-                operation_id,
-                order_attempt=m_attempt,
-                precio_senal_bot=float(precio) if precio else None,
-            )
-        else:
-            res_market = ejecutar_orden_market_sell(
-                symbol,
-                restante,
-                operation_id,
-                order_attempt=m_attempt,
-                precio_senal_bot=float(precio) if precio else None,
-            )
-        ej_m = float(res_market.get("ejecutado", 0.0) or 0.0)
-        ejecutado_total += ej_m
-        restante = res_market.get("restante", 0.0)
-        slippage = res_market.get("slippage", slippage)
-        if operation_id:
-            metricas["fee"] = res_market.get("fee", metricas.get("fee", 0.0))
-            metricas["pnl"] = res_market.get("pnl", metricas.get("pnl", 0.0))
-        if ej_m > 0:
-            pf_m = res_market.get("precio_fill")
-            if pf_m is not None:
-                try:
-                    pfm = float(pf_m)
-                    if pfm > 0:
-                        vwap_num += pfm * ej_m
-                        vwap_den += ej_m
-                except (TypeError, ValueError):
-                    pass
-
-    status = "FILLED" if restante <= 1e-8 else "PARTIAL"
-    fill_avg = (vwap_num / vwap_den) if vwap_den > 0 else None
-    return {
-        "ejecutado": ejecutado_total,
-        "restante": restante,
-        "status": status,
-        "min_qty": min_qty,
-        "fee": metricas.get("fee", 0.0),
-        "pnl": metricas.get("pnl", 0.0),
-        "slippage": slippage,
-        "precio_fill_promedio": fill_avg,
-    }
-
+    return real_orders_execution.ejecutar_orden_limit(
+        symbol,
+        side,
+        precio,
+        cantidad,
+        operation_id,
+        timeout,
+        offset_reprice,
+        max_reintentos,
+    )
 
 
 def _persistir_operaciones(operaciones: list[dict]) -> tuple[int, int, list[dict]]:
-    """Persiste operaciones en SQLite y Parquet devolviendo conteos de errores y pendientes."""
-    _init_db()
-    errores_sqlite = 0
-    errores_parquet = 0
-    pendientes: list[dict[str, Any]] = []
-    try:
-        with _connect_db() as conn:
-            for op in operaciones:
-                data = op.copy()
-                if isinstance(data.get('estrategias_activas'), dict):
-                    data['estrategias_activas'] = json.dumps(data['estrategias_activas'])
-                try:
-                    conn.execute(
-                        """
-                        INSERT INTO operaciones (
-                            symbol, precio_entrada, cantidad, stop_loss, take_profit,
-                            timestamp, estrategias_activas, tendencia, max_price,
-                            direccion, precio_cierre, fecha_cierre, motivo_cierre,
-                            retorno_total
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                        """,
-                        (
-                            data.get('symbol'),
-                            data.get('precio_entrada'),
-                            data.get('cantidad'),
-                            data.get('stop_loss'),
-                            data.get('take_profit'),
-                            data.get('timestamp'),
-                            data.get('estrategias_activas'),
-                            data.get('tendencia'),
-                            data.get('max_price'),
-                            data.get('direccion'),
-                            data.get('precio_cierre'),
-                            data.get('fecha_cierre'),
-                            data.get('motivo_cierre'),
-                            data.get('retorno_total'),
-                        ),
-                    )
-                except sqlite3.Error as e:
-                    log.error(
-                        '❌ Error SQLite al insertar operación para %s: %s',
-                        data.get('symbol'),
-                        format_exception_for_log(e),
-                    )
-                    errores_sqlite += 1
-                    pendientes.append(op)
-    except sqlite3.Error as e:
-        log.error(
-            '❌ Error global al guardar operaciones en SQLite: %s',
-            format_exception_for_log(e),
-        )
-        errores_sqlite += 1
-        pendientes.extend(operaciones)
-    for op in operaciones:
-        data = op.copy()
-        symbol = data.get('symbol')
-        if isinstance(data.get('estrategias_activas'), dict):
-            data['estrategias_activas'] = json.dumps(data['estrategias_activas'])
-        if symbol:
-            try:
-                guardar_orden_real(symbol, data)
-            except Exception as e:
-                log.error(
-                    '❌ Error guardando operación en Parquet para %s: %s',
-                    symbol,
-                    format_exception_for_log(e),
-                )
-                errores_parquet += 1
-                if op not in pendientes:
-                    pendientes.append(op)
-    return errores_sqlite, errores_parquet, pendientes
+    """Persiste operaciones en SQLite y Parquet (delegación sobre ``real_orders_operaciones``)."""
+    return real_orders_operaciones.persist_operaciones_batch(operaciones, RUTA_DB)
 
 
-def _chunked(seq: list, size: int):
-    """Divide ``seq`` en lotes del ``size`` indicado."""
-    for i in range(0, len(seq), size):
-        yield seq[i : i + size]
-
-
-def flush_operaciones() ->None:
-    global _SLOW_FLUSHES, _USE_PROCESS_POOL, _ULTIMO_FLUSH, _FLUSH_BATCH_SIZE
+def flush_operaciones() -> None:
     """Guarda en disco todas las operaciones acumuladas.
 
     Las operaciones se procesan en lotes para minimizar el impacto de las
     iteraciones largas sobre SQLite y las escrituras en Parquet manejadas por
     :mod:`pandas`.
     """
-    with _BUFFER_LOCK:
-        operaciones = list(_BUFFER_OPERACIONES)
-        _BUFFER_OPERACIONES.clear()
-    total_ops = len(operaciones)
-    if not total_ops:
-        return
-    log.info(f'📝 Iniciando flush_operaciones con {total_ops} operaciones.', extra={'symbol': None, 'timeframe': None})
-    inicio = time.time()
-    errores_sqlite = errores_parquet = 0
-    pendientes: list[dict] = []
-    batches = list(_chunked(operaciones, _FLUSH_BATCH_SIZE))
-    if _USE_PROCESS_POOL:
-        with ProcessPoolExecutor() as executor:
-            futures = [executor.submit(_persistir_operaciones, b) for b in batches]
-            for f in as_completed(futures):
-                e_sql, e_parq, pend = f.result()
-                errores_sqlite += e_sql
-                errores_parquet += e_parq
-                pendientes.extend(pend)
-    else:
-        for b in batches:
-            e_sql, e_parq, pend = _persistir_operaciones(b)
-            errores_sqlite += e_sql
-            errores_parquet += e_parq
-            pendientes.extend(pend)
-    duracion = time.time() - inicio
-    mensaje_timeout = int(os.getenv('MENSAJE_TIMEOUT', '0') or 0)
-    inactivity_intervals = int(os.getenv('INACTIVITY_INTERVALS', '0') or 0)
-    log.info(f'🏁 flush_operaciones finalizado en {duracion:.2f}s para {total_ops} operaciones.', extra={'symbol': None, 'timeframe': None})
-    if mensaje_timeout and duracion > mensaje_timeout:
-        log.warning(
-            f'⏱️ Duración {duracion:.2f}s supera mensaje_timeout {mensaje_timeout}s'
-        )
-    if inactivity_intervals and duracion > inactivity_intervals:
-        log.warning(
-            f'⏱️ Duración {duracion:.2f}s supera inactivity_intervals {inactivity_intervals}s'
-        )
-    if duracion > _SLOW_FLUSH_THRESHOLD:
-        _SLOW_FLUSHES += 1
-        log.warning(
-            f'⚠️ flush_operaciones tardó {duracion:.2f}s; considerar reducir '
-            'FLUSH_BATCH_SIZE o activar USE_PROCESS_POOL'
-        )
-        if _FLUSH_BATCH_SIZE > 10:
-            nuevo_tam = max(_FLUSH_BATCH_SIZE // 2, 10)
-            if nuevo_tam < _FLUSH_BATCH_SIZE:
-                _FLUSH_BATCH_SIZE = nuevo_tam
-                log.info(
-                    f'ℹ️ FLUSH_BATCH_SIZE reducido a {_FLUSH_BATCH_SIZE} por flush lento',
-                    extra={'symbol': None, 'timeframe': None},
-                )
-    else:
-        _SLOW_FLUSHES = 0
-    if _SLOW_FLUSHES >= _SLOW_FLUSH_LIMIT and not _USE_PROCESS_POOL:
-        log.warning(
-            '⚠️ flush_operaciones excede 30s de forma recurrente; activando ProcessPoolExecutor'
-        )
-        _USE_PROCESS_POOL = True
-
-    if pendientes:
-        with _BUFFER_LOCK:
-            _BUFFER_OPERACIONES[:0] = pendientes
-
-    global _ULTIMO_FLUSH
-    _ULTIMO_FLUSH = time.time()
-
-    if errores_sqlite == 0 and errores_parquet == 0:
-        log.info(f'✅ {total_ops} operaciones guardadas correctamente.', extra={'symbol': None, 'timeframe': None})
-    else:
-        log.warning(
-            f'⚠️ Guardadas {total_ops} operaciones con errores — SQLite: {errores_sqlite}, Parquet: {errores_parquet}'
-        )
+    real_orders_operaciones.flush_buffer_operaciones(RUTA_DB)
 
 
 async def flush_periodico(
-    interval: int = _FLUSH_INTERVAL,
+    interval: int | None = None,
     heartbeat: int = 30,
     max_fallos: int = 5,
     reintento: int = 300,
@@ -2027,6 +501,11 @@ async def flush_periodico(
     notifica el fallo y reintenta el ciclo.
     """
     global _FLUSH_FUTURE
+    eff_interval = (
+        interval
+        if interval is not None
+        else real_orders_operaciones._FLUSH_INTERVAL
+    )
     fallos_consecutivos = 0
     try:
         while True:
@@ -2039,7 +518,7 @@ async def flush_periodico(
                         format_exception_for_log(e),
                     )
                 _FLUSH_FUTURE = None
-            restante = interval
+            restante = eff_interval
             while restante > 0:
                 sleep_time = min(heartbeat, restante)
                 await asyncio.sleep(sleep_time)

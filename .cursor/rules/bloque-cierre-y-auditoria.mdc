@@ -1,0 +1,44 @@
+---
+description: No avanzar de bloque/archivo sin cierre documentado; auditoría mínima en refactors
+alwaysApply: true
+---
+
+# Cierre por bloque y auditoría de refactors
+
+## Regla de avance
+
+No avances al siguiente archivo ni al siguiente bloque de trabajo hasta **cerrar el actual** con un bloque explícito en el chat (o en el PR) que incluya **obligatoriamente**:
+
+1. **Resumen del diff** — qué archivos y qué tipo de cambio (mover, renombrar, delegar, borrar).
+2. **Riesgos** — mecánicos (self/manager, imports circulares), de runtime (órdenes, concurrencia), y de mantenimiento (divergencia si hubiera duplicado).
+3. **Tests ejecutados** — comando exacto y resultado (passed/skipped/failed); si no hubo tests, decirlo y el sustituto (p. ej. `py_compile`, smoke manual).
+4. **Deuda técnica introducida** — qué quedó sin hacer, qué habría que documentar, qué convendría testear después en vivo.
+5. **Recomendación de commit** — mensaje listo para copiar (imperativo, una línea + cuerpo opcional breve).
+
+Hasta no entregar esos cinco puntos, el bloque/archivo actual se considera **abierto**.
+
+## Dimensión de auditoría (extracciones / mover lógica)
+
+En refactors que mueven lógica entre módulos o clases, además conviene responder (puede ir en el mismo cierre o en subapartados):
+
+1. **Qué cambió exactamente** — antes/después en una frase.
+2. **Qué riesgo introduces** — explícito respecto al cambio concreto.
+3. **Qué no has verificado** — broker, carga, mypy, casos límite manuales, etc.
+4. **Qué pruebas confirman el cambio** — enlazar a la sección de tests del cierre.
+5. **Acoplamiento** — si sube o baja (clase monolítica vs dependencia de módulo).
+6. **Lógica vs comportamiento** — aclarar si solo se **mueve** lógica o si hay **cambio de comportamiento** intencional (lo habitual en extract: solo mover).
+
+## Ejemplo de cierre mínimo (plantilla)
+
+```text
+## Cierre — <nombre del bloque>
+
+**Diff:** …
+**Riesgos:** …
+**Tests:** `pytest tests/ -q` → …
+**Deuda:** …
+**Commit sugerido:**
+refactor(orders): extraer cierre parcial a order_manager_cerrar
+
+**Auditoría:** (1) … (2) … (3) … (4) … (5) … (6) …
+```

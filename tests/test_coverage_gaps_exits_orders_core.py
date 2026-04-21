@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -517,6 +518,85 @@ def test_binance_time_sync_auto_admin_calls_setsystemtime(
     assert outcome["synced"] is True
     assert outcome["method"] == "SetSystemTime"
     assert outcome["elevated"] is True
+
+
+def test_pid_lock_creates_and_releases_file(tmp_path: Path) -> None:
+    from core.utils import pid_lock as pl
+
+    target = tmp_path / "bot.pid"
+    lock = pl.acquire_pid_lock(target)
+    assert target.exists()
+    payload = target.read_text(encoding="utf-8")
+    assert str(lock.pid) in payload
+
+    pl.release_pid_lock(lock)
+    assert not target.exists()
+
+
+def test_pid_lock_blocks_when_other_python_alive(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import pytest as _pytest
+
+    from core.utils import pid_lock as pl
+
+    target = tmp_path / "bot.pid"
+    target.write_text('{"pid": 999999, "started_at": 0}', encoding="utf-8")
+
+    monkeypatch.setattr(pl, "_process_is_alive", lambda pid: True)
+    monkeypatch.setattr(pl, "_process_is_python", lambda pid: True)
+    monkeypatch.delenv("BOT_PID_LOCK_FORCE", raising=False)
+
+    with _pytest.raises(pl.PidLockError):
+        pl.acquire_pid_lock(target)
+
+
+def test_pid_lock_force_override_steals_lock(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from core.utils import pid_lock as pl
+
+    target = tmp_path / "bot.pid"
+    target.write_text('{"pid": 999999, "started_at": 0}', encoding="utf-8")
+
+    monkeypatch.setattr(pl, "_process_is_alive", lambda pid: True)
+    monkeypatch.setattr(pl, "_process_is_python", lambda pid: True)
+    monkeypatch.setenv("BOT_PID_LOCK_FORCE", "true")
+
+    lock = pl.acquire_pid_lock(target)
+    assert lock.pid == os.getpid()
+    pl.release_pid_lock(lock)
+
+
+def test_pid_lock_stale_pid_takes_over(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from core.utils import pid_lock as pl
+
+    target = tmp_path / "bot.pid"
+    target.write_text('{"pid": 999999, "started_at": 0}', encoding="utf-8")
+
+    monkeypatch.setattr(pl, "_process_is_alive", lambda pid: False)
+
+    lock = pl.acquire_pid_lock(target)
+    assert lock.pid == os.getpid()
+    pl.release_pid_lock(lock)
+
+
+def test_pid_lock_non_python_pid_takes_over(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from core.utils import pid_lock as pl
+
+    target = tmp_path / "bot.pid"
+    target.write_text('{"pid": 999999, "started_at": 0}', encoding="utf-8")
+
+    monkeypatch.setattr(pl, "_process_is_alive", lambda pid: True)
+    monkeypatch.setattr(pl, "_process_is_python", lambda pid: False)
+
+    lock = pl.acquire_pid_lock(target)
+    assert lock.pid == os.getpid()
+    pl.release_pid_lock(lock)
 
 
 def test_learning_trade_results_reexport() -> None:

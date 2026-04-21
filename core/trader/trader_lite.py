@@ -25,7 +25,13 @@ if TYPE_CHECKING:  # pragma: no cover
     from core.supervisor import Supervisor
 
 
-log = configurar_logger("trader_modular", modo_silencioso=True)
+log = configurar_logger("trader_modular")
+# Logger dedicado para diagnóstico del bucle del trader.
+# Aunque ``trader_modular`` ya no se silencia por defecto, mantenemos este
+# logger separado para latidos y trazas de vida del bucle principal. Así
+# si alguien fija ``BOT_SILENT_LOGGERS=true`` para reducir ruido operativo,
+# el heartbeat sigue visible a INFO.
+_heartbeat_log = configurar_logger("trader.heartbeat")
 
 
 class ComponentResolutionError(RuntimeError):
@@ -815,7 +821,92 @@ class TraderLite(TraderLiteBackfillMixin, TraderLiteProcessingMixin):
     async def _heartbeat_loop(self, interval: int = 60) -> None:
         while not self._stop_event.is_set():
             self.supervisor.beat("trader")
+            try:
+                self._log_heartbeat_state()
+            except Exception:
+                log.debug("heartbeat.log_state_failed", exc_info=True)
             await asyncio.sleep(interval)
+
+    def _log_heartbeat_state(self) -> None:
+        """Emite un latido INFO periódico con el estado mínimo del runtime.
+
+        Sirve para confirmar que el bucle principal del trader sigue vivo y
+        para detectar visualmente si la cola de velas no se vacía (handler
+        bloqueado) o el WS no ha conectado aún. Usa ``INFO`` deliberadamente
+        para que aparezca en la consola con el nivel por defecto.
+        """
+
+        feed = getattr(self, "feed", None)
+        queue_sizes: Dict[str, int] = {}
+        consumer_states: Dict[str, str] = {}
+        ws_connected: bool | None = None
+        ws_failure: str | None = None
+        if feed is not None:
+            try:
+                queues = getattr(feed, "_queues", {}) or {}
+                for sym, queue in queues.items():
+                    try:
+                        queue_sizes[str(sym)] = int(queue.qsize())
+                    except Exception:
+                        continue
+            except Exception:
+                queue_sizes = {}
+            try:
+                # El atributo correcto en ``DataFeed`` es ``_consumer_state`` (singular),
+                # no el plural que usábamos antes: por eso el heartbeat mostraba
+                # ``consumer_states: {}``.
+                states = getattr(feed, "_consumer_state", {}) or {}
+                for sym, state in states.items():
+                    consumer_states[str(sym)] = getattr(state, "name", str(state))
+            except Exception:
+                consumer_states = {}
+            try:
+                evt = getattr(feed, "ws_connected_event", None)
+                if evt is not None and hasattr(evt, "is_set"):
+                    ws_connected = bool(evt.is_set())
+            except Exception:
+                ws_connected = None
+            try:
+                ws_failure = getattr(feed, "_ws_failure_reason", None)
+            except Exception:
+                ws_failure = None
+
+        orders_abiertas: int | None = None
+        ordenes = getattr(self, "orders", None)
+        if ordenes is not None:
+            try:
+                # ``OrderManager`` expone el diccionario directamente como
+                # ``self.ordenes`` (``Dict[str, Order]``). No hay getters
+                # sincronos tipo ``ordenes_abiertas()`` / ``obtener_todas()``.
+                ordenes_dict = getattr(ordenes, "ordenes", None)
+                if isinstance(ordenes_dict, dict):
+                    orders_abiertas = len(ordenes_dict)
+            except Exception:
+                orders_abiertas = None
+
+        bg_alive = 0
+        try:
+            bg_alive = sum(1 for t in getattr(self, "_bg_tasks", set()) if not t.done())
+        except Exception:
+            bg_alive = 0
+
+        _heartbeat_log.info(
+            "trader.heartbeat",
+            extra=safe_extra(
+                {
+                    "event": "trader.heartbeat",
+                    "stop_event_set": bool(self._stop_event.is_set()),
+                    "ws_connected": ws_connected,
+                    "ws_failure_reason": ws_failure,
+                    "queue_sizes": queue_sizes,
+                    "consumer_states": consumer_states,
+                    "orders_abiertas": orders_abiertas,
+                    "bg_tasks_alive": bg_alive,
+                    "intervalo": getattr(self.config, "intervalo_velas", None),
+                    "stage": "Trader._heartbeat",
+                }
+            ),
+        )
 
     # --------------------- utilidades ---------------------
     def _emit(self, evt: str, data: dict) -> None:
