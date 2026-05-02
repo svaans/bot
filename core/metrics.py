@@ -227,6 +227,16 @@ DATAFEED_CANDLES_ENQUEUED_TOTAL = Counter(
     ["symbol", "tf"],
 )
 
+WS_DISPATCH_QUEUE_DEPTH = Gauge(
+    "ws_dispatch_queue_depth",
+    "Profundidad actual de la cola entre recv WS y el worker que ejecuta el handler (Fase 2)",
+)
+
+WS_DISPATCH_BACKLOG_EVENTS_TOTAL = Counter(
+    "ws_dispatch_backlog_events_total",
+    "Muestras en las que la profundidad de la cola de despacho alcanzó el umbral de advertencia",
+)
+
 QUEUE_SIZE = Gauge(
     "datafeed_queue_size",
     "Tamaño de cola de DataFeed",
@@ -252,8 +262,9 @@ CONSUMER_LAG_SECONDS = Gauge(
 
 INGEST_LATENCY = Histogram(
     "datafeed_ingest_latency_seconds",
-    "Latencia desde recepción hasta procesamiento",
+    "Latencia desde _df_enqueue_time (post-validación en handle_candle) hasta inicio del handler del DataFeed",
     ["symbol"],
+    buckets=(0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2, 5),
 )
 
 DATAFEED_HANDLER_LATENCY = Histogram(
@@ -435,6 +446,8 @@ _METRICS_WITH_FALLBACK = [
     "FEEDS_MISSING_RATE",
     "DATAFEED_WS_MESSAGES_TOTAL",
     "DATAFEED_CANDLES_ENQUEUED_TOTAL",
+    "WS_DISPATCH_QUEUE_DEPTH",
+    "WS_DISPATCH_BACKLOG_EVENTS_TOTAL",
     "WS_CONNECTED_GAUGE",
     "QUEUE_SIZE",
     "CONSUMER_SKIPPED_EXPECTED_TOTAL",

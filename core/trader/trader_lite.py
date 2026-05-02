@@ -13,6 +13,8 @@ from typing import Any, Awaitable, Callable, Dict, Optional, Tuple, TYPE_CHECKIN
 
 from core.backfill_service import BackfillService
 
+from core.metrics import TRADER_QUEUE_SIZE
+from core.metrics_helpers import safe_set
 from core.utils.log_utils import safe_extra
 from core.utils.utils import configurar_logger
 
@@ -455,7 +457,7 @@ class TraderLite(TraderLiteBackfillMixin, TraderLiteProcessingMixin):
             return caster(default)
 
         kwargs: Dict[str, Any] = {
-            "handler_timeout": _resolve("handler_timeout", "DF_HANDLER_TIMEOUT_SEC", 6.0, float),
+            "handler_timeout": _resolve("handler_timeout", "DF_HANDLER_TIMEOUT_SEC", 180.0, float),
             "inactivity_intervals": _resolve("inactivity_intervals", "DF_INACTIVITY_INTERVALS", 10, int),
             "queue_max": _resolve("df_queue_default_limit", "DF_QUEUE_MAX", 2000, int),
             "queue_min_recommended": _resolve(
@@ -870,6 +872,13 @@ class TraderLite(TraderLiteBackfillMixin, TraderLiteProcessingMixin):
                 ws_failure = getattr(feed, "_ws_failure_reason", None)
             except Exception:
                 ws_failure = None
+
+        tf_heartbeat = str(getattr(self.config, "intervalo_velas", None) or "unknown").lower()
+        for sym_key, sz in list(queue_sizes.items()):
+            try:
+                safe_set(TRADER_QUEUE_SIZE, float(sz), symbol=str(sym_key), timeframe=tf_heartbeat)
+            except Exception:
+                pass
 
         orders_abiertas: int | None = None
         ordenes = getattr(self, "orders", None)

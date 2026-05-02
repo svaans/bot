@@ -31,7 +31,8 @@ from indicadores.retornos_volatilidad import (
     verificar_consistencia,
     volatilidad_welford,
 )
-from core.utils.log_utils import format_exception_for_log
+from config.symbol_config_resolve import resolve_symbol_branch
+from core.utils.log_utils import format_exception_for_log, safe_extra
 from core.utils.utils import configurar_logger, ESTADO_DIR
 log = configurar_logger("adaptador_umbral")
 RUTA_CONFIG = Path("config/configuraciones_optimas.json")
@@ -156,7 +157,29 @@ def calcular_umbral_adaptativo(
       reducir ligeramente el umbral requerido.
     """
     _ensure_umbral_estado_cargado()
-    config = _cargar_config().get(symbol, {})
+    raw_cfg = _cargar_config()
+    matched_key, branch, resolution = resolve_symbol_branch(symbol, raw_cfg)
+    if resolution == "ambiguous":
+        log.warning(
+            "umbral.symbol_config_alias_ambiguous",
+            extra=safe_extra({"requested": str(symbol).strip(), "path": str(RUTA_CONFIG)}),
+        )
+        config: dict = {}
+    elif isinstance(branch, dict):
+        config = dict(branch)
+        if resolution == "base_alias" and matched_key:
+            log.warning(
+                "umbral.symbol_config_alias_used",
+                extra=safe_extra(
+                    {
+                        "requested": str(symbol).strip(),
+                        "matched_key": matched_key,
+                        "path": str(RUTA_CONFIG),
+                    }
+                ),
+            )
+    else:
+        config = {}
     base = config.get("peso_minimo_total", 0.5)
     factor = config.get("factor_umbral", 1.0)
 

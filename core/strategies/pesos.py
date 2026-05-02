@@ -8,7 +8,10 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Tuple, Union
 
+from config.symbol_config_resolve import resolve_symbol_branch
 from core.repo_paths import repo_root, resolve_under_repo
+from core.utils.log_utils import safe_extra
+from core.utils.utils import configurar_logger
 
 # Rutas configurables por entorno; relativas → ancladas al repo (no al CWD).
 
@@ -39,6 +42,8 @@ PESOS_SALIDAS_PATH = _resolve_pesos_storage_path(
 )
 
 Number = Union[int, float]
+
+_log = configurar_logger("gestor_pesos_estrategias", modo_silencioso=True)
 
 
 # ----------------------------- Utilidades IO ----------------------------- #
@@ -152,7 +157,29 @@ class GestorPesos:
     # ---- API principal ----
     def obtener_pesos_symbol(self, symbol: str) -> Dict[str, float]:
         """Devuelve dict de pesos para ``symbol`` (vacío si no hay)."""
-        return dict(self.pesos.get(symbol.upper(), {}))
+        direct = self.pesos.get(symbol.upper(), {})
+        if direct:
+            return dict(direct)
+        mk, branch, res = resolve_symbol_branch(symbol, self.pesos)
+        if res == "ambiguous":
+            _log.warning(
+                "gestor_pesos.symbol_alias_ambiguous",
+                extra=safe_extra({"requested": str(symbol).strip(), "ruta": str(self.ruta)}),
+            )
+            return {}
+        if res == "base_alias" and isinstance(branch, dict) and mk:
+            _log.warning(
+                "gestor_pesos.symbol_alias_used",
+                extra=safe_extra(
+                    {
+                        "requested": str(symbol).strip(),
+                        "matched_key": mk,
+                        "ruta": str(self.ruta),
+                    }
+                ),
+            )
+            return dict(branch)
+        return {}
 
     def obtener_peso(self, estrategia: str, symbol: str) -> float:
         """Obtiene el peso asignado a ``estrategia`` para ``symbol``."""
@@ -160,7 +187,28 @@ class GestorPesos:
         if not estrategia:
             return 0.0
         bucket = self.pesos.get(symbol.upper(), {})
-        return float(bucket.get(estrategia, 0.0))
+        if bucket:
+            return float(bucket.get(estrategia, 0.0))
+        mk, branch, res = resolve_symbol_branch(symbol, self.pesos)
+        if res == "ambiguous":
+            _log.warning(
+                "gestor_pesos.symbol_alias_ambiguous",
+                extra=safe_extra({"requested": str(symbol).strip(), "ruta": str(self.ruta)}),
+            )
+            return 0.0
+        if res == "base_alias" and isinstance(branch, dict) and mk:
+            _log.warning(
+                "gestor_pesos.symbol_alias_used",
+                extra=safe_extra(
+                    {
+                        "requested": str(symbol).strip(),
+                        "matched_key": mk,
+                        "ruta": str(self.ruta),
+                    }
+                ),
+            )
+            return float(branch.get(estrategia, 0.0))
+        return 0.0
 
     def set_pesos_symbol(self, symbol: str, pesos_crudos: Dict[str, Number]) -> Dict[str, float]:
         """Establece pesos para `symbol` normalizando a (total, piso). Devuelve los pesos normalizados."""

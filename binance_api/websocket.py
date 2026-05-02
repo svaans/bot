@@ -2,10 +2,13 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
+import os
 import random
 import re
+import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Awaitable, Callable, Dict, Iterable, Mapping, Optional, Sequence, TYPE_CHECKING
@@ -18,6 +21,24 @@ if TYPE_CHECKING:  # pragma: no cover - hints opcionales
 from core.utils.log_utils import truncate_for_log
 
 from .utils import normalize_symbol_for_rest, normalize_symbol_for_ws
+
+
+def _record_ws_dispatch_queue_metrics(depth: int, maxsize: int) -> None:
+    """Actualiza gauge/contador de la cola Fase 2 sin alterar el comportamiento del worker."""
+    try:
+        from core.metrics import WS_DISPATCH_BACKLOG_EVENTS_TOTAL, WS_DISPATCH_QUEUE_DEPTH
+    except Exception:
+        return
+    warn_floor = max(16, (maxsize * 3) // 4)
+    try:
+        WS_DISPATCH_QUEUE_DEPTH.set(float(depth))
+    except Exception:
+        pass
+    if depth >= warn_floor:
+        try:
+            WS_DISPATCH_BACKLOG_EVENTS_TOTAL.inc()
+        except Exception:
+            pass
 
 __all__ = [
     "InactividadTimeoutError",
@@ -518,6 +539,57 @@ async def _escuchar_velas_combinado_real(
     )
 
 
+_WS_DISPATCH_QUEUE_DEFAULT = 64
+
+
+def _ws_dispatch_queue_maxsize() -> int:
+    """Tamaño máximo de la cola entre ``recv`` y el worker que ejecuta ``handler``.
+
+    Fase 2: acota memoria y aplica backpressure (``put`` espera si el worker va
+    atrasado). Rango razonable 1..4096; variable de entorno ``WS_DISPATCH_QUEUE_MAX``.
+    """
+
+    raw = os.getenv("WS_DISPATCH_QUEUE_MAX", str(_WS_DISPATCH_QUEUE_DEFAULT))
+    try:
+        n = int(raw)
+    except (TypeError, ValueError):
+        n = _WS_DISPATCH_QUEUE_DEFAULT
+    return max(1, min(n, 4096))
+
+
+async def _ws_dispatch_worker_loop(
+    dispatch_queue: "asyncio.Queue[tuple[float, dict[str, Any]]]",
+    handler: Callable[[Dict[str, Any]], Awaitable[None] | None],
+    *,
+    url: str,
+) -> None:
+    """Un único consumidor: preserva el orden de mensajes y serializa ``handler``."""
+
+    while True:
+        _recv_parse_t0, data = await dispatch_queue.get()
+        try:
+            result = handler(data)
+            if asyncio.iscoroutine(result):
+                await result
+        except Exception:
+            logger.exception(
+                "ws.dispatch.handler_failed",
+                extra={"event": "ws.dispatch.handler_failed", "url": url},
+            )
+            raise
+        finally:
+            dispatch_queue.task_done()
+
+
+def _worker_failed_exc(worker_task: asyncio.Task) -> BaseException | None:
+    if not worker_task.done():
+        return None
+    if worker_task.cancelled():
+        return None
+    exc = worker_task.exception()
+    return exc if exc else None
+
+
 async def _consume_ws_stream(
     url: str,
     handler: Callable[[Dict[str, Any]], Awaitable[None] | None],
@@ -543,67 +615,108 @@ async def _consume_ws_stream(
                 # ``frames_log_every`` mensajes, sin bajar el resto a DEBUG.
                 frames_received = 0
                 frames_log_every = 100
-                while True:
-                    try:
-                        raw = await asyncio.wait_for(ws.recv(), timeout=inactivity)
-                    except asyncio.TimeoutError as exc:
-                        raise InactividadTimeoutError(
-                            f"Sin mensajes de Binance en {inactivity}s"
-                        ) from exc
-                    frames_received += 1
-                    if frames_received == 1 or frames_received % frames_log_every == 0:
-                        logger.info(
-                            "ws.frames.progress",
+                maxsize = _ws_dispatch_queue_maxsize()
+                dispatch_queue: asyncio.Queue[tuple[float, dict[str, Any]]] = asyncio.Queue(
+                    maxsize=maxsize
+                )
+                worker_task = asyncio.create_task(
+                    _ws_dispatch_worker_loop(dispatch_queue, handler, url=url),
+                    name="binance_ws_dispatch",
+                )
+                try:
+                    while True:
+                        failed = _worker_failed_exc(worker_task)
+                        if failed is not None:
+                            raise failed
+                        try:
+                            raw = await asyncio.wait_for(ws.recv(), timeout=inactivity)
+                        except asyncio.TimeoutError as exc:
+                            raise InactividadTimeoutError(
+                                f"Sin mensajes de Binance en {inactivity}s"
+                            ) from exc
+                        recv_t0 = time.perf_counter()
+                        frames_received += 1
+                        if frames_received == 1 or frames_received % frames_log_every == 0:
+                            logger.info(
+                                "ws.frames.progress",
+                                extra={
+                                    "event": "ws.frames.progress",
+                                    "url": url,
+                                    "frames": frames_received,
+                                },
+                            )
+                        preview: str
+                        if isinstance(raw, bytes):
+                            preview = raw[:64].decode("utf-8", "ignore")
+                            raw_text = raw.decode("utf-8", "ignore")
+                            raw_len = len(raw)
+                        else:
+                            preview = str(raw)[:64]
+                            raw_text = str(raw)
+                            raw_len = len(raw_text)
+                        logger.debug(
+                            "ws.recv.raw",
                             extra={
-                                "event": "ws.frames.progress",
+                                "event": "ws.recv.raw",
                                 "url": url,
-                                "frames": frames_received,
-                            },
-                        )
-                    preview: str
-                    if isinstance(raw, bytes):
-                        preview = raw[:64].decode("utf-8", "ignore")
-                        raw_text = raw.decode("utf-8", "ignore")
-                        raw_len = len(raw)
-                    else:
-                        preview = str(raw)[:64]
-                        raw_text = str(raw)
-                        raw_len = len(raw_text)
-                    logger.debug(
-                        "ws.recv.raw",
-                        extra={
-                            "event": "ws.recv.raw",
-                            "url": url,
-                            "len": raw_len,
-                            "first_bytes": preview,
-                        },
-                    )
-                    try:
-                        data = json.loads(raw_text)
-                    except json.JSONDecodeError as exc:
-                        logger.warning(
-                            "ws.recv.json_error",
-                            extra={
-                                "event": "ws.recv.json_error",
-                                "url": url,
-                                "error": truncate_for_log(repr(exc), 400),
+                                "len": raw_len,
                                 "first_bytes": preview,
                             },
                         )
-                        continue
-                    if not isinstance(data, dict):
+                        try:
+                            data = json.loads(raw_text)
+                        except json.JSONDecodeError as exc:
+                            logger.warning(
+                                "ws.recv.json_error",
+                                extra={
+                                    "event": "ws.recv.json_error",
+                                    "url": url,
+                                    "error": truncate_for_log(repr(exc), 400),
+                                    "first_bytes": preview,
+                                },
+                            )
+                            continue
+                        if not isinstance(data, dict):
+                            logger.debug(
+                                "ws.recv.non_object_json",
+                                extra={
+                                    "event": "ws.recv.non_object_json",
+                                    "url": url,
+                                    "type": type(data).__name__,
+                                },
+                            )
+                            continue
+                        failed = _worker_failed_exc(worker_task)
+                        if failed is not None:
+                            raise failed
+                        await dispatch_queue.put((recv_t0, data))
+                        recv_to_enqueue_ms = (time.perf_counter() - recv_t0) * 1000.0
+                        depth = dispatch_queue.qsize()
+                        warn_floor = max(16, (maxsize * 3) // 4)
+                        _record_ws_dispatch_queue_metrics(depth, maxsize)
+                        if depth >= warn_floor:
+                            logger.warning(
+                                "ws.dispatch.backlog",
+                                extra={
+                                    "event": "ws.dispatch.backlog",
+                                    "url": url,
+                                    "depth": depth,
+                                    "maxsize": maxsize,
+                                },
+                            )
                         logger.debug(
-                            "ws.recv.non_object_json",
+                            "ws.dispatch.enqueued",
                             extra={
-                                "event": "ws.recv.non_object_json",
+                                "event": "ws.dispatch.enqueued",
                                 "url": url,
-                                "type": type(data).__name__,
+                                "recv_to_enqueue_ms": round(recv_to_enqueue_ms, 4),
+                                "queue_depth": depth,
                             },
                         )
-                        continue
-                    result = handler(data)
-                    if asyncio.iscoroutine(result):
-                        await result
+                finally:
+                    worker_task.cancel()
+                    with contextlib.suppress(asyncio.CancelledError):
+                        await worker_task
         except InactividadTimeoutError:
             raise
         except asyncio.CancelledError:

@@ -134,6 +134,7 @@ class CapitalManager:
             default = total / max(len(symbols), 1)
 
         if default <= 0:
+            # ``min_order_eur`` es nombre histórico: mismo orden de magnitud que el notional en **quote** del par.
             default = float(getattr(config, "min_order_eur", 0.0) or 0.0)
 
         capital: Dict[str, float] = {}

@@ -12,7 +12,6 @@ class ProductionConfig(DevelopmentConfig):
     modo_real: bool = True
     modo_operativo: OperationalMode = OperationalMode.REAL
     intervalo_velas: str = '5m'
-    symbols: List[str] = field(default_factory=lambda : ['BTC/EUR',
-        'ETH/EUR', 'ADA/EUR', 'SOL/EUR', 'BNB/EUR'])
+    symbols: List[str] = field(default_factory=lambda: ["BTC/USDT", "ETH/USDT"])
     contradicciones_bloquean_entrada: bool = True
     entrada_cooldown_tras_crear_failed_sec: float = 0.0

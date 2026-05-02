@@ -40,7 +40,7 @@ class DataFeed:
         self,
         intervalo: str,
         *,
-        handler_timeout: float = float(os.getenv("DF_HANDLER_TIMEOUT_SEC", "6.0")),
+        handler_timeout: float = float(os.getenv("DF_HANDLER_TIMEOUT_SEC", "180.0")),
         inactivity_intervals: int = int(os.getenv("DF_INACTIVITY_INTERVALS", "10")),
         queue_max: int = int(os.getenv("DF_QUEUE_MAX", "2000")),
         queue_policy: str | None = None,

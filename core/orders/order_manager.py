@@ -83,6 +83,7 @@ class OrderManager:
         # Símbolos para los que ya se registró un mensaje de duplicado
         self._dup_warned: set[str] = set()
         self._sync_task: asyncio.Task | None = None
+        self._post_cancel_sync_task: asyncio.Task[Any] | None = None
 		# Símbolos con registro pendiente persistente (pausa nuevas entradas)
         self._registro_pendiente_paused: set[str] = set()
         self._sync_interval = 300
@@ -577,13 +578,48 @@ class OrderManager:
     async def _sync_once(self) -> bool:
         return await order_manager_sync.run_sync_once(self)
 
+    def schedule_sync_after_open_cancel(self, symbol: str) -> None:
+        """Tras cancelación durante apertura (modo real): un sync de órdenes, máx. uno inflight."""
+        if not self.modo_real:
+            return
+        log.warning(
+            "order.reconcile.scheduled",
+            extra=safe_extra({"symbol": symbol, "reason": "open_cancelled"}),
+        )
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        if self._post_cancel_sync_task is not None and not self._post_cancel_sync_task.done():
+            return
+
+        mgr = self
+
+        async def _run() -> None:
+            try:
+                await mgr._sync_once()
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                log.exception(
+                    "order.reconcile.after_open_cancel_failed",
+                    extra=safe_extra({"symbol": symbol}),
+                )
+            finally:
+                mgr._post_cancel_sync_task = None
+
+        self._post_cancel_sync_task = loop.create_task(
+            _run(),
+            name="orders.post_cancel_sync",
+        )
+
     async def _sync_loop(self) -> None:
         await order_manager_sync.run_sync_loop(self)
 
     async def aclose_background_tasks(self) -> None:
         """Cancela tareas periódicas (flush, reconciliación, sync) y reintentos de registro."""
         tasks: list[asyncio.Task[Any]] = []
-        for attr in ("_flush_task", "_reconcile_task", "_sync_task"):
+        for attr in ("_flush_task", "_reconcile_task", "_sync_task", "_post_cancel_sync_task"):
             t = getattr(self, attr, None)
             if t is not None and not t.done():
                 t.cancel()

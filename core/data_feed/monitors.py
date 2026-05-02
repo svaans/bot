@@ -15,6 +15,8 @@ from core.metrics import (
 )
 from core.utils.feature_flags import is_flag_enabled
 
+from core.utils.log_utils import safe_extra
+
 from ._shared import ConsumerState, log
 from . import events
 
@@ -111,6 +113,25 @@ async def monitor_consumers(feed: "DataFeed", timeout: float | None = None) -> N
                         events.emit_event(feed, "consumer_idle_no_data", {"symbol": symbol})
                         await reiniciar_stream(feed, symbol)
                         feed._consumer_last[symbol] = time.monotonic()
+                    continue
+                # Cola con trabajo pendiente: el consumidor suele estar en un handler
+                # lento (p. ej. pipeline de vela). No cancelar: evita cortar órdenes
+                # y falsos positivos del watchdog frente a ``handler_timeout``.
+                qs = queue.qsize()
+                if qs > 0:
+                    events.set_consumer_state(feed, symbol, ConsumerState.HEALTHY)
+                    log.warning(
+                        "consumer.slow_with_backlog",
+                        extra=safe_extra(
+                            {
+                                "symbol": symbol,
+                                "stage": "DataFeed.monitor_consumers",
+                                "queue_size": qs,
+                                "lag_secs": round(ahora - last, 3),
+                                "consumer_timeout": current_timeout,
+                            }
+                        ),
+                    )
                     continue
                 events.set_consumer_state(feed, symbol, ConsumerState.STALLED)
                 log.warning("%s: consumer sin progreso; reiniciando…", symbol)

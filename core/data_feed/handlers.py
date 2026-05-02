@@ -29,6 +29,7 @@ try:  # pragma: no cover - métricas opcionales
         DATAFEED_BACKFILL_WINDOW_REQUESTED,
         DATAFEED_HANDLER_LATENCY,
         DATAFEED_WS_MESSAGES_TOTAL,
+        INGEST_LATENCY,
         registrar_vela_recibida,
         registrar_vela_rechazada,
     )
@@ -69,6 +70,13 @@ except Exception:  # pragma: no cover - fallback cuando Prometheus no está disp
         "datafeed_handler_latency_seconds",
         "Latencia del handler de DataFeed desde el encolado hasta la ejecución",
         ["symbol", "timeframe"],
+        buckets=(0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2, 5),
+    )
+
+    INGEST_LATENCY = Histogram(
+        "datafeed_ingest_latency_seconds",
+        "Latencia desde _df_enqueue_time hasta inicio del handler del DataFeed",
+        ["symbol"],
         buckets=(0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2, 5),
     )
 
@@ -891,6 +899,10 @@ async def consumer_loop(feed: "DataFeed", symbol: str) -> None:
                     DATAFEED_HANDLER_LATENCY.labels(symbol=sym, timeframe=timeframe_label).observe(
                         queue_wait
                     )
+                    try:
+                        INGEST_LATENCY.labels(symbol=sym).observe(queue_wait)
+                    except Exception:
+                        pass
 
             events.set_consumer_state(feed, symbol, ConsumerState.HEALTHY)
             feed._stats[symbol]["handler_calls"] += 1
@@ -913,13 +925,15 @@ async def consumer_loop(feed: "DataFeed", symbol: str) -> None:
                         "timestamp": ts,
                         "timeout": feed.handler_timeout,
                         "stage": "DataFeed._consumer",
+                        "queue_size": queue.qsize(),
                     }
                 ),
             )
             events.emit_event(feed, "handler_timeout", {"symbol": sym, "ts": ts})
 
         except asyncio.CancelledError:
-            queue.task_done()
+            # task_done() solo en ``finally`` (un get → un task_done). Duplicarlo
+            # aquí rompía el contador de la cola al cancelar el consumidor.
             raise
 
         except Exception as exc:

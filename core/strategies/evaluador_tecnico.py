@@ -5,8 +5,9 @@ from typing import Dict
 import pandas as pd
 from indicadores.helpers import get_rsi
 from data_feed.candle_builder import backfill
+from config.symbol_config_resolve import resolve_symbol_branch
 from core.strategies.pesos_governance import log_pesos_tecnicos_persistidos
-from core.utils.log_utils import format_exception_for_log
+from core.utils.log_utils import format_exception_for_log, safe_extra
 from core.utils.utils import configurar_logger
 log = configurar_logger('eval_tecnico')
 RUTA_PESOS = 'config/pesos_tecnicos.json'
@@ -54,9 +55,29 @@ def _cargar_pesos(symbol: str) ->dict:
                 _pesos_cache = {}
         else:
             _pesos_cache = {}
-    datos_simbolo = _pesos_cache.get(symbol) or _pesos_cache.get('default')
+    matched_key, datos_simbolo, resolution = resolve_symbol_branch(symbol, _pesos_cache)
+    if resolution == "ambiguous":
+        log.warning(
+            "eval_tecnico.pesos_tecnicos_alias_ambiguous",
+            extra=safe_extra({"requested": str(symbol).strip(), "path": RUTA_PESOS}),
+        )
+        datos_simbolo = {}
+    elif resolution == "base_alias" and matched_key:
+        log.warning(
+            "eval_tecnico.pesos_tecnicos_alias_used",
+            extra=safe_extra(
+                {
+                    "requested": str(symbol).strip(),
+                    "matched_key": matched_key,
+                    "path": RUTA_PESOS,
+                }
+            ),
+        )
     if not isinstance(datos_simbolo, dict):
         datos_simbolo = {}
+    if not datos_simbolo:
+        fb = _pesos_cache.get("default")
+        datos_simbolo = fb if isinstance(fb, dict) else {}
     pesos = PESOS_DEFECTO.copy()
     pesos.update(datos_simbolo)
     return pesos

@@ -13,6 +13,53 @@ from core.utils.log_utils import safe_extra
 log = configurar_logger('config_manager')
 
 
+def _dominant_quote_from_symbols(symbols: List[str]) -> Optional[str]:
+    """Si todos los símbolos comparten la misma moneda de cotización, devuélvela en mayúsculas."""
+
+    quotes: set[str] = set()
+    for sym in symbols:
+        if "/" not in sym:
+            continue
+        _, quote = sym.split("/", 1)
+        q = quote.strip().upper()
+        if q:
+            quotes.add(q)
+    if len(quotes) == 1:
+        return next(iter(quotes))
+    return None
+
+
+def _resolve_capital_currency_for_symbols(
+    symbols: List[str],
+    capital_currency_env: Optional[str],
+) -> tuple[Optional[str], Optional[str]]:
+    """Alinea ``CAPITAL_CURRENCY`` con el quote inferido de ``SYMBOLS``.
+
+    Returns
+    -------
+    (resolved, dominant_quote)
+        ``dominant_quote`` es ``None`` si no hay un quote único (mezcla o símbolos sin ``/``).
+    """
+
+    dominant = _dominant_quote_from_symbols(symbols)
+    raw = (
+        capital_currency_env.strip().upper()
+        if capital_currency_env and capital_currency_env.strip()
+        else None
+    )
+    if dominant is None:
+        return raw, None
+    if raw is None:
+        return dominant, dominant
+    if raw != dominant:
+        raise ValueError(
+            f"CAPITAL_CURRENCY={raw} no coincide con el quote unificado inferido de SYMBOLS "
+            f"({dominant}). MIN_ORDER_EUR y RISK_CAPITAL_* expresan notional en la moneda del par; "
+            "ajusta CAPITAL_CURRENCY o los símbolos."
+        )
+    return raw, dominant
+
+
 def _cargar_float(clave: str, valor_defecto) -> float:
     try:
         return float(os.getenv(clave, valor_defecto))
@@ -131,6 +178,7 @@ class Config:
     intervalo_velas: str
     symbols: List[str]
     umbral_riesgo_diario: float
+    # Notional mínimo de bootstrap por símbolo en la moneda **quote** del par (nombre histórico ``*_eur``).
     min_order_eur: float
     risk_kill_switch_max_consecutive_losses: int = 5
     diversidad_minima: int = 2
@@ -187,7 +235,7 @@ class Config:
     monitor_interval: int = 5
     max_stream_restarts: int = 10
     inactivity_intervals: int = 10
-    handler_timeout: float = 12.0
+    handler_timeout: float = 180.0
     ws_timeout: int = 30
     frecuencia_tendencia: int = 1
     frecuencia_correlaciones: int = 300
@@ -340,8 +388,8 @@ class ConfigManager:
             if not rest or not ws:
                 raise ValueError('Faltan endpoints de staging: BINANCE_STAGING_REST_URL/BINANCE_STAGING_WS_URL')
 
-        # Capital
-        capital_currency = os.getenv('CAPITAL_CURRENCY')
+        # Capital (se resuelve frente a SYMBOLS más abajo, antes de construir ``Config``)
+        capital_currency_env = os.getenv('CAPITAL_CURRENCY')
 
         # DataFeed queue tuning
         df_queue_limits = dict(getattr(defaults, 'df_queue_limits', {}))
@@ -559,7 +607,10 @@ class ConfigManager:
                 getattr(defaults, 'risk_kill_switch_max_consecutive_losses', 5),
             ),
         )
-        min_order_eur = _cargar_float('MIN_ORDER_EUR', defaults.min_order_eur)
+        if os.getenv('MIN_ORDER_QUOTE') is not None and str(os.getenv('MIN_ORDER_QUOTE', '')).strip() != '':
+            min_order_eur = _cargar_float('MIN_ORDER_QUOTE', defaults.min_order_eur)
+        else:
+            min_order_eur = _cargar_float('MIN_ORDER_EUR', defaults.min_order_eur)
         diversidad_minima = _cargar_int('DIVERSIDAD_MINIMA', defaults.diversidad_minima)
         max_posiciones_cartera = max(
             0,
@@ -629,7 +680,21 @@ class ConfigManager:
         for sym, amount in risk_capital_per_symbol.items():
             if amount < 0:
                 raise ValueError(f'RISK_CAPITAL_PER_SYMBOL[{sym}] no puede ser negativo')
-        
+
+        capital_currency, dominant_quote = _resolve_capital_currency_for_symbols(
+            symbols, capital_currency_env
+        )
+        if dominant_quote and (capital_currency_env is None or not str(capital_currency_env).strip()):
+            log.info(
+                'config.capital_currency_inferred_from_symbols',
+                extra=safe_extra(
+                    {
+                        'capital_currency': capital_currency,
+                        'dominant_quote': dominant_quote,
+                    }
+                ),
+            )
+
         config = Config(
             api_key=api_key,
             api_secret=api_secret,

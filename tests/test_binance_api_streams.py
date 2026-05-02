@@ -2,9 +2,13 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import json
+import time
 from typing import Any, Dict
 
 import pytest
+import websockets
 
 from binance_api.cliente import (
     BinanceClient,
@@ -276,3 +280,150 @@ async def test_escuchar_velas_combinado_dispatches_to_handlers(monkeypatch: pyte
         assert candle["open_time"] == 60000
         assert candle["close_time"] == 120000
         assert candle["is_closed"] is True
+
+
+@pytest.mark.asyncio
+async def test_ws_dispatch_puts_finish_before_slow_handler() -> None:
+    """Cola + worker: ``put`` no espera a que el handler termine trabajo lento."""
+
+    q: asyncio.Queue = asyncio.Queue(maxsize=32)
+    order: list[int] = []
+
+    async def handler(data: Dict[str, Any]) -> None:
+        seq = int(data["seq"])
+        order.append(seq)
+        if seq == 1:
+            await asyncio.sleep(0.35)
+
+    worker = asyncio.create_task(ws._ws_dispatch_worker_loop(q, handler, url="test://dispatch"))
+    try:
+        t0 = time.perf_counter()
+        await q.put((0.0, {"seq": 1}))
+        await q.put((0.0, {"seq": 2}))
+        put_elapsed = time.perf_counter() - t0
+        assert put_elapsed < 0.12
+        await asyncio.wait_for(q.join(), timeout=2.0)
+    finally:
+        worker.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await worker
+
+    assert order == [1, 2]
+
+
+@pytest.mark.asyncio
+async def test_ws_dispatch_queue_maxsize_blocks_extra_puts() -> None:
+    """Cola acotada: con el worker bloqueado en el primer mensaje, ``put`` deja de aceptar al llenarse."""
+
+    q: asyncio.Queue = asyncio.Queue(maxsize=3)
+    gate = asyncio.Event()
+
+    async def handler(data: Dict[str, Any]) -> None:
+        if int(data["n"]) == 1:
+            await gate.wait()
+
+    worker = asyncio.create_task(ws._ws_dispatch_worker_loop(q, handler, url="test://dispatch"))
+    try:
+        await q.put((0.0, {"n": 1}))
+        await q.put((0.0, {"n": 2}))
+        await q.put((0.0, {"n": 3}))
+        await q.put((0.0, {"n": 4}))
+        with pytest.raises(asyncio.TimeoutError):
+            await asyncio.wait_for(q.put((0.0, {"n": 5})), timeout=0.1)
+        gate.set()
+        await asyncio.wait_for(q.join(), timeout=2.0)
+    finally:
+        worker.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await worker
+
+
+@pytest.mark.asyncio
+async def test_ws_dispatch_worker_preserves_message_order() -> None:
+    """Un worker serial preserva el orden de ingestión."""
+
+    q: asyncio.Queue = asyncio.Queue(maxsize=8)
+    ids: list[str] = []
+
+    async def handler(data: Dict[str, Any]) -> None:
+        ids.append(str(data["id"]))
+
+    worker = asyncio.create_task(ws._ws_dispatch_worker_loop(q, handler, url="test://dispatch"))
+    try:
+        await q.put((0.0, {"id": "a", "is_closed": True}))
+        await q.put((0.0, {"id": "b", "is_closed": True}))
+        await asyncio.wait_for(q.join(), timeout=2.0)
+    finally:
+        worker.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await worker
+
+    assert ids == ["a", "b"]
+
+
+@pytest.mark.asyncio
+async def test_consume_ws_stream_recv_decoupled_from_slow_handler(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Tras Fase 2, el bucle puede hacer ``recv`` del 2.º mensaje antes de que acabe el handler lento del 1.º."""
+
+    second_recv_at: list[float] = []
+    slow_handler_end: list[float] = []
+
+    class _MockWs:
+        _n = 0
+
+        async def recv(self) -> str:
+            self._n += 1
+            if self._n == 1:
+                return json.dumps({"i": 1})
+            if self._n == 2:
+                second_recv_at.append(time.perf_counter())
+                return json.dumps({"i": 2})
+            await asyncio.Event().wait()
+
+    class _FakeConnect:
+        def __init__(self, *_a: Any, **_k: Any) -> None:
+            pass
+
+        async def __aenter__(self) -> _MockWs:
+            return _MockWs()
+
+        async def __aexit__(self, *_exc: Any) -> None:
+            return None
+
+    def fake_connect(*_a: Any, **_k: Any) -> _FakeConnect:
+        return _FakeConnect()
+
+    monkeypatch.setattr(websockets, "connect", fake_connect)
+
+    async def handle(msg: Dict[str, Any]) -> None:
+        if int(msg["i"]) == 1:
+            await asyncio.sleep(0.22)
+            slow_handler_end.append(time.perf_counter())
+
+    consume_task = asyncio.create_task(
+        ws._consume_ws_stream(
+            "wss://unit.test/stream",
+            handle,
+            timeout_inactividad=30.0,
+            mensaje_timeout=30.0,
+        )
+    )
+    try:
+        await asyncio.wait_for(_wait_for_slow(slow_handler_end), timeout=2.0)
+    finally:
+        consume_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await consume_task
+
+    assert second_recv_at and slow_handler_end
+    assert second_recv_at[0] < slow_handler_end[0]
+
+
+async def _wait_for_slow(slow_handler_end: list[float]) -> None:
+    for _ in range(200):
+        if slow_handler_end:
+            return
+        await asyncio.sleep(0.01)
+    raise AssertionError("slow handler did not complete")

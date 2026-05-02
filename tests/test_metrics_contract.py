@@ -4,6 +4,7 @@ from core.metrics import (
     BUFFER_SIZE_V2,
     CANDLES_DUPLICADAS_RATE,
     ENTRADAS_RECHAZADAS_V2,
+    INGEST_LATENCY,
     TASK_TIMEOUT_SECONDS,
     TRADER_PIPELINE_LATENCY,
     TRADER_PIPELINE_QUEUE_WAIT,
@@ -12,6 +13,8 @@ from core.metrics import (
     VELAS_RECHAZADAS,
     VELAS_RECHAZADAS_PCT,
     VELAS_TOTAL,
+    WS_DISPATCH_BACKLOG_EVENTS_TOTAL,
+    WS_DISPATCH_QUEUE_DEPTH,
 )
 from core.metrics_helpers import safe_inc, safe_set
 from observability.metrics import (
@@ -59,6 +62,15 @@ def test_trader_pipeline_metrics_include_timeframe() -> None:
     assert _labels_of(TRADER_QUEUE_SIZE) == expected
     assert _labels_of(TRADER_PIPELINE_LATENCY) == expected
     assert _labels_of(TRADER_PIPELINE_QUEUE_WAIT) == expected
+
+
+def test_ingest_latency_metric_labels() -> None:
+    assert _labels_of(INGEST_LATENCY) == {"symbol"}
+
+
+def test_ws_dispatch_metrics_no_labels() -> None:
+    assert _labels_of(WS_DISPATCH_QUEUE_DEPTH) == set()
+    assert _labels_of(WS_DISPATCH_BACKLOG_EVENTS_TOTAL) == set()
 
 
 def test_watchdog_timeout_metric_labels() -> None:

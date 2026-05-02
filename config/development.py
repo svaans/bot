@@ -10,8 +10,9 @@ class DevelopmentConfig:
     modo_real: bool = False
     modo_operativo: OperationalMode = OperationalMode.PAPER_TRADING
     intervalo_velas: str = '5m'
-    symbols: List[str] = field(default_factory=lambda : ['BTC/EUR',
-        'ETH/EUR', 'ADA/EUR', 'SOL/EUR', 'BNB/EUR'])
+    # Spot Binance (CCXT): mercados líquidos USDT; evita */EUR por defecto que en
+    # binance.com suelen no existir o no coincidir con el feed WS usado en paper.
+    symbols: List[str] = field(default_factory=lambda: ["BTC/USDT", "ETH/USDT"])
     umbral_riesgo_diario: float = 0.03
     risk_kill_switch_max_consecutive_losses: int = 5
     risk_alerta_capital_pct: float = 0.85
@@ -63,7 +64,9 @@ class DevelopmentConfig:
     monitor_interval: int = 5
     max_stream_restarts: int = 10
     inactivity_intervals: int = 10
-    handler_timeout: float = 12.0
+    # Alineado con ``DataFeed`` (``DF_HANDLER_TIMEOUT_SEC`` default 180) y Fase 1:
+    # el pipeline real supera con frecuencia 12s; 12s aquí anulaba el umbral largo vía Config.
+    handler_timeout: float = 180.0
     ws_timeout: int = 30
     frecuencia_tendencia: int = 3
     frecuencia_correlaciones: int = 300

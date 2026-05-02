@@ -18,7 +18,8 @@ from core.ajustador_riesgo import (
     MODO_AGRESIVO_SLOPE_THRESHOLD,
     MODO_AGRESIVO_VOL_THRESHOLD,
 )
-from core.utils.log_utils import format_exception_for_log
+from config.symbol_config_resolve import resolve_symbol_branch
+from core.utils.log_utils import format_exception_for_log, safe_extra
 from core.utils.utils import configurar_logger
 RUTA_CONFIG_SIMBOLOS = 'config/configuraciones_optimas.json'
 log = configurar_logger('config_service')
@@ -183,15 +184,40 @@ class ConfigurationService:
                 '⚠️ Archivo JSON vacío ({}); ningún símbolo persistido aún',
                 extra={"path": str(objetivo)},
             )
-        partial = configuraciones.get(symbol, {})
-        if not isinstance(partial, dict):
+        matched_key, branch, resolution = resolve_symbol_branch(symbol, configuraciones)
+        partial: dict[str, Any] = {}
+        if resolution == "ambiguous":
+            log.warning(
+                "config.symbol_config_alias_ambiguous",
+                extra=safe_extra(
+                    {
+                        "requested": str(symbol).strip(),
+                        "path": str(objetivo),
+                    }
+                ),
+            )
+            return self._merge_with_base(symbol, {}, silent_defaults=True)
+        if isinstance(branch, dict):
+            partial = dict(branch)
+        elif branch is not None:
             log.warning(
                 "⚠️ Configuración para %s no es un dict; se ignora",
                 symbol,
                 extra={"symbol": symbol},
             )
             partial = {}
-        return self._merge_with_base(symbol, partial.copy())
+        if resolution == "base_alias" and matched_key:
+            log.warning(
+                "config.symbol_config_alias_used",
+                extra=safe_extra(
+                    {
+                        "requested": str(symbol).strip(),
+                        "matched_key": matched_key,
+                        "path": str(objetivo),
+                    }
+                ),
+            )
+        return self._merge_with_base(symbol, partial)
 
     def save(self, symbol: str, config: dict[str, Any]) ->None:
         if not isinstance(config, dict):

@@ -254,6 +254,12 @@ async def abrir_async(
                 return OrderOpenStatus.FAILED
 
         manager.abriendo.add(symbol)
+        log.info(
+            "order.create.start",
+            extra=safe_extra(
+                {"symbol": symbol, "operation_id": operation_id, "modo_real": manager.modo_real}
+            ),
+        )
         try:
             precio_senal = float(precio)
             if not manager.modo_real:
@@ -479,7 +485,16 @@ async def abrir_async(
 
             except Exception as e:
                 err_t = _fmt_exchange_err(e)
-                log.error("❌ No se pudo abrir la orden para %s: %s", symbol, err_t)
+                log.error(
+                    "order.create.error",
+                    extra=safe_extra(
+                        {
+                            "symbol": symbol,
+                            "operation_id": operation_id,
+                            "error": err_t,
+                        }
+                    ),
+                )
                 if manager.bus:
                     await manager.bus.publish(
                         "notify",
@@ -494,6 +509,16 @@ async def abrir_async(
                 registrar_orden('failed')
                 return OrderOpenStatus.FAILED
 
+        except asyncio.CancelledError:
+            log.warning(
+                "order.create.cancelled",
+                extra=safe_extra({"symbol": symbol, "operation_id": operation_id}),
+            )
+            manager.ordenes.pop(symbol, None)
+            limpiar_registro_pendiente(symbol)
+            manager._registro_pendiente_paused.discard(symbol)
+            manager.schedule_sync_after_open_cancel(symbol)
+            raise
         finally:
             manager.abriendo.discard(symbol)
             manager._dup_warned.discard(symbol)
@@ -531,4 +556,8 @@ async def abrir_async(
             {'cantidad': cantidad},
         )
         manager._actualizar_capital_disponible(symbol, orden)
+        log.info(
+            "order.create.end",
+            extra=safe_extra({"symbol": symbol, "operation_id": operation_id}),
+        )
         return OrderOpenStatus.OPENED

@@ -5,10 +5,12 @@ import contextlib
 import time
 from datetime import datetime, timezone
 from typing import Any, Callable
+from unittest.mock import AsyncMock
 
 import pytest
 
 from core.utils.feature_flags import reset_flag_cache
+from core.data_feed import handlers as handlers_module
 from core.data_feed import (
     ConsumerStreamSnapshot,
     DataFeed,
@@ -755,3 +757,122 @@ async def test_snapshot_consumer_stream_detects_missing_stream() -> None:
     blocker_event.set()
     with contextlib.suppress(asyncio.CancelledError):
         await consumer
+
+
+class _TaskDoneCountingQueue(asyncio.Queue):
+    """Cuenta llamadas a ``task_done()`` para blindar Fase 1 (un ``get`` → un ``task_done``)."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.task_done_count = 0
+
+    def task_done(self) -> None:  # type: ignore[override]
+        self.task_done_count += 1
+        super().task_done()
+
+
+@pytest.mark.asyncio
+async def test_consumer_cancel_mid_handler_calls_task_done_once() -> None:
+    """Si el handler se cancela, ``finally`` debe llamar ``task_done`` una sola vez por ``get``."""
+
+    handler_started = asyncio.Event()
+
+    async def handler(_: dict[str, Any]) -> None:
+        handler_started.set()
+        await asyncio.Event().wait()
+
+    feed = make_feed(handler_timeout=60.0)
+    symbol = "XRPUSDT"
+    feed._handler = handler
+    feed._running = True
+    feed._queues[symbol] = _TaskDoneCountingQueue()
+
+    consumer_task = asyncio.create_task(feed._consumer(symbol))
+    candle = {"symbol": symbol, "timestamp": 1_650_000_000_000, "is_closed": True}
+    await feed._queues[symbol].put(candle)
+
+    await asyncio.wait_for(handler_started.wait(), timeout=1.0)
+    consumer_task.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await consumer_task
+
+    assert feed._queues[symbol].task_done_count == 1
+
+
+@pytest.mark.asyncio
+async def test_monitor_consumers_backlog_does_not_reiniciar_consumer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Fase 1: consumidor lento con cola no vacía → no se llama ``reiniciar_consumer``."""
+
+    from core.data_feed import monitors as monitors_mod
+
+    mock_reiniciar = AsyncMock()
+    monkeypatch.setattr(monitors_mod, "reiniciar_consumer", mock_reiniciar)
+
+    feed = make_feed(monitor_interval=0.05)
+    symbol = "LINKUSDT"
+    feed._running = True
+    feed._queues[symbol] = asyncio.Queue()
+    await feed._queues[symbol].put({"symbol": symbol, "timestamp": 1, "is_closed": True})
+    feed._consumer_tasks[symbol] = asyncio.create_task(asyncio.sleep(10_000.0))
+    feed._consumer_last[symbol] = time.monotonic() - 3600.0
+
+    monitor_task = asyncio.create_task(monitors_mod.monitor_consumers(feed, timeout=5.0))
+    await asyncio.sleep(0.2)
+    feed._running = False
+    monitor_task.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await monitor_task
+
+    mock_reiniciar.assert_not_awaited()
+    feed._consumer_tasks[symbol].cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await feed._consumer_tasks[symbol]
+
+
+@pytest.mark.asyncio
+async def test_consumer_handler_timeout_log_extra_includes_queue_size(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``handler.timeout`` recibe ``extra`` con ``queue_size`` (el logger real no propaga a caplog)."""
+
+    handler_started = asyncio.Event()
+
+    async def handler(_: dict[str, Any]) -> None:
+        handler_started.set()
+        await asyncio.sleep(0.25)
+
+    timeout_extras: list[dict[str, Any]] = []
+    real_error = handlers_module.log.error
+
+    def _spy_error(msg: str, *args: Any, extra: dict[str, Any] | None = None, **kwargs: Any) -> None:
+        if msg == "handler.timeout" and isinstance(extra, dict):
+            timeout_extras.append(dict(extra))
+        return real_error(msg, *args, extra=extra, **kwargs)
+
+    monkeypatch.setattr(handlers_module.log, "error", _spy_error)
+
+    feed = make_feed(handler_timeout=0.1)
+    symbol = "DOTUSDT"
+    feed._handler = handler
+    feed._running = True
+    feed._queues[symbol] = asyncio.Queue()
+
+    candle_a = {"symbol": symbol, "timestamp": 1_650_000_000_000, "is_closed": True}
+    candle_b = {"symbol": symbol, "timestamp": 1_650_000_060_000, "is_closed": True}
+
+    consumer_task = asyncio.create_task(feed._consumer(symbol))
+
+    await feed._queues[symbol].put(candle_a)
+    await asyncio.wait_for(handler_started.wait(), timeout=1.0)
+    await feed._queues[symbol].put(candle_b)
+    await asyncio.wait_for(feed._queues[symbol].join(), timeout=2.0)
+
+    feed._running = False
+    consumer_task.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await consumer_task
+
+    assert timeout_extras, "se esperaba al menos un log handler.timeout"
+    assert any(e.get("queue_size") == 1 for e in timeout_extras)

@@ -11,6 +11,7 @@ from core.metrics import (
     BARS_OUT_OF_RANGE_TOTAL,
     EVAL_ATTEMPTS_TOTAL,
     TRADER_PIPELINE_LATENCY,
+    TRADER_PIPELINE_QUEUE_WAIT,
     TRADER_PROCESAR_VELA_CALLS_TOTAL,
     TRADER_SKIPS_TOTAL,
     WAITING_CLOSE_STREAK,
@@ -598,6 +599,15 @@ class TraderLiteProcessingMixin:
         tf_str = str(timeframe) if timeframe else None
         eval_context = candle.get("_df_eval_context") if isinstance(candle, dict) else None
         metric_tf_label = (tf_str or "unknown").lower()
+        enq_mono = candle.get("_df_enqueue_time") if isinstance(candle, dict) else None
+        if enq_mono is not None:
+            try:
+                pipeline_wait = max(0.0, time.perf_counter() - float(enq_mono))
+                TRADER_PIPELINE_QUEUE_WAIT.labels(
+                    symbol=sym, timeframe=metric_tf_label
+                ).observe(pipeline_wait)
+            except Exception:
+                pass
         TRADER_PROCESAR_VELA_CALLS_TOTAL.labels(symbol=sym, tf=metric_tf_label).inc()
         attempt_payload = {
             "symbol": sym,
