@@ -1839,6 +1839,8 @@ class Trader(TraderLite):
                     self._verificar_entrada_provider = provider_used
                     _drain(captured_events)
                     return resolved
+                # First non-TypeError attempt is definitive — stop trying other signatures
+                break
 
             if captured_events:
                 deferred_events = list(captured_events)
@@ -1878,6 +1880,8 @@ class Trader(TraderLite):
                     if resolved is not None:
                         self._verificar_entrada_provider = provider_used
                         return resolved
+                    # First non-TypeError attempt is definitive
+                    break
 
         self._verificar_entrada_provider = provider_used
         _drain(deferred_events)

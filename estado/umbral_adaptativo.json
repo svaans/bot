@@ -5,6 +5,7 @@
     "BNB/EUR": 1.0
   },
   "histeresis_skips": {
-    "SOL/EUR": 1
+    "SOL/EUR": 2,
+    "BNB/EUR": 1
   }
 }

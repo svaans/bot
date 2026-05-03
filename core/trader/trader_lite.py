@@ -895,7 +895,10 @@ class TraderLite(TraderLiteBackfillMixin, TraderLiteProcessingMixin):
 
         bg_alive = 0
         try:
-            bg_alive = sum(1 for t in getattr(self, "_bg_tasks", set()) if not t.done())
+            sup = getattr(self, "supervisor", None)
+            if sup is not None:
+                tasks_dict = getattr(sup, "tasks", {}) or {}
+                bg_alive = sum(1 for t in tasks_dict.values() if not t.done())
         except Exception:
             bg_alive = 0
 

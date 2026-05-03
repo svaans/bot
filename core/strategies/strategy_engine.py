@@ -461,6 +461,14 @@ class StrategyEngine:
                 p90,
                 dispersion,
             )
+        elif dispersion < 0.01 and p90 >= self._synergy_cap * 0.9:
+            log.warning(
+                "⚠️ [%s] Sinergia colapsada: valores idénticos y saturados (p90=%.2f, disp=%.4f) — "
+                "todas las estrategias alineadas en la misma dirección",
+                symbol,
+                p90,
+                dispersion,
+            )
         elif p90 < self._synergy_cap * 0.6 and dispersion < 0.1:
             log.info(
                 "ℹ️ [%s] Sinergia muy por debajo del cap %.2f (p90=%.2f, disp=%.3f). Re-evaluar límite.",
