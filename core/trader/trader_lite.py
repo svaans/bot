@@ -928,6 +928,8 @@ class TraderLite(TraderLiteBackfillMixin, TraderLiteProcessingMixin):
     def _maybe_emit_datafeed_connected(self, symbol: str | None, ts: int | None) -> None:
         if self._datafeed_connected_emitted:
             return
+        # Reset duplicate-bar tracking so historic backfill candles don't block live ones
+        self._last_evaluated_bar.clear()
         bus = getattr(self, "event_bus", None) or getattr(self, "bus", None)
         payload: Dict[str, Any] = {}
         if symbol:

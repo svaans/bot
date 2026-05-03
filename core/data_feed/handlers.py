@@ -425,6 +425,7 @@ async def handle_candle(
     feed: "DataFeed", symbol: str, candle: dict, *, _from_backfill: bool = False
 ) -> None:
     """Normaliza y encola una vela recibida desde el stream."""
+    _t0_hc = time.monotonic()
 
     candle = _normalize_candle_payload(candle)
 
@@ -718,6 +719,10 @@ async def handle_candle(
     _track_slot_version(feed, symbol, slot_key, candle)
     events.emit_event(feed, "tick", {"symbol": symbol, "ts": ts})
 
+    _elapsed_hc = (time.monotonic() - _t0_hc) * 1000
+    if _elapsed_hc > 50:
+        log.info("diagnostico.handle_candle_time", extra={"symbol": symbol_label, "elapsed_ms": round(_elapsed_hc, 2)})
+
 
 async def consumer_loop(feed: "DataFeed", symbol: str) -> None:
     """Consume velas de la cola y ejecuta el handler del usuario."""
@@ -974,6 +979,11 @@ async def consumer_loop(feed: "DataFeed", symbol: str) -> None:
                     except (TypeError, ValueError):
                         base_total = 0.0
                     stage_durations["total"] = base_total + handler_elapsed
+            if handler_elapsed > 5.0:
+                log.info(
+                    "diagnostico.consumer_handler_time",
+                    extra={"symbol": sym, "elapsed_ms": round(handler_elapsed * 1000, 2), "queue_wait_ms": round((queue_wait or 0) * 1000, 2), "outcome": outcome},
+                )
             feed._consumer_last[symbol] = time.monotonic()
             if handler_completed:
                 ts_done = _to_int(ts)

@@ -1034,10 +1034,12 @@ class Trader(TraderLite):
                 }
                 return None
 
-            if not self._should_evaluate(symbol, timeframe_str, last_bar_ts_raw):
-                log.debug(
-                    "[%s] Saltando evaluación (sin nueva vela cerrada)",
-                    symbol,
+            eval_ts = int(bar_open_ts * 1000) if bar_open_ts is not None else last_bar_ts_raw
+            if not self._should_evaluate(symbol, timeframe_str, eval_ts):
+                eval_key_dup = (symbol.upper(), (timeframe_str or "unknown"))
+                prev_ts = self._last_evaluated_bar.get(eval_key_dup)
+                log.info(
+                    "diagnostico.duplicate_bar",
                     extra=safe_extra(
                         {
                             "symbol": symbol,
@@ -1045,6 +1047,8 @@ class Trader(TraderLite):
                             "reason": "duplicate_bar",
                             "buffer_len": buf_len,
                             "min_needed": min_bars,
+                            "eval_ts": eval_ts,
+                            "prev_evaluated_ts": prev_ts,
                         }
                     ),
                 )
@@ -1053,6 +1057,8 @@ class Trader(TraderLite):
                     "timeframe": timeframe_str,
                     "buffer_len": buf_len,
                     "min_needed": min_bars,
+                    "eval_ts": eval_ts,
+                    "prev_evaluated_ts": prev_ts,
                 }
                 return None
 

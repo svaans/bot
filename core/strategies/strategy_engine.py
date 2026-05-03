@@ -1,11 +1,12 @@
 """Motor de estrategias para el bot de trading."""
 from __future__ import annotations
 import asyncio
+import json
 import math
 import statistics
 from collections import deque
 from threading import Lock
-from time import monotonic
+from time import monotonic, perf_counter
 from typing import TYPE_CHECKING, Any, Awaitable, Callable, Dict, Mapping, Optional
 import pandas as pd
 
@@ -147,6 +148,7 @@ class StrategyEngine:
                 "volumen_real": validar_volumen_real(df),
                 "spread": validar_spread(df),
             }
+        _t0_eval = perf_counter()
         try:
             pesos = pesos_symbol or self._peso_provider(symbol)
             tendencia_normalizada = self._normalizar_tendencia(tendencia)
@@ -165,6 +167,8 @@ class StrategyEngine:
                 pesos,
                 config or {},
             )
+            _elapsed = (perf_counter() - _t0_eval) * 1000
+            log.info("diagnostico.evaluar_entrada_time", extra={"symbol": symbol, "elapsed_ms": round(_elapsed, 2)})
             return analisis
         except (ValueError, KeyError) as e:
             log.error(
@@ -229,6 +233,7 @@ class StrategyEngine:
         pesos_symbol: Mapping[str, float],
         config: Mapping[str, Any],
     ) -> Dict[str, Any]:
+        _t0 = perf_counter()
         estrategias_activas = resultado.get("estrategias_activas", {})
         score_base = float(resultado.get("puntaje_total", 0.0))
         diversidad = int(resultado.get("diversidad", 0))
@@ -328,6 +333,66 @@ class StrategyEngine:
 
         # ``verificar_entrada`` respeta ``permitido``; si es False no se abre aunque
         # el score técnico pase otros filtros aislados en el pipeline.
+
+        # --- DIAGNÓSTICO: validación de indicadores anómalos ----------------
+        _anomalias = []
+        if rsi_val is not None and (rsi_val < 0 or rsi_val > 100):
+            _anomalias.append(f"rsi_fuera_rango={rsi_val}")
+        if slope_val is not None and (slope_val < -1 or slope_val > 1):
+            _anomalias.append(f"slope_fuera_rango={slope_val}")
+        if mom_val is not None and (mom_val < -1 or mom_val > 1):
+            _anomalias.append(f"momentum_fuera_rango={mom_val}")
+        if rsi_val is None:
+            _anomalias.append("rsi_none")
+        if slope_val is None:
+            _anomalias.append("slope_none")
+        if mom_val is None:
+            _anomalias.append("momentum_none")
+        if contexto.get("volumen", 0) <= 0:
+            _anomalias.append(f"volumen_no_positivo={contexto.get('volumen')}")
+        if math.isnan(score_total) or math.isinf(score_total):
+            _anomalias.append(f"score_total_invalid={score_total}")
+        if math.isnan(score_tec) or math.isinf(score_tec):
+            _anomalias.append(f"score_tecnico_invalid={score_tec}")
+        if math.isnan(umbral) or math.isinf(umbral):
+            _anomalias.append(f"umbral_invalid={umbral}")
+        if _anomalias:
+            log.warning(
+                "diagnostico.anomalia_indicadores",
+                extra={"symbol": symbol, "anomalias": _anomalias},
+            )
+        # -------------------------------------------------------------------
+
+        _elapsed_ms = (perf_counter() - _t0) * 1000
+        _diag = {
+            "symbol": symbol,
+            "timestamp": int(df["timestamp"].iloc[-1]) if "timestamp" in df.columns else None,
+            "rsi": rsi_val,
+            "slope": slope_val,
+            "momentum": mom_val,
+            "volumen_media": contexto.get("volumen"),
+            "tendencia": tendencia,
+            "score_base": round(score_base, 4),
+            "sinergia": round(sinergia, 4),
+            "score_total": round(score_total, 4),
+            "umbral": round(umbral, 4),
+            "score_tecnico": round(score_tec, 4),
+            "umbral_score_tecnico": round(umbral_score, 4),
+            "diversidad": diversidad,
+            "cumple_diversidad": cumple_div,
+            "validaciones": validaciones,
+            "validaciones_fallidas": validaciones_fallidas,
+            "contradiccion": contradiccion,
+            "empate": empate,
+            "regimen_volatilidad": vol_etiqueta,
+            "permitido": permitido,
+            "motivo_rechazo": motivo,
+            "score_breakdown": score_breakdown.to_dict() if hasattr(score_breakdown, "to_dict") else str(score_breakdown),
+            "anomalias": _anomalias if _anomalias else None,
+            "elapsed_ms": round(_elapsed_ms, 2),
+        }
+        log.info("diagnostico.decision_entrada", extra=_diag)
+
         return {
             "permitido": permitido,
             "motivo_rechazo": motivo,

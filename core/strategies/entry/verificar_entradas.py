@@ -729,6 +729,7 @@ async def verificar_entrada(
       - meta: dict con detalles internos (puedes extenderlo)
     o None si no procede.
     """
+    _t0_ve = time.monotonic()
     symbol_norm = str(symbol or "").upper()
     ts_value: Any = None
     log.debug(
@@ -791,6 +792,12 @@ async def verificar_entrada(
     # Última vela
     last = df.iloc[-1]
     precio = float(last["close"])
+    if not math.isfinite(precio) or precio <= 0:
+        log.warning("diagnostico.precio_anomalo", extra={"symbol": symbol_norm, "precio": precio})
+        return _reject("precio_invalido", extra={"precio": precio})
+    vol_ultimo = float(last.get("volume", 0)) if "volume" in last else None
+    if vol_ultimo is not None and (not math.isfinite(vol_ultimo) or vol_ultimo <= 0):
+        log.warning("diagnostico.volumen_anomalo", extra={"symbol": symbol_norm, "volume": vol_ultimo})
     try:
         ts_value = int(last["timestamp"])
     except (TypeError, ValueError):
@@ -800,6 +807,8 @@ async def verificar_entrada(
     # Respeta la puerta de entrada del Trader (capital, riesgo, cooldown, etc.)
     gate = getattr(trader, "_puede_evaluar_entradas", None)
     if callable(gate) and not gate(symbol):
+        _elapsed_ve = (time.monotonic() - _t0_ve) * 1000
+        log.info("diagnostico.verificar_entrada_time", extra={"symbol": symbol_norm, "elapsed_ms": round(_elapsed_ve, 2), "outcome": "rechazada", "motivo": "gate_blocked"})
         payload = {"symbol": symbol, "reason": "gate_blocked"}
         _emit(on_event, "entry_gate_blocked", payload)
         return _reject("gate_blocked", extra=payload)
@@ -826,7 +835,22 @@ async def verificar_entrada(
         return _reject("timeout", extra=payload)
 
     if not resultado_engine:
+        _elapsed_ve = (time.monotonic() - _t0_ve) * 1000
+        log.info("diagnostico.verificar_entrada_time", extra={"symbol": symbol_norm, "elapsed_ms": round(_elapsed_ve, 2), "outcome": "rechazada", "motivo": "engine_no_result"})
         return _reject("engine_no_result")
+
+    # --- DIAGNÓSTICO: validación de valores del engine -------------------
+    _ind_diag = {}
+    for _k in ("rsi", "slope", "momentum", "score_total", "score_tecnico", "umbral"):
+        _v = resultado_engine.get(_k)
+        if _v is None:
+            _ind_diag[_k] = "none"
+        elif isinstance(_v, (int, float)):
+            if math.isnan(_v) or math.isinf(_v):
+                _ind_diag[_k] = f"invalid_{_v}"
+    if _ind_diag:
+        log.warning("diagnostico.engine_values_anomalous", extra={"symbol": symbol_norm, "anomalous_fields": _ind_diag})
+    # --------------------------------------------------------------------
 
     # Normalización mínima del resultado del engine
     side = str(resultado_engine.get("side", "long")).lower()
@@ -854,6 +878,14 @@ async def verificar_entrada(
             "umbral": resultado_engine.get("umbral"),
             "score_tecnico": resultado_engine.get("score_tecnico"),
             "umbral_score_tecnico": resultado_engine.get("umbral_score_tecnico"),
+            "rsi": resultado_engine.get("rsi"),
+            "slope": resultado_engine.get("slope"),
+            "momentum": resultado_engine.get("momentum"),
+            "tendencia": resultado_engine.get("tendencia"),
+            "diversidad": resultado_engine.get("diversidad"),
+            "validaciones_fallidas": resultado_engine.get("validaciones_fallidas"),
+            "contradicciones": resultado_engine.get("contradicciones"),
+            "regimen_volatilidad": resultado_engine.get("regimen_volatilidad"),
         }
         return _reject_with_skip("engine_denegado", extra=extra)
 
@@ -944,6 +976,8 @@ async def verificar_entrada(
         }
         _emit(on_event, "entry_skip", payload)
         _finalize_decision(decision)
+        _elapsed_ve = (time.monotonic() - _t0_ve) * 1000
+        log.info("diagnostico.verificar_entrada_time", extra={"symbol": symbol_norm, "elapsed_ms": round(_elapsed_ve, 2), "outcome": "rechazada", "motivo": "score_bajo", "score": decision.score, "umbral": decision.threshold})
         return _reject("score_bajo", extra=payload)
 
     allow_persist, persist_ok, strict_flag = _apply_persistencia_gate(
@@ -1000,6 +1034,8 @@ async def verificar_entrada(
         bar_ts=ts_value,
         side=side,
     )
+    _elapsed_ve = (time.monotonic() - _t0_ve) * 1000
+    log.info("diagnostico.verificar_entrada_time", extra={"symbol": symbol_norm, "elapsed_ms": round(_elapsed_ve, 2), "outcome": "aprobada"})
     return _approve(final_payload)
 
 

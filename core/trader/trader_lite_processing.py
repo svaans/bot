@@ -710,6 +710,9 @@ class TraderLiteProcessingMixin:
 
             log.debug("procesar_vela.exit", extra=safe_extra(exit_payload))
 
+            if elapsed > 1.0:
+                log.info("diagnostico.procesar_vela_time", extra={"symbol": sym, "elapsed_ms": round(elapsed * 1000, 2), "outcome": outcome, "stages": stage_durations})
+
             handler_timeout = getattr(getattr(self, "feed", None), "handler_timeout", None)
             warn_threshold: float | None = None
             if isinstance(handler_timeout, (int, float)) and handler_timeout > 0:
@@ -792,6 +795,19 @@ class TraderLiteProcessingMixin:
 
         key = (symbol.upper(), str(timeframe or "").lower())
         prev = self._last_evaluated_bar.get(key)
+
+        log.info(
+            "diagnostico.should_evaluate",
+            extra=safe_extra({
+                "symbol": symbol,
+                "timeframe": timeframe,
+                "key": list(key),
+                "incoming_ts": normalized_ts,
+                "prev_ts": prev,
+                "will_evaluate": prev is None or normalized_ts > prev,
+            }),
+        )
+
         if prev is not None and normalized_ts <= prev:
             return False
 

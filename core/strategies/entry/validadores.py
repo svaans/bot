@@ -22,27 +22,27 @@ def validar_volumen(df: pd.DataFrame) ->bool:
     vol_med = float(round_decimal(df['volume'].rolling(30).mean().iloc[-1], 8))
     if isclose(vol_med, 0.0, rel_tol=1e-12, abs_tol=1e-12):
         return True
-    return vol_act / vol_med >= 0.9
+    return bool(vol_act / vol_med >= 0.9)
 
 
 def validar_rsi(df: pd.DataFrame, direccion: str='long') ->bool:
     valor = get_rsi(df)
     if valor is None:
         return True
-    if valor > 75:
+    if bool(valor > 75):
         return False
-    if direccion == 'short' and valor < 30:
+    if direccion == 'short' and bool(valor < 30):
         return False
     return True
 
 
 def validar_slope(df: pd.DataFrame, tendencia: (str | None)) ->bool:
     pendiente = get_slope(df)
-    if tendencia == 'alcista' and pendiente < 0:
+    if tendencia == 'alcista' and bool(pendiente < 0):
         return False
-    if tendencia == 'bajista' and pendiente > 0:
+    if tendencia == 'bajista' and bool(pendiente > 0):
         return False
-    if abs(pendiente) < 0.01:
+    if bool(abs(pendiente) < 0.01):
         return False
     return True
 
@@ -51,7 +51,7 @@ def validar_bollinger(df: pd.DataFrame) ->bool:
     _, banda_sup, precio = calcular_bollinger(df)
     if banda_sup is None or precio is None:
         return True
-    return abs(banda_sup - precio) / precio >= 0.01
+    return bool(abs(banda_sup - precio) / precio >= 0.01)
 
 
 def validar_max_min(df: pd.DataFrame, ventana: int=30, umbral: float=0.005
@@ -64,7 +64,7 @@ def validar_max_min(df: pd.DataFrame, ventana: int=30, umbral: float=0.005
     min_rec = float(df['low'].rolling(ventana).min().iloc[-1])
     dist_max = _distancia_relativa(precio, max_rec)
     dist_min = _distancia_relativa(precio, min_rec)
-    return dist_max > umbral and dist_min > umbral
+    return bool(dist_max > umbral and dist_min > umbral)
 
 
 def validar_volumen_real(df: pd.DataFrame, factor: float=1.0, ventana: int=30
@@ -76,7 +76,7 @@ def validar_volumen_real(df: pd.DataFrame, factor: float=1.0, ventana: int=30
     vol_med = float(round_decimal(df['volume'].tail(ventana).mean(), 8))
     if isclose(vol_med, 0.0, rel_tol=1e-12, abs_tol=1e-12):
         return True
-    return vol_act >= vol_med * factor
+    return bool(vol_act >= vol_med * factor)
 
 
 def validar_spread(df: pd.DataFrame, max_spread: float=0.002) ->bool:
@@ -89,4 +89,4 @@ def validar_spread(df: pd.DataFrame, max_spread: float=0.002) ->bool:
     if isclose(cierre, 0.0, rel_tol=1e-12, abs_tol=1e-12):
         return True
     spread = (alto - bajo) / cierre
-    return spread <= max_spread
+    return bool(spread <= max_spread)

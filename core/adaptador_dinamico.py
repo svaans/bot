@@ -413,14 +413,26 @@ async def backfill_ventana(
 
     ordered = [normalized[key] for key in sorted(normalized)]
     if ordered:
-        log.debug(
+        log.info(
             "backfill_ventana.completed",
             extra={
                 "symbol": symbol,
                 "intervalo": intervalo,
-                "count": len(ordered),
-                "start_ts": ordered[0]["timestamp"],
-                "end_ts": ordered[-1]["timestamp"],
+                "candles_fetched": len(ordered),
+                "first_ts": ordered[0]["timestamp"] if ordered else None,
+                "last_ts": ordered[-1]["timestamp"] if ordered else None,
+                "all_timestamps": [c["timestamp"] for c in ordered],
+            },
+        )
+    else:
+        log.info(
+            "backfill_ventana.empty",
+            extra={
+                "symbol": symbol,
+                "intervalo": intervalo,
+                "start_ts": start_ts,
+                "current_ts": current_ts,
+                "limit": limit,
             },
         )
     return ordered
