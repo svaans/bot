@@ -13,7 +13,7 @@ from core.metrics import (
     BACKFILL_REQUESTS_TOTAL,
 )
 
-from core.utils.log_utils import format_exception_for_log
+from core.utils.log_utils import format_exception_for_log, safe_extra
 
 from ._shared import UTC, _safe_float, log
 from . import events
@@ -148,6 +148,23 @@ async def do_backfill(feed: "DataFeed", symbol: str) -> None:
             "volume": _safe_float(o[5], 0.0),
             "is_closed": True,
         }
+
+        # Diagnóstico de consistencia de timestamps en backfill
+        try:
+            _unit = "milliseconds" if float(o[0]) >= 1e11 else "seconds"
+        except (TypeError, ValueError):
+            _unit = "unknown"
+
+        log.info(
+            "diagnostico.timestamp_entry",
+            extra=safe_extra({
+                "symbol": symbol,
+                "raw_ts": int(o[0]),
+                "unit_detected": _unit,
+                "source": "backfill",
+            }),
+        )
+
         await feed._handle_candle(symbol, candle)
 
     elapsed = max(0.0, time.perf_counter() - start)

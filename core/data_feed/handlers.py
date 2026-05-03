@@ -442,7 +442,7 @@ async def handle_candle(
         if not _from_backfill and _should_log(
             f"df.handle.not_closed:{symbol_label}", every=30.0
         ):
-            log.info(
+            log.debug(
                 "df.recv.not_closed",
                 extra=safe_extra(
                     {
@@ -460,7 +460,7 @@ async def handle_candle(
     # backfill). Bajo volumen (~1/min para 5 símbolos en 5m). Sirve para
     # confirmar que el WS combinado empuja velas cerradas a este handler.
     if not _from_backfill:
-        log.info(
+        log.debug(
             "df.recv.closed",
             extra=safe_extra(
                 {
@@ -750,6 +750,27 @@ async def consumer_loop(feed: "DataFeed", symbol: str) -> None:
 
     while feed._running:
         candle = await queue.get()
+
+        # Diagnóstico de consistencia de timestamps al entrar al pipeline
+        _raw_ts = candle.get("timestamp") or candle.get("open_time") or candle.get("close_time")
+        if _raw_ts is not None:
+            try:
+                _unit = "milliseconds" if float(_raw_ts) >= 1e11 else "seconds"
+            except (TypeError, ValueError):
+                _unit = "unknown"
+        else:
+            _unit = "unknown"
+
+        log.debug(
+            "diagnostico.timestamp_entry",
+            extra=safe_extra({
+                "symbol": str(candle.get("symbol") or symbol).upper(),
+                "raw_ts": _raw_ts,
+                "unit_detected": _unit,
+                "source": "websocket_consumer",
+            }),
+        )
+
         if not first_candle_logged:
             first_candle_logged = True
             log.info(
@@ -773,7 +794,7 @@ async def consumer_loop(feed: "DataFeed", symbol: str) -> None:
         # trader: si vemos esto y NO vemos attempt, el problema está en la
         # llamada al handler; si no vemos esto, la vela no se encoló).
         else:
-            log.info(
+            log.debug(
                 "consumer.recv",
                 extra=safe_extra(
                     {

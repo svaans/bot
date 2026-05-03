@@ -114,7 +114,7 @@ async def _manejar_stop_loss(trader, orden, df) -> bool:
         if not permitir_cierre_tecnico(
             symbol, df, precio_cierre, orden.to_dict()
         ):
-            log.info(f'🛡️ Cierre evitado por análisis técnico: {symbol}')
+            log.debug(f'cierre_evitado_tecnico: {symbol}')
             metricas_tracker.registrar_sl_evitado()
             orden.sl_evitar_info = orden.sl_evitar_info or []
             orden.sl_evitar_info.append(
@@ -152,8 +152,8 @@ async def _manejar_stop_loss(trader, orden, df) -> bool:
                 'precio': precio_cierre,
             }
         )
-        log.info(
-            f"🛡️ SL evitado para {symbol} → {resultado.get('motivo', '')}"
+        log.debug(
+            f"sl_evitado: {symbol} → {resultado.get('motivo', '')}"
         )
         establecer_sl_emergencia()
         if getattr(orden, 'sl_emergencia', None) is not None:
@@ -168,7 +168,7 @@ async def _manejar_stop_loss(trader, orden, df) -> bool:
                 )
                 return True
     else:
-        log.info(f"ℹ️ {symbol} → {resultado.get('motivo', '')}")
+        log.debug(f"sl_check_pass: {symbol} → {resultado.get('motivo', '')}")
     return False
 
 
@@ -233,7 +233,7 @@ async def _manejar_trailing_stop(trader, orden, df) -> bool:
         cerrar, motivo = False, ''
     if cerrar:
         if not permitir_cierre_tecnico(symbol, df, precio_cierre, orden.to_dict()):
-            log.info(f'🛡️ Cierre evitado por análisis técnico: {symbol}')
+            log.debug(f'cierre_evitado_tecnico: {symbol}')
             return False
         if await trader._cerrar_y_reportar(orden, precio_cierre, motivo, df=df):
             spread = None
@@ -274,7 +274,7 @@ async def _manejar_cambio_tendencia(trader, orden, df) -> bool:
         nueva_tendencia = obtener_tendencia(symbol, df)
         precio_cierre = float(df['close'].iloc[-1])
         if not permitir_cierre_tecnico(symbol, df, precio_cierre, orden.to_dict()):
-            log.info(f'🛡️ Cierre evitado por análisis técnico: {symbol}')
+            log.debug(f'cierre_evitado_tecnico: {symbol}')
             return False
         if await trader._cerrar_y_reportar(
             orden,
@@ -297,7 +297,7 @@ async def _manejar_cambio_tendencia(trader, orden, df) -> bool:
         nueva_tendencia = obtener_tendencia(symbol, df)
         precio_cierre = float(df['close'].iloc[-1])
         if not permitir_cierre_tecnico(symbol, df, precio_cierre, orden.to_dict()):
-            log.info(f'🛡️ Cierre evitado por análisis técnico: {symbol}')
+            log.debug(f'cierre_evitado_tecnico: {symbol}')
             return False
         if await trader._cerrar_y_reportar(orden, precio_cierre, 'Cambio de tendencia', tendencia=nueva_tendencia, df=df):
             log.info(f'🔄 Cambio de tendencia detectado para {symbol}. Cierre recomendado.')
@@ -361,10 +361,10 @@ async def _aplicar_salidas_adicionales(trader, orden, df) -> bool:
         pesos_symbol = trader.pesos_por_simbolo.get(symbol, {})
         umbral = calcular_umbral_adaptativo(symbol, df)
         if not validar_necesidad_de_salida(df, orden.to_dict(), estrategias, puntaje=puntaje, umbral=umbral, config=config_actual):
-            log.info(f"❌ Cierre por '{razon}' evitado: condiciones técnicas aún válidas.")
+            log.debug(f"cierre_evitado_tecnico: '{razon}' condiciones activas")
             return False
         if not permitir_cierre_tecnico(symbol, df, precio_cierre, orden.to_dict()):
-            log.info(f'🛡️ Cierre evitado por análisis técnico: {symbol}')
+            log.debug(f'cierre_evitado_tecnico: {symbol}')
             return False
         await trader._cerrar_y_reportar(orden, precio_cierre, f'Estrategia: {razon}', df=df)
         return True

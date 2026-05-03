@@ -1035,6 +1035,28 @@ class Trader(TraderLite):
                 return None
 
             eval_ts = int(bar_open_ts * 1000) if bar_open_ts is not None else last_bar_ts_raw
+
+            # Diagnóstico de consistencia de timestamps
+            raw_ts_for_diagnostic = bar_open_raw if bar_open_raw is not None else last_bar_ts_raw
+            if raw_ts_for_diagnostic is not None:
+                try:
+                    unit_detected = "milliseconds" if float(raw_ts_for_diagnostic) >= 1e11 else "seconds"
+                except (TypeError, ValueError):
+                    unit_detected = "unknown"
+            else:
+                unit_detected = "unknown"
+
+            log.info(
+                "diagnostico.timestamp_pipeline",
+                extra=safe_extra({
+                    "symbol": symbol,
+                    "raw_ts": raw_ts_for_diagnostic,
+                    "bar_open_ts": bar_open_ts,
+                    "eval_ts": eval_ts,
+                    "unit_detected": unit_detected,
+                }),
+            )
+
             if not self._should_evaluate(symbol, timeframe_str, eval_ts):
                 eval_key_dup = (symbol.upper(), (timeframe_str or "unknown"))
                 prev_ts = self._last_evaluated_bar.get(eval_key_dup)

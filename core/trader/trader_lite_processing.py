@@ -646,7 +646,7 @@ class TraderLiteProcessingMixin:
             attempt_payload["raw_reason"] = eval_context.get("raw_reason")
             attempt_reason = str(eval_context.get("reason") or attempt_reason)
         attempt_payload["reason"] = attempt_reason
-        log.info("procesar_vela.attempt", extra=safe_extra(attempt_payload))
+        log.debug("procesar_vela.attempt", extra=safe_extra(attempt_payload))
         log.debug(
             "procesar_vela.enter",
             extra=safe_extra(

@@ -168,7 +168,7 @@ class StrategyEngine:
                 config or {},
             )
             _elapsed = (perf_counter() - _t0_eval) * 1000
-            log.info("diagnostico.evaluar_entrada_time", extra={"symbol": symbol, "elapsed_ms": round(_elapsed, 2)})
+            log.debug("diagnostico.evaluar_entrada_time", extra={"symbol": symbol, "elapsed_ms": round(_elapsed, 2)})
             return analisis
         except (ValueError, KeyError) as e:
             log.error(
@@ -391,7 +391,7 @@ class StrategyEngine:
             "anomalias": _anomalias if _anomalias else None,
             "elapsed_ms": round(_elapsed_ms, 2),
         }
-        log.info("diagnostico.decision_entrada", extra=_diag)
+        log.debug("diagnostico.decision_entrada", extra=_diag)
 
         return {
             "permitido": permitido,

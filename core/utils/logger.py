@@ -236,19 +236,8 @@ def _set_minimum_level(logger_name: str, min_level: int) -> None:
 # Nota: no incluir ``binance_api.websocket`` aquí: ``_configure_noisy_loggers``
 # debe poder elevarlo a INFO (tests + menos ruido). Para DEBUG puntual usar
 # ``DEBUG_LOGGERS=binance_api.websocket`` o ``BOT_LOG_LEVEL=DEBUG``.
-_DEBUG_DIAG_DEFAULT: set[str] = {
-    "datafeed",
-    "procesar_vela",
-}
-_UNSILENCE_DIAG_DEFAULT: set[str] = {
-    "orders",
-    "engine",
-    "entry_verifier",
-    "risk",
-    "capital_manager",
-    "entradas",
-    "filtro_entradas",
-}
+_DEBUG_DIAG_DEFAULT: set[str] = set()
+_UNSILENCE_DIAG_DEFAULT: set[str] = set()
 # ---------------------------------------------------------------------------
 
 
