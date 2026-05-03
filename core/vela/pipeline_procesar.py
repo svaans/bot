@@ -190,6 +190,12 @@ async def procesar_vela(trader: Any, vela: dict) -> None:
             _mark_skip(vela, reason)
             return
 
+        try:
+            raw_vol = vela.get("volume")
+            vela["zero_volume"] = raw_vol is not None and float(raw_vol) == 0.0
+        except (TypeError, ValueError):
+            vela["zero_volume"] = False
+
         if parse_end is None:
             parse_end = _mark_stage("parse", t0)
 

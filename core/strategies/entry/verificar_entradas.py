@@ -796,8 +796,31 @@ async def verificar_entrada(
         log.warning("diagnostico.precio_anomalo", extra={"symbol": symbol_norm, "precio": precio})
         return _reject("precio_invalido", extra={"precio": precio})
     vol_ultimo = float(last.get("volume", 0)) if "volume" in last else None
-    if vol_ultimo is not None and (not math.isfinite(vol_ultimo) or vol_ultimo <= 0):
-        log.warning("diagnostico.volumen_anomalo", extra={"symbol": symbol_norm, "volume": vol_ultimo})
+
+    if vol_ultimo is None:
+        log.warning("diagnostico.volumen_missing", extra={"symbol": symbol_norm})
+        return _reject("volumen_missing")
+
+    if not math.isfinite(vol_ultimo):
+        log.warning("diagnostico.volumen_nan_inf", extra={"symbol": symbol_norm, "volume": vol_ultimo})
+        return _reject("volumen_nan_inf")
+
+    if vol_ultimo <= 0:
+        log.warning("diagnostico.volumen_cero", extra={"symbol": symbol_norm, "volume": vol_ultimo})
+
+        o = last.get("open")
+        h = last.get("high")
+        l_val = last.get("low")
+        c = last.get("close")
+        if len({o, h, l_val, c}) != 1:
+            log.error(
+                "zero_volume_but_price_moves",
+                extra={"symbol": symbol_norm, "ohlc": (o, h, l_val, c)},
+            )
+
+        cfg_vol = getattr(trader, "config", None)
+        if bool(getattr(cfg_vol, "rechazar_volumen_cero", True)):
+            return _reject("volumen_cero", extra={"volume": vol_ultimo})
     try:
         ts_value = int(last["timestamp"])
     except (TypeError, ValueError):

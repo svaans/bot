@@ -286,6 +286,7 @@ class Config:
     entrada_cooldown_tras_crear_failed_sec: float = 0.0
     entrada_cooldown_tras_crear_failed_por_symbol: Dict[str, float] = field(default_factory=dict)
     entrada_dedupe_por_vela: bool = True
+    rechazar_volumen_cero: bool = True
 
 class ConfigManager:
     """Carga y proporciona acceso a la configuración del bot."""
@@ -575,6 +576,11 @@ class ConfigManager:
             getattr(defaults, 'entrada_dedupe_por_vela', True),
         )
 
+        rechazar_volumen_cero = _env_bool(
+            'RECHAZAR_VOLUMEN_CERO',
+            getattr(defaults, 'rechazar_volumen_cero', True),
+        )
+
         risk_capital_total = _cargar_float(
             'RISK_CAPITAL_TOTAL', getattr(defaults, 'risk_capital_total', 0.0)
         )
@@ -809,6 +815,7 @@ class ConfigManager:
             entrada_cooldown_tras_crear_failed_sec=entrada_cooldown_tras_crear_failed_sec,
             entrada_cooldown_tras_crear_failed_por_symbol=entrada_cooldown_tras_crear_failed_por_symbol,
             entrada_dedupe_por_vela=entrada_dedupe_por_vela,
+            rechazar_volumen_cero=rechazar_volumen_cero,
             risk_kill_switch_max_consecutive_losses=risk_kill_switch_max_consecutive_losses,
         )
 

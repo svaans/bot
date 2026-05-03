@@ -771,6 +771,13 @@ def _emit_if_closed(
 def _convert_kline(kline: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
     if not kline or not kline.get("x"):
         return None
+    raw_v = kline.get("v")
+    vol = float(raw_v) if raw_v is not None else 0.0
+    if vol == 0.0:
+        logger.warning(
+            "ws.kline.zero_volume",
+            extra={"symbol": kline.get("s"), "t": kline.get("t"), "raw_v": raw_v},
+        )
     return {
         "event_time": int(kline.get("T", kline.get("t", 0))),
         "symbol": kline.get("s", ""),
@@ -781,7 +788,7 @@ def _convert_kline(kline: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
         "high": float(kline.get("h", 0.0)),
         "low": float(kline.get("l", 0.0)),
         "close": float(kline.get("c", 0.0)),
-        "volume": float(kline.get("v", 0.0)),
+        "volume": vol,
         "is_closed": bool(kline.get("x", False)),
     }
 
