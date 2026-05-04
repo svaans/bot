@@ -133,6 +133,10 @@ async def stream_simple(feed: "DataFeed", symbol: str) -> None:
             if not feed.ws_connected_event.is_set():
                 events.signal_ws_connected(feed, symbol)
 
+            # FIX (Opción 1+2): refrescar _last_monotonic al momento en que
+            # el WebSocket abre, no al momento del backfill.
+            feed._last_monotonic[symbol] = time.monotonic()
+
             await escuchar_velas(
                 symbol,
                 feed.intervalo,
@@ -253,6 +257,16 @@ async def stream_combinado(feed: "DataFeed", symbols: List[str]) -> None:
             if not feed.ws_connected_event.is_set():
                 objetivo = symbols[0] if symbols else None
                 events.signal_ws_connected(feed, objetivo)
+
+            # FIX (Opción 1+2): refrescar _last_monotonic al momento en que
+            # el WebSocket abre, no al momento del backfill. Esto evita que el
+            # watchdog de inactividad dispare prematuramente porque el timestamp
+            # del backfill ya quedó atrás de tiempo_inactividad al reconectar.
+            # El timer vuelve a correr desde ahora; las velas cerradas lo
+            # seguirán actualizando durante la sesión (handlers.py:717).
+            _now = time.monotonic()
+            for _s in symbols:
+                feed._last_monotonic[_s] = _now
 
             async def wrap(sym: str):
                 async def _handler(candle: dict) -> None:

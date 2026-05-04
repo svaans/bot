@@ -148,10 +148,9 @@ async def verificar_salida_stoploss(orden: dict, df: pd.DataFrame, config: (dict
             motivo='❌ Orden incompleta', evitado=False)
     symbol = orden.get('symbol', 'SYM')
     precio_actual = float(df['close'].iloc[-1])
-    precio_entrada = orden.get('precio_entrada', precio_actual)
+    precio_entrada = float(orden.get('precio_entrada', precio_actual))
     direccion = orden.get('direccion', 'long')
-    precio_actual = float(df['close'].iloc[-1])
-    precio_entrada = orden.get('precio_entrada', precio_actual)
+    # [FIX] Variables eliminadas duplicadas que sobreescribían sin propósito
     sl_config = orden.get('stop_loss')
     if orden.get('break_even_activado'):
         if direccion in ('long', 'compra'
@@ -204,19 +203,30 @@ async def verificar_salida_stoploss(orden: dict, df: pd.DataFrame, config: (dict
     cerrar_forzado = (validar_sl_tecnico(df, direccion) or puntaje < 0.75 *
         umbral or duracion >= max_velas or intentos >= max_evitar)
     if condiciones_validas and not cerrar_forzado:
-        log.info(
-            f'🛡️ SL evitado en {symbol} | Puntaje: {puntaje:.2f}/{umbral:.2f} | Velas abiertas: {duracion}'
+        # [FIX C-03] Cada evasión aprieta el SL hacia el precio actual para limitar
+        # cuánto puede crecer la pérdida. Sin este apretamiento, evitar 2 veces
+        # puede dejar que la pérdida se multiplique 2-3x sobre el SL original.
+        emergency_pct = cfg.get('sl_emergency_pct', 0.02)
+        if intentos > 0 and sl_config is not None:
+            if direccion in ('long', 'compra'):
+                nuevo_sl = sl_config + (precio_actual - sl_config) * emergency_pct * intentos
+                orden['stop_loss'] = min(nuevo_sl, precio_actual * 0.999)
+            else:
+                nuevo_sl = sl_config - (sl_config - precio_actual) * emergency_pct * intentos
+                orden['stop_loss'] = max(nuevo_sl, precio_actual * 1.001)
+            log.info(
+                f'🛡️ SL evitado #{intentos} en {symbol} | SL apretado: {sl_config:.4f}→{orden["stop_loss"]:.4f}'
+            )
+        else:
+            log.info(
+                f'🛡️ SL evitado en {symbol} | Puntaje: {puntaje:.2f}/{umbral:.2f} | Velas abiertas: {duracion}'
             )
         return resultado_salida('Stop Loss', False,
             'SL tocado pero indicadores válidos para mantener', motivo=
             'SL tocado pero indicadores válidos para mantener', evitado=True)
-    if puntaje >= 2.5 * umbral:
-        log.info(
-            f'🛡️ SL evitado por score excepcional en {symbol} → {puntaje:.2f}/{umbral:.2f}'
-            )
-        return resultado_salida('Stop Loss', False,
-            'Score técnico muy alto', motivo='Score técnico muy alto',
-            evitado=True)
+    # [FIX C-02] Eliminado el bypass de 'score excepcional' (puntaje >= 2.5 * umbral)
+    # que ignoraba cerrar_forzado. Cuando cerrar_forzado=True (límites de intentos
+    # o duración superados), el SL se ejecuta sin excepción posible.
     log.info(
         f'🔴 SL forzado en {symbol} | Score técnico: {puntaje:.2f}/{umbral:.2f} | Velas abiertas: {duracion}'
         )

@@ -119,7 +119,12 @@ def verificar_trailing_stop(info: dict, precio_actual: float, df: (pd.DataFrame 
         if max_price <= 0 or precio_actual <= 0:
             info['max_price'] = precio_actual
             max_price = precio_actual
-        elif precio_actual < max_price * (1 - buffer_pct) or precio_actual < max_price:
+        elif precio_actual < max_price * (1 - buffer_pct):
+            # [FIX C-04] Eliminado el `or precio_actual < max_price` que hacía que el
+            # buffer fuera ignorado en SHORT. Con buffer_pct > 0, cualquier pequeña
+            # bajada actualizaba max_price, moviendo el trailing stop de forma
+            # demasiado agresiva y cerrando posiciones ganadoras prematuramente.
+            # Con buffer_pct=0 el comportamiento es idéntico al anterior (correcto).
             info['max_price'] = min(max_price, precio_actual)
             max_price = float(info['max_price'])
     trailing_start_ratio = cfg['trailing_start_ratio']

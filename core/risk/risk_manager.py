@@ -268,6 +268,13 @@ class RiskManager:
             self.riesgo_diario = 0.0
             RIESGO_CONSUMIDO_GAUGE.set(self.riesgo_diario)
             self._reset_alerta_capital()
+            # [FIX C-08] Resetear kill switch al inicio de nuevo día para que el bot
+            # pueda operar de nuevo. Sin este reset, un kill switch activado en el
+            # día anterior bloqueaba todas las operaciones indefinidamente.
+            if self._kill_switch_disparado:
+                log.info("🔄 Nuevo día detectado — reseteando kill switch para reanudar trading.")
+                self._kill_switch_disparado = False
+                self._perdidas_consecutivas = 0
         perdida_abs = increment
         self.riesgo_diario += perdida_abs
         RIESGO_CONSUMIDO_GAUGE.set(self.riesgo_diario)
@@ -333,6 +340,21 @@ class RiskManager:
             return
         # Denominador: exposición disponible global (CapitalManager), no capital teórico asignado.
         capital_total = self._exposure_disponible_global()
+        # [FIX C-01] Si capital_total == 0 y hay pérdida acumulada, el bot está sin fondos.
+        # Asignar ratio=0 enmascaraba este estado crítico. Activar kill switch directamente.
+        if capital_total <= 0 and self.riesgo_diario > 0:
+            log.error(
+                "🛑 Kill switch activado: capital_total=0 con pérdida acumulada=%.4f",
+                self.riesgo_diario,
+            )
+            await self.kill_switch(
+                self.order_manager,
+                float('inf'),
+                float(self.umbral),
+                self._perdidas_consecutivas,
+                self.kill_switch_max_perdidas_consecutivas,
+            )
+            return
         ratio = (self.riesgo_diario / capital_total) if capital_total > 0 else 0.0
         max_p = self.kill_switch_max_perdidas_consecutivas
         umbral = float(self.umbral)

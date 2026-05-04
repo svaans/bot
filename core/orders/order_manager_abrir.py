@@ -109,6 +109,11 @@ async def abrir_async(
     }
     lock = manager._locks.setdefault(symbol, asyncio.Lock())
     async with lock:
+        # La asyncio.Lock() se mantiene durante TODA la ejecución (incluyendo awaits),
+        # garantizando que dos eventos concurrentes para el mismo símbolo nunca puedan
+        # ejecutar en paralelo. La segunda llamada esperará en esta línea hasta que
+        # la primera libere el lock en el bloque finally, en el que ya habrá registrado
+        # el símbolo en manager.ordenes (éxito) o dejado abriendo vacío (fallo/retry).
         # Evitar duplicados si ya se está abriendo o existe localmente
         if symbol in manager.abriendo or symbol in manager.ordenes:
             if symbol not in manager._dup_warned:

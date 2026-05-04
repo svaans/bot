@@ -1488,12 +1488,25 @@ class Trader(TraderLite):
         estado: Any,
         on_event: Callable[[str, dict], None] | None,
     ) -> dict[str, Any] | None:
+        """Evaluación síncrona para llamadas desde threads sin event loop.
+
+        NOTA: Esta función está diseñada para ser llamada SOLO desde threads
+        que no tienen un event loop activo. Si la llamas desde un contexto
+        async, usa _run_eval_offloaded() en su lugar.
+        """
         future = self._submit_eval_offload(symbol, df, estado, on_event)
         if future is None:
-            async def _runner() -> dict[str, Any] | None:
-                return await TraderLite._execute_pipeline(self, symbol, df, estado, on_event)
-
-            return asyncio.run(_runner())
+            # [FIX C-09] asyncio.run() lanza RuntimeError: 'This event loop is
+            # already running' si se llama desde un thread con loop activo.
+            # Usamos new_event_loop() + run_until_complete() + close() que es
+            # equivalente pero sin la validación de loop existente.
+            loop = asyncio.new_event_loop()
+            try:
+                return loop.run_until_complete(
+                    TraderLite._execute_pipeline(self, symbol, df, estado, on_event)
+                )
+            finally:
+                loop.close()
         try:
             return future.result()
         except asyncio.CancelledError:  # pragma: no cover - defensive
