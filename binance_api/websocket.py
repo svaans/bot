@@ -540,6 +540,22 @@ async def _escuchar_velas_combinado_real(
 
 
 _WS_DISPATCH_QUEUE_DEFAULT = 64
+_WS_MAX_STREAM_RESTARTS_DEFAULT = 10
+
+
+def _ws_max_stream_restarts() -> int:
+    """Límite de reconexiones WS por sesión de ``_consume_ws_stream``.
+
+    Permite que el DataFeed (nivel superior) decida si seguir reintentando
+    tras agotar los reintentos WS-level. Valor 0 significa sin límite.
+    Variable de entorno: ``MAX_STREAM_RESTARTS`` (por coherencia con Config).
+    """
+    raw = os.getenv("MAX_STREAM_RESTARTS", str(_WS_MAX_STREAM_RESTARTS_DEFAULT))
+    try:
+        n = int(raw)
+    except (TypeError, ValueError):
+        n = _WS_MAX_STREAM_RESTARTS_DEFAULT
+    return max(0, n)
 
 
 def _ws_dispatch_queue_maxsize() -> int:
@@ -600,6 +616,9 @@ async def _consume_ws_stream(
     inactivity = mensaje_timeout or timeout_inactividad or 30.0
     inactivity = max(1.0, float(inactivity))
     backoff = 1.0
+    # H-01: enforce max WS-level reconnection attempts.  Value 0 means unlimited.
+    max_restarts = _ws_max_stream_restarts()
+    restarts = 0
     while True:
         if _is_being_cancelled():
             raise asyncio.CancelledError
@@ -717,6 +736,26 @@ async def _consume_ws_stream(
                     worker_task.cancel()
                     with contextlib.suppress(asyncio.CancelledError):
                         await worker_task
+                    # H-03: drain items still queued from the dropped session so
+                    # they don't silently disappear and to unblock any producer
+                    # that holds a reference to this queue.
+                    abandoned = 0
+                    while not dispatch_queue.empty():
+                        try:
+                            dispatch_queue.get_nowait()
+                            dispatch_queue.task_done()
+                            abandoned += 1
+                        except asyncio.QueueEmpty:
+                            break
+                    if abandoned:
+                        logger.warning(
+                            "ws.dispatch.queue_drained",
+                            extra={
+                                "event": "ws.dispatch.queue_drained",
+                                "url": url,
+                                "abandoned": abandoned,
+                            },
+                        )
         except InactividadTimeoutError:
             raise
         except asyncio.CancelledError:
@@ -724,6 +763,7 @@ async def _consume_ws_stream(
         except websockets.ConnectionClosedOK:  # pragma: no cover - desconexión limpia
             await asyncio.sleep(0)
         except (websockets.WebSocketException, OSError) as exc:
+            restarts += 1
             logger.warning(
                 "binance_ws_retry",
                 extra={
@@ -731,8 +771,23 @@ async def _consume_ws_stream(
                     "url": url,
                     "error": truncate_for_log(repr(exc), 400),
                     "backoff": round(backoff, 2),
+                    "restarts": restarts,
+                    "max_restarts": max_restarts or "unlimited",
                 },
             )
+            if max_restarts > 0 and restarts >= max_restarts:
+                logger.error(
+                    "binance_ws_max_restarts_reached",
+                    extra={
+                        "event": "binance_ws_max_restarts_reached",
+                        "url": url,
+                        "restarts": restarts,
+                        "max_restarts": max_restarts,
+                    },
+                )
+                raise RuntimeError(
+                    f"WebSocket {url!r}: alcanzado límite de {max_restarts} reconexiones WS"
+                ) from exc
             await asyncio.sleep(backoff)
             backoff = min(backoff * 2, 30.0)
         else:

@@ -11,6 +11,7 @@ can be instantiated in unit tests without external dependencies.
 """
 from __future__ import annotations
 import asyncio
+import threading
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, Mapping, MutableMapping, Set
@@ -88,6 +89,8 @@ class CapitalManager:
         self._metric_symbols: Set[str] = set()
         self._kelly_base = float(getattr(config, "risk_kelly_base", 0.1) or 0.1)
         self.fraccion_kelly = self._kelly_base
+        # H-07: serialize concurrent writes to capital_por_simbolo + persist.
+        self._exposure_lock = threading.Lock()
         self._recalcular_disponible_global()
         self._event_bus: Any | None = None
         self._apply_persisted_state(snapshot)
@@ -203,9 +206,15 @@ class CapitalManager:
 
         Consumido por :class:`core.orders.quantity_resolver.QuantityResolver`.
         ``exposicion_total`` del meta acota el notional máximo de esta operación.
-        ``stop_loss`` se acepta por compatibilidad de firma; el ajuste fino va en la orden.
+
+        H-09: si ``stop_loss`` es válido se aplica sizing basado en riesgo:
+            cantidad = (notional_cap * fraccion_kelly) / distancia_sl
+        donde ``fraccion_kelly`` es la fracción de riesgo por trade (0 < f ≤ 1).
+        El resultado se acota al máximo de notional disponible para evitar
+        sobredimensionar en stops muy ajustados.
+        Sin stop_loss válido o con precio == stop_loss se usa el sizing notional
+        clásico (cantidad = notional_cap / precio).
         """
-        _ = stop_loss
         precio_f = float(precio)
         if precio_f <= 0:
             return {"cantidad": 0.0}
@@ -216,15 +225,52 @@ class CapitalManager:
             notional_cap = min(notional_cap, ex_tot)
         if notional_cap <= 0:
             return {"cantidad": 0.0}
-        return {"cantidad": notional_cap / precio_f}
+
+        # H-09: risk-based sizing when stop_loss is available.
+        sl_f = float(stop_loss) if stop_loss is not None else 0.0
+        distancia = abs(precio_f - sl_f) if sl_f > 0 else 0.0
+        if distancia > 1e-8:
+            fraccion = max(1e-4, min(1.0, float(self.fraccion_kelly)))
+            cantidad_sl = (notional_cap * fraccion) / distancia
+            # Never exceed the plain notional cap so a very tight SL cannot
+            # create an outsized position relative to available capital.
+            cantidad = min(notional_cap / precio_f, cantidad_sl)
+            log.debug(
+                "capital_manager.sizing_sl",
+                extra={
+                    "symbol": symbol,
+                    "precio": precio_f,
+                    "stop_loss": sl_f,
+                    "distancia": round(distancia, 6),
+                    "fraccion_kelly": round(fraccion, 6),
+                    "cantidad": round(cantidad, 8),
+                },
+            )
+            return {"cantidad": cantidad, "sizing_mode": "risk_based"}
+
+        return {"cantidad": notional_cap / precio_f, "sizing_mode": "notional"}
 
     def actualizar_exposure(self, symbol: str, disponible: float) -> None:
         """Update the available exposure for ``symbol`` and refresh caches."""
 
         clave = _normalizar_symbol(symbol)
-        self.capital_por_simbolo[clave] = max(0.0, float(disponible))
-        self._recalcular_disponible_global()
-        self._persist_state()
+        # H-07: threading.Lock serializes concurrent callers (e.g. multiple
+        # order-close coroutines whose run_in_executor persist calls race).
+        # threading.Lock is used (not asyncio.Lock) because this method is
+        # synchronous; the critical section is short so hold time is minimal.
+        with self._exposure_lock:
+            self.capital_por_simbolo[clave] = max(0.0, float(disponible))
+            self._recalcular_disponible_global()
+            # H-06: avoid blocking the event loop with synchronous I/O.
+            # When called from an async context (the normal runtime path), offload
+            # the repository write to the default thread-pool executor.  When there
+            # is no running loop (tests, __init__ startup) call directly.
+            try:
+                loop = asyncio.get_running_loop()
+                loop.run_in_executor(None, self._persist_state)
+            except RuntimeError:
+                # No running event loop — synchronous call is safe.
+                self._persist_state()
 
     def aplicar_multiplicador_kelly(self, factor: float) -> float:
         """Adjust the Kelly fraction with ``factor`` keeping defensive bounds."""

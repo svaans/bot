@@ -59,7 +59,8 @@ def init_db(ruta_db: str) -> None:
         precio_cierre REAL,
         fecha_cierre TEXT,
         motivo_cierre TEXT,
-        retorno_total REAL
+        retorno_total REAL,
+        cantidad_abierta REAL
     """
     try:
         with connect_db(ruta_db) as conn:
@@ -69,13 +70,23 @@ def init_db(ruta_db: str) -> None:
             conn.execute(
                 f"CREATE TABLE IF NOT EXISTS operaciones (id INTEGER PRIMARY KEY AUTOINCREMENT, {schema_base})"
             )
+            # Migration: add cantidad_abierta to pre-existing databases that
+            # were created without this column. sqlite3 raises OperationalError
+            # ("duplicate column name") if the column already exists.
+            for table in ("ordenes", "operaciones"):
+                try:
+                    conn.execute(
+                        f"ALTER TABLE {table} ADD COLUMN cantidad_abierta REAL"
+                    )
+                except sqlite3.OperationalError:
+                    pass  # Column already present — nothing to do.
         log.info(
-            "🗃️ Tablas de órdenes y operaciones verificadas/creadas.",
+            "Tablas de ordenes y operaciones verificadas/creadas.",
             extra={"symbol": None, "timeframe": None},
         )
     except sqlite3.Error as e:
         log.error(
-            "❌ Error al crear las tablas en SQLite: %s",
+            "Error al crear las tablas en SQLite: %s",
             format_exception_for_log(e),
         )
         raise
@@ -129,8 +140,8 @@ def persist_orders(ruta_db: str, ordenes: dict[str, Order]) -> None:
                             symbol, precio_entrada, cantidad, stop_loss, take_profit,
                             timestamp, estrategias_activas, tendencia, max_price,
                             direccion, precio_cierre, fecha_cierre, motivo_cierre,
-                            retorno_total
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            retorno_total, cantidad_abierta
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                         """,
                         (
                             data.get("symbol"),
@@ -147,6 +158,7 @@ def persist_orders(ruta_db: str, ordenes: dict[str, Order]) -> None:
                             data.get("fecha_cierre"),
                             data.get("motivo_cierre"),
                             data.get("retorno_total"),
+                            data.get("cantidad_abierta"),
                         ),
                     )
         log.info(

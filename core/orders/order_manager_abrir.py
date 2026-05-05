@@ -2,8 +2,10 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from collections.abc import Mapping
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Dict
 
 from binance_api.ccxt_client import obtener_ccxt as obtener_cliente
@@ -32,6 +34,52 @@ from core.utils.utils import is_valid_number
 
 log = configurar_logger('orders', modo_silencioso=True)
 UTC = timezone.utc
+
+
+def _intent_path(symbol: str) -> Path:
+    """Ruta del archivo de intención pre-ejecución para `symbol`."""
+    from core.orders.real_orders import RUTA_DB  # import local para evitar ciclo
+    safe = symbol.replace('/', '_').replace(':', '_')
+    return Path(RUTA_DB).parent / f'pre_exec_intent_{safe}.json'
+
+
+def _escribir_intent_pre_ejecucion(
+    symbol: str,
+    precio: float,
+    cantidad: float,
+    sl: float,
+    tp: float,
+    direccion: str,
+    operation_id: str | None,
+) -> None:
+    # [FIX C-07] Escribe intent en disco ANTES de llamar al exchange.
+    # Si el bot crashea entre la ejecución real y el registro en SQLite,
+    # este archivo queda como evidencia para detectar órdenes huérfanas al reiniciar.
+    try:
+        p = _intent_path(symbol)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        data = {
+            'symbol': symbol,
+            'precio': precio,
+            'cantidad': cantidad,
+            'sl': sl,
+            'tp': tp,
+            'direccion': direccion,
+            'operation_id': operation_id,
+            'timestamp': datetime.now(UTC).isoformat(),
+        }
+        p.write_text(json.dumps(data, ensure_ascii=False), encoding='utf-8')
+    except Exception as e:
+        log.warning('⚠️ No se pudo escribir intent pre-ejecución para %s: %s', symbol, e)
+
+
+def _borrar_intent_pre_ejecucion(symbol: str) -> None:
+    """Elimina el intent pre-ejecución tras registro exitoso en SQLite."""
+    try:
+        _intent_path(symbol).unlink(missing_ok=True)
+    except Exception as e:
+        log.warning('⚠️ No se pudo eliminar intent pre-ejecución para %s: %s', symbol, e)
+
 
 async def abrir_async(
     manager: Any,
@@ -313,6 +361,10 @@ async def abrir_async(
 
             try:
                 if manager.modo_real and is_valid_number(cantidad) and cantidad > 0:
+                    # [FIX C-07] Persistir intención ANTES de llamar al exchange.
+                    _escribir_intent_pre_ejecucion(
+                        symbol, precio_senal, cantidad, sl, tp, direccion, operation_id
+                    )
                     side_open = _exchange_side_open_position(direccion)
                     execution = await manager._execute_real_order(
                         side_open,
@@ -448,6 +500,7 @@ async def abrir_async(
                             orden.registro_pendiente = False
                             limpiar_registro_pendiente(symbol)
                             manager._registro_pendiente_paused.discard(symbol)
+                            _borrar_intent_pre_ejecucion(symbol)  # [FIX C-07]
                         else:
                             registrar_orden('failed')  # mantenemos etiqueta por compatibilidad
                             if manager.bus:

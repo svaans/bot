@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+from pathlib import Path
 from collections.abc import Mapping
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
@@ -54,6 +55,40 @@ log = configurar_logger('orders', modo_silencioso=True)
 UTC = timezone.utc
 
 MAX_HISTORIAL_ORDENES = 1000
+
+
+
+def _alertar_intent_huerfanos(logger: object) -> None:
+    """[FIX C-07] Escanea archivos de intención pre-ejecución huérfanos.
+
+    Si el bot crasheó entre enviar la orden al exchange y persistirla en SQLite,
+    el archivo pre_exec_intent_<symbol>.json queda en disco.
+    Emite un log CRITICAL para cada uno, para forzar reconciliación manual.
+    """
+    try:
+        from core.orders.real_orders import RUTA_DB  # import local para evitar ciclo
+        carpeta = Path(RUTA_DB).parent
+        if not carpeta.exists():
+            return
+        huerfanos = list(carpeta.glob('pre_exec_intent_*.json'))
+        if not huerfanos:
+            return
+        for f in huerfanos:
+            try:
+                import json
+                data = json.loads(f.read_text(encoding='utf-8'))
+            except Exception:
+                data = {'archivo': str(f)}
+            logger.critical(  # type: ignore[union-attr]
+                '🚨 [C-07] Intent pre-ejecución huérfano detectado — posible orden no registrada. '
+                'Verifique manualmente en Binance y reconcilie: %s',
+                data,
+            )
+    except Exception as e:
+        try:
+            logger.warning('⚠️ No se pudo verificar intents huérfanos: %s', e)  # type: ignore[union-attr]
+        except Exception:
+            pass
 
 
 class OrderManager:
@@ -130,6 +165,10 @@ class OrderManager:
         self._partial_close_retry_delay = max(
             0.0, float(os.getenv("ORDERS_PARTIAL_CLOSE_RETRY_DELAY", "1.0"))
         )
+        # Symbols with a pending full-close requeue in flight.
+        # Prevents a concurrent cerrar_async from issuing a second sell
+        # on the same residual quantity while the retry task is sleeping.
+        self._pending_close_requeue: set[str] = set()
         self.capital_manager: Any | None = None
         self.risk_manager: Any | None = None
         self._config = config or getattr(app_config, "cfg", None)
@@ -167,6 +206,9 @@ class OrderManager:
             self.subscribe(bus)
         else:
             self._ensure_background_tasks()
+        if self.modo_real:
+            # [FIX C-07] Detectar intents pre-ejecución huérfanos de un crash anterior.
+            _alertar_intent_huerfanos(log)
 
     def _generar_operation_id(self, symbol: str) -> str:
         """Genera un identificador único para agrupar fills de una operación."""
@@ -763,11 +805,6 @@ class OrderManager:
             self._set_latent_pnl(symbol, orden, 0.0, extra={'precio_mark': precio})
             return
 
-        direccion = str(getattr(orden, "direccion", "long")).lower()
-        signo = -1.0 if direccion in {"short", "venta"} else 1.0
-        self._set_latent_pnl(
-            symbol,
-            orden,
-            signo * precio * cantidad_float,
-            extra={'precio_mark': precio},
-        )
+        direccion = str(getattr(orden, "direccion", "long"))
+        pnl_latente = precio * cantidad_float
+        self._set_latent_pnl(symbol, orden, pnl_latente, extra={'precio_mark': precio})

@@ -49,6 +49,23 @@ CONFIG_BASE = {
     'beneficio_minimo_parcial': 5.0,
 }
 
+# H-08: range constraints for critical numeric config keys.
+# Each entry: key -> (min_val, max_val, description)
+# Values outside this range are clamped with a WARNING so the bot never
+# operates with a degenerate parameter (e.g. sl_ratio=0 → division-by-zero).
+_CONFIG_RANGE_CONSTRAINTS: dict[str, tuple[float, float, str]] = {
+    "sl_ratio":             (0.1,   20.0,  "ratio SL/ATR (e.g. 1.5)"),
+    "tp_ratio":             (0.1,   50.0,  "ratio TP/ATR (e.g. 3.0)"),
+    "riesgo_por_trade":     (1e-4,  1.0,   "fracción de riesgo por trade (e.g. 0.02)"),
+    "trailing_buffer":      (1e-4,  0.5,   "buffer trailing stop (e.g. 0.01)"),
+    "riesgo_maximo_diario": (1e-4,  1.0,   "fracción riesgo máximo diario (e.g. 0.06)"),
+    "ratio_minimo_beneficio": (0.1, 20.0,  "ratio mínimo beneficio (e.g. 1.3)"),
+    "diversidad_minima":    (1.0,   50.0,  "número mínimo de estrategias activas"),
+    "cooldown_tras_perdida": (0.0, 100.0,  "velas de cooldown tras pérdida"),
+    "factor_umbral":        (0.01, 100.0,  "factor de umbral de señal"),
+    "ajuste_volatilidad":   (0.01, 100.0,  "multiplicador de ajuste por volatilidad"),
+}
+
 FALLBACK_DIR = Path(tempfile.gettempdir()) / "bot_config_fallbacks"
 FALLBACK_ALERT_THRESHOLD = int(os.getenv('FALLBACK_PERMISSION_ALERT_THRESHOLD', '3'))
 
@@ -156,6 +173,26 @@ class ConfigurationService:
                         f"⚠️ {symbol} - Faltante: '{clave}'. Usando valor por defecto: {valor_defecto}"
                     )
                 config[clave] = valor_defecto
+        # H-08: clamp critical numeric fields to valid ranges.
+        for clave, (min_val, max_val, desc) in _CONFIG_RANGE_CONSTRAINTS.items():
+            if clave not in config:
+                continue
+            try:
+                val = float(config[clave])
+            except (TypeError, ValueError):
+                log.warning(
+                    "⚠️ %s - '%s' no es numérico (%r); usando mínimo %.4g (%s)",
+                    symbol, clave, config[clave], min_val, desc,
+                )
+                config[clave] = min_val
+                continue
+            if val < min_val or val > max_val:
+                clamped = max(min_val, min(max_val, val))
+                log.warning(
+                    "⚠️ %s - '%s'=%.4g fuera de rango [%.4g, %.4g] (%s); ajustado a %.4g",
+                    symbol, clave, val, min_val, max_val, desc, clamped,
+                )
+                config[clave] = clamped
         return config
 
     def load(self, symbol: str) ->dict[str, Any]:

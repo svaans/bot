@@ -68,10 +68,13 @@ def requeue_partial_close(
                 exc_info=True,
             )
 
-    loop.create_task(
+    task = loop.create_task(
         _retry(),
         name=f"orders.retry_partial_close.{symbol.replace('/', '')}",
     )
+    # H-11: register the task so aclose_background_tasks can cancel it on shutdown.
+    if hasattr(manager, "_registro_retry_tasks"):
+        manager._registro_retry_tasks[f"__requeue_partial__{symbol}"] = task
     log.info(
         "orders.partial_close.reenqueued",
         extra=safe_extra(
@@ -119,11 +122,18 @@ def requeue_full_close(
                 ),
                 exc_info=True,
             )
+        finally:
+            # Lower the guard regardless of publish outcome so cerrar_async
+            # can accept a new close signal if this retry fails permanently.
+            manager._pending_close_requeue.discard(symbol)
 
-    loop.create_task(
+    task = loop.create_task(
         _retry(),
         name=f"orders.retry_full_close.{symbol.replace('/', '')}",
     )
+    # H-11: register the task so aclose_background_tasks can cancel it on shutdown.
+    if hasattr(manager, "_registro_retry_tasks"):
+        manager._registro_retry_tasks[f"__requeue_full__{symbol}"] = task
     log.info(
         "orders.full_close.reenqueued",
         extra=safe_extra(
@@ -227,6 +237,17 @@ async def agregar_parcial_async(manager, symbol: str, precio: float, cantidad: f
         orden.entradas.append({'precio': px_nueva, 'cantidad': cantidad})
         orden.precio_ultima_piramide = px_nueva
         manager._actualizar_capital_disponible(symbol, orden)
+        # H-05/M-10: persist updated position (cantidad_abierta, precio_entrada)
+        # to SQLite so a crash between add-partial and next event doesn't lose state.
+        if manager.modo_real:
+            try:
+                await asyncio.to_thread(real_orders.actualizar_orden, symbol, orden)
+            except Exception as e:
+                log.error(
+                    "Error persistiendo agregar_parcial de %s en SQLite: %s",
+                    symbol,
+                    _fmt_exchange_err(e),
+                )
         return True
 
 async def cerrar_async(manager, symbol: str, precio: float | None, motivo: str) -> bool:
@@ -237,9 +258,12 @@ async def cerrar_async(manager, symbol: str, precio: float | None, motivo: str) 
         if not orden:
             log.warning(f'⚠️ Se intentó verificar TP/SL sin orden activa en {symbol}')
             return False
-        if getattr(orden, 'cerrando', False):
+        if getattr(orden, 'cerrando', False) or symbol in getattr(manager, '_pending_close_requeue', set()):
             if symbol not in manager._dup_warned:
-                log.warning(f'⚠️ Orden duplicada evitada para {symbol}')
+                log.warning(
+                    f'⚠️ Orden duplicada evitada para {symbol}'
+                    + (' (requeue pendiente)' if symbol in getattr(manager, '_pending_close_requeue', set()) else '')
+                )
                 manager._dup_warned.add(symbol)
             return False
 
@@ -312,6 +336,10 @@ async def cerrar_async(manager, symbol: str, precio: float | None, motivo: str) 
                                 ),
                             )
                             orden.cantidad_abierta = restante
+                            # Raise the guard BEFORE scheduling the task so that
+                            # cerrar_async rejects any concurrent close arriving
+                            # while the retry is sleeping.
+                            manager._pending_close_requeue.add(symbol)
                             requeued = requeue_full_close(manager,
                                 symbol,
                                 precio if precio is not None else precio_referencia,
@@ -319,6 +347,8 @@ async def cerrar_async(manager, symbol: str, precio: float | None, motivo: str) 
                                 operation_id=operation_id,
                             )
                             if not requeued:
+                                # Task could not be scheduled; lower guard immediately.
+                                manager._pending_close_requeue.discard(symbol)
                                 real_orders.registrar_venta_fallida(symbol)
                         else:
                             log.error(f'❌ Venta no ejecutada para {symbol} (sin fills)')
@@ -441,7 +471,11 @@ async def cerrar_async(manager, symbol: str, precio: float | None, motivo: str) 
             return True
 
         finally:
-            orden.cerrando = False
+            # Only lower cerrando if no retry task is keeping the position
+            # locked. The task's own finally will discard the symbol and allow
+            # future close signals once the retry resolves.
+            if symbol not in getattr(manager, '_pending_close_requeue', set()):
+                orden.cerrando = False
             manager._dup_warned.discard(symbol)
 
 async def cerrar_parcial_async(manager, symbol: str, cantidad: float, precio: float, motivo: str) -> bool:
@@ -646,7 +680,7 @@ async def cerrar_parcial_async(manager, symbol: str, cantidad: float, precio: fl
                         await asyncio.to_thread(real_orders.eliminar_orden, symbol)
                     except Exception as e:
                         log.error(
-                            "❌ Error eliminando orden %s de SQLite: %s",
+                            "Error eliminando orden %s de SQLite: %s",
                             symbol,
                             _fmt_exchange_err(e),
                         )
@@ -657,6 +691,17 @@ async def cerrar_parcial_async(manager, symbol: str, cantidad: float, precio: fl
                 registrar_orden('partial')
                 log_decision(log, 'cerrar_parcial', operation_id, {'symbol': symbol, 'cantidad': cantidad}, {}, 'accept', {'parcial': True})
                 manager._actualizar_capital_disponible(symbol, orden)
+                # H-05: persist cantidad_abierta to SQLite after each partial fill
+                # so that a crash between partial and total close doesn't lose state.
+                if manager.modo_real:
+                    try:
+                        await asyncio.to_thread(real_orders.actualizar_orden, symbol, orden)
+                    except Exception as e:
+                        log.error(
+                            "Error persistiendo cierre parcial de %s en SQLite: %s",
+                            symbol,
+                            _fmt_exchange_err(e),
+                        )
             return True
         finally:
-            log.debug(f'🔓 Exit cerrar_parcial lock {symbol} id={order_id}')
+            log.debug(f'Exit cerrar_parcial lock {symbol} id={order_id}')

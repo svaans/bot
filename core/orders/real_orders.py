@@ -277,8 +277,8 @@ def actualizar_orden(symbol: str, data: (Order | dict)) ->None:
                             symbol, precio_entrada, cantidad, stop_loss, take_profit,
                             timestamp, estrategias_activas, tendencia, max_price,
                             direccion, precio_cierre, fecha_cierre, motivo_cierre,
-                            retorno_total
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            retorno_total, cantidad_abierta
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                         """,
                         (
                             d.get('symbol'),
@@ -295,6 +295,7 @@ def actualizar_orden(symbol: str, data: (Order | dict)) ->None:
                             d.get('fecha_cierre'),
                             d.get('motivo_cierre'),
                             d.get('retorno_total'),
+                            d.get('cantidad_abierta'),
                         ),
                     )
             ordenes[symbol] = data if isinstance(data, Order) else Order.from_dict(d)
@@ -563,7 +564,7 @@ async def flush_periodico(
                 await asyncio.wait_for(_FLUSH_FUTURE, timeout=5)
             except Exception:
                 pass
-        log.info('🛑 flush_periodico cancelado correctamente.', extra={'symbol': None, 'timeframe': None})
+        log.info('\U0001f6d1 flush_periodico cancelado correctamente.', extra={'symbol': None, 'timeframe': None})
         raise
 
 atexit.register(flush_operaciones)

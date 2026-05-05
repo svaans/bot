@@ -71,6 +71,12 @@ class BackfillService:
         self.headroom = int(
             max(0, headroom if headroom is not None else int(os.getenv("BACKFILL_HEADROOM", "200")))
         )
+        # H-12: cap live-candle buffer per (symbol, tf) key to prevent unbounded
+        # growth when mode B is active for a long time before historical data arrives.
+        # Oldest candles are evicted (dequeued from the front) when the cap is hit.
+        self.max_live_buffer = int(
+            max(1, int(os.getenv("BACKFILL_MAX_LIVE_BUFFER", "500")))
+        )
 
         self._mode: str = "A"
         self._ready: Dict[Tuple[str, str], bool] = defaultdict(lambda: False)
@@ -152,7 +158,21 @@ class BackfillService:
 
         normalized = self._normalize_live(sym, tf, candle)
         if normalized is not None:
-            self._live_buffers[key].append(normalized)
+            buf = self._live_buffers[key]
+            buf.append(normalized)
+            # H-12: evict oldest entries when the cap is exceeded.
+            overflow = len(buf) - self.max_live_buffer
+            if overflow > 0:
+                del buf[:overflow]
+                self.logger.warning(
+                    "backfill.live_buffer.evicted",
+                    extra={
+                        "symbol": sym,
+                        "timeframe": tf,
+                        "evicted": overflow,
+                        "cap": self.max_live_buffer,
+                    },
+                )
         return False, None
 
     def is_ready(self, symbol: str, timeframe: str) -> bool:
