@@ -4,5 +4,8 @@
     "BNB/EUR": 1.0021792197763435,
     "SOL/EUR": 1.0106298123160304
   },
-  "histeresis_skips": {}
+  "histeresis_skips": {
+    "SOL/EUR": 1,
+    "BNB/EUR": 1
+  }
 }
