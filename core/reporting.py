@@ -20,6 +20,10 @@ UTC = timezone.utc
 
 log = configurar_logger('reporte_diario')
 
+# Directorio raíz de reportes. Configurable vía env var para evitar depender
+# del CWD en producción (mismo patrón que kelly.py → _REPORTES_DIR).
+_REPORTES_DIR: str = os.getenv("REPORTES_DIARIOS_PATH", "reportes_diarios")
+
 _executor = ProcessPoolExecutor(max_workers=1)
 atexit.register(_executor.shutdown)
 
@@ -66,7 +70,7 @@ class ReporterDiario:
         "notional",
     )
 
-    def __init__(self, carpeta='reportes_diarios', max_operaciones=1000):
+    def __init__(self, carpeta: str = _REPORTES_DIR, max_operaciones=1000):
         self.carpeta = carpeta
         os.makedirs(self.carpeta, exist_ok=True)
         self.fecha_actual = datetime.now(UTC).date()
