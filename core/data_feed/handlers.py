@@ -436,9 +436,6 @@ async def handle_candle(
     if not candle.get("is_closed", False):
         if metrics_enabled:
             registrar_vela_rechazada(symbol_label, "not_closed", timeframe_label)
-        # --- DIAGNÓSTICO TEMPORAL — REVERTIR ------------------------------
-        # Confirmamos que ``handle_candle`` recibe ticks intra-vela (is_closed=False).
-        # Si NUNCA aparece en logs significa que el WS no está llamando aquí.
         if not _from_backfill and _should_log(
             f"df.handle.not_closed:{symbol_label}", every=30.0
         ):
@@ -452,13 +449,8 @@ async def handle_candle(
                     }
                 ),
             )
-        # ------------------------------------------------------------------
         return
 
-    # --- DIAGNÓSTICO TEMPORAL — REVERTIR ----------------------------------
-    # Log INFO de toda vela cerrada recibida por ``handle_candle`` (excluye
-    # backfill). Bajo volumen (~1/min para 5 símbolos en 5m). Sirve para
-    # confirmar que el WS combinado empuja velas cerradas a este handler.
     if not _from_backfill:
         log.debug(
             "df.recv.closed",
@@ -472,7 +464,6 @@ async def handle_candle(
                 }
             ),
         )
-    # ----------------------------------------------------------------------
 
     ts = candle.get("timestamp")
     if ts is None:
@@ -548,15 +539,8 @@ async def handle_candle(
     if last is not None and ts <= last:
         if metrics_enabled:
             registrar_vela_rechazada(symbol_label, "stale", timeframe_label)
-        # --- DIAGNÓSTICO TEMPORAL — REVERTIR ------------------------------
-        # Tras procesar el caché local ``feed._last_close_ts`` queda en el
-        # último ``open_time`` visto. Si el WS vuelve a mandar la misma vela
-        # o una anterior, se descarta aquí silenciosamente. Sacarlo a INFO
-        # nos permite ver si velas NUEVAS del WS también caen como stale
-        # (lo que indicaría un bug de ``_maybe_run_backfill_window`` o de
-        # actualización prematura de ``_last_close_ts``).
         if not _from_backfill:
-            log.info(
+            log.debug(
                 "df.recv.stale",
                 extra=safe_extra(
                     {
@@ -569,7 +553,6 @@ async def handle_candle(
                     }
                 ),
             )
-        # ------------------------------------------------------------------
         return
 
     maybe_attach_spread = getattr(feed, "_maybe_attach_spread", None)
@@ -788,11 +771,6 @@ async def consumer_loop(feed: "DataFeed", symbol: str) -> None:
                     }
                 ),
             )
-        # --- DIAGNÓSTICO TEMPORAL — REVERTIR ------------------------------
-        # Log de toda vela dequeued. Sirve para confirmar que hay tráfico
-        # entre queue y handler (complementa ``procesar_vela.attempt`` del
-        # trader: si vemos esto y NO vemos attempt, el problema está en la
-        # llamada al handler; si no vemos esto, la vela no se encoló).
         else:
             log.debug(
                 "consumer.recv",
@@ -810,7 +788,6 @@ async def consumer_loop(feed: "DataFeed", symbol: str) -> None:
                     }
                 ),
             )
-        # ------------------------------------------------------------------
         sym = str(candle.get("symbol") or symbol).upper()
         ts = candle.get("timestamp") or candle.get("close_time") or candle.get("open_time")
         timeframe = candle.get("timeframe") or candle.get("interval") or candle.get("tf")
@@ -1116,7 +1093,7 @@ async def consumer_loop(feed: "DataFeed", symbol: str) -> None:
             if should_activate_debug_wrapper:
                 activate_handler_debug_wrapper(feed)
             ts_processed = candle.get("timestamp")
-            prev = getattr(feed, f"_last_processed_{symbol}", None)
+            prev = feed._last_processed_ts.get(symbol)
             if ts_processed is not None:
                 if prev is not None and ts_processed <= prev:
                     events.set_consumer_state(feed, symbol, ConsumerState.LOOP)
@@ -1127,8 +1104,8 @@ async def consumer_loop(feed: "DataFeed", symbol: str) -> None:
                         ts_processed,
                     )
                     await reiniciar_consumer(feed, symbol)
-                    continue
-                setattr(feed, f"_last_processed_{symbol}", ts_processed)
+                    return
+                feed._last_processed_ts[symbol] = ts_processed
 
 
 async def reiniciar_consumer(feed: "DataFeed", symbol: str) -> None:

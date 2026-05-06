@@ -157,6 +157,7 @@ class DataFeed:
         # consumidor, ver ``_last_handler_close_ts``.
         self._last_close_ts: Dict[str, int] = {}
         self._last_handler_close_ts: Dict[str, int] = {}
+        self._last_processed_ts: Dict[str, int] = {}
         self._ultimo_candle: Dict[str, dict] = {}
         self._last_monotonic: Dict[str, float] = {}
         self._consumer_last: Dict[str, float] = {}
