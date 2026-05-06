@@ -33,7 +33,8 @@ log = logging.getLogger("orphan_reconciler")
 # Creada lazy para evitar problemas con el event loop en tiempo de importación.
 # ---------------------------------------------------------------------------
 _CCXT_READY: Optional[asyncio.Event] = None
-_CCXT_READY_LOCK = asyncio.Lock()  # protege la creación lazy
+# Nota: no se necesita un Lock — asyncio es single-threaded y get_ccxt_ready_event()
+# solo se llama desde coroutines. La asignación de _CCXT_READY es atómica en CPython.
 
 
 def get_ccxt_ready_event() -> asyncio.Event:
@@ -282,8 +283,12 @@ class OrphanReconciler:
                 try:
                     from core.orders.real_orders_reconcile import sincronizar_ordenes_binance
 
-                    reconciliadas = sincronizar_ordenes_binance(
-                        simbolos=[symbol], modo_real=True
+                    # sincronizar_ordenes_binance hace I/O de red síncrona; debe
+                    # correr en un thread para no bloquear el event loop.
+                    reconciliadas = await asyncio.to_thread(
+                        sincronizar_ordenes_binance,
+                        simbolos=[symbol],
+                        modo_real=True,
                     )
 
                     if symbol in reconciliadas:
