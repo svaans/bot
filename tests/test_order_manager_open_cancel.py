@@ -74,8 +74,18 @@ async def test_cancel_mid_open_schedules_reconcile_when_modo_real(
     monkeypatch.setattr(order_manager_abrir, "obtener_cliente", lambda: object())
     monkeypatch.setattr(order_manager_abrir, "_fetch_balance_non_blocking", fake_fetch_balance)
 
+    # Evitar que stale intent files de otras ejecuciones bloqueen este test vía
+    # OrphanReconciler.scan_and_detect. El reconciliador se parchea antes de crear
+    # el manager para que no lea el filesystem real durante la construcción.
+    from core.orders.orphan_reconciler import OrphanReconciler
+    monkeypatch.setattr(OrphanReconciler, "scan_and_detect", lambda *_a, **_k: None)
+    monkeypatch.setattr(OrphanReconciler, "start", lambda *_a, **_k: None)
+
     symbol = "BTC/USDT"
     manager = OrderManager(modo_real=True, bus=None)
+    # Garantizar que el reconciliador no bloquea el símbolo bajo prueba.
+    if manager.orphan_reconciler is not None:
+        manager.orphan_reconciler.is_blocked = lambda *_a, **_k: False  # type: ignore[method-assign]
 
     sync_done = asyncio.Event()
 
