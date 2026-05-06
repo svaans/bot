@@ -255,6 +255,12 @@ class Config:
     entrada_dedupe_por_vela: bool = True
     rechazar_volumen_cero: bool = True
     min_bars_warmup: int = 400
+    # ── Circuit breaker de creación de órdenes ──────────────────────────────
+    # Coinciden con los defaults del módulo core/vela/circuit_breaker.py y los
+    # de DevelopmentConfig. Anulables vía env vars ORDER_CIRCUIT_*.
+    order_circuit_max_failures: int = 3
+    order_circuit_open_seconds: float = 30.0
+    order_circuit_reset_after: float = 120.0
 
 class ConfigManager:
     """Carga y proporciona acceso a la configuración del bot."""
@@ -553,6 +559,28 @@ class ConfigManager:
             _cargar_int('MIN_BARS', getattr(defaults, 'min_bars_warmup', 400)),
         )
 
+        order_circuit_max_failures = max(
+            1,
+            _cargar_int(
+                'ORDER_CIRCUIT_MAX_FAILURES',
+                getattr(defaults, 'order_circuit_max_failures', 3),
+            ),
+        )
+        order_circuit_open_seconds = max(
+            0.0,
+            _cargar_float(
+                'ORDER_CIRCUIT_OPEN_SECONDS',
+                getattr(defaults, 'order_circuit_open_seconds', 30.0),
+            ),
+        )
+        order_circuit_reset_after = max(
+            0.0,
+            _cargar_float(
+                'ORDER_CIRCUIT_RESET_AFTER',
+                getattr(defaults, 'order_circuit_reset_after', 120.0),
+            ),
+        )
+
         risk_capital_total = _cargar_float(
             'RISK_CAPITAL_TOTAL', getattr(defaults, 'risk_capital_total', 0.0)
         )
@@ -790,6 +818,9 @@ class ConfigManager:
             rechazar_volumen_cero=rechazar_volumen_cero,
             risk_kill_switch_max_consecutive_losses=risk_kill_switch_max_consecutive_losses,
             min_bars_warmup=min_bars_warmup,
+            order_circuit_max_failures=order_circuit_max_failures,
+            order_circuit_open_seconds=order_circuit_open_seconds,
+            order_circuit_reset_after=order_circuit_reset_after,
         )
 
         log.info(
