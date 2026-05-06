@@ -30,7 +30,7 @@ def salida_stoploss_atr(orden: dict, df: pd.DataFrame) ->dict:
             if precio_actual <= sl_tecnico:
                 return resultado_salida('Stop Loss', True,
                     f'SL-ATR activado (long) a {sl_tecnico:.4f}', logger=log)
-        elif direccion == 'venta':
+        elif direccion in ('venta', 'short'):
             sl_tecnico = entrada + margen
             if precio_actual >= sl_tecnico:
                 return resultado_salida('Stop Loss', True,
