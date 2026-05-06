@@ -1,59 +1,44 @@
-"""Configuración de alto nivel cargada desde ``ConfigManager``."""
-from config.config_manager import ConfigManager
-cfg = ConfigManager.load_from_env()
-API_KEY = cfg.api_key
-API_SECRET = cfg.api_secret
-MODO_REAL = cfg.modo_real
-MODO_OPERATIVO = cfg.modo_operativo
-INTERVALO_VELAS = cfg.intervalo_velas
-SYMBOLS = cfg.symbols
-UMBRAL_RIESGO_DIARIO = cfg.umbral_riesgo_diario
-RISK_KILL_SWITCH_MAX_CONSECUTIVE_LOSSES = cfg.risk_kill_switch_max_consecutive_losses
-MIN_ORDER_EUR = cfg.min_order_eur
-DIVERSIDAD_MINIMA = cfg.diversidad_minima
-MAX_POSICIONES_CARTERA = cfg.max_posiciones_cartera
-MAX_POSICIONES_MISMO_SENTIDO = cfg.max_posiciones_mismo_sentido
-REGIMEN_ENTRADA_ENABLED = cfg.regimen_entrada_enabled
-REGIMEN_VOL_ATR_RATIO_ALTO = cfg.regimen_vol_atr_ratio_alto
-REGIMEN_VOL_ATR_RATIO_BAJO = cfg.regimen_vol_atr_ratio_bajo
-REGIMEN_ATR_PERIODO = cfg.regimen_atr_periodo
-PERSISTENCIA_MINIMA = cfg.persistencia_minima
-PESO_EXTRA_PERSISTENCIA = cfg.peso_extra_persistencia
-MODO_CAPITAL_BAJO = cfg.modo_capital_bajo
-TELEGRAM_TOKEN = cfg.telegram_token
-TELEGRAM_CHAT_ID = cfg.telegram_chat_id
-UMBRAL_SCORE_TECNICO = cfg.umbral_score_tecnico
-USAR_SCORE_TECNICO = cfg.usar_score_tecnico
-UMBRAL_SCORE_OVERRIDES = cfg.umbral_score_overrides
-USAR_SCORE_OVERRIDES = cfg.usar_score_overrides
-PERSISTENCIA_STRICT = cfg.persistencia_strict
-PERSISTENCIA_STRICT_OVERRIDES = cfg.persistencia_strict_overrides
-CONTRADICCIONES_BLOQUEAN_ENTRADA = cfg.contradicciones_bloquean_entrada
-REGISTRO_TECNICO_CSV = cfg.registro_tecnico_csv
-UMBRAL_ALERTA_CPU = cfg.umbral_alerta_cpu
-UMBRAL_ALERTA_MEM = cfg.umbral_alerta_mem
-CICLOS_ALERTA_RECURSOS = cfg.ciclos_alerta_recursos
-UMBRAL_CONFIRMACION_MICRO = cfg.umbral_confirmacion_micro
-UMBRAL_CONFIRMACION_MACRO = cfg.umbral_confirmacion_macro
-TIMEOUT_SIN_DATOS_FACTOR = cfg.timeout_sin_datos_factor
-BACKFILL_MAX_CANDLES = cfg.backfill_max_candles
-TIMEOUT_EVALUAR_CONDICIONES_POR_SYMBOL = cfg.timeout_evaluar_condiciones_por_symbol
-INDICADORES_NORMALIZE_DEFAULT = cfg.indicadores_normalize_default
-INDICADORES_CACHE_MAX_ENTRIES = cfg.indicadores_cache_max_entries
-INDICATORS_INCREMENTAL_ENABLED = cfg.indicadores_incremental_enabled
-ORDERS_RETRY_PERSISTENCIA_ENABLED = cfg.orders_retry_persistencia_enabled
-TRADER_PURGE_HISTORIAL_ENABLED = cfg.trader_purge_historial_enabled
-METRICS_EXTENDED_ENABLED = cfg.metrics_extended_enabled
-DATAFEED_DEBUG_WRAPPER_ENABLED = cfg.datafeed_debug_wrapper_enabled
-ORDERS_FLUSH_PERIODICO_ENABLED = cfg.orders_flush_periodico_enabled
-ORDERS_LIMIT_ENABLED = cfg.orders_limit_enabled
-ORDERS_EXECUTION_POLICY = cfg.orders_execution_policy
-ORDERS_EXECUTION_POLICY_BY_SYMBOL = cfg.orders_execution_policy_by_symbol
-ORDERS_RECONCILE_ENABLED = cfg.orders_reconcile_enabled
-FUNDING_ENABLED = cfg.funding_enabled
-BACKFILL_VENTANA_ENABLED = cfg.backfill_ventana_enabled
-ENTRADA_COOLDOWN_TRAS_CREAR_FAILED_SEC = cfg.entrada_cooldown_tras_crear_failed_sec
-ENTRADA_DEDUPE_POR_VELA = cfg.entrada_dedupe_por_vela
-RISK_ALERTA_CAPITAL_PCT = cfg.risk_alerta_capital_pct
-RISK_CAPITAL_DIVERGENCE_THRESHOLD = cfg.risk_capital_divergence_threshold
-RECHAZAR_VOLUMEN_CERO = cfg.rechazar_volumen_cero
+"""Configuración de alto nivel cargada desde ``ConfigManager``.
+
+Acceso lazy: la carga del entorno se difiere al primer acceso de cualquier
+atributo. Esto evita que el simple hecho de importar este módulo ejecute
+``load_from_env()`` antes de que el entorno esté listo (efecto secundario
+en import-time que rompía tests unitarios y dificultaba la modularidad).
+
+Uso compatible con el código existente::
+
+    from config.config import MODO_REAL       # lazy: carga al acceder
+    from config.config import cfg             # objeto Config completo
+"""
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from config.config_manager import Config
+
+_cfg: "Config | None" = None
+
+
+def _load() -> "Config":
+    global _cfg
+    if _cfg is None:
+        from config.config_manager import ConfigManager
+        _cfg = ConfigManager.load_from_env()
+    return _cfg
+
+
+def __getattr__(name: str) -> Any:
+    """Resuelve atributos de módulo de forma lazy sobre la Config cargada."""
+    _DIRECT = {"_cfg", "_load", "__getattr__", "__all__", "__spec__", "__loader__"}
+    if name in _DIRECT:
+        raise AttributeError(name)
+    # Alias conveniente: ``from config.config import cfg``
+    if name == "cfg":
+        return _load()
+    config = _load()
+    try:
+        return getattr(config, name.lower())
+    except AttributeError:
+        pass
+    raise AttributeError(f"module 'config.config' has no attribute {name!r}")

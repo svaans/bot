@@ -86,7 +86,7 @@ async def do_backfill(feed: "DataFeed", symbol: str) -> None:
     
 
     while restante_total > 0:
-        limit = min(100, restante_total)
+        limit = min(1000, restante_total)
         try:
             chunk = await _fetch_ohlcv_async(feed._cliente, symbol, feed.intervalo, since=since, limit=limit)
         except Exception as exc:
@@ -155,7 +155,7 @@ async def do_backfill(feed: "DataFeed", symbol: str) -> None:
         except (TypeError, ValueError):
             _unit = "unknown"
 
-        log.info(
+        log.debug(
             "diagnostico.timestamp_entry",
             extra=safe_extra({
                 "symbol": symbol,

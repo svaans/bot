@@ -121,3 +121,5 @@ class DevelopmentConfig:
     entrada_cooldown_tras_crear_failed_por_symbol: Dict[str, float] = field(default_factory=dict)
     # Evita re-emitir la misma candidatura (mismo TF + vela + lado) en re-evaluaciones del mismo cierre.
     entrada_dedupe_por_vela: bool = True
+    # Número mínimo de velas históricas que el warmup inicial debe cargar por símbolo.
+    min_bars_warmup: int = 400

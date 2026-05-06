@@ -24,7 +24,7 @@ class BootstrapMixin:
         await warmup_inicial(
             self.config.symbols,
             self.config.intervalo_velas,
-            min_bars=int(os.getenv("MIN_BARS", "400")),
+            min_bars=getattr(self.config, "min_bars_warmup", 400),
         )
         precargar = getattr(self.trader, "_precargar_historico", None)
         if not precargar:

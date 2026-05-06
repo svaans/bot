@@ -10,10 +10,13 @@ de opciones, etc.).
 import asyncio
 import random
 import time
-from typing import List
+from typing import TYPE_CHECKING, List
 
 from binance_api.utils import normalize_symbol_for_rest
 from binance_api.websocket import InactividadTimeoutError
+
+if TYPE_CHECKING:  # pragma: no cover
+    from .datafeed import DataFeed
 
 from . import escuchar_velas, escuchar_velas_combinado
 
@@ -373,7 +376,3 @@ async def stream_combinado(feed: "DataFeed", symbols: List[str]) -> None:
             await asyncio.sleep(delay)
 
 
-from typing import TYPE_CHECKING
-
-if TYPE_CHECKING:  # pragma: no cover
-    from .datafeed import DataFeed  # Ensure DataFeed is imported from the correct module
