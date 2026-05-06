@@ -4,6 +4,7 @@ import gzip
 import hashlib
 import json
 import logging
+import os
 import shutil
 import sqlite3
 from contextlib import closing
@@ -26,7 +27,8 @@ from observability.metrics import (
 UTC = timezone.utc
 _lock = Lock()
 _LOCK_CONTENTION_THRESHOLD_SECONDS = 0.05
-_AUDIT_BASE_DIR = Path("informes")
+# Directorio raíz configurable vía env var (evita dependencia del CWD en producción).
+_AUDIT_BASE_DIR = Path(os.getenv("AUDIT_BASE_DIR", "informes"))
 
 log = logging.getLogger(__name__)
 
@@ -295,11 +297,15 @@ def registrar_auditoria(
     if ruta_archivo.parent not in (Path(""), Path(".")):
         ruta_archivo.parent.mkdir(parents=True, exist_ok=True)
     if formato_normalizado == "jsonl":
-        def _jsonl_operation() -> None:
-            if archivo is None:
-                _comprimir_auditoria_del_dia_anterior(momento_actual)
-            _append_jsonl(ruta_archivo, registro)
-        _persist_with_lock(formato_normalizado, _jsonl_operation)
+        # Comprimimos el día anterior FUERA del lock: la operación de gzip puede
+        # tardar decenas de ms si el archivo es grande, y mantenerla dentro del
+        # Lock bloqueaba todas las escrituras concurrentes durante ese tiempo.
+        # La compresión es idempotente (comprueba si ya existe el .gz antes de
+        # escribir), por lo que la carrera entre dos hilos en medianoche es
+        # inofensiva.
+        if archivo is None:
+            _comprimir_auditoria_del_dia_anterior(momento_actual)
+        _persist_with_lock(formato_normalizado, lambda: _append_jsonl(ruta_archivo, registro))
     elif formato_normalizado == "sqlite":
         _persist_with_lock(
             formato_normalizado, lambda: _append_sqlite(ruta_archivo, registro)
@@ -405,13 +411,15 @@ def _append_sqlite(ruta_archivo: Path, registro: Dict[str, object]) -> None:
         valores = [_coerce_sqlite_value(registro.get(col)) for col in AUDIT_COLUMNS]
         placeholders = ",".join(["?"] * len(AUDIT_COLUMNS))
         columnas = ",".join(AUDIT_COLUMNS)
+        # El context manager ``with conn:`` de sqlite3 llama a conn.commit() en
+        # __exit__ exitoso y conn.rollback() en excepción. El commit() explícito
+        # que había aquí era redundante y dejaba una transacción vacía posterior.
         with conn:
             conn.execute(
                 f"INSERT INTO auditoria ({columnas}) VALUES ({placeholders})",
                 valores,
             )
             _update_daily_checksum(conn, registro)
-            conn.commit()
 
 
 def _coerce_sqlite_value(value: object) -> object:

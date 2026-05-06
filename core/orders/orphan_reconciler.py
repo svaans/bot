@@ -306,7 +306,7 @@ class OrphanReconciler:
                                     "state": record.state.value,
                                 },
                             )
-                            self._notify_telegram(
+                            self._notify_telegram_bg(
                                 f"✅ Orphan reconciliado: {symbol}\n"
                                 f"La orden existía en Binance y fue registrada localmente.\n"
                                 f"ID: {op_id}",
@@ -335,7 +335,7 @@ class OrphanReconciler:
                                 "state": record.state.value,
                             },
                         )
-                        self._notify_telegram(
+                        self._notify_telegram_bg(
                             f"⚠️ Orphan resuelto: {symbol}\n"
                             f"No hay orden activa en Binance.\n"
                             f"ID: {op_id} — Probable fallo previo de ejecución.",
@@ -382,7 +382,7 @@ class OrphanReconciler:
                                 "action_required": "manual_intervention",
                             },
                         )
-                        self._notify_telegram(
+                        self._notify_telegram_bg(
                             f"🚨 FALLO PERMANENTE orphan {symbol}\n"
                             f"Tras {self.MAX_RETRIES} intentos no se pudo reconciliar.\n"
                             f"ID: {op_id}\n"
@@ -429,9 +429,36 @@ class OrphanReconciler:
     # ------------------------------------------------------------------
 
     def _notify_telegram(self, mensaje: str, nivel: str) -> None:
+        """Envío síncrono — solo para llamadas desde contexto sync (scan_and_detect)."""
         try:
             from core.orders.real_orders import notificador
             notificador.enviar(mensaje, nivel)
+        except Exception:
+            pass
+
+    def _notify_telegram_bg(self, mensaje: str, nivel: str) -> None:
+        """Envío fire-and-forget desde contexto async.
+
+        Evita que ``notificador.enviar()`` (que usa ``time.sleep`` en reintentos)
+        bloquee el event loop. Crea una Task que usa ``enviar_async`` y no
+        bloquea al llamador. Si no hay loop activo, cae silenciosamente.
+        """
+        try:
+            from core.orders.real_orders import notificador
+
+            async def _send() -> None:
+                try:
+                    await notificador.enviar_async(mensaje, nivel)
+                except Exception:
+                    pass
+
+            import asyncio
+            try:
+                loop = asyncio.get_running_loop()
+                loop.create_task(_send(), name="orphan.notify")
+            except RuntimeError:
+                # Sin loop activo (p.ej. durante tests) → intento síncrono
+                notificador.enviar(mensaje, nivel)
         except Exception:
             pass
 

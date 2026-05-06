@@ -223,22 +223,11 @@ def _set_minimum_level(logger_name: str, min_level: int) -> None:
         logger.setLevel(min_level)
 
 
-# ---------------------------------------------------------------------------
-# BLOQUE DE DIAGNÓSTICO TEMPORAL — REVERTIR CUANDO TERMINE LA DEPURACIÓN.
-#
-# Durante la fase actual de auditoría del flujo de ejecución del bot queremos
-# ver en consola sin tener que exportar variables de entorno desde la shell.
-# Los sets siguientes se SUMAN a lo que venga por env var (``DEBUG_LOGGERS`` /
-# ``UNSILENCE_LOGGERS``). Para volver al comportamiento normal basta con
-# vaciar estos sets (o borrarlos) y dejar que el operador controle el detalle
-# por entorno.
-# ---------------------------------------------------------------------------
-# Nota: no incluir ``binance_api.websocket`` aquí: ``_configure_noisy_loggers``
-# debe poder elevarlo a INFO (tests + menos ruido). Para DEBUG puntual usar
-# ``DEBUG_LOGGERS=binance_api.websocket`` o ``BOT_LOG_LEVEL=DEBUG``.
+# Loggers adicionales forzados a DEBUG o des-silenciados por defecto.
+# Controlados exclusivamente por env vars ``DEBUG_LOGGERS`` / ``UNSILENCE_LOGGERS``.
+# Para diagnóstico puntual: DEBUG_LOGGERS=binance_api.websocket,datafeed python main.py
 _DEBUG_DIAG_DEFAULT: set[str] = set()
 _UNSILENCE_DIAG_DEFAULT: set[str] = set()
-# ---------------------------------------------------------------------------
 
 
 def _debug_loggers_override() -> set[str]:
