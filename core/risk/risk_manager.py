@@ -14,6 +14,7 @@ poner a cero ``_perdidas_consecutivas`` sin cerrar posiciones.
 """
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timedelta, timezone
 import math
 
@@ -33,7 +34,11 @@ from core.utils.feature_flags import is_flag_enabled
 from core.utils.metrics_compat import Gauge
 from core.utils.log_utils import format_exception_for_log
 from core.utils.utils import configurar_logger
-from config.config import RISK_ALERTA_CAPITAL_PCT
+# risk_alerta_capital_pct vive en DevelopmentConfig/ProductionConfig y se lee
+# desde Config vía config_manager. La constante legacy RISK_ALERTA_CAPITAL_PCT
+# se resolvía igual vía __getattr__ de config.config, pero el nombre UPPER_CASE
+# es confuso (sugiere constante inmutable). Leemos directamente del módulo lazy.
+from config.config import risk_alerta_capital_pct as _RISK_ALERTA_CAPITAL_PCT_DEFAULT
 
 if TYPE_CHECKING:  # pragma: no cover - solo para tipado
     from core.capital_manager import CapitalManager
@@ -77,7 +82,7 @@ class RiskManager:
         self.bus = bus
         self.capital_manager = capital_manager
         if alerta_capital_pct is None:
-            alerta_capital_pct = RISK_ALERTA_CAPITAL_PCT
+            alerta_capital_pct = _RISK_ALERTA_CAPITAL_PCT_DEFAULT
         self.alerta_capital_pct = max(0.0, float(alerta_capital_pct))
         self.cooldown_pct = cooldown_pct
         self.cooldown_duracion = cooldown_duracion
@@ -317,6 +322,44 @@ class RiskManager:
             COOLDOWN_ACTIVO_GAUGE.set(0.0)
         self._perdidas_consecutivas += 1
         self._evaluar_alerta_capital(self._exposure_disponible_global())
+        self._schedule_kill_switch_check()
+
+    def _schedule_kill_switch_check(self) -> None:
+        """Programa ``_maybe_activate_kill_switch`` en el loop activo si no hay bus.
+
+        Cuando el bus está conectado, ``_on_registrar_perdida`` ya llama a
+        ``await _maybe_activate_kill_switch()`` tras ``registrar_perdida()``,
+        por lo que no hay que hacer nada extra.
+
+        Cuando se llama a ``registrar_perdida()`` directamente (sin bus, p. ej.
+        en código de test o en rutas de código que bypass el bus), el kill switch
+        nunca se evaluaría. Este helper programa una tarea en el loop si está
+        corriendo, tapando el gap sin cambiar la firma síncrona de
+        ``registrar_perdida()``.
+
+        Idempotencia: ``_maybe_activate_kill_switch`` retorna inmediatamente si
+        ``_kill_switch_disparado`` ya es ``True``, así que la doble evaluación
+        que ocurre cuando el bus SÍ está conectado (una vía create_task + otra
+        vía el await en el handler) es inofensiva.
+        """
+        if self._bus is not None:
+            # El bus invocará _maybe_activate_kill_switch vía _on_registrar_perdida.
+            return
+        if self.order_manager is None:
+            # Sin order_manager el kill switch no puede actuar; ahorramos el overhead.
+            return
+        try:
+            loop = asyncio.get_running_loop()
+            loop.create_task(
+                self._maybe_activate_kill_switch(),
+                name="risk.kill_switch_check",
+            )
+        except RuntimeError:
+            # No hay loop activo (llamada síncrona pura, p. ej. tests sin asyncio).
+            # En este caso el caller es responsable de disparar el kill switch.
+            log.debug(
+                "kill_switch_check no programado: sin loop activo y sin bus"
+            )
 
     def _exposure_disponible_global(self) -> float:
         if not self.capital_manager:

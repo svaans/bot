@@ -106,13 +106,32 @@ class SpreadGuard:
         return self.observe(symbol, spread_ratio)
 
     def allows(self, symbol: str, spread_ratio: float) -> bool:
-        """Devuelve True si el spread actual está por debajo del límite."""
+        """Registra ``spread_ratio`` en el historial y devuelve si está permitido.
+
+        .. warning::
+            Este método **muta el estado interno** (actualiza el historial P90 y
+            el límite dinámico). Úsalo sólo cuando quieras registrar la
+            observación. Para una comprobación de solo lectura usa :meth:`check`.
+        """
         limit = self.observe(symbol, spread_ratio)
         try:
             val = float(spread_ratio)
         except Exception:
             return True  # No bloqueamos por dato corrupto
         return val <= limit
+
+    def check(self, symbol: str, spread_ratio: float) -> bool:
+        """Comprueba si ``spread_ratio`` está dentro del límite **sin mutar estado**.
+
+        Equivalente de solo lectura a :meth:`allows`. Útil en caminos de
+        diagnóstico, logging o validaciones previas donde no queremos
+        contaminar el historial P90 con lecturas especulativas.
+        """
+        try:
+            val = float(spread_ratio)
+        except Exception:
+            return True
+        return val <= self.current_limit(symbol)
 
     def current_limit(self, symbol: str) -> float:
         """Límite vigente para el símbolo (o base_limit si sin historial)."""
@@ -134,7 +153,8 @@ class SpreadGuard:
             # Sin datos: no bloqueamos por spread
             return True
         spread_actual = float(hist[-1])
-        return self.allows(sym, spread_actual)
+        # Usa check() para no mutar el historial en una comprobación de acceso.
+        return self.check(sym, spread_actual)
 
 
 __all__ = ["SpreadGuard"]

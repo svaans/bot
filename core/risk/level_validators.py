@@ -98,7 +98,9 @@ def validate_levels(
         "step_size": float(step_size),
     }
 
-    if not (entry and min_dist_pct is not None):
+    # Validación explícita: entry debe ser un precio positivo; min_dist_pct
+    # puede ser 0.0 (distancia mínima desactivada) pero no None.
+    if entry <= 0 or min_dist_pct is None:
         raise LevelValidationError("invalid_input", contexto_base)
 
     side_norm = side.lower()

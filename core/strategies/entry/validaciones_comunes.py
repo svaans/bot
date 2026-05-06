@@ -15,10 +15,14 @@ def rsi_bajo(df: pd.DataFrame, limite: float=30.0) ->Tuple[bool, float | None]:
 def rsi_cruce_descendente(df: pd.DataFrame, umbral: float=70.0) ->Tuple[
     bool, float | None]:
     serie = get_rsi(df, serie_completa=True)
-    if serie is None or len(serie.dropna()) < 2:
+    if serie is None:
         return False, None
-    valido = serie.iloc[-2] > umbral and serie.iloc[-1] < umbral
-    return valido, float(serie.iloc[-1])
+    # Usar solo valores no-NaN para evitar comparaciones ambiguas contra el umbral.
+    limpia = serie.dropna()
+    if len(limpia) < 2:
+        return False, None
+    valido = limpia.iloc[-2] > umbral and limpia.iloc[-1] < umbral
+    return valido, float(limpia.iloc[-1])
 
 
 def volumen_suficiente(df: pd.DataFrame, factor: float=1.5, ventana: int=20

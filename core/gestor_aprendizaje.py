@@ -48,8 +48,14 @@ async def ciclo_aprendizaje_periodico(
     while True:
         try:
             _emit(on_event, "aprendizaje_inicio", {})
-            # Ejecuta entrenamiento en thread pool
-            fut = asyncio.to_thread(fn_entrenar)
+            # Ejecuta entrenamiento en thread pool.
+            # asyncio.to_thread() devuelve una *coroutine*, no un Task.
+            # Hay que envolverla en create_task para obtener un Task que
+            # exponga .done() y pueda ser esperado simultáneamente.
+            fut: asyncio.Task = asyncio.create_task(
+                asyncio.to_thread(fn_entrenar),
+                name="aprendizaje.entrenar",
+            )
             # Mientras corre, enviamos latidos periódicos
             while not fut.done():
                 if watchdog:

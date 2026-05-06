@@ -52,18 +52,30 @@ def spread_gate_default(
     bid: Optional[float],
     ask: Optional[float],
     *,
-    max_spread_pct: float = 0.15,  # 0.15% por defecto; ajustable
+    max_spread_ratio: float = 0.0015,  # 0.15 % expresado como ratio; ajustable
 ) -> Tuple[bool, Optional[float]]:
-    """
-    Acepta/deniega según spread relativo. Retorna (permitido, spread_pct).
-    Si no se puede calcular → (False, None).
+    """Acepta/deniega según spread relativo bid-ask.
+
+    Parameters
+    ----------
+    bid, ask:
+        Precio de compra y venta actuales.
+    max_spread_ratio:
+        Umbral máximo de spread como *ratio* (fracción, no %).
+        ``0.0015`` ≡ 0.15 %; debe coincidir con ``Config.max_spread_ratio``
+        (por defecto 0.003) si se conecta al Config.
+
+    Returns
+    -------
+    (permitido, ratio)
+        ``ratio`` es la fracción calculada (no %) o ``None`` si no se pudo
+        calcular. Unidad coherente con :func:`_spread_gate`.
     """
     r = _approximate_spread(bid, ask)
     if r is None:
         return (False, None)
     try:
-        pct = 100.0 * r
-        return (pct <= max_spread_pct, pct)
+        return (r <= max_spread_ratio, r)
     except Exception:
         return (False, None)
 

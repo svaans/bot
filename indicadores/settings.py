@@ -73,3 +73,18 @@ def _reset_indicator_settings_cache_for_tests() -> None:  # pragma: no cover - s
     """Limpia la caché interna usada en pruebas."""
 
     get_indicator_settings.cache_clear()  # type: ignore[attr-defined]
+
+
+def invalidar_cache_indicadores() -> None:
+    """Invalida el caché de ajustes de indicadores.
+
+    Debe llamarse desde el gestor de hot-reload (``ConfigWatcher``) tras
+    aplicar una nueva configuración, para que la próxima llamada a
+    ``get_indicator_settings()`` refleje los valores actualizados.
+
+    Ejemplo de uso en el gestor de configuración::
+
+        from indicadores.settings import invalidar_cache_indicadores
+        invalidar_cache_indicadores()
+    """
+    get_indicator_settings.cache_clear()  # type: ignore[attr-defined]

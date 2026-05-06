@@ -76,9 +76,26 @@ def _cargar_int(clave: str, valor_defecto) -> int:
         return int(valor_defecto)
 
 
-def _parse_int_mapping(clave: str) -> Dict[str, int]:
-    """Parses mappings ``SIMBOLO:valor`` separados por coma en enteros."""
-    resultado: Dict[str, int] = {}
+def _parse_bool_value(v: str) -> bool:
+    """Convierte un string a bool tolerante (truthy/falsy)."""
+    truthy = {"true", "1", "yes", "on", "y", "t"}
+    falsy = {"false", "0", "no", "off", "n", "f"}
+    norm = v.strip().lower()
+    if norm in truthy:
+        return True
+    if norm in falsy:
+        return False
+    raise ValueError(f"Valor no es booleano: {v!r}")
+
+
+def _parse_typed_mapping(clave: str, converter) -> dict:
+    """Parsea mappings ``SIMBOLO:valor`` separados por coma aplicando ``converter``.
+
+    Centraliza el bucle de parsing que antes estaba duplicado en cuatro
+    funciones distintas (int, str, float, bool). Cada función pública delega
+    aquí y solo aporta su conversión específica.
+    """
+    resultado: dict = {}
     raw = os.getenv(clave, "")
     if not raw:
         return resultado
@@ -92,80 +109,30 @@ def _parse_int_mapping(clave: str) -> Dict[str, int]:
         simbolo, valor = fragmento.split(':', 1)
         simbolo = simbolo.strip().upper()
         try:
-            resultado[simbolo] = int(valor.strip())
-        except ValueError:
-            log.warning(f'⚠️ Valor inválido en {clave} para {simbolo}: {valor}')
+            resultado[simbolo] = converter(valor.strip())
+        except (ValueError, TypeError):
+            log.warning(f'⚠️ Valor inválido en {clave} para {simbolo}: {valor.strip()}')
     return resultado
+
+
+def _parse_int_mapping(clave: str) -> Dict[str, int]:
+    """Parses mappings ``SIMBOLO:valor`` separados por coma en enteros."""
+    return _parse_typed_mapping(clave, int)
 
 
 def _parse_str_mapping(clave: str) -> Dict[str, str]:
     """Parses mappings ``SIMBOLO:valor`` separados por coma en strings."""
-    resultado: Dict[str, str] = {}
-    raw = os.getenv(clave, "")
-    if not raw:
-        return resultado
-    for fragmento in raw.split(','):
-        fragmento = fragmento.strip()
-        if not fragmento:
-            continue
-        if ':' not in fragmento:
-            log.warning(f'⚠️ Formato inválido en {clave}: {fragmento}')
-            continue
-        simbolo, valor = fragmento.split(':', 1)
-        resultado[simbolo.strip().upper()] = valor.strip().lower()
-    return resultado
+    return _parse_typed_mapping(clave, str.lower)
 
 
 def _parse_float_mapping(clave: str) -> Dict[str, float]:
     """Parses mappings ``SIMBOLO:valor`` en flotantes."""
-    resultado: Dict[str, float] = {}
-    raw = os.getenv(clave, "")
-    if not raw:
-        return resultado
-    for fragmento in raw.split(','):
-        fragmento = fragmento.strip()
-        if not fragmento:
-            continue
-        if ':' not in fragmento:
-            log.warning(f'⚠️ Formato inválido en {clave}: {fragmento}')
-            continue
-        simbolo, valor = fragmento.split(':', 1)
-        simbolo = simbolo.strip().upper()
-        try:
-            resultado[simbolo] = float(valor.strip())
-        except ValueError:
-            log.warning(f'⚠️ Valor inválido en {clave} para {simbolo}: {valor}')
-    return resultado
+    return _parse_typed_mapping(clave, float)
 
 
 def _parse_bool_mapping(clave: str) -> Dict[str, bool]:
     """Parses mappings ``SIMBOLO:valor`` en booleanos tolerantes."""
-
-    resultado: Dict[str, bool] = {}
-    raw = os.getenv(clave, "")
-    if not raw:
-        return resultado
-
-    truthy = {"true", "1", "yes", "on", "y", "t"}
-    falsy = {"false", "0", "no", "off", "n", "f"}
-
-    for fragmento in raw.split(','):
-        fragmento = fragmento.strip()
-        if not fragmento:
-            continue
-        if ':' not in fragmento:
-            log.warning(f'⚠️ Formato inválido en {clave}: {fragmento}')
-            continue
-        simbolo, valor = fragmento.split(':', 1)
-        simbolo = simbolo.strip().upper()
-        valor_norm = valor.strip().lower()
-        if valor_norm in truthy:
-            resultado[simbolo] = True
-        elif valor_norm in falsy:
-            resultado[simbolo] = False
-        else:
-            log.warning(f'⚠️ Valor inválido en {clave} para {simbolo}: {valor}')
-    return resultado
+    return _parse_typed_mapping(clave, _parse_bool_value)
 
 
 @dataclass(frozen=True)
@@ -287,6 +254,7 @@ class Config:
     entrada_cooldown_tras_crear_failed_por_symbol: Dict[str, float] = field(default_factory=dict)
     entrada_dedupe_por_vela: bool = True
     rechazar_volumen_cero: bool = True
+    min_bars_warmup: int = 400
 
 class ConfigManager:
     """Carga y proporciona acceso a la configuración del bot."""
@@ -580,6 +548,10 @@ class ConfigManager:
             'RECHAZAR_VOLUMEN_CERO',
             getattr(defaults, 'rechazar_volumen_cero', True),
         )
+        min_bars_warmup = max(
+            1,
+            _cargar_int('MIN_BARS', getattr(defaults, 'min_bars_warmup', 400)),
+        )
 
         risk_capital_total = _cargar_float(
             'RISK_CAPITAL_TOTAL', getattr(defaults, 'risk_capital_total', 0.0)
@@ -817,6 +789,7 @@ class ConfigManager:
             entrada_dedupe_por_vela=entrada_dedupe_por_vela,
             rechazar_volumen_cero=rechazar_volumen_cero,
             risk_kill_switch_max_consecutive_losses=risk_kill_switch_max_consecutive_losses,
+            min_bars_warmup=min_bars_warmup,
         )
 
         log.info(
@@ -838,12 +811,11 @@ class ConfigManager:
 
 
     def reload(self) -> Config:
-            """Recarga la configuración desde el entorno y la expone en ``config``."""
-    
-            cfg = self.load_from_env()
-            self._config = cfg
-            self.config = cfg
-            return cfg
+        """Recarga la configuración desde el entorno y la expone en ``config``."""
+        cfg = self.load_from_env()
+        self._config = cfg
+        self.config = cfg
+        return cfg
     
     
     def get_config(self) -> Config:

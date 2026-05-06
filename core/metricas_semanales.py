@@ -1,10 +1,13 @@
 import os
 import json
-import time
 from datetime import datetime, timedelta, timezone
 
 UTC = timezone.utc
 import pandas as pd
+
+# Directorio raíz de reportes. Configurable vía env var para evitar depender
+# del CWD en producción (mismo patrón que kelly.py → _REPORTES_DIR).
+_REPORTES_DIR: str = os.getenv("REPORTES_DIARIOS_PATH", "reportes_diarios")
 from core.utils.utils import leer_csv_seguro
 from core.utils.log_utils import format_exception_for_log
 from core.utils.logger import configurar_logger
@@ -15,7 +18,7 @@ log = configurar_logger(__name__)
 class MetricasTracker:
     """Acumula eventos relevantes para el reporte semanal."""
 
-    def __init__(self, archivo="reportes_diarios/metricas_semana.json"):
+    def __init__(self, archivo: str = os.path.join(_REPORTES_DIR, "metricas_semana.json")):
         self.archivo = archivo
         self.data = {
             "filtradas_persistencia": 0,
@@ -37,12 +40,25 @@ class MetricasTracker:
                 log.exception("Error al cargar métricas semanales desde %s", self.archivo)
 
     def _guardar(self, intentos: int = 3) -> None:
-        os.makedirs(os.path.dirname(self.archivo), exist_ok=True)
+        """Persiste métricas a disco usando escritura atómica (tmp → replace).
+
+        No usa ``time.sleep`` entre reintentos para no bloquear el event loop
+        en contextos async. Cada reintento es inmediato; si el sistema de
+        archivos está saturado, reintentar un segundo después es igualmente
+        inútil pero sí bloquea el loop.
+        """
+        directorio = os.path.dirname(self.archivo)
+        if directorio:
+            os.makedirs(directorio, exist_ok=True)
+        tmp = self.archivo + ".tmp"
         for intento in range(1, intentos + 1):
             try:
-                with open(self.archivo, "w") as f:
+                with open(tmp, "w", encoding="utf-8") as f:
                     json.dump(self.data, f)
-                break
+                    f.flush()
+                    os.fsync(f.fileno())
+                os.replace(tmp, self.archivo)
+                return
             except Exception as e:
                 if intento == intentos:
                     log.warning(
@@ -50,8 +66,6 @@ class MetricasTracker:
                         intentos,
                         format_exception_for_log(e),
                     )
-                else:
-                    time.sleep(1)
 
     def registrar_filtro(self, tipo: str) -> None:
         """Incrementa el contador para el ``tipo`` de filtro dado."""
@@ -82,7 +96,7 @@ class MetricasTracker:
 metricas_tracker = MetricasTracker()
 
 
-def metricas_semanales(carpeta: str = "reportes_diarios") -> pd.DataFrame:
+def metricas_semanales(carpeta: str = _REPORTES_DIR) -> pd.DataFrame:
     """Calcula métricas de la última semana para cada par."""
     if not os.path.isdir(carpeta):
         return pd.DataFrame()
@@ -98,8 +112,15 @@ def metricas_semanales(carpeta: str = "reportes_diarios") -> pd.DataFrame:
             continue
         if not inicio <= fecha < fin:
             continue
-        df = leer_csv_seguro(os.path.join(carpeta, archivo), expected_cols=20)
+        df = leer_csv_seguro(os.path.join(carpeta, archivo))
         if df.empty:
+            continue
+        if "retorno_total" not in df.columns:
+            log.debug(
+                "Reporte %s sin columna 'retorno_total' (%d cols); ignorado",
+                archivo,
+                df.shape[1],
+            )
             continue
         if "symbol" not in df.columns and "simbolo" in df.columns:
             df["symbol"] = df["simbolo"]

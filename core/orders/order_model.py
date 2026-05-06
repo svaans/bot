@@ -1,7 +1,13 @@
 from dataclasses import dataclass, asdict
+from decimal import ROUND_CEILING, ROUND_DOWN, Decimal, InvalidOperation
 from typing import Dict, Any, Optional
 import json
 import math
+
+
+def _to_decimal(value: float) -> Decimal:
+    """Convierte a Decimal vía str para evitar errores de representación binaria."""
+    return Decimal(str(value))
 
 
 def normalizar_precio_cantidad(filtros: Dict[str, float], precio: float, cantidad: float,
@@ -31,12 +37,35 @@ def normalizar_precio_cantidad(filtros: Dict[str, float], precio: float, cantida
     min_amount = filtros.get('min_qty', 0.0)
 
     precio = ajustar_tick_size(precio, tick_size, direccion)
-    
-    if step_size > 0:
-        cantidad = math.floor(cantidad / step_size) * step_size
+
+    def _floor_step(q: float) -> float:
+        if step_size <= 0:
+            return q
+        try:
+            return float(
+                (_to_decimal(q) / _to_decimal(step_size)).to_integral_value(
+                    rounding=ROUND_DOWN
+                ) * _to_decimal(step_size)
+            )
+        except InvalidOperation:
+            return math.floor(q / step_size) * step_size
+
+    def _ceil_step(q: float) -> float:
+        if step_size <= 0:
+            return q
+        try:
+            return float(
+                (_to_decimal(q) / _to_decimal(step_size)).to_integral_value(
+                    rounding=ROUND_CEILING
+                ) * _to_decimal(step_size)
+            )
+        except InvalidOperation:
+            return math.ceil(q / step_size) * step_size
+
+    cantidad = _floor_step(cantidad)
 
     if min_amount and step_size > 0 and cantidad < min_amount:
-        cantidad = math.ceil(min_amount / step_size) * step_size
+        cantidad = _ceil_step(min_amount)
 
     if (
         min_notional
@@ -44,21 +73,35 @@ def normalizar_precio_cantidad(filtros: Dict[str, float], precio: float, cantida
         and step_size > 0
         and precio * cantidad < min_notional
     ):
-        cantidad = math.ceil(min_notional / precio / step_size) * step_size
+        cantidad = _ceil_step(min_notional / precio)
 
-    if step_size > 0:
-        cantidad = math.floor(cantidad / step_size) * step_size
+    # Final snap: min_notional ceil may itself need flooring to step boundary.
+    cantidad = _floor_step(cantidad)
     return precio, cantidad
 
 
 def ajustar_tick_size(precio: float, tick_size: float, direccion: str = 'long') -> float:
-    """Ajusta un precio al múltiplo de ``tick_size`` según la dirección."""
+    """Ajusta un precio al múltiplo de ``tick_size`` según la dirección.
+
+    Usa ``Decimal`` para evitar errores de representación flotante en ticks
+    pequeños (< 0.001), coherente con :mod:`core.risk.sizing` y
+    :mod:`core.risk.level_validators`.
+    """
     if tick_size <= 0:
         return precio
-    factor = precio / tick_size
-    if direccion in ('short', 'venta'):
-        return math.ceil(factor) * tick_size
-    return math.floor(factor) * tick_size
+    try:
+        dec_precio = _to_decimal(precio)
+        dec_tick = _to_decimal(tick_size)
+        if direccion in ('short', 'venta'):
+            rounded = (dec_precio / dec_tick).to_integral_value(rounding=ROUND_CEILING)
+        else:
+            rounded = (dec_precio / dec_tick).to_integral_value(rounding=ROUND_DOWN)
+        return float(rounded * dec_tick)
+    except InvalidOperation:
+        factor = precio / tick_size
+        if direccion in ('short', 'venta'):
+            return math.ceil(factor) * tick_size
+        return math.floor(factor) * tick_size
 
 
 @dataclass

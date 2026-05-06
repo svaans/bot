@@ -9,6 +9,13 @@ import os
 import random
 import re
 import time
+
+try:
+    import orjson as _json_impl  # Rust-backed: 3-5x más rápido que stdlib json
+    _ORJSON = True
+except ImportError:  # pragma: no cover
+    _json_impl = json  # type: ignore[assignment]
+    _ORJSON = False
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Awaitable, Callable, Dict, Iterable, Mapping, Optional, Sequence, TYPE_CHECKING
@@ -514,25 +521,6 @@ async def _escuchar_velas_combinado_real(
                     "close_time": candle.get("close_time"),
                 },
             )
-        # --- DIAGNÓSTICO TEMPORAL — REVERTIR ------------------------------
-        # Log INFO de TODA vela cerrada dispatchada (no solo la primera).
-        # Volumen bajo: ~1/min para 5 símbolos en 5m. Permite comparar con
-        # ``df.recv.closed`` en el DataFeed: si la vela se loguea aquí pero
-        # no llega a ``df.recv.closed`` es un problema de propagación del
-        # handler; si llega a ``df.recv.closed`` pero no pasa de ``stale``
-        # es un bug de ``_last_close_ts``/backfill_window.
-        logger.info(
-            "ws.closed_candle",
-            extra={
-                "event": "ws.closed_candle",
-                "symbol": symbol,
-                "stream": stream_name,
-                "interval": interval,
-                "open_time": candle.get("open_time"),
-                "close_time": candle.get("close_time"),
-            },
-        )
-        # ------------------------------------------------------------------
         await dispatch(symbol, candle)
 
     await _consume_ws_stream(
@@ -668,15 +656,11 @@ async def _consume_ws_stream(
                                     "frames": frames_received,
                                 },
                             )
-                        preview: str
-                        if isinstance(raw, bytes):
-                            preview = raw[:64].decode("utf-8", "ignore")
-                            raw_text = raw.decode("utf-8", "ignore")
-                            raw_len = len(raw)
-                        else:
-                            preview = str(raw)[:64]
-                            raw_text = str(raw)
-                            raw_len = len(raw_text)
+                        # orjson acepta bytes/str directamente — evitamos decode innecesario.
+                        raw_bytes: bytes | None = raw if isinstance(raw, bytes) else None
+                        raw_text: str = raw if isinstance(raw, str) else raw.decode("utf-8", "ignore")
+                        raw_len = len(raw_bytes) if raw_bytes is not None else len(raw_text)
+                        preview = (raw_bytes[:64].decode("utf-8", "ignore") if raw_bytes else raw_text[:64])
                         logger.debug(
                             "ws.recv.raw",
                             extra={
@@ -687,8 +671,8 @@ async def _consume_ws_stream(
                             },
                         )
                         try:
-                            data = json.loads(raw_text)
-                        except json.JSONDecodeError as exc:
+                            data = _json_impl.loads(raw_bytes if (_ORJSON and raw_bytes is not None) else raw_text)
+                        except (json.JSONDecodeError, ValueError) as exc:
                             logger.warning(
                                 "ws.recv.json_error",
                                 extra={

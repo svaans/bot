@@ -1046,7 +1046,7 @@ class Trader(TraderLite):
             else:
                 unit_detected = "unknown"
 
-            log.info(
+            log.debug(
                 "diagnostico.timestamp_pipeline",
                 extra=safe_extra({
                     "symbol": symbol,
@@ -1060,7 +1060,7 @@ class Trader(TraderLite):
             if not self._should_evaluate(symbol, timeframe_str, eval_ts):
                 eval_key_dup = (symbol.upper(), (timeframe_str or "unknown"))
                 prev_ts = self._last_evaluated_bar.get(eval_key_dup)
-                log.info(
+                log.debug(
                     "diagnostico.duplicate_bar",
                     extra=safe_extra(
                         {

@@ -1,4 +1,5 @@
 import math
+from decimal import ROUND_DOWN, Decimal, InvalidOperation
 from typing import Dict, List
 
 import pandas as pd
@@ -11,10 +12,22 @@ log = configurar_logger('salida_takeprofit_atr')
 
 
 def _ajustar_step_size(cantidad: float, step_size: float) -> float:
-    """Ajusta ``cantidad`` al múltiplo inferior de ``step_size``."""
+    """Ajusta ``cantidad`` al múltiplo inferior de ``step_size``.
+
+    Usa ``Decimal`` para evitar errores de representación binaria en step_size
+    pequeños (< 0.001), coherente con :mod:`core.risk.sizing` y
+    :mod:`core.orders.order_model`.
+    """
     if step_size <= 0:
         return cantidad
-    return math.floor(cantidad / step_size) * step_size
+    try:
+        return float(
+            (Decimal(str(cantidad)) / Decimal(str(step_size))).to_integral_value(
+                rounding=ROUND_DOWN
+            ) * Decimal(str(step_size))
+        )
+    except InvalidOperation:
+        return math.floor(cantidad / step_size) * step_size
 
 
 def salida_takeprofit_atr(

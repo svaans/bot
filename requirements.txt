@@ -29,6 +29,7 @@ frozenlist==1.8.0
 multidict==6.7.1
 pycares==5.0.1
 httpx==0.28.1
+orjson==3.10.18            # JSON parsing 3-5x más rápido que stdlib (Rust); drop-in en hot path WS
 
 # ───────── CONFIGURACIÓN Y UTILIDADES ─────────
 python-dotenv==1.2.2

@@ -111,6 +111,35 @@ def test_real_orders_esperar_balance(monkeypatch: pytest.MonkeyPatch) -> None:
     assert got >= 1.0
 
 
+def test_real_orders_esperar_balance_all_throws_returns_zero(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """F1-phase12: si fetch_balance lanza en todos los intentos, debe devolver 0.0
+    sin NameError (antes de la corrección, `disponible` era referenciado sin inicializar)."""
+    monkeypatch.setattr(ro.time, "sleep", lambda *_a, **_k: None)
+
+    class FailingCli:
+        def fetch_balance(self) -> dict[str, Any]:
+            raise RuntimeError("exchange down")
+
+    result = ro.esperar_balance(FailingCli(), "BTC/USDT", 1.0, max_intentos=3, delay=0.0)
+    assert result == 0.0
+
+
+def test_resolve_timeframe_trader_config_none() -> None:
+    """F1-phase11: _resolve_timeframe no debe levantar NameError cuando trader.config es None."""
+    import pandas as pd
+    from core.strategies.entry.verificar_entradas import _resolve_timeframe  # type: ignore[attr-defined]
+
+    from types import SimpleNamespace
+
+    df = pd.DataFrame()  # sin atributo .tf ni .attrs["tf"]
+    trader_no_config = SimpleNamespace()  # sin atributo config → getattr devuelve None
+
+    result = _resolve_timeframe(df, trader_no_config)
+    assert result is None
+
+
 @pytest.mark.asyncio
 async def test_external_feeds_funding_404_marca_missing() -> None:
     from core.data import external_feeds as ef

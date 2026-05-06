@@ -82,6 +82,11 @@ class _TelegramBackend:
         self._base_url = base_url.rstrip("/")
         self._parse_mode = parse_mode if parse_mode else None
         self._escape_markdown_text = escape_markdown_text
+        if not self._enabled:
+            log.warning(
+                "❌ Telegram deshabilitado: TELEGRAM_TOKEN o TELEGRAM_CHAT_ID no configurados "
+                "en config/claves.env. Las notificaciones no se enviarán."
+            )
 
     async def send(self, text: str, *, meta: dict[str, Any] | None = None) -> DeliveryReport:
         if not self._enabled:
@@ -539,6 +544,11 @@ class NotificationManager:
 
 # Factory desde entorno (como usa tu main)
 def crear_notification_manager_desde_env(on_event: Optional[Callable[[str, dict], None]] = None) -> NotificationManager:
+    try:
+        from dotenv import load_dotenv
+        load_dotenv("config/claves.env")
+    except Exception:
+        pass
     token = os.getenv("TELEGRAM_TOKEN")
     chat_id = os.getenv("TELEGRAM_CHAT_ID")
     nm = NotificationManager(

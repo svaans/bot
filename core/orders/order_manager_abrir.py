@@ -105,6 +105,25 @@ async def abrir_async(
     strategy_version: str | None = None,  # reservado (no usado aquí)
 ) -> OrderOpenStatus:
     operation_id = manager._generar_operation_id(symbol)
+
+    # Invariante: un símbolo con orphan pendiente no puede operar.
+    # Previene posiciones duplicadas si el intent previo sí llegó a Binance.
+    rec = getattr(manager, "orphan_reconciler", None)
+    if rec is not None and rec.is_blocked(symbol):
+        blocking = rec.get_blocking_record(symbol)
+        op_str = getattr(blocking, "operation_id", "?") if blocking else "?"
+        state_str = getattr(getattr(blocking, "state", None), "value", "?") if blocking else "?"
+        log.warning(
+            "orphan.trading_blocked",
+            extra={
+                "symbol": symbol,
+                "blocking_operation_id": op_str,
+                "orphan_state": state_str,
+                "reason": "orphan_pending_reconciliation",
+            },
+        )
+        return OrderOpenStatus.BLOCKED_BY_ORPHAN
+
     tick_size_value = float(tick_size or 0.0)
     step_size_value = float(step_size or 0.0)
     try:
@@ -494,7 +513,10 @@ async def abrir_async(
                             if manager._should_schedule_persistence_retry(last_error):
                                 reason_label = type(last_error).__name__ if last_error else 'unknown'
                                 manager._schedule_registro_retry(symbol, reason=reason_label)
-                        await asyncio.sleep(1)
+                            # Breve pausa sólo en el camino de fallo para no reintentaremos
+                            # inmediatamente. En el camino de éxito no hay motivo de espera:
+                            # la orden ya fue enviada a Binance antes de este bloque.
+                            await asyncio.sleep(1)
 
                         if registrado:
                             orden.registro_pendiente = False

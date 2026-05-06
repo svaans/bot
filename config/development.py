@@ -121,3 +121,13 @@ class DevelopmentConfig:
     entrada_cooldown_tras_crear_failed_por_symbol: Dict[str, float] = field(default_factory=dict)
     # Evita re-emitir la misma candidatura (mismo TF + vela + lado) en re-evaluaciones del mismo cierre.
     entrada_dedupe_por_vela: bool = True
+    # Número mínimo de velas históricas que el warmup inicial debe cargar por símbolo.
+    min_bars_warmup: int = 400
+
+    # ── Circuit breaker de creación de órdenes ──────────────────────────────
+    # Número de fallos consecutivos antes de abrir el circuit breaker.
+    order_circuit_max_failures: int = 3
+    # Segundos que el CB permanece abierto tras activarse.
+    order_circuit_open_seconds: float = 30.0
+    # Segundos de inactividad tras los cuales se resetean los contadores.
+    order_circuit_reset_after: float = 120.0

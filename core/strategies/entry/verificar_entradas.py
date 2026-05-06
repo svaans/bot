@@ -324,8 +324,8 @@ def _resolve_timeframe(df: pd.DataFrame, trader: Any) -> str | None:
     cfg = getattr(trader, "config", None)
     if cfg is not None:
         tf_cfg = getattr(cfg, "intervalo_velas", None)
-    if tf_cfg:
-        return str(tf_cfg)
+        if tf_cfg:
+            return str(tf_cfg)
     return None
 
 
@@ -478,7 +478,7 @@ def _apply_persistencia_gate(
                 ),
             )
 
-    log.info(
+    log.debug(
         "persistencia.check",
         extra=safe_extra({**base_extra, "persistencia_ok": persist_ok}),
     )
@@ -842,7 +842,7 @@ async def verificar_entrada(
     gate = getattr(trader, "_puede_evaluar_entradas", None)
     if callable(gate) and not gate(symbol):
         _elapsed_ve = (time.monotonic() - _t0_ve) * 1000
-        log.info("diagnostico.verificar_entrada_time", extra={"symbol": symbol_norm, "elapsed_ms": round(_elapsed_ve, 2), "outcome": "rechazada", "motivo": "gate_blocked"})
+        log.debug("diagnostico.verificar_entrada_time", extra={"symbol": symbol_norm, "elapsed_ms": round(_elapsed_ve, 2), "outcome": "rechazada", "motivo": "gate_blocked"})
         payload = {"symbol": symbol, "reason": "gate_blocked"}
         _emit(on_event, "entry_gate_blocked", payload)
         return _reject("gate_blocked", extra=payload)
@@ -870,7 +870,7 @@ async def verificar_entrada(
 
     if not resultado_engine:
         _elapsed_ve = (time.monotonic() - _t0_ve) * 1000
-        log.info("diagnostico.verificar_entrada_time", extra={"symbol": symbol_norm, "elapsed_ms": round(_elapsed_ve, 2), "outcome": "rechazada", "motivo": "engine_no_result"})
+        log.debug("diagnostico.verificar_entrada_time", extra={"symbol": symbol_norm, "elapsed_ms": round(_elapsed_ve, 2), "outcome": "rechazada", "motivo": "engine_no_result"})
         return _reject("engine_no_result")
 
     # --- DIAGNÓSTICO: validación de valores del engine -------------------
@@ -1011,7 +1011,7 @@ async def verificar_entrada(
         _emit(on_event, "entry_skip", payload)
         _finalize_decision(decision)
         _elapsed_ve = (time.monotonic() - _t0_ve) * 1000
-        log.info("diagnostico.verificar_entrada_time", extra={"symbol": symbol_norm, "elapsed_ms": round(_elapsed_ve, 2), "outcome": "rechazada", "motivo": "score_bajo", "score": decision.score, "umbral": decision.threshold})
+        log.debug("diagnostico.verificar_entrada_time", extra={"symbol": symbol_norm, "elapsed_ms": round(_elapsed_ve, 2), "outcome": "rechazada", "motivo": "score_bajo", "score": decision.score, "umbral": decision.threshold})
         return _reject("score_bajo", extra=payload)
 
     allow_persist, persist_ok, strict_flag = _apply_persistencia_gate(
@@ -1069,7 +1069,7 @@ async def verificar_entrada(
         side=side,
     )
     _elapsed_ve = (time.monotonic() - _t0_ve) * 1000
-    log.info("diagnostico.verificar_entrada_time", extra={"symbol": symbol_norm, "elapsed_ms": round(_elapsed_ve, 2), "outcome": "aprobada"})
+    log.debug("diagnostico.verificar_entrada_time", extra={"symbol": symbol_norm, "elapsed_ms": round(_elapsed_ve, 2), "outcome": "aprobada"})
     return _approve(final_payload)
 
 

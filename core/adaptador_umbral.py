@@ -17,6 +17,7 @@ frecuencia para no saturar E/S.
 from __future__ import annotations
 import json
 import math
+import os
 import time
 from collections import deque
 from pathlib import Path
@@ -88,17 +89,25 @@ def cargar_estado() -> None:
 
 
 def guardar_estado() -> None:
+    """Persiste el estado de umbral adaptativo usando escritura atómica.
+
+    Escribe primero en un archivo temporal y luego usa ``os.replace`` para
+    garantizar que ``umbral_adaptativo.json`` nunca quede en estado parcial
+    si el proceso muere a mitad de la escritura.  Coherente con
+    ``pesos.py._atomic_write_json``.
+    """
     try:
         RUTA_ESTADO.parent.mkdir(parents=True, exist_ok=True)
-        with open(RUTA_ESTADO, "w", encoding="utf-8") as fh:
-            json.dump(
-                {
-                    "umbral_suavizado": _UMBRAL_SUAVIZADO,
-                    "histeresis_skips": _HISTERESIS_SKIPS,
-                },
-                fh,
-                indent=2,
-            )
+        tmp = RUTA_ESTADO.with_suffix(".tmp")
+        payload = {
+            "umbral_suavizado": _UMBRAL_SUAVIZADO,
+            "histeresis_skips": _HISTERESIS_SKIPS,
+        }
+        with open(tmp, "w", encoding="utf-8") as fh:
+            json.dump(payload, fh, indent=2)
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp, RUTA_ESTADO)
     except Exception as e:  # pragma: no cover - logging de guardado
         log.warning(
             "⚠️ Error guardando estado umbral: %s",

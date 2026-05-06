@@ -2,6 +2,11 @@ import os
 import re
 from datetime import datetime, timedelta, timezone
 
+# Directorio de reportes diarios. Se puede sobreescribir con la variable de
+# entorno REPORTES_DIARIOS_PATH para que Kelly funcione desde cualquier CWD
+# (Docker, CI, scripts de análisis fuera de la raíz del proyecto).
+_REPORTES_DIR: str = os.getenv("REPORTES_DIARIOS_PATH", "reportes_diarios")
+
 UTC = timezone.utc
 from math import isclose
 import pandas as pd
@@ -18,7 +23,7 @@ def calcular_fraccion_kelly(dias_historia: int=30, fallback: float=0.2
     Se basa en los reportes diarios generados por ``ReporterDiario``. Si no
     existen suficientes registros, devuelve ``fallback``.
     """
-    carpeta = 'reportes_diarios'
+    carpeta = _REPORTES_DIR
     if not os.path.isdir(carpeta):
         return fallback
     fecha_limite = datetime.now(UTC).date() - timedelta(days=dias_historia)
@@ -38,18 +43,21 @@ def calcular_fraccion_kelly(dias_historia: int=30, fallback: float=0.2
             continue
         if fecha < fecha_limite:
             continue
-        try:
-            df = leer_csv_seguro(os.path.join(carpeta, archivo),
-                expected_cols=20)
-        except (pd.errors.EmptyDataError, pd.errors.ParserError, OSError) as e:
-            log.warning(
-                '⚠️ No se pudo leer reporte %s: %s',
-                archivo,
-                format_exception_for_log(e),
-            )
+        # Sin expected_cols: leer_csv_seguro ya atrapa errores de lectura y
+        # devuelve DataFrame vacío. La validación semántica es la presencia de
+        # 'retorno_total'; un check de columnas exactas (== 20) silenciaba CSVs
+        # con una columna extra cuando se añadía un nuevo campo al reporte.
+        df = leer_csv_seguro(os.path.join(carpeta, archivo))
+        if df.empty:
+            log.debug('Reporte vacío o ilegible: %s', archivo)
             continue
         if 'retorno_total' in df.columns:
             retornos.extend(df['retorno_total'].dropna().tolist())
+        else:
+            log.debug(
+                "Reporte %s sin columna 'retorno_total' (%d cols); ignorado",
+                archivo, df.shape[1],
+            )
     if len(retornos) < 10:
         return fallback
     ganadoras = [r for r in retornos if r > 0]
