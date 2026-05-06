@@ -105,6 +105,25 @@ async def abrir_async(
     strategy_version: str | None = None,  # reservado (no usado aquí)
 ) -> OrderOpenStatus:
     operation_id = manager._generar_operation_id(symbol)
+
+    # Invariante: un símbolo con orphan pendiente no puede operar.
+    # Previene posiciones duplicadas si el intent previo sí llegó a Binance.
+    rec = getattr(manager, "orphan_reconciler", None)
+    if rec is not None and rec.is_blocked(symbol):
+        blocking = rec.get_blocking_record(symbol)
+        op_str = getattr(blocking, "operation_id", "?") if blocking else "?"
+        state_str = getattr(getattr(blocking, "state", None), "value", "?") if blocking else "?"
+        log.warning(
+            "orphan.trading_blocked",
+            extra={
+                "symbol": symbol,
+                "blocking_operation_id": op_str,
+                "orphan_state": state_str,
+                "reason": "orphan_pending_reconciliation",
+            },
+        )
+        return OrderOpenStatus.BLOCKED_BY_ORPHAN
+
     tick_size_value = float(tick_size or 0.0)
     step_size_value = float(step_size or 0.0)
     try:

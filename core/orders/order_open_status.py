@@ -11,3 +11,4 @@ class OrderOpenStatus(Enum):
     OPENED = "opened"
     PENDING_REGISTRATION = "pending_registration"
     FAILED = "failed"
+    BLOCKED_BY_ORPHAN = "blocked_by_orphan"  # Símbolo bloqueado: orphan pendiente de reconciliar

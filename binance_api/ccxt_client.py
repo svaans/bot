@@ -190,4 +190,11 @@ def obtener_ccxt(config: Any | None = None) -> Any:
             "ccxt.binance listo",
             extra={"event": "ccxt_exchange_ready", "testnet": testnet_active},
         )
+        # Señal explícita de readiness: el reconciliador de orphans la espera
+        # para no correr contra un cliente no inicializado.
+        try:
+            from core.orders.orphan_reconciler import signal_ccxt_ready
+            signal_ccxt_ready()
+        except Exception:
+            pass
         return _EXCHANGE

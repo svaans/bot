@@ -8,6 +8,8 @@ from collections.abc import Mapping
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
+from core.orders.orphan_reconciler import OrphanReconciler
+
 from core.orders.order_model import Order
 from core.orders.order_open_status import OrderOpenStatus
 from core.utils.feature_flags import is_flag_enabled
@@ -58,135 +60,15 @@ MAX_HISTORIAL_ORDENES = 1000
 
 
 
-def _alertar_intent_huerfanos(logger: object) -> list[Path]:
-    """[FIX C-07] Fase 1 — detección síncrona al arranque.
-
-    Escanea archivos pre_exec_intent_*.json, emite CRITICAL + Telegram por cada uno
-    y devuelve la lista de archivos pendientes de reconciliar con Binance.
-    La reconciliación real (que necesita ccxt) se hace en la fase 2 async.
-    """
-    pendientes: list[Path] = []
-    try:
-        from core.orders.real_orders import RUTA_DB  # import local para evitar ciclo
-        carpeta = Path(RUTA_DB).parent
-        if not carpeta.exists():
-            return pendientes
-        huerfanos = list(carpeta.glob('pre_exec_intent_*.json'))
-        if not huerfanos:
-            return pendientes
-        for f in huerfanos:
-            try:
-                import json
-                data = json.loads(f.read_text(encoding='utf-8'))
-            except Exception:
-                data = {'archivo': str(f)}
-            logger.critical(  # type: ignore[union-attr]
-                '🚨 [C-07] Intent pre-ejecución huérfano detectado — posible orden no registrada. '
-                'Verifique manualmente en Binance y reconcilie: %s',
-                data,
-            )
-            try:
-                from core.orders.real_orders import notificador as _notif
-                symbol_msg = data.get("symbol", "?") if isinstance(data, dict) else "?"
-                op_id_msg = data.get("operation_id", "?") if isinstance(data, dict) else "?"
-                _notif.enviar(
-                    f"🚨 Intent pre-ejecución huérfano\n"
-                    f"Symbol: {symbol_msg}\nID: {op_id_msg}\n"
-                    "Reconciliando con Binance tras startup...",
-                    "CRITICAL",
-                )
-            except Exception:
-                pass
-            # Datos corruptos: no hay nada que reconciliar, borrar ya.
-            op_id = data.get("operation_id") if isinstance(data, dict) else None
-            symbol = data.get("symbol") if isinstance(data, dict) else None
-            if not op_id or not symbol:
-                logger.warning(
-                    "⚠️ [C-07] Intent sin symbol/operation_id — eliminando: %s", f
-                )
-                f.unlink(missing_ok=True)
-            else:
-                pendientes.append(f)
-    except Exception as e:
-        try:
-            logger.warning('⚠️ No se pudo verificar intents huérfanos: %s', e)  # type: ignore[union-attr]
-        except Exception:
-            pass
-    return pendientes
+# Instancia singleton del reconciliador de orphans.
+# Creada en OrderManager.__init__ y accesible desde abrir_async vía manager.orphan_reconciler.
+# Nula hasta que se crea el primer OrderManager en modo real.
+_ORPHAN_RECONCILER: "OrphanReconciler | None" = None
 
 
-async def _reconciliar_intents_huerfanos_async(
-    archivos: list[Path],
-    logger: object,
-    delay: float = 20.0,
-) -> None:
-    """[FIX C-07] Fase 2 — reconciliación async tras startup.
-
-    Espera `delay` segundos para que ccxt esté listo, luego consulta Binance
-    por cada intent huérfano y elimina el archivo en todos los casos resolubles.
-    """
-    await asyncio.sleep(delay)
-    for f in archivos:
-        if not f.exists():
-            continue
-        try:
-            import json
-            data = json.loads(f.read_text(encoding='utf-8'))
-        except Exception:
-            f.unlink(missing_ok=True)
-            continue
-        op_id = data.get("operation_id") if isinstance(data, dict) else None
-        symbol = data.get("symbol") if isinstance(data, dict) else None
-        if not op_id or not symbol:
-            f.unlink(missing_ok=True)
-            continue
-        try:
-            from core.orders.real_orders_reconcile import sincronizar_ordenes_binance
-            from core.orders.real_orders import notificador as _notif
-            reconciliadas = sincronizar_ordenes_binance(simbolos=[symbol], modo_real=True)
-            if symbol in reconciliadas:
-                ord_externa = reconciliadas[symbol]
-                if getattr(ord_externa, "operation_id", None) == op_id:
-                    logger.info(  # type: ignore[union-attr]
-                        "✅ [C-07] Orden huérfana reconciliada en Binance: %s op=%s.",
-                        symbol, op_id,
-                    )
-                    try:
-                        _notif.enviar(
-                            f"✅ Huérfano reconciliado: {symbol}\n"
-                            "La orden existía en Binance y fue registrada localmente.",
-                            "INFO",
-                        )
-                    except Exception:
-                        pass
-                else:
-                    logger.warning(  # type: ignore[union-attr]
-                        "⚠️ [C-07] Orden en Binance para %s con distinto operation_id — "
-                        "intent obsoleto eliminado.",
-                        symbol,
-                    )
-            else:
-                logger.warning(  # type: ignore[union-attr]
-                    "⚠️ [C-07] Sin orden activa en Binance para %s (op=%s). "
-                    "Probable fallo previo — eliminando intent.",
-                    symbol, op_id,
-                )
-                try:
-                    _notif.enviar(
-                        f"⚠️ Huérfano resuelto: {symbol}\n"
-                        f"No hay orden activa en Binance (op={op_id}).\n"
-                        "Era un fallo de ejecución previo. Archivo eliminado.",
-                        "WARNING",
-                    )
-                except Exception:
-                    pass
-            f.unlink(missing_ok=True)
-        except Exception as exc:
-            logger.warning(  # type: ignore[union-attr]
-                "⚠️ [C-07] No se pudo reconciliar huérfano con Binance para %s: %s — "
-                "se conserva el archivo para el próximo arranque.",
-                symbol, exc,
-            )
+def get_orphan_reconciler() -> "OrphanReconciler | None":
+    """Devuelve el reconciliador activo, o None si no hay ninguno."""
+    return _ORPHAN_RECONCILER
 
 
 class OrderManager:
@@ -304,21 +186,20 @@ class OrderManager:
             self.subscribe(bus)
         else:
             self._ensure_background_tasks()
-        self._intent_cleanup_task: asyncio.Task | None = None
+        # Reconciliador de orphans: instancia por OrderManager, singleton efectivo en producción.
+        self.orphan_reconciler: OrphanReconciler | None = None
         if self.modo_real:
-            # [FIX C-07] Fase 1: detección síncrona — log CRITICAL + Telegram.
-            # Fase 2 (reconciliación con Binance) se lanza como tarea async
-            # para evitar que corra antes de que ccxt esté listo.
-            _pendientes = _alertar_intent_huerfanos(log)
-            if _pendientes:
-                try:
-                    loop = asyncio.get_running_loop()
-                    self._intent_cleanup_task = loop.create_task(
-                        _reconciliar_intents_huerfanos_async(_pendientes, log),
-                        name="orders.intent_cleanup",
-                    )
-                except RuntimeError:
-                    pass  # sin loop aún: la fase 2 se omite (no hay loop en tests)
+            global _ORPHAN_RECONCILER
+            rec = OrphanReconciler()
+            from core.orders.real_orders import RUTA_DB
+            rec.scan_and_detect(RUTA_DB)
+            _ORPHAN_RECONCILER = rec
+            self.orphan_reconciler = rec
+            try:
+                loop = asyncio.get_running_loop()
+                rec.start(loop)
+            except RuntimeError:
+                pass  # sin loop: tests o contexto sync — la fase 2 no aplica
 
     def _generar_operation_id(self, symbol: str) -> str:
         """Genera un identificador único para agrupar fills de una operación."""
@@ -771,7 +652,9 @@ class OrderManager:
     async def aclose_background_tasks(self) -> None:
         """Cancela tareas periódicas (flush, reconciliación, sync) y reintentos de registro."""
         tasks: list[asyncio.Task[Any]] = []
-        for attr in ("_flush_task", "_reconcile_task", "_sync_task", "_post_cancel_sync_task", "_intent_cleanup_task"):
+        if self.orphan_reconciler is not None:
+            self.orphan_reconciler.shutdown()
+        for attr in ("_flush_task", "_reconcile_task", "_sync_task", "_post_cancel_sync_task"):
             t = getattr(self, attr, None)
             if t is not None and not t.done():
                 t.cancel()
