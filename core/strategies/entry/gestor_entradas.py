@@ -188,7 +188,8 @@ def entrada_permitida(symbol: str, potencia: float, umbral: float,
         df if df is not None else pd.DataFrame(), rsi, momentum, slope,
         tendencia or 'lateral', direccion
     )[0]
-    assert 0.0 <= sinergia <= 1.0, 'sinergia fuera de rango'
+    if not (0.0 <= sinergia <= 1.0):
+        raise ValueError(f"sinergia fuera de rango [0, 1]: {sinergia!r}")
     potencia_ajustada = potencia * (1 + score_tecnico / 3)
     if not _validar_correlacion(symbol, df, df_referencia, umbral_correlacion):
         return False

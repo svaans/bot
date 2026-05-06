@@ -123,3 +123,11 @@ class DevelopmentConfig:
     entrada_dedupe_por_vela: bool = True
     # Número mínimo de velas históricas que el warmup inicial debe cargar por símbolo.
     min_bars_warmup: int = 400
+
+    # ── Circuit breaker de creación de órdenes ──────────────────────────────
+    # Número de fallos consecutivos antes de abrir el circuit breaker.
+    order_circuit_max_failures: int = 3
+    # Segundos que el CB permanece abierto tras activarse.
+    order_circuit_open_seconds: float = 30.0
+    # Segundos de inactividad tras los cuales se resetean los contadores.
+    order_circuit_reset_after: float = 120.0

@@ -14,6 +14,14 @@ from core.vela.metrics_definitions import DEFAULT_MIN_BARS
 
 COLUMNS = ("timestamp", "open", "high", "low", "close", "volume")
 
+# Evaluado una sola vez al cargar el módulo; evita llamar os.getenv() en cada vela
+# del hot-path (600+ veces/hora con 2 símbolos en 5 m).
+_STRICT_CLOSED: bool = os.getenv("PROCESAR_VELA_STRICT_CLOSED", "").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+}
+
 
 def _attach_timeframe(df: pd.DataFrame, timeframe: Optional[str]) -> None:
     """Adjunta el timeframe al DataFrame sin contaminar columnas."""
@@ -190,12 +198,7 @@ def _validar_candle(c: dict) -> Tuple[bool, str]:
         flag_value = _normalize_flag(c.get(flag_name))
         if flag_value is False:
             return False, "incomplete"
-    strict_closed = os.getenv("PROCESAR_VELA_STRICT_CLOSED", "").strip().lower() in {
-        "1",
-        "true",
-        "yes",
-    }
-    if strict_closed:
+    if _STRICT_CLOSED:
         any_true = False
         any_key = False
         for flag_name in ("is_closed", "is_final", "final"):

@@ -1,12 +1,21 @@
 # core/vela/circuit_breaker.py — circuit breaker de creación de órdenes
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from typing import Any, Dict
 
-_ORDER_CIRCUIT_MAX_FAILURES = 3
-_ORDER_CIRCUIT_OPEN_SECONDS = 30.0
-_ORDER_CIRCUIT_RESET_AFTER = 120.0
+# Valores por defecto; anulables vía Config (campos ``order_circuit_*``) o
+# variables de entorno como fallback para entornos sin Config completo.
+_ORDER_CIRCUIT_MAX_FAILURES: int = int(
+    os.getenv("ORDER_CIRCUIT_MAX_FAILURES", "3")
+)
+_ORDER_CIRCUIT_OPEN_SECONDS: float = float(
+    os.getenv("ORDER_CIRCUIT_OPEN_SECONDS", "30.0")
+)
+_ORDER_CIRCUIT_RESET_AFTER: float = float(
+    os.getenv("ORDER_CIRCUIT_RESET_AFTER", "120.0")
+)
 
 
 @dataclass
@@ -72,6 +81,9 @@ class OrderCircuitBreakerStore:
         self._circuits.clear()
 
 
+# Singleton de último recurso; sólo se usa cuando el Trader no tiene su propio
+# ``order_circuit_store``. En tests, cada Trader debería proveer el suyo propio
+# para evitar polución de estado entre tests.
 _DEFAULT_ORDER_CIRCUIT_STORE = OrderCircuitBreakerStore()
 
 
@@ -80,3 +92,12 @@ def _resolve_order_circuit_store(trader: Any) -> OrderCircuitBreakerStore:
     if isinstance(store, OrderCircuitBreakerStore):
         return store
     return _DEFAULT_ORDER_CIRCUIT_STORE
+
+
+def _resolve_circuit_params(trader: Any) -> tuple[int, float, float]:
+    """Devuelve ``(max_failures, open_seconds, reset_after)`` desde Config o módulo."""
+    cfg = getattr(trader, "config", None)
+    max_f = int(getattr(cfg, "order_circuit_max_failures", _ORDER_CIRCUIT_MAX_FAILURES))
+    open_s = float(getattr(cfg, "order_circuit_open_seconds", _ORDER_CIRCUIT_OPEN_SECONDS))
+    reset = float(getattr(cfg, "order_circuit_reset_after", _ORDER_CIRCUIT_RESET_AFTER))
+    return max_f, open_s, reset
