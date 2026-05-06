@@ -14,6 +14,7 @@ poner a cero ``_perdidas_consecutivas`` sin cerrar posiciones.
 """
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timedelta, timezone
 import math
 
@@ -321,6 +322,44 @@ class RiskManager:
             COOLDOWN_ACTIVO_GAUGE.set(0.0)
         self._perdidas_consecutivas += 1
         self._evaluar_alerta_capital(self._exposure_disponible_global())
+        self._schedule_kill_switch_check()
+
+    def _schedule_kill_switch_check(self) -> None:
+        """Programa ``_maybe_activate_kill_switch`` en el loop activo si no hay bus.
+
+        Cuando el bus está conectado, ``_on_registrar_perdida`` ya llama a
+        ``await _maybe_activate_kill_switch()`` tras ``registrar_perdida()``,
+        por lo que no hay que hacer nada extra.
+
+        Cuando se llama a ``registrar_perdida()`` directamente (sin bus, p. ej.
+        en código de test o en rutas de código que bypass el bus), el kill switch
+        nunca se evaluaría. Este helper programa una tarea en el loop si está
+        corriendo, tapando el gap sin cambiar la firma síncrona de
+        ``registrar_perdida()``.
+
+        Idempotencia: ``_maybe_activate_kill_switch`` retorna inmediatamente si
+        ``_kill_switch_disparado`` ya es ``True``, así que la doble evaluación
+        que ocurre cuando el bus SÍ está conectado (una vía create_task + otra
+        vía el await en el handler) es inofensiva.
+        """
+        if self._bus is not None:
+            # El bus invocará _maybe_activate_kill_switch vía _on_registrar_perdida.
+            return
+        if self.order_manager is None:
+            # Sin order_manager el kill switch no puede actuar; ahorramos el overhead.
+            return
+        try:
+            loop = asyncio.get_running_loop()
+            loop.create_task(
+                self._maybe_activate_kill_switch(),
+                name="risk.kill_switch_check",
+            )
+        except RuntimeError:
+            # No hay loop activo (llamada síncrona pura, p. ej. tests sin asyncio).
+            # En este caso el caller es responsable de disparar el kill switch.
+            log.debug(
+                "kill_switch_check no programado: sin loop activo y sin bus"
+            )
 
     def _exposure_disponible_global(self) -> float:
         if not self.capital_manager:
