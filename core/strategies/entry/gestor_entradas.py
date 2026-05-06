@@ -4,6 +4,8 @@ Evalúa las estrategias activas y calcula el score técnico total y la diversida
 """
 from __future__ import annotations
 import asyncio
+import concurrent.futures
+import os
 import time
 import pandas as pd
 from core.utils.metrics_compat import Histogram
@@ -15,8 +17,28 @@ from core.estrategias import obtener_estrategias_por_tendencia, calcular_sinergi
 from core.scoring import calcular_score_tecnico
 from core.utils import configurar_logger
 from core.utils.log_utils import format_exception_for_log
+
 log = configurar_logger('entradas')
 _FUNCIONES: dict | None = None
+
+# Executor dedicado a la evaluación de estrategias.
+# Razón: `asyncio.to_thread` usa el executor por defecto del loop, compartido
+# con backfill, llamadas CCXT y cualquier otro `run_in_executor` del bot.
+# 19 estrategias × N símbolos en cierre simultáneo pueden saturar ese pool y
+# retrasar tareas de I/O críticas.
+# Tamaño: env var STRATEGY_EVAL_WORKERS → por defecto cpu_count×2, capped a 20.
+_STRATEGY_WORKERS: int = int(
+    os.getenv(
+        "STRATEGY_EVAL_WORKERS",
+        str(min(20, (os.cpu_count() or 4) * 2)),
+    )
+)
+_STRATEGY_EXECUTOR: concurrent.futures.ThreadPoolExecutor = (
+    concurrent.futures.ThreadPoolExecutor(
+        max_workers=_STRATEGY_WORKERS,
+        thread_name_prefix="strategy-eval",
+    )
+)
 
 
 def _estrategias_cargadas() -> dict:
@@ -43,6 +65,8 @@ async def evaluar_estrategias(symbol: str, df: pd.DataFrame, tendencia: str) -> 
     activas: dict[str, bool] = {}
     puntaje_total = 0.0
 
+    loop = asyncio.get_running_loop()
+
     async def ejecutar(nombre: str):
         func = funciones.get(nombre)
         if not callable(func):
@@ -50,7 +74,9 @@ async def evaluar_estrategias(symbol: str, df: pd.DataFrame, tendencia: str) -> 
             return nombre, False
         inicio = time.perf_counter()
         try:
-            resultado = await asyncio.to_thread(func, df)
+            # Usa el executor dedicado para no competir con backfill / IO del
+            # executor por defecto del loop.
+            resultado = await loop.run_in_executor(_STRATEGY_EXECUTOR, func, df)
             if isinstance(resultado, dict):
                 valor = resultado.get('activo')
                 if isinstance(valor, pd.Series):
