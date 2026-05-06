@@ -33,7 +33,11 @@ from core.utils.feature_flags import is_flag_enabled
 from core.utils.metrics_compat import Gauge
 from core.utils.log_utils import format_exception_for_log
 from core.utils.utils import configurar_logger
-from config.config import RISK_ALERTA_CAPITAL_PCT
+# risk_alerta_capital_pct vive en DevelopmentConfig/ProductionConfig y se lee
+# desde Config vía config_manager. La constante legacy RISK_ALERTA_CAPITAL_PCT
+# se resolvía igual vía __getattr__ de config.config, pero el nombre UPPER_CASE
+# es confuso (sugiere constante inmutable). Leemos directamente del módulo lazy.
+from config.config import risk_alerta_capital_pct as _RISK_ALERTA_CAPITAL_PCT_DEFAULT
 
 if TYPE_CHECKING:  # pragma: no cover - solo para tipado
     from core.capital_manager import CapitalManager
@@ -77,7 +81,7 @@ class RiskManager:
         self.bus = bus
         self.capital_manager = capital_manager
         if alerta_capital_pct is None:
-            alerta_capital_pct = RISK_ALERTA_CAPITAL_PCT
+            alerta_capital_pct = _RISK_ALERTA_CAPITAL_PCT_DEFAULT
         self.alerta_capital_pct = max(0.0, float(alerta_capital_pct))
         self.cooldown_pct = cooldown_pct
         self.cooldown_duracion = cooldown_duracion

@@ -2,6 +2,11 @@ import os
 import re
 from datetime import datetime, timedelta, timezone
 
+# Directorio de reportes diarios. Se puede sobreescribir con la variable de
+# entorno REPORTES_DIARIOS_PATH para que Kelly funcione desde cualquier CWD
+# (Docker, CI, scripts de análisis fuera de la raíz del proyecto).
+_REPORTES_DIR: str = os.getenv("REPORTES_DIARIOS_PATH", "reportes_diarios")
+
 UTC = timezone.utc
 from math import isclose
 import pandas as pd
@@ -18,7 +23,7 @@ def calcular_fraccion_kelly(dias_historia: int=30, fallback: float=0.2
     Se basa en los reportes diarios generados por ``ReporterDiario``. Si no
     existen suficientes registros, devuelve ``fallback``.
     """
-    carpeta = 'reportes_diarios'
+    carpeta = _REPORTES_DIR
     if not os.path.isdir(carpeta):
         return fallback
     fecha_limite = datetime.now(UTC).date() - timedelta(days=dias_historia)

@@ -1,6 +1,9 @@
 from __future__ import annotations
-from dataclasses import dataclass
+
 import math
+from dataclasses import dataclass
+from decimal import ROUND_CEILING, ROUND_DOWN, Decimal, InvalidOperation
+
 
 @dataclass
 class MarketInfo:
@@ -9,18 +12,47 @@ class MarketInfo:
     step_size: float
     min_notional: float
 
+
+def _to_decimal(value: float) -> Decimal:
+    """Convierte a Decimal vía str para evitar errores de representación binaria."""
+    return Decimal(str(value))
+
+
 def _round_price(price: float, tick: float, side: str = "buy") -> float:
+    """Redondea ``price`` al múltiplo de ``tick`` más cercano según ``side``.
+
+    Usa ``Decimal`` para evitar errores de representación flotante en ticks
+    pequeños (< 0.001), coherente con :mod:`core.risk.level_validators`.
+    """
     if tick <= 0:
         return price
-    factor = price / tick
-    if side in ("sell", "short"):
-        return math.ceil(factor) * tick
-    return math.floor(factor) * tick
+    try:
+        dec_price = _to_decimal(price)
+        dec_tick = _to_decimal(tick)
+        if side in ("sell", "short"):
+            rounded = (dec_price / dec_tick).to_integral_value(rounding=ROUND_CEILING)
+        else:
+            rounded = (dec_price / dec_tick).to_integral_value(rounding=ROUND_DOWN)
+        return float(rounded * dec_tick)
+    except InvalidOperation:
+        # Fallback numérico si Decimal falla (tick o price muy extremos)
+        factor = price / tick
+        if side in ("sell", "short"):
+            return math.ceil(factor) * tick
+        return math.floor(factor) * tick
+
 
 def _round_qty(qty: float, step: float) -> float:
+    """Redondea ``qty`` al múltiplo de ``step`` inferior usando ``Decimal``."""
     if step <= 0:
         return qty
-    return math.floor(qty / step) * step
+    try:
+        dec_qty = _to_decimal(qty)
+        dec_step = _to_decimal(step)
+        rounded = (dec_qty / dec_step).to_integral_value(rounding=ROUND_DOWN)
+        return float(rounded * dec_step)
+    except InvalidOperation:
+        return math.floor(qty / step) * step
 
 def apply_exchange_limits(price: float, qty: float, market: MarketInfo, side: str = "buy") -> tuple[float, float, float]:
     """Round price/qty and ensure ``min_notional``.

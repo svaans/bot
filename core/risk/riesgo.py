@@ -82,7 +82,7 @@ def guardar_estado_riesgo_seguro(estado: dict) ->None:
                 '⚠️ No se pudo escribir backup: %s',
                 format_exception_for_log(e),
             )
-        log.info(f'💾 Estado de riesgo actualizado: {estado}')
+        log.debug('💾 Estado de riesgo actualizado: %s', estado)
     except OSError as e:
         log.error(
             '❌ No se pudo guardar estado de riesgo: %s',
@@ -114,6 +114,10 @@ class AsyncRiskPersistence:
         self._queue: SimpleQueue[_LossUpdate] = SimpleQueue()
         self._stop_event = threading.Event()
         self._pending_event = threading.Event()
+        # Señaliza que el último flush ha completado; permite que esperar_flush()
+        # use wait() en lugar de un busy-loop de 10 ms.
+        self._flushed_event = threading.Event()
+        self._flushed_event.set()  # inicialmente "sin trabajo pendiente"
         self._lock = threading.Lock()
         self._estado_cache: dict = cargar_estado_riesgo_seguro()
         self._thread = threading.Thread(target=self._run, daemon=True, name='risk-persistence')
@@ -125,6 +129,7 @@ class AsyncRiskPersistence:
             return
         # Marcar pendiente antes del put para que esperar_flush no vea cola vacía
         # y evento libre en la ventana entre get() y set() en el hilo worker.
+        self._flushed_event.clear()  # hay trabajo sin completar
         self._pending_event.set()
         self._queue.put(_LossUpdate(simbolo=simbolo, perdida=abs(perdida)))
 
@@ -134,13 +139,16 @@ class AsyncRiskPersistence:
             return dict(self._estado_cache)
 
     def esperar_flush(self, timeout: float = 2.0) -> None:
-        """Bloquea hasta que la cola esté vacía y el estado haya sido persistido."""
-        limite = time.monotonic() + timeout
-        while time.monotonic() < limite:
-            if self._queue.empty() and not self._pending_event.is_set():
-                return
-            time.sleep(0.01)
-        raise TimeoutError('No se pudo vaciar la cola de riesgo a tiempo.')
+        """Bloquea hasta que la cola esté vacía y el estado haya sido persistido.
+
+        Usa ``_flushed_event.wait()`` en lugar de un busy-loop de 10 ms para
+        no consumir CPU mientras espera (relevante en tests y en shutdown).
+        """
+        if self._queue.empty() and not self._pending_event.is_set():
+            return
+        flushed = self._flushed_event.wait(timeout=timeout)
+        if not flushed:
+            raise TimeoutError('No se pudo vaciar la cola de riesgo a tiempo.')
 
     def shutdown(self, timeout: float = 2.0) -> None:
         """Detiene el hilo de persistencia asegurando el flush final."""
@@ -188,6 +196,7 @@ class AsyncRiskPersistence:
                 estado.get('perdida_acumulada', 0.0),
             )
         self._pending_event.clear()
+        self._flushed_event.set()
 
 
 _PERSISTENCIA: Optional[AsyncRiskPersistence] = None
