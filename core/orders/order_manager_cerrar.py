@@ -28,6 +28,29 @@ log = configurar_logger("orders", modo_silencioso=True)
 UTC = timezone.utc
 
 
+def _get_retry_delay(manager, symbol: str) -> float:
+    """M-03: per-symbol retry delay, fallback al global ORDERS_PARTIAL_CLOSE_RETRY_DELAY.
+
+    Lee el JSON crudo (sin merge con CONFIG_BASE) para que el valor solo
+    sobreescriba si esta EXPLICITAMENTE definido para el simbolo.  Asi los
+    tests que hacen manager._partial_close_retry_delay = 0.0 no son afectados
+    por los defaults del CONFIG_BASE (que tambien contienen partial_close_retry_delay).
+    """
+    try:
+        import json as _json
+        from pathlib import Path as _Path
+        from config.configuracion import RUTA_CONFIG_SIMBOLOS
+        raw = _json.loads(_Path(RUTA_CONFIG_SIMBOLOS).read_text(encoding="utf-8"))
+        sym_data = raw.get(symbol) or raw.get(symbol.replace("/", ""))
+        if isinstance(sym_data, dict) and "partial_close_retry_delay" in sym_data:
+            return max(0.0, float(sym_data["partial_close_retry_delay"]))
+    except Exception:
+        pass
+    return manager._partial_close_retry_delay
+
+
+
+
 def requeue_partial_close(
     manager,
     symbol: str,
@@ -53,8 +76,9 @@ def requeue_partial_close(
 
     async def _retry() -> None:
         try:
-            if manager._partial_close_retry_delay > 0:
-                await asyncio.sleep(manager._partial_close_retry_delay)
+            delay = _get_retry_delay(manager, symbol)
+            if delay > 0:
+                await asyncio.sleep(delay)
             await manager.bus.publish("cerrar_parcial", dict(payload))
         except Exception:
             log.warning(
@@ -83,7 +107,7 @@ def requeue_partial_close(
                 "cantidad": cantidad,
                 "precio": precio,
                 "operation_id": operation_id,
-                "delay": manager._partial_close_retry_delay,
+                "delay": _get_retry_delay(manager, symbol),
             }
         ),
     )
@@ -108,8 +132,9 @@ def requeue_full_close(
 
     async def _retry() -> None:
         try:
-            if manager._partial_close_retry_delay > 0:
-                await asyncio.sleep(manager._partial_close_retry_delay)
+            delay = _get_retry_delay(manager, symbol)
+            if delay > 0:
+                await asyncio.sleep(delay)
             await manager.bus.publish("cerrar_orden", dict(payload))
         except Exception:
             log.warning(
@@ -142,7 +167,7 @@ def requeue_full_close(
                 "precio": precio,
                 "motivo": motivo,
                 "operation_id": operation_id,
-                "delay": manager._partial_close_retry_delay,
+                "delay": _get_retry_delay(manager, symbol),
             }
         ),
     )
@@ -324,7 +349,10 @@ async def cerrar_async(manager, symbol: str, precio: float | None, motivo: str) 
                         elif execution.executed > 0 and restante <= 1e-08:
                             venta_exitosa = True
                         elif execution.executed > 0 and restante > 0:
-                            log.warning(
+                            # M-02: elevado a error — operativamente equivalente a
+                            # "sin fills" y a excepcion de exchange; debe disparar
+                            # las mismas alertas en sistemas de monitoreo.
+                            log.error(
                                 "orders.full_close.partial_fill_executable_remainder",
                                 extra=safe_extra(
                                     {
@@ -397,7 +425,9 @@ async def cerrar_async(manager, symbol: str, precio: float | None, motivo: str) 
 
             # Venta exitosa: cerrar y registrar
             if manager.modo_real:
-                precio_cierre_registro = precio if precio is not None else precio_referencia
+                # M-09: priorizar siempre el precio de fill real sobre el precio
+                # de senal. Si fill_salida no esta disponible se cae al precio de
+                # senal (lo que puede distorsionar PnL hasta la siguiente reconciliacion).
                 fill_salida = (
                     execution.precio_fill_promedio
                     if execution is not None
@@ -409,8 +439,24 @@ async def cerrar_async(manager, symbol: str, precio: float | None, motivo: str) 
                     and float(fill_salida) > 0
                 ):
                     precio_cierre_registro = float(fill_salida)
+                else:
+                    # Fallback al precio de senal — PnL puede estar distorsionado.
+                    precio_cierre_registro = precio if precio is not None else precio_referencia
+                    log.warning(
+                        "orders.close.precio_fill_no_disponible",
+                        extra={
+                            "symbol": symbol,
+                            "operation_id": operation_id,
+                            "precio_senal": precio_cierre_registro,
+                            "nota": "pnl_basado_en_senal_no_en_fill_real",
+                        },
+                    )
             else:
                 precio_cierre_registro = precio_cierre_mtm
+            # TODO(M-07): este bloque de finalizacion de cierre duplica logica
+            # identica en cerrar_parcial_async (bloque 'cantidad_abierta <= 0').
+            # Extraer a _finalizar_cierre_completo_async() cuando se agregue
+            # cobertura de test para ambas rutas.
             orden.precio_cierre = precio_cierre_registro
             orden.fecha_cierre = datetime.now(UTC).isoformat()
             orden.motivo_cierre = motivo
@@ -633,6 +679,7 @@ async def cerrar_parcial_async(manager, symbol: str, cantidad: float, precio: fl
                 await manager.bus.publish('notify', {'mensaje': mensaje, 'operation_id': operation_id})
 
             if orden.cantidad_abierta <= 0:
+                # TODO(M-07): duplica logica de cerrar_async — ver comentario alli.
                 orden.precio_cierre = precio_mtm
                 orden.fecha_cierre = datetime.now(UTC).isoformat()
                 orden.motivo_cierre = motivo

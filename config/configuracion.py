@@ -1,7 +1,23 @@
-"""Parámetros por símbolo en JSON (p. ej. ``config/configuraciones_optimas.json``).
+"""Parametros por simbolo en JSON (p. ej. ``config/configuraciones_optimas.json``).
 
-Coexiste con :class:`config.config_manager.Config` (variables de entorno): cada
-subsistema elige fuente; no hay precedencia única documentada en un solo sitio.
+M-01 — PRECEDENCIA ENTRE FUENTES DE CONFIGURACION
+--------------------------------------------------
+Existen dos fuentes de config que coexisten sin jerarquia global:
+
+1. ``config.config_manager.Config`` (variables de entorno / .env):
+   - Parametros de infraestructura y operacion global: API keys, capital total,
+     modo real/simulacion, risk limits globales, feature flags.
+   - Tiene precedencia sobre el JSON para los parametros que define.
+
+2. Esta clase ``ConfigurationService`` / ``config/configuraciones_optimas.json``:
+   - Parametros de tuning por simbolo: sl_ratio, tp_ratio, riesgo_por_trade,
+     trailing_buffer, diversidad_minima, cooldown_tras_perdida, etc.
+   - Solo aplica a nivel de simbolo; no sobreescribe parametros globales de Config.
+
+Regla de resolucion:
+- Si un parametro existe en ambas fuentes (caso raro), Config (env var) prevalece
+  porque los subsistemas lo consultan primero via ``getattr(config, key)``.
+- Los parametros que SOLO existen en el JSON son siempre tomados de aqui.
 
 ``core.adaptador_dinamico`` cachea el JSON al importar; tras editar el archivo en
 caliente usar :func:`core.adaptador_dinamico.recargar_configs_optimas`.
@@ -38,6 +54,7 @@ CONFIG_BASE = {
     'umbral_peso_estrategia_unica': 3.5,
     'umbral_score_estrategia_unica': 5.0,
     'cooldown_tras_perdida': 3,
+    'partial_close_retry_delay': 1.0,  # M-03: segundos de espera antes de requeue (por simbolo)
     'sl_ratio': 1.5,
     'tp_ratio': 3.0,
     'ratio_minimo_beneficio': 1.3,
@@ -61,7 +78,8 @@ _CONFIG_RANGE_CONSTRAINTS: dict[str, tuple[float, float, str]] = {
     "riesgo_maximo_diario": (1e-4,  1.0,   "fracción riesgo máximo diario (e.g. 0.06)"),
     "ratio_minimo_beneficio": (0.1, 20.0,  "ratio mínimo beneficio (e.g. 1.3)"),
     "diversidad_minima":    (1.0,   50.0,  "número mínimo de estrategias activas"),
-    "cooldown_tras_perdida": (0.0, 100.0,  "velas de cooldown tras pérdida"),
+    "cooldown_tras_perdida": (0.0, 100.0,  "velas de cooldown tras perdida"),
+    "partial_close_retry_delay": (0.0,  60.0,  "segundos de espera antes de requeue (M-03)"),
     "factor_umbral":        (0.01, 100.0,  "factor de umbral de señal"),
     "ajuste_volatilidad":   (0.01, 100.0,  "multiplicador de ajuste por volatilidad"),
 }

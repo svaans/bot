@@ -41,7 +41,9 @@ class CapitalRepository:
             except FileNotFoundError:
                 return CapitalSnapshot(capital_por_simbolo={}, disponible_global=0.0)
             except Exception:
-                log.warning(
+                # M-06: elevado a error — un snapshot vacio hace que el bot deniegue
+                # todas las entradas sin alerta critica visible en monitoreo.
+                log.error(
                     "capital_repository.read_failed",
                     extra={"path": str(self.path)},
                     exc_info=True,
@@ -51,7 +53,8 @@ class CapitalRepository:
         try:
             data = json.loads(raw)
         except json.JSONDecodeError:
-            log.warning(
+            # M-06: JSON corrupto -> error critico (capital=0 bloquea toda entrada).
+            log.error(
                 "capital_repository.decode_failed",
                 extra={"path": str(self.path)},
             )

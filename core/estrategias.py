@@ -6,8 +6,8 @@ que expone una función callable ``<nombre>(df)``; el cargador dinámico
 registro en tiempo de ejecución. Para comprobar coherencia ejecuta
 ``python -m core.diag.auditoria_estrategias``.
 
-El flujo de adaptabilidad en entrada suele ser: detección de tendencia →
-estrategias activas y pesos (:mod:`core.strategies.pesos`) →
+El flujo de adaptabilidad en entrada suele ser: detección de tendencia ->
+estrategias activas y pesos (:mod:`core.strategies.pesos`) ->
 :func:`core.adaptador_umbral.calcular_umbral_adaptativo` y validaciones en
 :class:`core.strategies.strategy_engine.StrategyEngine`. Salidas combinan
 adaptadores de umbral con TP/SL en :mod:`core.adaptador_dinamico`.
@@ -41,7 +41,7 @@ def obtener_estrategias_por_tendencia(tendencia: str) ->list:
 
 def filtrar_por_direccion(estrategias: dict, direccion: str) ->tuple[dict,
     list[str]]:
-    """Filtra ``estrategias`` según la coherencia con ``direccion``."""
+    """Filtra ``estrategias`` segun la coherencia con ``direccion``."""
     direccion = direccion.lower()
     coherentes = {}
     incoherentes: list[str] = []
@@ -57,11 +57,37 @@ def filtrar_por_direccion(estrategias: dict, direccion: str) ->tuple[dict,
     return coherentes, incoherentes
 
 
-def calcular_sinergia(estrategias: dict[str, bool], tendencia: str) ->float:
-    """Calcula la fracción de estrategias activas alineadas con la tendencia."""
+def calcular_sinergia(estrategias: dict[str, bool], tendencia: str) -> float:
+    """Fraccion de estrategias direccionales activas alineadas con ``tendencia``.
+
+    H-10 fix: las estrategias 'lateral' son NEUTRAS en mercados direccionales
+    (alcista/bajista); contarlas como alineadas colapsaba la distribucion a 1.0
+    de forma permanente, eliminando el poder discriminante del indicador.
+
+    Reglas:
+    - Mercado lateral: todas las estrategias activas son coherentes -> 1.0
+    - Mercado direccional: se ignoran las estrategias laterales (neutras) y se
+      calcula la fraccion de alineados sobre el total de estrategias
+      direccionales activas. Si no hay ninguna direccional activa -> 0.0
+    """
+    tendencia_lower = tendencia.lower()
     activos = [e for e, a in estrategias.items() if a]
     if not activos:
         return 0.0
-    alineados = [e for e in activos if TENDENCIA_IDEAL.get(e, 'lateral') in
-        {tendencia.lower(), 'lateral'}]
-    return round(len(alineados) / len(activos), 2)
+    if tendencia_lower == 'lateral':
+        # En lateral todos los setups activos son coherentes con el regimen
+        return 1.0
+    # En mercados direccionales solo cuentan las estrategias direccionales;
+    # las laterales son neutras (ni suman ni restan al indicador).
+    direccionales = [
+        e for e in activos
+        if TENDENCIA_IDEAL.get(e, 'lateral') != 'lateral'
+    ]
+    if not direccionales:
+        # Solo hay estrategias laterales activas -> sinergia 0 con la direccion
+        return 0.0
+    alineados = [
+        e for e in direccionales
+        if TENDENCIA_IDEAL[e] == tendencia_lower
+    ]
+    return round(len(alineados) / len(direccionales), 2)

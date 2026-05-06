@@ -806,7 +806,18 @@ async def verificar_entrada(
         return _reject("volumen_nan_inf")
 
     if vol_ultimo <= 0:
-        log.warning("diagnostico.volumen_cero", extra={"symbol": symbol_norm, "volume": vol_ultimo})
+        # M-08: volume=0.0 en esta capa proviene del tick actual de la vela
+        # (primera fila del df al abrir la vela). El engine usa volumen_media
+        # del buffer historico (rolling 20 velas), por lo que los dos valores
+        # son intencionalmente distintos y no indican inconsistencia de datos.
+        log.warning(
+            "diagnostico.volumen_cero",
+            extra={
+                "symbol": symbol_norm,
+                "volume": vol_ultimo,
+                "nota": "tick_actual_vs_buffer_historico_en_engine_es_esperado",
+            },
+        )
 
         o = last.get("open")
         h = last.get("high")

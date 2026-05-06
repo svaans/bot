@@ -259,8 +259,15 @@ class CapitalManager:
         # threading.Lock is used (not asyncio.Lock) because this method is
         # synchronous; the critical section is short so hold time is minimal.
         with self._exposure_lock:
-            self.capital_por_simbolo[clave] = max(0.0, float(disponible))
-            self._recalcular_disponible_global()
+            # M-04: O(1) incremental update instead of O(N) full sum on every close.
+            old_val = max(0.0, self.capital_por_simbolo.get(clave, 0.0))
+            new_val = max(0.0, float(disponible))
+            self.capital_por_simbolo[clave] = new_val
+            delta = new_val - old_val
+            self._disponible_global = max(0.0, self._disponible_global + delta)
+            if self._state.total > 0:
+                self._disponible_global = min(self._disponible_global, self._state.total)
+            self._refresh_metrics()
             # H-06: avoid blocking the event loop with synchronous I/O.
             # When called from an async context (the normal runtime path), offload
             # the repository write to the default thread-pool executor.  When there

@@ -47,6 +47,11 @@ __all__ = [
 ]
 
 logger = logging.getLogger(__name__)
+
+# M-05: persiste entre reconexiones de _escuchar_velas_combinado_real.
+# Si el set viviera en el closure de la funcion, cada reconexion exterior
+# (streaming.py) lo resetea y reloga "ws.first_closed_candle" como falsos positivos.
+_first_closed_seen_global: set[str] = set()
 UTC = timezone.utc
 _WS_BASE_URL = "wss://stream.binance.com:9443"
 _WS_TESTNET_BASE_URL = "wss://testnet.binance.vision"
@@ -465,11 +470,10 @@ async def _escuchar_velas_combinado_real(
             if asyncio.iscoroutine(result):
                 await result
 
-    # Diagnóstico: deja traza INFO de la PRIMERA vela cerrada dispatchada por
-    # símbolo. Permite verificar en producción que el pipeline WS -> trader se
-    # activa realmente tras ``binance_ws_connected`` sin tener que subir todo a
-    # DEBUG. El set vive en el closure del consumidor combinado.
-    first_closed_seen: set[str] = set()
+    # M-05: referencia al set global en lugar de uno local por llamada.
+    # Esto preserva el historial entre reconexiones externas (streaming.py)
+    # evitando falsos positivos en la metrica ws.first_closed_candle.
+    first_closed_seen = _first_closed_seen_global
 
     async def process_combined(payload: Dict[str, Any]) -> None:
         stream_name = str(payload.get("stream") or "")
