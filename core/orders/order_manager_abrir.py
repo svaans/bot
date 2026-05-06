@@ -513,7 +513,10 @@ async def abrir_async(
                             if manager._should_schedule_persistence_retry(last_error):
                                 reason_label = type(last_error).__name__ if last_error else 'unknown'
                                 manager._schedule_registro_retry(symbol, reason=reason_label)
-                        await asyncio.sleep(1)
+                            # Breve pausa sólo en el camino de fallo para no reintentaremos
+                            # inmediatamente. En el camino de éxito no hay motivo de espera:
+                            # la orden ya fue enviada a Binance antes de este bloque.
+                            await asyncio.sleep(1)
 
                         if registrado:
                             orden.registro_pendiente = False

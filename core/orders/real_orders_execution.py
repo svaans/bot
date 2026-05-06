@@ -685,7 +685,8 @@ def ejecutar_orden_limit(
     max_reintentos = max_reintentos or LIMIT_MAX_RETRY
 
     cliente = obtener_cliente()
-    cliente.load_markets()  # asegura markets en ccxt
+    # load_markets() ya se invoca al construir el singleton en ccxt_client.obtener_ccxt;
+    # llamarlo aquí de nuevo añade una round-trip de red por cada orden límite.
 
     params_base: dict[str, Any] = {}
 

@@ -136,6 +136,7 @@ def esperar_balance(cliente, symbol: str, cantidad_esperada: float,
             format_exception_for_log(e),
         )
         return 0.0
+    disponible = 0.0
     for intento in range(max_intentos):
         try:
             balance = cliente.fetch_balance()
