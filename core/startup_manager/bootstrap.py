@@ -65,6 +65,20 @@ class BootstrapMixin:
         # por CCXT y dispare Binance -1021. Aquí solo verificamos el drift.
         with phase("_check_clock_drift"):
             clock_ok = await asyncio.wait_for(self._check_clock_drift(), timeout=5)
+        # Fallback: si el drift es alto, intentar sincronizar el reloj automáticamente
+        if not clock_ok:
+            try:
+                self.log.info(
+                    "Desfase de reloj detectado; intentando sincronización automática de Binance."
+                )
+                await self._auto_sync_system_clock()
+                # Reintento de verificación de drift tras el intento de sincronización
+                with phase("_check_clock_drift_retry"):
+                    clock_ok = await asyncio.wait_for(self._check_clock_drift(), timeout=5)
+            except Exception as exc:  # pragma: no cover
+                self.log.debug(
+                    "Fallo al reintentar sincronización de reloj: %s", exc, exc_info=True
+                )
         if not clock_ok:
             # Por defecto NO se pasa a papel: CCXT ya compensa tiempo y MODO_REAL=true
             # debe respetarse. Activa CLOCK_DRIFT_FORCE_PAPER=true si quieres el fallback estricto.

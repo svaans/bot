@@ -32,6 +32,7 @@ def test_config_manager_respects_symbols_env_override(monkeypatch: pytest.Monkey
     monkeypatch.setenv("BOT_ENV", "development")
     monkeypatch.setenv("MODO_REAL", "false")
     monkeypatch.setenv("SYMBOLS", "SOL/USDT,ADA/USDT")
+    monkeypatch.delenv("CAPITAL_CURRENCY", raising=False)
     monkeypatch.setattr(cm, "load_dotenv", lambda *_a, **_k: None, raising=False)
     cfg = cm.ConfigManager.load_from_env()
     assert cfg.symbols == ["SOL/USDT", "ADA/USDT"]

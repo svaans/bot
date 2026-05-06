@@ -20,7 +20,7 @@ WINDOW = 50  # Ventana menor para tener más evaluaciones
 STEP = 5  # Evaluar cada 5 velas
 
 
-async def test_symbol(symbol: str, csv_path: str) -> dict:
+async def evaluate_symbol(symbol: str, csv_path: str) -> dict:
     """Ejecuta replay para un símbolo y devuelve métricas."""
     print(f"\n{'='*60}")
     print(f"📊 Evaluando {symbol}...")
@@ -116,7 +116,7 @@ async def main():
     resultados = []
     for symbol, csv_path in SYMBOLS_CSV.items():
         try:
-            r = await test_symbol(symbol, csv_path)
+            r = await evaluate_symbol(symbol, csv_path)
             resultados.append(r)
         except Exception as e:
             print(f"   ❌ Error: {e}")

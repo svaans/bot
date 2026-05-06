@@ -84,6 +84,22 @@ def _alertar_intent_huerfanos(logger: object) -> None:
                 'Verifique manualmente en Binance y reconcilie: %s',
                 data,
             )
+            # Intento opcional de reconciliación automática si hay datos de operación
+            op_id = data.get("operation_id") if isinstance(data, dict) else None
+            symbol = data.get("symbol") if isinstance(data, dict) else None
+            if op_id and symbol:
+                try:
+                    from core.orders.real_orders_reconcile import sincronizar_ordenes_binance
+                    reconciliadas = sincronizar_ordenes_binance(simbolos=[symbol], modo_real=True)
+                    if symbol in reconciliadas:
+                        ord_externa = reconciliadas[symbol]
+                        if getattr(ord_externa, "operation_id", None) == op_id:
+                            logger.info(
+                                "Orden huérfana reconciliada en Binance para %s con operation_id=%s.",
+                                symbol, op_id
+                            )
+                except Exception as exc:  # pragma: no cover
+                    logger.debug("No se pudo reconciliar huérfano con Binance: %s", exc, exc_info=True)
     except Exception as e:
         try:
             logger.warning('⚠️ No se pudo verificar intents huérfanos: %s', e)  # type: ignore[union-attr]

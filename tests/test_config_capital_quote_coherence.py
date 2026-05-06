@@ -63,6 +63,7 @@ def test_min_order_quote_env_takes_precedence_over_min_order_eur_name(
 ) -> None:
     _paper_env_base(monkeypatch)
     monkeypatch.setenv("SYMBOLS", "BTC/USDT")
+    monkeypatch.setenv("CAPITAL_CURRENCY", "USDT")
     monkeypatch.setenv("MIN_ORDER_QUOTE", "47")
     monkeypatch.delenv("MIN_ORDER_EUR", raising=False)
     cfg = cm.ConfigManager.load_from_env()
