@@ -51,6 +51,21 @@ def _metrics_extended_enabled() -> bool:
     return is_flag_enabled("metrics.extended.enabled")
 
 
+def _get_exit_config(trader: Any, symbol: str) -> dict:
+    """Devuelve la config de salida sin evaluar load_exit_config si ya está en cache.
+
+    ``dict.get(key, load_exit_config(symbol))`` evalúa SIEMPRE el segundo
+    argumento (Python no lo hace lazy), lo que provoca una lectura de JSON por
+    vela aunque ``config_por_simbolo[symbol]`` ya exista.  Este helper evita
+    la lectura innecesaria y, si falta, la popula también en el cache del trader.
+    """
+    cfg = trader.config_por_simbolo.get(symbol)
+    if cfg is None:
+        cfg = load_exit_config(symbol)
+        trader.config_por_simbolo[symbol] = cfg
+    return cfg
+
+
 async def _chequear_contexto_macro(trader, orden, df) -> bool:
     """Comprueba el puntaje macroeconómico y cierra la posición si supera el
     umbral configurado. Esta validación tiene la prioridad más alta."""
@@ -58,7 +73,7 @@ async def _chequear_contexto_macro(trader, orden, df) -> bool:
     symbol = orden.symbol
     # Se valida contexto macroeconómico antes de tomar decisiones de cierre.
     puntaje_macro = obtener_puntaje_contexto(symbol)
-    cfg = load_exit_config(symbol)
+    cfg = _get_exit_config(trader, symbol)
     if abs(puntaje_macro) > cfg['umbral_puntaje_macro_cierre']:
         log.info(f'[{symbol}] Contexto macro crítico ({puntaje_macro:.2f}). Se prioriza cierre.')
         await trader._cerrar_y_reportar(orden, float(df["close"].iloc[-1]), 'Contexto macro', df=df)
@@ -93,9 +108,7 @@ async def _manejar_stop_loss(trader, orden, df) -> bool:
     else:
         if precio_max < orden.stop_loss:
             return False
-    config_actual = trader.config_por_simbolo.get(
-        symbol, load_exit_config(symbol)
-    )
+    config_actual = _get_exit_config(trader, symbol)
     resultado = await verificar_salida_stoploss(
         orden.to_dict(), df, config=config_actual
     )
@@ -187,7 +200,7 @@ async def _procesar_take_profit(trader, orden, df) -> bool:
         if precio_max < orden.take_profit:
             return False
     precio_cierre = float(df['close'].iloc[-1])
-    config_actual = trader.config_por_simbolo.get(symbol, load_exit_config(symbol))
+    config_actual = _get_exit_config(trader, symbol)
     if not getattr(orden, 'parcial_cerrado', False) and orden.cantidad_abierta > 0:
         if await trader.es_salida_parcial_valida(orden, orden.take_profit, config_actual, df):
             cantidad_parcial = orden.cantidad_abierta * 0.5
@@ -211,7 +224,7 @@ async def _manejar_trailing_stop(trader, orden, df) -> bool:
     symbol = orden.symbol
     precio_cierre = float(df['close'].iloc[-1])
     precio_min_bar = float(df['low'].iloc[-1])
-    config_actual = trader.config_por_simbolo.get(symbol, load_exit_config(symbol))
+    config_actual = _get_exit_config(trader, symbol)
     es_short = str(getattr(orden, "direccion", "long")).lower() in ('short', 'venta')
     if es_short:
         cur = float(getattr(orden, "max_price", precio_cierre) or precio_cierre)
@@ -239,7 +252,7 @@ async def _manejar_trailing_stop(trader, orden, df) -> bool:
             spread = None
             if 'spread' in df.columns:
                 spread = df['spread'].iloc[-1] / precio_cierre
-            cfg = trader.config_por_simbolo.get(symbol, load_exit_config(symbol))
+            cfg = _get_exit_config(trader, symbol)
             if spread and spread > cfg['max_spread_ratio']:
                 orden.intentos_cierre += 1
                 if orden.intentos_cierre >= cfg['max_intentos_cierre']:
@@ -259,7 +272,7 @@ async def _manejar_cambio_tendencia(trader, orden, df) -> bool:
     evalúa después del trailing stop."""
 
     symbol = orden.symbol
-    config_actual = trader.config_por_simbolo.get(symbol, load_exit_config(symbol))
+    config_actual = _get_exit_config(trader, symbol)
     if not verificar_reversion_tendencia(symbol, df, orden.tendencia):
         orden.reversion_tendencia_contador = 0
         return False
@@ -316,7 +329,7 @@ async def _aplicar_salidas_adicionales(trader, orden, df) -> bool:
 
     symbol = orden.symbol
     precio_cierre = float(df['close'].iloc[-1])
-    config_actual = trader.config_por_simbolo.get(symbol, load_exit_config(symbol))
+    config_actual = _get_exit_config(trader, symbol)
     atr = get_atr(df)
     volatilidad_rel = atr / precio_cierre if atr and precio_cierre else 1.0
     tendencia_detectada = obtener_tendencia(symbol, df)
