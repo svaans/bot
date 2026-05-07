@@ -149,15 +149,25 @@ async def test_data_feed_supervised_task_creates_and_runs(caplog, monkeypatch):
     caplog.set_level(logging.DEBUG, logger="trader")
     caplog.set_level(logging.DEBUG, logger="trader_modular")
 
-    trader = TraderLite(config, candle_handler=handler)
-    trader.start()
-
+    # El handler_collector debe registrarse ANTES de trader.start() para capturar
+    # los primeros mensajes del WS stub (que entrega velas y cierra de inmediato).
     handler_collector = _ListHandler()
     handler_collector.setLevel(logging.DEBUG)
-    datafeed_logger = logging.getLogger("datafeed")
-    backfill_logger = logging.getLogger("backfill_service")
+
+    # configurar_logger usa un cache interno (_CONFIGURED). Si "backfill_service"
+    # aún no fue inicializado, la primera llamada en BackfillService.__init__ lo
+    # crea con nivel INFO (console_log_level). Pre-inicializamos aquí para que la
+    # llamada posterior sea un no-op y el nivel DEBUG quede fijo.
+    from core.utils.logger import configurar_logger as _cfg_log
+    datafeed_logger = _cfg_log("datafeed")
+    backfill_logger = _cfg_log("backfill_service")
+    datafeed_logger.setLevel(logging.DEBUG)
+    backfill_logger.setLevel(logging.DEBUG)
     datafeed_logger.addHandler(handler_collector)
     backfill_logger.addHandler(handler_collector)
+
+    trader = TraderLite(config, candle_handler=handler)
+    trader.start()
 
     try:
         data_feed_task: asyncio.Task | None = None
