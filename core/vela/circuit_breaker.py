@@ -1,4 +1,4 @@
-# core/vela/circuit_breaker.py — circuit breaker de creación de órdenes
+﻿# core/vela/circuit_breaker.py — circuit breaker de creación de órdenes
 from __future__ import annotations
 
 import os
@@ -39,15 +39,31 @@ class _CircuitBreakerState:
         self.failures = 0
         self.opened_until = 0.0
 
-    def record_failure(self, now: float) -> bool:
-        """Registra una falla y devuelve si el circuito debe abrirse."""
+    def record_failure(
+        self,
+        now: float,
+        *,
+        max_failures: int | None = None,
+        open_seconds: float | None = None,
+        reset_after: float | None = None,
+    ) -> bool:
+        """Registra una falla y devuelve si el circuito debe abrirse.
 
-        if now - self.last_failure >= _ORDER_CIRCUIT_RESET_AFTER:
+        Los parámetros opcionales permiten que el caller inyecte valores
+        desde Config (via ``_resolve_circuit_params``); si se omiten se usan
+        los defaults de módulo (env-overridables: ORDER_CIRCUIT_*).
+        """
+
+        mf = max_failures if max_failures is not None else _ORDER_CIRCUIT_MAX_FAILURES
+        os_ = open_seconds if open_seconds is not None else _ORDER_CIRCUIT_OPEN_SECONDS
+        ra = reset_after if reset_after is not None else _ORDER_CIRCUIT_RESET_AFTER
+
+        if now - self.last_failure >= ra:
             self.failures = 0
         self.last_failure = now
         self.failures += 1
-        if self.failures >= _ORDER_CIRCUIT_MAX_FAILURES:
-            self.opened_until = now + _ORDER_CIRCUIT_OPEN_SECONDS
+        if self.failures >= mf:
+            self.opened_until = now + os_
             return True
         return False
 

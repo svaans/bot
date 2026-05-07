@@ -1,4 +1,4 @@
-# core/vela/pipeline_procesar.py — handler principal de vela cerrada y salidas previas
+﻿# core/vela/pipeline_procesar.py — handler principal de vela cerrada y salidas previas
 from __future__ import annotations
 
 import asyncio
@@ -20,6 +20,7 @@ from indicadores.incremental import (
 from core.vela.buffers import _resolve_buffer_manager
 from core.vela.circuit_breaker import (
     OrderCircuitBreakerOpen,
+    _resolve_circuit_params,
     _resolve_order_circuit_store,
 )
 from core.vela.helpers import (
@@ -565,6 +566,7 @@ async def procesar_vela(trader: Any, vela: dict) -> None:
                 meta,
                 trace_id=trace_id,
                 circuit_store=_resolve_order_circuit_store(trader),
+                circuit_params=_resolve_circuit_params(trader),
             )
             if status not in (OrderOpenStatus.OPENED, OrderOpenStatus.PENDING_REGISTRATION):
                 safe_inc(

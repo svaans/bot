@@ -1,4 +1,4 @@
-# core/vela/order_open.py — reintentos y circuit breaker al crear órdenes
+﻿# core/vela/order_open.py — reintentos y circuit breaker al crear órdenes
 from __future__ import annotations
 
 import asyncio
@@ -14,6 +14,8 @@ from core.vela.circuit_breaker import (
     OrderCircuitBreakerOpen,
     OrderCircuitBreakerStore,
     _DEFAULT_ORDER_CIRCUIT_STORE,
+    _ORDER_CIRCUIT_MAX_FAILURES,
+    _ORDER_CIRCUIT_OPEN_SECONDS,
     _ORDER_CIRCUIT_RESET_AFTER,
 )
 
@@ -38,6 +40,7 @@ async def _abrir_orden(
     trace_id: str | None = None,
     max_attempts: Optional[int] = None,
     circuit_store: OrderCircuitBreakerStore | None = None,
+    circuit_params: tuple[int, float, float] | None = None,
 ) -> OrderOpenStatus:
     """Wrapper robusto sobre OrderManager.crear(...) con reintentos solo ante excepciones.
 
@@ -54,10 +57,18 @@ async def _abrir_orden(
     if sl <= 0 or tp <= 0:
         log.debug("[%s] SL/TP no establecidos al abrir (sl=%.6f, tp=%.6f)", symbol, sl, tp)
 
+    # Resolver parámetros del circuit breaker desde Config o módulo.
+    if circuit_params is not None:
+        _cb_max_failures, _cb_open_seconds, _cb_reset_after = circuit_params
+    else:
+        _cb_max_failures = _ORDER_CIRCUIT_MAX_FAILURES
+        _cb_open_seconds = _ORDER_CIRCUIT_OPEN_SECONDS
+        _cb_reset_after = _ORDER_CIRCUIT_RESET_AFTER
+
     store = circuit_store or _DEFAULT_ORDER_CIRCUIT_STORE
     state = store.get_state(symbol, side)
     now = time.monotonic()
-    state.reset_if_idle(now, _ORDER_CIRCUIT_RESET_AFTER)
+    state.reset_if_idle(now, _cb_reset_after)
     if state.opened_until and state.opened_until <= now:
         state.opened_until = 0.0
     if state.opened_until > now:
@@ -90,7 +101,12 @@ async def _abrir_orden(
         except Exception as exc:
             last_exc = exc
             failure_now = time.monotonic()
-            opened = state.record_failure(failure_now)
+            opened = state.record_failure(
+                failure_now,
+                max_failures=_cb_max_failures,
+                open_seconds=_cb_open_seconds,
+                reset_after=_cb_reset_after,
+            )
             log.warning(
                 "orders_crear_retry",
                 extra={
