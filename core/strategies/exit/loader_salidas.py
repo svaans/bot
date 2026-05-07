@@ -9,12 +9,18 @@ log = configurar_logger('loader_salidas')
 CARPETA_SALIDAS = os.path.dirname(__file__)
 _PACKAGE = "core.strategies.exit"
 
-# Funciones que deben excluirse aunque su nombre comience por 'verificar_'.
-# Estas tienen firmas distintas (no son estrategias de salida directas).
+# Funciones que deben excluirse del loop genérico de evaluar_salidas.
 _EXCLUDED_FUNCTIONS: frozenset[str] = frozenset({
+    # 'verificar_*' tienen firmas distintas (no son estrategias de salida directas).
     'verificar_trailing_stop',
     'verificar_reversion_tendencia',
     'evaluar_evitar_stoploss',
+    # salida_trailing_stop es dead code en el loop genérico: no puede activarse
+    # porque resetea max_precio = precio_actual en cada llamada (estado perdido
+    # por operar sobre Order.to_dict()), haciendo imposible sl_nuevo < precio_actual.
+    # El trailing stop real es verificar_trailing_stop, llamado directamente desde
+    # _manejar_trailing_stop en verificar_salidas.py con estado persistido en Order.
+    'salida_trailing_stop',
 })
 
 # Cache del resultado de cargar_estrategias_salida() y de las firmas.
