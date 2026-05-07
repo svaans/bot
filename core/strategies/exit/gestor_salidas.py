@@ -159,6 +159,16 @@ async def evaluar_salidas(orden: dict, df, config=None, contexto=None):
 
         # Manejo de escalado: reducir posición cuando se llenan targets
         if resultado.get('targets_hit'):
+            # KNOWN LIMITATION (P6-F5): `orden` aquí es un dict-copy proveniente
+            # de Order.to_dict() en verificar_salidas.py.  Las mutaciones de
+            # `cantidad_abierta` y `targets` a continuación NO persisten en el
+            # Order real — se pierden al terminar el ciclo.
+            # Para targets parciales (qty_frac < 1.0) esto produce que en la
+            # siguiente vela los targets ya alcanzados se reprocesen.
+            # Fix pendiente: propagar hits a través de verificar_salidas y
+            # ejecutar cerrar_parcial_async; requiere actualizar Order model.
+            # En la configuración actual (target único, qty_frac=1.0) el bloque
+            # alcanza el `return {'cerrar': True}` y el bug queda latente.
             cantidad_abierta = orden.get('cantidad_abierta', orden.get('cantidad', 0.0))
             for t in resultado['targets_hit']:
                 cantidad_abierta -= t.get('qty', 0.0)
