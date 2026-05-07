@@ -8,6 +8,7 @@ from dataclasses import replace, is_dataclass
 from typing import Any, Optional
 
 from config.config_manager import ConfigManager
+from config.config import _load as _load_global_cfg
 from core.operational_mode import OperationalMode
 from core.trader_modular import Trader
 
@@ -34,7 +35,9 @@ class ConfigMixin:
             self.config = getattr(self.trader, "config", None)
 
         if self.config is None:
-            self.config = ConfigManager.load_from_env()
+            # Usa el singleton lazy de config.config para evitar re-parsear
+            # todas las env vars en cada instanciación de StartupManager.
+            self.config = _load_global_cfg()
 
         if self.trader is None:
             self.trader = Trader(self.config)  # type: ignore[arg-type]

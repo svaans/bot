@@ -704,7 +704,7 @@ async def handle_candle(
 
     _elapsed_hc = (time.monotonic() - _t0_hc) * 1000
     if _elapsed_hc > 50:
-        log.info("diagnostico.handle_candle_time", extra={"symbol": symbol_label, "elapsed_ms": round(_elapsed_hc, 2)})
+        log.debug("diagnostico.handle_candle_time", extra={"symbol": symbol_label, "elapsed_ms": round(_elapsed_hc, 2)})
 
 
 async def consumer_loop(feed: "DataFeed", symbol: str) -> None:
