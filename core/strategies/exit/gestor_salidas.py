@@ -6,7 +6,6 @@ filtros técnicos que podrían aplazar un apagado de emergencia.
 """
 import pandas as pd
 import asyncio
-import inspect
 from datetime import datetime, timezone
 from core.utils.utils import validar_dataframe
 from core.strategies.tendencia import detectar_tendencia
@@ -17,7 +16,7 @@ from core.utils import configurar_logger
 from core.utils.log_utils import format_exception_for_log
 log = configurar_logger('gestor_salidas')
 UTC = timezone.utc
-from .loader_salidas import cargar_estrategias_salida
+from .loader_salidas import cargar_estrategias_salida, get_params
 
 
 
@@ -130,7 +129,7 @@ async def evaluar_salidas(orden: dict, df, config=None, contexto=None):
         if not callable(f):
             continue
         try:
-            params = list(inspect.signature(f).parameters.keys())
+            params = get_params(f)
             if 'symbol' in params and 'orden' in params and 'config' in params:
                 resultado = f(symbol, orden, df, config=config)
             elif 'symbol' in params and 'orden' in params:
