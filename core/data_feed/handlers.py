@@ -12,7 +12,6 @@ from core.utils.feature_flags import is_flag_enabled
 from core.utils.utils import timestamp_alineado, validar_integridad_velas
 from core.utils.log_utils import format_exception_for_log, safe_extra
 from core.utils.logger import _should_log
-from core.adaptador_dinamico import backfill_ventana
 from ._shared import COMBINED_STREAM_KEY, ConsumerState, log
 from . import events
 
@@ -203,6 +202,9 @@ async def _maybe_run_backfill_window(
         DATAFEED_BACKFILL_WINDOW_REQUESTED.labels(
             symbol=symbol_label, timeframe=timeframe_label
         ).observe(float(remaining))
+        # Lazy import para evitar circular: adaptador_dinamico → data_feed → handlers → adaptador_dinamico.
+        # Python cachea en sys.modules, overhead O(1) a partir de la segunda llamada (CIRC-01 fix).
+        from core.adaptador_dinamico import backfill_ventana  # noqa: PLC0415
         extras = await backfill_ventana(
             symbol,
             intervalo=feed.intervalo,
