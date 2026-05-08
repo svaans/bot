@@ -71,10 +71,23 @@ def salida_takeprofit_atr(
         if targets is None:
             targets = [{'porcentaje': 2.5, 'qty_frac': 1.0}]
 
+        # Filtrar targets ya ejecutados en velas previas (fix P6-F5).
+        # targets_alcanzados en la orden guarda los (porcentaje, qty_frac) ya procesados.
+        ya_procesados: set[tuple] = {
+            (t.get('porcentaje'), t.get('qty_frac'))
+            for t in (orden.get('targets_alcanzados') or [])
+        }
+        targets_pendientes = [
+            t for t in targets
+            if (t.get('porcentaje'), t.get('qty_frac')) not in ya_procesados
+        ]
+        if not targets_pendientes:
+            return resultado_salida('Take Profit', False, 'Todos los targets ya procesados')
+
         niveles: List[Dict[str, float]] = []
         alcanzados: List[Dict[str, float]] = []
 
-        for t in targets:
+        for t in targets_pendientes:
             mult = t.get('porcentaje', 0.0)
             frac = t.get('qty_frac', 0.0)
 
@@ -85,7 +98,9 @@ def salida_takeprofit_atr(
 
             precio = ajustar_tick_size(precio, tick_size, direccion)
             cantidad = _ajustar_step_size(cantidad_total * frac, step_size)
-            data = {'price': precio, 'qty': cantidad}
+            # Incluir config original (porcentaje, qty_frac) para poder rastrear
+            # qué targets se han procesado y evitar re-ejecución en velas siguientes.
+            data = {'price': precio, 'qty': cantidad, 'porcentaje': mult, 'qty_frac': frac}
             niveles.append(data)
 
             cond_hit = (

@@ -345,6 +345,31 @@ async def _aplicar_salidas_adicionales(trader, orden, df) -> bool:
             format_exception_for_log(e),
         )
         resultado = {}
+    # Fix P6-F5: targets parciales multi-nivel propagados desde gestor_salidas.
+    # Aquí sí tenemos acceso al Order real (no al dict-copia), por lo que podemos
+    # ejecutar los cierres parciales y persistir el estado de targets procesados.
+    if resultado.get('targets_parcial') and resultado.get('targets_hit'):
+        hits = resultado['targets_hit']
+        for t in hits:
+            qty = t.get('qty', 0.0)
+            price = t.get('price', precio_cierre)
+            if qty > 1e-8:
+                await trader._cerrar_parcial_y_reportar(
+                    orden, qty, price, 'TP parcial (multi-target)', df=df
+                )
+        # Persistir en el Order real qué targets han sido procesados.
+        # salida_takeprofit_atr los leerá en la siguiente vela y los omitirá.
+        prev = list(orden.targets_alcanzados or [])
+        orden.targets_alcanzados = prev + [
+            {'porcentaje': t.get('porcentaje'), 'qty_frac': t.get('qty_frac')}
+            for t in hits
+            if t.get('porcentaje') is not None
+        ]
+        log.info(
+            '[%s] %d target(s) parciales ejecutados; %d restante(s)',
+            symbol, len(hits), len(resultado.get('targets_restantes', [])),
+        )
+        return bool(hits)
     if resultado.get('break_even'):
         nuevo_sl = resultado.get('nuevo_sl')
         if nuevo_sl is not None:

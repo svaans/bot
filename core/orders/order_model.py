@@ -141,6 +141,9 @@ class Order:
     pnl_latente: float = 0.0
     registro_pendiente: bool = False
     operation_id: str | None = None
+    # Targets de TP multi-nivel ya ejecutados (list[dict] con porcentaje+qty_frac).
+    # Permite a salida_takeprofit_atr omitir niveles ya procesados en velas previas.
+    targets_alcanzados: list | None = None
 
     @staticmethod
     def from_dict(data: Dict[str, Any]) ->'Order':
@@ -179,6 +182,7 @@ class Order:
         data.setdefault('pnl_latente', 0.0)
         data.setdefault('registro_pendiente', False)
         data.setdefault('operation_id', None)
+        data.setdefault('targets_alcanzados', None)
         return Order(**data)
 
     def to_dict(self) ->Dict[str, Any]:

@@ -157,29 +157,26 @@ async def evaluar_salidas(orden: dict, df, config=None, contexto=None):
             )
             continue
 
-        # Manejo de escalado: reducir posición cuando se llenan targets
+        # Manejo de escalado: reducir posición cuando se llenan targets (fix P6-F5).
+        # En lugar de mutar el dict-copia (que se pierde al salir del ciclo),
+        # propagamos el resultado al caller (_aplicar_salidas_adicionales en
+        # verificar_salidas.py) que tiene acceso al Order real y puede:
+        #   a) llamar cerrar_parcial_async con las cantidades correctas, y
+        #   b) persistir los targets procesados en orden.targets_alcanzados.
         if resultado.get('targets_hit'):
-            # KNOWN LIMITATION (P6-F5): `orden` aquí es un dict-copy proveniente
-            # de Order.to_dict() en verificar_salidas.py.  Las mutaciones de
-            # `cantidad_abierta` y `targets` a continuación NO persisten en el
-            # Order real — se pierden al terminar el ciclo.
-            # Para targets parciales (qty_frac < 1.0) esto produce que en la
-            # siguiente vela los targets ya alcanzados se reprocesen.
-            # Fix pendiente: propagar hits a través de verificar_salidas y
-            # ejecutar cerrar_parcial_async; requiere actualizar Order model.
-            # En la configuración actual (target único, qty_frac=1.0) el bloque
-            # alcanza el `return {'cerrar': True}` y el bug queda latente.
-            cantidad_abierta = orden.get('cantidad_abierta', orden.get('cantidad', 0.0))
-            for t in resultado['targets_hit']:
-                cantidad_abierta -= t.get('qty', 0.0)
-            orden['cantidad_abierta'] = max(cantidad_abierta, 0.0)
             restantes = [t for t in resultado.get('targets', []) if t not in resultado['targets_hit']]
             if restantes:
-                orden['targets'] = restantes
+                # Targets parciales: propagar al caller para cierre parcial real.
+                return {
+                    'cerrar': False,
+                    'targets_parcial': True,
+                    'targets_hit': resultado['targets_hit'],
+                    'targets_restantes': restantes,
+                    'razon': 'TP parcial (multi-target)',
+                }
             else:
                 log.info(f'[{symbol}] Todos los targets alcanzados. Posición cerrada')
                 return {'cerrar': True, 'razon': 'Targets completados'}
-            continue
 
         evento = resultado.get('evento') or resultado.get('razon') or resultado.get('motivo')
         politica = None
