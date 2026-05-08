@@ -28,7 +28,7 @@ def calcular_atr(df: pd.DataFrame, periodo: int = 14) -> float | None:
     tr3 = _safe_series((low - prev_close).abs(), "tr3")
 
     tr = (
-        pd.concat([tr1, tr2, tr3], axis=1, copy=False)
+        pd.concat([tr1, tr2, tr3], axis=1)
         .max(axis=1)
         .fillna(0.0)
     )
