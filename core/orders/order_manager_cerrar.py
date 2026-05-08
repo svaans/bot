@@ -275,6 +275,110 @@ async def agregar_parcial_async(manager, symbol: str, precio: float, cantidad: f
                 )
         return True
 
+async def _finalizar_cierre_completo_async(
+    manager,
+    symbol: str,
+    orden: Any,
+    precio_cierre: float,
+    motivo: str,
+    operation_id: str,
+    *,
+    log_verb: str = "cerrar",
+    entrada_log: dict | None = None,
+) -> None:
+    """Pasos finales compartidos por cerrar_async y cerrar_parcial_async (M-07).
+
+    Anota el cierre en la orden, calcula el retorno, emite PnL, persiste el
+    historial, publica notificaciones en el bus, elimina de SQLite (modo_real)
+    y limpia el registro activo en memoria.
+
+    Fix M-07-BUG: cerrar_parcial_async usaba "Venta" hardcoded en el mensaje
+    de notificación incluso para posiciones short (cuyo cierre es una compra).
+    Esta función usa _is_short_direction para determinar la acción correcta.
+    """
+    orden.precio_cierre = precio_cierre
+    orden.fecha_cierre = datetime.now(UTC).isoformat()
+    orden.motivo_cierre = motivo
+    manager._set_latent_pnl(symbol, orden, 0.0, emit=False)
+
+    base = orden.precio_entrada * orden.cantidad if orden.cantidad else 0.0
+    retorno = (orden.pnl_realizado / base) if base else 0.0
+    orden.retorno_total = retorno
+    manager._emit_pnl_update(
+        symbol,
+        orden,
+        extra={"precio_mark": precio_cierre, "motivo": motivo, "retorno": retorno},
+    )
+
+    manager.historial.setdefault(symbol, []).append(orden.to_dict())
+    if len(manager.historial[symbol]) > manager.max_historial:
+        manager.historial[symbol] = manager.historial[symbol][-manager.max_historial:]
+
+    if manager.bus:
+        if retorno < 0:
+            await manager._publish_registrar_perdida(symbol, retorno, orden)
+        else:
+            await manager.bus.publish("risk.win_streak_reset", {})
+
+    log.info("📤 Orden cerrada para %s @ %.2f | %s", symbol, precio_cierre, motivo)
+
+    if manager.bus:
+        if manager.modo_real:
+            accion_cierre = (
+                "Compra"
+                if _is_short_direction(getattr(orden, "direccion", None))
+                else "Venta"
+            )
+            mensaje = (
+                f"📤 {accion_cierre} {symbol}\n"
+                f"Entrada: {orden.precio_entrada:.2f} Salida: {precio_cierre:.2f}\n"
+                f"Retorno: {retorno * 100:.2f}%\nMotivo: {motivo}"
+            )
+            await manager.bus.publish(
+                "notify", {"mensaje": mensaje, "operation_id": operation_id}
+            )
+        else:
+            await manager.bus.publish(
+                "orden_simulada_cerrada",
+                {
+                    "symbol": symbol,
+                    "precio_cierre": precio_cierre,
+                    "retorno": retorno,
+                    "motivo": motivo,
+                    "operation_id": operation_id,
+                },
+            )
+
+    registrar_orden("closed")
+
+    # Eliminar de SQLite en modo real. cerrar_async no lo hacía (M-07), dejando
+    # registros huérfanos hasta el siguiente ciclo de sincronización.
+    if manager.modo_real:
+        try:
+            await asyncio.to_thread(real_orders.eliminar_orden, symbol)
+        except Exception as e:
+            log.error(
+                "Error eliminando orden %s de SQLite tras cierre completo: %s",
+                symbol,
+                _fmt_exchange_err(e),
+            )
+
+    manager.ordenes.pop(symbol, None)
+    limpiar_registro_pendiente(symbol)
+    manager._registro_pendiente_paused.discard(symbol)
+    manager._actualizar_capital_disponible(symbol)
+
+    log_decision(
+        log,
+        log_verb,
+        operation_id,
+        entrada_log or {"symbol": symbol},
+        {"venta_exitosa": True},
+        "accept",
+        {"retorno": retorno},
+    )
+
+
 async def cerrar_async(manager, symbol: str, precio: float | None, motivo: str) -> bool:
     lock = manager._locks.setdefault(symbol, asyncio.Lock())
     async with lock:
@@ -453,67 +557,16 @@ async def cerrar_async(manager, symbol: str, precio: float | None, motivo: str) 
                     )
             else:
                 precio_cierre_registro = precio_cierre_mtm
-            # TODO(M-07): este bloque de finalizacion de cierre duplica logica
-            # identica en cerrar_parcial_async (bloque 'cantidad_abierta <= 0').
-            # Extraer a _finalizar_cierre_completo_async() cuando se agregue
-            # cobertura de test para ambas rutas.
-            orden.precio_cierre = precio_cierre_registro
-            orden.fecha_cierre = datetime.now(UTC).isoformat()
-            orden.motivo_cierre = motivo
-            manager._set_latent_pnl(symbol, orden, 0.0, emit=False)
-
-            base = orden.precio_entrada * orden.cantidad if orden.cantidad else 0.0
-            retorno = (orden.pnl_realizado / base) if base else 0.0
-            orden.retorno_total = retorno
-            manager._emit_pnl_update(
+            await _finalizar_cierre_completo_async(
+                manager,
                 symbol,
                 orden,
-                extra={'precio_mark': precio_cierre_registro, 'motivo': motivo, 'retorno': retorno},
+                precio_cierre_registro,
+                motivo,
+                operation_id,
+                log_verb="cerrar",
+                entrada_log=entrada_log,
             )
-
-            manager.historial.setdefault(symbol, []).append(orden.to_dict())
-            if len(manager.historial[symbol]) > manager.max_historial:
-                manager.historial[symbol] = manager.historial[symbol][-manager.max_historial:]
-
-            if manager.bus:
-                if retorno < 0:
-                    await manager._publish_registrar_perdida(symbol, retorno, orden)
-                else:
-                    await manager.bus.publish('risk.win_streak_reset', {})
-
-            log.info(f'📤 Orden cerrada para {symbol} @ {precio_cierre_registro:.2f} | {motivo}')
-            if manager.bus:
-                if manager.modo_real:
-                    accion_cierre = (
-                        "Compra"
-                        if _is_short_direction(getattr(orden, "direccion", None))
-                        else "Venta"
-                    )
-                    mensaje = (
-                        f"""📤 {accion_cierre} {symbol}\nEntrada: {orden.precio_entrada:.2f} Salida: {precio_cierre_registro:.2f}\nRetorno: {retorno * 100:.2f}%\nMotivo: {motivo}"""
-                    )
-                    await manager.bus.publish('notify', {'mensaje': mensaje, 'operation_id': operation_id})
-                else:
-                    await manager.bus.publish(
-                        'orden_simulada_cerrada',
-                        {
-                            'symbol': symbol,
-                            'precio_cierre': precio_cierre_registro,
-                            'retorno': retorno,
-                            'motivo': motivo,
-                            'operation_id': operation_id,
-                        },
-                    )
-
-            log_decision(log, 'cerrar', operation_id, entrada_log, {'venta_exitosa': True}, 'accept', {'retorno': retorno})
-
-            registrar_orden('closed')
-
-            # Finalmente, elimina del activo
-            manager.ordenes.pop(symbol, None)
-            limpiar_registro_pendiente(symbol)
-            manager._registro_pendiente_paused.discard(symbol)
-            manager._actualizar_capital_disponible(symbol)
             return True
 
         finally:
@@ -679,61 +732,16 @@ async def cerrar_parcial_async(manager, symbol: str, cantidad: float, precio: fl
                 await manager.bus.publish('notify', {'mensaje': mensaje, 'operation_id': operation_id})
 
             if orden.cantidad_abierta <= 0:
-                # TODO(M-07): duplica logica de cerrar_async — ver comentario alli.
-                orden.precio_cierre = precio_mtm
-                orden.fecha_cierre = datetime.now(UTC).isoformat()
-                orden.motivo_cierre = motivo
-                manager._set_latent_pnl(symbol, orden, 0.0, emit=False)
-                base = orden.precio_entrada * orden.cantidad if orden.cantidad else 0.0
-                retorno = (orden.pnl_realizado / base) if base else 0.0
-                orden.retorno_total = retorno
-                manager._emit_pnl_update(
+                await _finalizar_cierre_completo_async(
+                    manager,
                     symbol,
                     orden,
-                    extra={'precio_mark': precio_mtm, 'motivo': motivo, 'retorno': retorno},
+                    precio_mtm,
+                    motivo,
+                    operation_id,
+                    log_verb="cerrar_parcial",
+                    entrada_log={"symbol": symbol, "cantidad": cantidad},
                 )
-                manager.historial.setdefault(symbol, []).append(orden.to_dict())
-                if len(manager.historial[symbol]) > manager.max_historial:
-                    manager.historial[symbol] = manager.historial[symbol][-manager.max_historial:]
-                if manager.bus:
-                    if retorno < 0:
-                        await manager._publish_registrar_perdida(symbol, retorno, orden)
-                    else:
-                        await manager.bus.publish('risk.win_streak_reset', {})
-                log.info(f'📤 Orden cerrada para {symbol} @ {precio_mtm:.2f} | {motivo}')
-                if manager.bus:
-                    if manager.modo_real:
-                        mensaje = (
-                            f"""📤 Venta {symbol}\nEntrada: {orden.precio_entrada:.2f} Salida: {precio_mtm:.2f}\nRetorno: {retorno * 100:.2f}%\nMotivo: {motivo}"""
-                        )
-                        await manager.bus.publish('notify', {'mensaje': mensaje, 'operation_id': operation_id})
-                    else:
-                        await manager.bus.publish(
-                            'orden_simulada_cerrada',
-                            {
-                                'symbol': symbol,
-                                'precio_cierre': precio_mtm,
-                                'retorno': retorno,
-                                'motivo': motivo,
-                                'operation_id': operation_id,
-                            },
-                        )
-                manager.ordenes.pop(symbol, None)
-                limpiar_registro_pendiente(symbol)
-                manager._registro_pendiente_paused.discard(symbol)
-
-                if manager.modo_real:
-                    try:
-                        await asyncio.to_thread(real_orders.eliminar_orden, symbol)
-                    except Exception as e:
-                        log.error(
-                            "Error eliminando orden %s de SQLite: %s",
-                            symbol,
-                            _fmt_exchange_err(e),
-                        )
-                registrar_orden('closed')
-                log_decision(log, 'cerrar_parcial', operation_id, {'symbol': symbol, 'cantidad': cantidad}, {}, 'accept', {'retorno': retorno})
-                manager._actualizar_capital_disponible(symbol)
             else:
                 registrar_orden('partial')
                 log_decision(log, 'cerrar_parcial', operation_id, {'symbol': symbol, 'cantidad': cantidad}, {}, 'accept', {'parcial': True})
