@@ -253,9 +253,19 @@ class RiskManager:
     ) -> None:
         """Registra una pérdida para ``symbol``.
 
-        Si ``perdida_moneda`` > 0 (misma unidad que el capital asignado), se
-        acumula para drawdown diario y persistencia. Si no, se usa ``|perdida|``
-        cuando ``perdida < 0`` (compat: fracción o moneda según el caller).
+        Parámetros
+        ----------
+        perdida:
+            Retorno fraccional negativo de la operación (e.g., -0.05 = -5%).
+            **Contrato del caller**: debe ser una fracción en ``(-1, 0)`` si
+            ``perdida_moneda`` no se proporciona. Valores de ``|perdida| >= 1``
+            sin ``perdida_moneda`` se tratan como importe absoluto (heurística
+            de compatibilidad) pero son anómalos en un bot spot y se loguean
+            como warning (RM-FRAGILE-01).
+        perdida_moneda:
+            Pérdida en la moneda del capital (USDT). Cuando está disponible
+            se usa directamente para el cálculo del cooldown en lugar de la
+            heurística fracción/absoluto.
         """
         if not symbol:
             return
@@ -302,11 +312,25 @@ class RiskManager:
             if perdida_moneda is not None and perdida_moneda > 0:
                 cooldown_trigger = (perdida_moneda / capital_symbol) > self.cooldown_pct
             else:
-                ap = abs(float(perdida))
-                if ap >= 1.0:
-                    cooldown_trigger = (ap / capital_symbol) > self.cooldown_pct
+                # RM-FRAGILE-01: heurística de compatibilidad para callers que
+                # no envían perdida_moneda.
+                # Contrato: perdida es una fracción en (-1, 0). Si |perdida| >= 1
+                # sin perdida_moneda → caller está roto o la pérdida supera el
+                # 100% (imposible en spot). Se trata como importe absoluto y se
+                # emite un warning para que aparezca en logs.
+                perdida_frac_abs = abs(float(perdida))
+                if perdida_frac_abs >= 1.0:
+                    log.warning(
+                        "risk.registrar_perdida.heuristica_absoluto: "
+                        "|perdida|=%.4f >= 1 sin perdida_moneda para %s; "
+                        "tratando como importe absoluto (RM-FRAGILE-01). "
+                        "Usar perdida_moneda para evitar ambigüedad.",
+                        perdida_frac_abs,
+                        symbol,
+                    )
+                    cooldown_trigger = (perdida_frac_abs / capital_symbol) > self.cooldown_pct
                 else:
-                    cooldown_trigger = ap > self.cooldown_pct
+                    cooldown_trigger = perdida_frac_abs > self.cooldown_pct
         if cooldown_trigger:
             estaba_activo = self.cooldown_activo
             self._cooldown_fin = datetime.now(UTC) + timedelta(seconds=self.cooldown_duracion)
