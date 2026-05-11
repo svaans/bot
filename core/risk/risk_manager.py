@@ -374,10 +374,20 @@ class RiskManager:
             return
         try:
             loop = asyncio.get_running_loop()
-            loop.create_task(
+            task = loop.create_task(
                 self._maybe_activate_kill_switch(),
                 name="risk.kill_switch_check",
             )
+            # [RISK-TASK-UNTRACKED-01] Sin callback, una excepción en
+            # _maybe_activate_kill_switch sería silenciosa ("Task exception was
+            # never retrieved"). El callback solo loguea; no re-lanza.
+            def _on_kill_check_done(t: asyncio.Task) -> None:
+                if not t.cancelled() and t.exception() is not None:
+                    log.error(
+                        "risk.kill_switch_check falló",
+                        exc_info=t.exception(),
+                    )
+            task.add_done_callback(_on_kill_check_done)
         except RuntimeError:
             # No hay loop activo (llamada síncrona pura, p. ej. tests sin asyncio).
             # En este caso el caller es responsable de disparar el kill switch.
@@ -686,6 +696,13 @@ class RiskManager:
         self, symbol: str, correlaciones: dict[str, float], diversidad_minima: float
     ) -> bool:
         """Determina si se permite una nueva entrada según la correlación media."""
+        # [RISK-PERMITE-ENTRADA-NO-KILL-SWITCH-01] El kill switch cierra todas las
+        # posiciones pero no activa cooldown automáticamente, por lo que sin esta
+        # guarda el Trader podría abrir nuevas entradas inmediatamente tras el cierre.
+        # El kill switch se resetea automáticamente al inicio de un nuevo día.
+        if self._kill_switch_disparado:
+            log.info('🚫 Kill switch activo, no se permiten nuevas entradas')
+            return False
         if self.cooldown_activo:
             log.info('🚫 Cooldown activo, no se permiten nuevas entradas')
             return False
