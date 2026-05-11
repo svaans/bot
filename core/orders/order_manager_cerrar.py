@@ -173,9 +173,9 @@ def requeue_full_close(
     )
     return True
 async def agregar_parcial_async(manager, symbol: str, precio: float, cantidad: float) -> bool:
+    """Aumenta la posición abierta (long: compra adicional; short: venta adicional)."""
     lock = manager._locks.setdefault(symbol, asyncio.Lock())
     async with lock:
-        """Aumenta la posición abierta (long: compra adicional; short: venta adicional)."""
         orden = manager.ordenes.get(symbol)
         if not orden:
             return False
@@ -380,9 +380,9 @@ async def _finalizar_cierre_completo_async(
 
 
 async def cerrar_async(manager, symbol: str, precio: float | None, motivo: str) -> bool:
+    """Cierra la orden indicada completamente."""
     lock = manager._locks.setdefault(symbol, asyncio.Lock())
     async with lock:
-        """Cierra la orden indicada completamente."""
         orden = manager.ordenes.get(symbol)
         if not orden:
             log.warning(f'⚠️ Se intentó verificar TP/SL sin orden activa en {symbol}')
@@ -677,7 +677,11 @@ async def cerrar_parcial_async(manager, symbol: str, cantidad: float, precio: fl
                         execution.pnl,
                         emit=False,
                     )
-                    orden.pnl_operaciones = getattr(orden, 'pnl_operaciones', 0.0) + execution.pnl
+                    # [FIX CERRAR-PNL-DOUBLE-01] La línea pnl_operaciones = ... fue eliminada.
+                    # Era un remanente anterior a _apply_realized_pnl_delta. El getter de
+                    # pnl_operaciones devuelve pnl_realizado + pnl_latente, por lo que el
+                    # setter escribía X + 2Δ + L en pnl_realizado (doble conteo + absorción
+                    # del PnL latente). _apply_realized_pnl_delta ya realiza el update correcto.
                     fill_px = execution.precio_fill_promedio
                     if (
                         fill_px is not None
