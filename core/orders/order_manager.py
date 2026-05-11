@@ -799,5 +799,21 @@ class OrderManager:
             return
 
         direccion = str(getattr(orden, "direccion", "long"))
-        pnl_latente = precio * cantidad_float
+
+        # [FIX MTM-WRONG-FORMULA] La fórmula anterior era `precio * cantidad`,
+        # que devuelve el valor de mercado bruto de la posición, no el PnL latente.
+        # `direccion` se extraía pero nunca se usaba en el cálculo, haciendo que
+        # las posiciones short reportaran el mismo valor positivo que las long.
+        # Corregido a (precio_actual − precio_entrada) × qty con signo por dirección.
+        precio_entrada_raw = getattr(orden, "precio_entrada", None)
+        if not is_valid_number(precio_entrada_raw) or float(precio_entrada_raw or 0.0) <= 0.0:
+            pnl_latente = 0.0
+        else:
+            precio_entrada_float = float(precio_entrada_raw)
+            delta = precio - precio_entrada_float
+            if direccion in ("short", "venta"):
+                pnl_latente = -delta * cantidad_float
+            else:
+                pnl_latente = delta * cantidad_float
+
         self._set_latent_pnl(symbol, orden, pnl_latente, extra={'precio_mark': precio})
