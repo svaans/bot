@@ -217,15 +217,28 @@ class OrphanReconciler:
             extra={"pending_orphans": len(self._records)},
         )
 
-        # Espera indefinida pero interrumpible por shutdown.
-        # Si ccxt nunca llega a estar listo, no hay trading de todos modos.
-        done, _ = await asyncio.wait(
-            [
-                asyncio.create_task(ccxt_ready.wait(), name="wait_ccxt"),
-                asyncio.create_task(self._shutdown_event.wait(), name="wait_shutdown"),
-            ],
-            return_when=asyncio.FIRST_COMPLETED,
+        # [FIX ORPHAN-ASYNCIO-WAIT-LEAK-01] asyncio.wait(return_when=FIRST_COMPLETED)
+        # NO cancela las tasks perdedoras — produce "Task destroyed but pending" warnings
+        # y un leak de recursos. Se mantienen referencias explícitas y se cancelan ambas
+        # en el bloque finally, tanto en el camino normal como si _reconcile_all es
+        # cancelada externamente (shutdown() llama _task.cancel()).
+        wait_ccxt_task = asyncio.create_task(ccxt_ready.wait(), name="wait_ccxt")
+        wait_shutdown_task = asyncio.create_task(
+            self._shutdown_event.wait(), name="wait_shutdown"
         )
+        try:
+            await asyncio.wait(
+                [wait_ccxt_task, wait_shutdown_task],
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+        finally:
+            for _t in (wait_ccxt_task, wait_shutdown_task):
+                if not _t.done():
+                    _t.cancel()
+                    try:
+                        await _t
+                    except (asyncio.CancelledError, Exception):
+                        pass
 
         if self._shutdown_event.is_set():
             log.info("orphan.reconcile.aborted_by_shutdown")
