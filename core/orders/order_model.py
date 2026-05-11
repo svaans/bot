@@ -144,6 +144,11 @@ class Order:
     # Targets de TP multi-nivel ya ejecutados (list[dict] con porcentaje+qty_frac).
     # Permite a salida_takeprofit_atr omitir niveles ya procesados en velas previas.
     targets_alcanzados: list | None = None
+    # [VERIF-TRAILING-STATE-LOST-01] Nivel activo del trailing stop (precio absoluto).
+    # verificar_trailing_stop() escribe sl_trailing al dict-copia de Order, que se
+    # perdía cada vela impidiendo el guard de movimiento mínimo (2 × tick_size).
+    # Ahora se persiste en el Order real y to_dict() lo incluye automáticamente.
+    sl_trailing: float | None = None
 
     @staticmethod
     def from_dict(data: Dict[str, Any]) ->'Order':
@@ -182,6 +187,9 @@ class Order:
         data.setdefault('pnl_latente', 0.0)
         data.setdefault('registro_pendiente', False)
         data.setdefault('operation_id', None)
+        # [VERIF-TRAILING-STATE-LOST-01] Nivel activo del trailing stop; None para
+        # órdenes antiguas sin este campo persistido en BD.
+        data.setdefault('sl_trailing', None)
         # P6-F5-LATENT fix: deserializar desde TEXT si viene de SQLite.
         ta = data.get('targets_alcanzados')
         if isinstance(ta, str):

@@ -234,9 +234,18 @@ async def _manejar_trailing_stop(trader, orden, df) -> bool:
     config_actual = adaptar_configuracion(symbol, df, config_actual)
     trader.config_por_simbolo[symbol] = config_actual
     try:
+        # [VERIF-TRAILING-STATE-LOST-01] verificar_trailing_stop() escribe sl_trailing
+        # al dict; capturamos el dict para leer el valor actualizado y persistirlo
+        # en el Order real, evitando que el guard de movimiento mínimo (2×tick)
+        # se bypasee por comenzar siempre con sl_actual = None.
+        _info = orden.to_dict()
         cerrar, motivo = verificar_trailing_stop(
-            orden.to_dict(), precio_cierre, df, config=config_actual
+            _info, precio_cierre, df, config=config_actual
         )
+        # Persistir sl_trailing en el Order real si fue actualizado.
+        _sl_t = _info.get('sl_trailing')
+        if _sl_t is not None:
+            orden.sl_trailing = float(_sl_t)
     except (KeyError, ValueError, TypeError) as e:
         log.warning(
             '⚠️ Error en trailing stop para %s: %s',
@@ -409,13 +418,56 @@ async def _aplicar_salidas_adicionales(trader, orden, df) -> bool:
     return False
 
 
+async def _run_checks_sequential(
+    check_fns: list,
+    timeout: float,
+    label: str,
+    symbol: str,
+) -> tuple[str, bool]:
+    """Ejecuta *check_fns* en orden estricto, abortando al primero que retorne True.
+
+    [VERIF-CONCURRENT-HIERARCHY-01] Reemplaza asyncio.gather() que corría todas
+    las comprobaciones en paralelo, ignorando la jerarquía de prioridades
+    documentada (macro > SL > TP y trailing > tendencia > adicionales).
+    Con gather, si macro cerraba la posición, SL y TP igual completaban y podían
+    intentar un segundo cierre (mitigado solo por AsyncSymbolLock, no por lógica).
+
+    Recibe *callables* (no coroutines) para crear el coroutine de forma lazy:
+    así los checks no ejecutados nunca se instancian, evitando
+    "coroutine was never awaited" RuntimeWarning.
+
+    Devuelve (decision_action, closed).
+    """
+    async def _inner() -> bool:
+        for fn in check_fns:
+            try:
+                if await fn():
+                    return True
+            except Exception as exc:
+                log.error(f'Error en verificación {label} para {symbol}: {exc}')
+        return False
+
+    try:
+        closed = await asyncio.wait_for(_inner(), timeout=timeout)
+    except asyncio.TimeoutError:
+        log.warning(f'Timeout en verificaciones {label} para {symbol}')
+        return "exit_timeout", False
+
+    if closed:
+        log.debug(f'Verificación {label} activó cierre para {symbol}')
+        return "exit_closed", True
+    return "exit_hold", False
+
+
 async def verificar_salidas(trader, symbol: str, df: pd.DataFrame) -> None:
     """Evalúa si la orden abierta debe cerrarse."""
 
     decision_action = "exit_skip"
     try:
         inicio_total = time.time()
-        trader.config_por_simbolo[symbol] = load_exit_config(symbol)
+        # [VERIF-LOAD-REDUNDANT-01] load_exit_config() se llamaba aquí en cada vela,
+        # ignorando el cache de _get_exit_config().  Eliminado: cada sub-función
+        # llama ya a _get_exit_config() que usa el cache correctamente.
         orden = trader.orders.obtener(symbol)
         if not orden:
             log.warning(f'⚠️ Se intentó verificar TP/SL sin orden activa en {symbol}')
@@ -425,33 +477,27 @@ async def verificar_salidas(trader, symbol: str, df: pd.DataFrame) -> None:
         orden.duracion_en_velas = getattr(orden, 'duracion_en_velas', 0) + 1
         await trader._piramidar(symbol, orden, df)
 
-        timeout = trader.config_por_simbolo[symbol].get('timeout_validaciones', 5)
+        cfg = _get_exit_config(trader, symbol)
+        timeout = cfg.get('timeout_validaciones', 5)
 
-        tareas_principales = [
-            _chequear_contexto_macro(trader, orden, df),
-            _manejar_stop_loss(trader, orden, df),
-            _procesar_take_profit(trader, orden, df),
+        # [VERIF-CONCURRENT-HIERARCHY-01] Antes: asyncio.gather() → todos en paralelo.
+        # Ahora: secuencial con retorno anticipado al primer cierre.
+        # Jerarquía estricta: contexto macro → stop loss → take profit.
+        # Los checks se pasan como lambdas (callables) para que el coroutine se cree
+        # de forma lazy — así los checks no ejecutados nunca se instancian y se
+        # evita el "coroutine was never awaited" RuntimeWarning.
+        primarias = [
+            lambda: _chequear_contexto_macro(trader, orden, df),
+            lambda: _manejar_stop_loss(trader, orden, df),
+            lambda: _procesar_take_profit(trader, orden, df),
         ]
-
-        try:
-            resultados = await asyncio.wait_for(
-                asyncio.gather(*tareas_principales, return_exceptions=True),
-                timeout=timeout,
-            )
-        except asyncio.TimeoutError:
-            log.warning(f'Timeout en verificaciones principales para {symbol}')
+        action, closed = await _run_checks_sequential(primarias, timeout, "principales", symbol)
+        if action == "exit_timeout":
             decision_action = "exit_timeout"
             return
-
-        for resultado in resultados:
-            if isinstance(resultado, Exception):
-                log.error(f'Error en verificación principal para {symbol}: {resultado}')
-                if decision_action != "exit_closed":
-                    decision_action = "exit_error"
-            elif resultado:
-                log.debug(f'Validación principal activó cierre para {symbol}')
-                decision_action = "exit_closed"
-                return
+        if closed:
+            decision_action = "exit_closed"
+            return
 
         if orden.cantidad_abierta <= 0:
             log.debug(
@@ -459,31 +505,21 @@ async def verificar_salidas(trader, symbol: str, df: pd.DataFrame) -> None:
             )
             decision_action = "exit_closed"
             return
-        tareas_secundarias = [
-            _manejar_trailing_stop(trader, orden, df),
-            _manejar_cambio_tendencia(trader, orden, df),
-            _aplicar_salidas_adicionales(trader, orden, df),
-        ]
 
-        try:
-            resultados = await asyncio.wait_for(
-                asyncio.gather(*tareas_secundarias, return_exceptions=True),
-                timeout=timeout,
-            )
-        except asyncio.TimeoutError:
-            log.warning(f'Timeout en verificaciones secundarias para {symbol}')
+        # Jerarquía estricta secundaria: trailing → tendencia → adicionales.
+        secundarias = [
+            lambda: _manejar_trailing_stop(trader, orden, df),
+            lambda: _manejar_cambio_tendencia(trader, orden, df),
+            lambda: _aplicar_salidas_adicionales(trader, orden, df),
+        ]
+        action, closed = await _run_checks_sequential(secundarias, timeout, "secundarias", symbol)
+        if action == "exit_timeout":
             decision_action = "exit_timeout"
             return
-        
-        for resultado in resultados:
-            if isinstance(resultado, Exception):
-                log.error(f'Error en verificación secundaria para {symbol}: {resultado}')
-                if decision_action != "exit_closed":
-                    decision_action = "exit_error"
-            elif resultado:
-                log.debug(f'Validación secundaria activó cierre para {symbol}')
-                decision_action = "exit_closed"
-                return
+        if closed:
+            decision_action = "exit_closed"
+            return
+
         log.debug(f'verificar_salidas total {time.time() - inicio_total:.2f}s para {symbol}')
     finally:
         if _metrics_extended_enabled():
