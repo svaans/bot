@@ -182,7 +182,15 @@ class Order:
         data.setdefault('pnl_latente', 0.0)
         data.setdefault('registro_pendiente', False)
         data.setdefault('operation_id', None)
-        data.setdefault('targets_alcanzados', None)
+        # P6-F5-LATENT fix: deserializar desde TEXT si viene de SQLite.
+        ta = data.get('targets_alcanzados')
+        if isinstance(ta, str):
+            try:
+                data['targets_alcanzados'] = json.loads(ta)
+            except (json.JSONDecodeError, ValueError):
+                data['targets_alcanzados'] = None
+        else:
+            data.setdefault('targets_alcanzados', None)
         return Order(**data)
 
     def to_dict(self) ->Dict[str, Any]:

@@ -60,7 +60,8 @@ def init_db(ruta_db: str) -> None:
         fecha_cierre TEXT,
         motivo_cierre TEXT,
         retorno_total REAL,
-        cantidad_abierta REAL
+        cantidad_abierta REAL,
+        targets_alcanzados TEXT
     """
     try:
         with connect_db(ruta_db) as conn:
@@ -70,16 +71,21 @@ def init_db(ruta_db: str) -> None:
             conn.execute(
                 f"CREATE TABLE IF NOT EXISTS operaciones (id INTEGER PRIMARY KEY AUTOINCREMENT, {schema_base})"
             )
-            # Migration: add cantidad_abierta to pre-existing databases that
-            # were created without this column. sqlite3 raises OperationalError
+            # Migration: add columns to pre-existing databases that were
+            # created without them. sqlite3 raises OperationalError
             # ("duplicate column name") if the column already exists.
+            migrations = [
+                ("cantidad_abierta", "REAL"),
+                ("targets_alcanzados", "TEXT"),  # P6-F5-LATENT fix
+            ]
             for table in ("ordenes", "operaciones"):
-                try:
-                    conn.execute(
-                        f"ALTER TABLE {table} ADD COLUMN cantidad_abierta REAL"
-                    )
-                except sqlite3.OperationalError:
-                    pass  # Column already present — nothing to do.
+                for col, col_type in migrations:
+                    try:
+                        conn.execute(
+                            f"ALTER TABLE {table} ADD COLUMN {col} {col_type}"
+                        )
+                    except sqlite3.OperationalError:
+                        pass  # Column already present — nothing to do.
         log.info(
             "Tablas de ordenes y operaciones verificadas/creadas.",
             extra={"symbol": None, "timeframe": None},
@@ -134,14 +140,16 @@ def persist_orders(ruta_db: str, ordenes: dict[str, Order]) -> None:
                     data = validar_datos_orden(orden)
                     if isinstance(data.get("estrategias_activas"), dict):
                         data["estrategias_activas"] = json.dumps(data["estrategias_activas"])
+                    ta = data.get("targets_alcanzados")
+                    ta_json = json.dumps(ta) if ta is not None else None
                     conn.execute(
                         """
                         INSERT OR REPLACE INTO ordenes (
                             symbol, precio_entrada, cantidad, stop_loss, take_profit,
                             timestamp, estrategias_activas, tendencia, max_price,
                             direccion, precio_cierre, fecha_cierre, motivo_cierre,
-                            retorno_total, cantidad_abierta
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            retorno_total, cantidad_abierta, targets_alcanzados
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                         """,
                         (
                             data.get("symbol"),
@@ -159,6 +167,7 @@ def persist_orders(ruta_db: str, ordenes: dict[str, Order]) -> None:
                             data.get("motivo_cierre"),
                             data.get("retorno_total"),
                             data.get("cantidad_abierta"),
+                            ta_json,
                         ),
                     )
         log.info(

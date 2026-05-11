@@ -272,14 +272,16 @@ def actualizar_orden(symbol: str, data: (Order | dict)) ->None:
             _init_db()
             with _connect_db() as conn:
                 with conn:
+                    ta = d.get('targets_alcanzados')
+                    ta_json = json.dumps(ta) if ta is not None else None
                     conn.execute(
                         """
                         INSERT OR REPLACE INTO ordenes (
                             symbol, precio_entrada, cantidad, stop_loss, take_profit,
                             timestamp, estrategias_activas, tendencia, max_price,
                             direccion, precio_cierre, fecha_cierre, motivo_cierre,
-                            retorno_total, cantidad_abierta
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            retorno_total, cantidad_abierta, targets_alcanzados
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                         """,
                         (
                             d.get('symbol'),
@@ -297,6 +299,7 @@ def actualizar_orden(symbol: str, data: (Order | dict)) ->None:
                             d.get('motivo_cierre'),
                             d.get('retorno_total'),
                             d.get('cantidad_abierta'),
+                            ta_json,
                         ),
                     )
             ordenes[symbol] = data if isinstance(data, Order) else Order.from_dict(d)
