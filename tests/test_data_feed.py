@@ -876,3 +876,88 @@ async def test_consumer_handler_timeout_log_extra_includes_queue_size(
 
     assert timeout_extras, "se esperaba al menos un log handler.timeout"
     assert any(e.get("queue_size") == 1 for e in timeout_extras)
+
+
+# ---------------------------------------------------------------------------
+# DF-SILENT-01: consumer atascado en STARTING sin first_candle
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_monitor_consumers_reinicia_stream_cuando_consumer_en_starting_excede_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """DF-SILENT-01: consumer en STARTING con _consumer_last antiguo dispara reiniciar_stream."""
+
+    from core.data_feed import monitors as monitors_mod
+    from core.data_feed._shared import ConsumerState
+
+    captured_events: list[tuple[str, dict]] = []
+    mock_reiniciar_stream = AsyncMock()
+    monkeypatch.setattr(monitors_mod, "reiniciar_stream", mock_reiniciar_stream)
+
+    feed = make_feed(monitor_interval=0.05, events=captured_events)
+    symbol = "BTCEUR"
+    feed._running = True
+
+    # Consumer activo (tarea no completada) atascado en STARTING
+    feed._consumer_tasks[symbol] = asyncio.create_task(asyncio.sleep(10_000.0))
+    # _consumer_last muy antiguo: 300 s sin avanzar
+    feed._consumer_last[symbol] = time.monotonic() - 300.0
+    # Estado explícito STARTING
+    feed._consumer_state[symbol] = ConsumerState.STARTING
+    # El stream de producción está vivo y activo (último frame reciente)
+    feed._last_monotonic[symbol] = time.monotonic()  # producer_idle = False
+
+    monitor_task = asyncio.create_task(monitors_mod.monitor_consumers(feed, timeout=30.0))
+    await asyncio.sleep(0.2)
+    feed._running = False
+    monitor_task.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await monitor_task
+
+    # El stream debe haberse reiniciado a pesar de producer_idle=False
+    mock_reiniciar_stream.assert_awaited_once_with(feed, symbol)
+
+    # El evento de telemetría debe haberse emitido
+    event_names = [e[0] for e in captured_events]
+    assert "consumer_starting_stalled" in event_names
+
+    feed._consumer_tasks[symbol].cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await feed._consumer_tasks[symbol]
+
+
+@pytest.mark.asyncio
+async def test_monitor_consumers_no_reinicia_stream_cuando_consumer_en_starting_dentro_de_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """DF-SILENT-01 negativo: consumer en STARTING reciente no se toca."""
+
+    from core.data_feed import monitors as monitors_mod
+    from core.data_feed._shared import ConsumerState
+
+    mock_reiniciar_stream = AsyncMock()
+    monkeypatch.setattr(monitors_mod, "reiniciar_stream", mock_reiniciar_stream)
+
+    feed = make_feed(monitor_interval=0.05)
+    symbol = "ETHEUR"
+    feed._running = True
+
+    feed._consumer_tasks[symbol] = asyncio.create_task(asyncio.sleep(10_000.0))
+    # _consumer_last muy reciente: dentro del timeout
+    feed._consumer_last[symbol] = time.monotonic() - 1.0
+    feed._consumer_state[symbol] = ConsumerState.STARTING
+    feed._last_monotonic[symbol] = time.monotonic()
+
+    monitor_task = asyncio.create_task(monitors_mod.monitor_consumers(feed, timeout=30.0))
+    await asyncio.sleep(0.2)
+    feed._running = False
+    monitor_task.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await monitor_task
+
+    mock_reiniciar_stream.assert_not_awaited()
+
+    feed._consumer_tasks[symbol].cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await feed._consumer_tasks[symbol]

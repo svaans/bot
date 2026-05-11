@@ -85,6 +85,36 @@ async def monitor_consumers(feed: "DataFeed", timeout: float | None = None) -> N
             for symbol, last in list(feed._consumer_last.items()):
                 if last is not None:
                     _set_consumer_lag(symbol, max(0.0, ahora - last))
+
+                # DF-SILENT-01: consumer atascado en STARTING sin first_candle.
+                # Cuando el WS envía frames de vela en progreso, _last_monotonic se
+                # actualiza (producer_idle=False) y la guarda de reiniciar_stream no
+                # se activa aunque el consumer lleve varios intervalos sin salir de
+                # STARTING.  Detectamos este caso de forma independiente usando
+                # _consumer_last como proxy: no avanza hasta que el handler completa
+                # su primera vela.
+                state = feed._consumer_state.get(symbol)
+                if state == ConsumerState.STARTING and last is not None:
+                    starting_timeout = getattr(feed, "_starting_timeout", None)
+                    if starting_timeout is None:
+                        starting_timeout = max(
+                            feed.consumer_timeout, feed.intervalo_segundos * 2.0
+                        )
+                    if ahora - last > starting_timeout:
+                        log.warning(
+                            "%s: consumer en STARTING %.0fs sin first_candle; reiniciando stream…",
+                            symbol,
+                            ahora - last,
+                        )
+                        events.emit_event(
+                            feed,
+                            "consumer_starting_stalled",
+                            {"symbol": symbol, "elapsed": round(ahora - last, 1)},
+                        )
+                        await reiniciar_stream(feed, symbol)
+                        feed._consumer_last[symbol] = time.monotonic()
+                        continue
+
                 tarea = feed._consumer_tasks.get(symbol)
                 if tarea is None or tarea.done():
                     events.set_consumer_state(feed, symbol, ConsumerState.STALLED)

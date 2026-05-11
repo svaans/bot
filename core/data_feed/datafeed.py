@@ -116,6 +116,18 @@ class DataFeed:
         raw_consumer_timeout = self.intervalo_segundos * self.consumer_timeout_intervals
         self.consumer_timeout = max(self.consumer_timeout_min, min(self.tiempo_inactividad, raw_consumer_timeout))
 
+        # DF-SILENT-01: timeout independiente para consumers atascados en STARTING.
+        # Un consumer en STARTING nunca avanza su _consumer_last tras el arranque,
+        # por lo que la guarda ahora - last > consumer_timeout no se activa si el
+        # stream está vivo (producer_idle=False). Este timeout separa ambos casos.
+        starting_timeout_intervals = _safe_float(
+            os.getenv("DF_STARTING_TIMEOUT_INTERVALS", "2.0"), 2.0
+        )
+        self._starting_timeout = max(
+            self.consumer_timeout,
+            self.intervalo_segundos * max(1.0, starting_timeout_intervals),
+        )
+
         self.backpressure = bool(backpressure)
         self.cancel_timeout = max(0.5, float(cancel_timeout))
         self._event_bus: Any | None = None
