@@ -71,8 +71,13 @@ class CapitalManager:
         overrides: Dict[str, float] = {}
         if exposure_limits:
             overrides.update(dict(exposure_limits))
-        if snapshot.capital_por_simbolo:
-            overrides.update(snapshot.capital_por_simbolo)
+        # [FIX CAPITAL-CONFIG-OVERRIDE] El snapshot NO debe entrar en overrides porque
+        # eso sobrescribe _state.por_symbol con el valor de runtime en vez del valor
+        # configurado. Consecuencia: exposure_asignada() devolvía el valor del snapshot
+        # (ej. 70 EUR con trade abierto) en lugar del máximo configurado (ej. 120 EUR),
+        # lo que hacía que sincronizar_exposure() al cierre devolviera solo 70 EUR al
+        # pool en vez de 120, perdiendo capital de forma silenciosa y permanente.
+        # El snapshot se aplica en _apply_persisted_state() donde se capea por config.
 
         self._state = self._build_state(
             config,
@@ -324,7 +329,17 @@ class CapitalManager:
                 clave = _normalizar_symbol(symbol)
                 if not clave:
                     continue
-                self.capital_por_simbolo[clave] = max(0.0, float(value))
+                # [FIX CAPITAL-CONFIG-OVERRIDE] Capear el valor del snapshot por el
+                # máximo configurado en _state.por_symbol. Así, si el operador reduce
+                # el límite en config, el snapshot no puede superarlo tras el restart.
+                # Símbolos en el snapshot pero no en config se preservan sin cota
+                # (pueden existir por un símbolo eliminado de la lista activa).
+                configured_max = self._state.por_symbol.get(clave)
+                if configured_max is not None:
+                    restored = min(float(value), float(configured_max))
+                else:
+                    restored = float(value)
+                self.capital_por_simbolo[clave] = max(0.0, restored)
         stored_disponible = max(0.0, float(snapshot.disponible_global))
         self._recalcular_disponible_global()
         if stored_disponible > 0:
