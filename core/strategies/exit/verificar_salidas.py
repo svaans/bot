@@ -343,9 +343,15 @@ async def _aplicar_salidas_adicionales(trader, orden, df) -> bool:
     volatilidad_rel = atr / precio_cierre if atr and precio_cierre else 1.0
     tendencia_detectada = obtener_tendencia(symbol, df)
     contexto = {'volatilidad': volatilidad_rel, 'tendencia': tendencia_detectada}
+    # [GESTOR-T_INICIO_PERDIDA-LOST-01] Pasamos el dict-copia (con t_inicio_perdida
+    # ya incluido porque to_dict() serializa todos los campos del Order).
+    # Tras la llamada leemos el valor mutado por evaluar_salidas() y lo
+    # escribimos de vuelta al Order real para que el timer t_max_loss acumule
+    # tiempo entre velas (en lugar de resetearse a None en cada ciclo).
+    _info_salidas = orden.to_dict()
     try:
         resultado = await evaluar_salidas(
-            orden.to_dict(), df, config=config_actual, contexto=contexto
+            _info_salidas, df, config=config_actual, contexto=contexto
         )
     except (KeyError, ValueError, TypeError) as e:
         log.warning(
@@ -354,6 +360,10 @@ async def _aplicar_salidas_adicionales(trader, orden, df) -> bool:
             format_exception_for_log(e),
         )
         resultado = {}
+    # Persistir t_inicio_perdida en el Order real (write-back del estado mutado).
+    _tip_nuevo = _info_salidas.get('t_inicio_perdida')
+    if _tip_nuevo != orden.t_inicio_perdida:
+        orden.t_inicio_perdida = _tip_nuevo
     # Fix P6-F5: targets parciales multi-nivel propagados desde gestor_salidas.
     # Aquí sí tenemos acceso al Order real (no al dict-copia), por lo que podemos
     # ejecutar los cierres parciales y persistir el estado de targets procesados.

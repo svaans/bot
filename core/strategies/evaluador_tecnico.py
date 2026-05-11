@@ -115,6 +115,12 @@ async def evaluar_puntaje_tecnico(
                     def _cleanup_backfill(t: asyncio.Task, *, sym: str = symbol) -> None:
                         try:
                             t.result()
+                        except asyncio.CancelledError:
+                            # [EVAL-CLEANUP-CANCEL-01] CancelledError es BaseException;
+                            # except Exception no lo atrapaba y escapaba del callback
+                            # generando ruido en el manejador de excepciones de asyncio.
+                            # Cancelación esperada durante shutdown del bot.
+                            pass
                         except Exception as exc:  # pragma: no cover - logging de error
                             log.warning(
                                 '[%s] backfill asincrono fallo: %s',

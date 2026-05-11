@@ -149,6 +149,12 @@ class Order:
     # perdía cada vela impidiendo el guard de movimiento mínimo (2 × tick_size).
     # Ahora se persiste en el Order real y to_dict() lo incluye automáticamente.
     sl_trailing: float | None = None
+    # [GESTOR-T_INICIO_PERDIDA-LOST-01] Timestamp ISO del momento en que la posición
+    # entró en pérdida continua. gestor_salidas.evaluar_salidas() lo muta en el
+    # dict-copia (orden.to_dict()) y se perdía cada vela impidiendo que t_max_loss
+    # acumulara tiempo real. Persistido aquí para que _aplicar_salidas_adicionales
+    # lo escriba de vuelta al Order real tras cada llamada a evaluar_salidas().
+    t_inicio_perdida: Optional[str] = None
 
     @staticmethod
     def from_dict(data: Dict[str, Any]) ->'Order':
@@ -190,6 +196,9 @@ class Order:
         # [VERIF-TRAILING-STATE-LOST-01] Nivel activo del trailing stop; None para
         # órdenes antiguas sin este campo persistido en BD.
         data.setdefault('sl_trailing', None)
+        # [GESTOR-T_INICIO_PERDIDA-LOST-01] Compatibilidad legacy: órdenes sin este
+        # campo persistido arrancan sin timer de pérdida activo.
+        data.setdefault('t_inicio_perdida', None)
         # P6-F5-LATENT fix: deserializar desde TEXT si viene de SQLite.
         ta = data.get('targets_alcanzados')
         if isinstance(ta, str):
