@@ -272,6 +272,11 @@ class CapitalManager:
             self._disponible_global = max(0.0, self._disponible_global + delta)
             if self._state.total > 0:
                 self._disponible_global = min(self._disponible_global, self._state.total)
+            # INVARIANT: _refresh_metrics() llama _emit_event() → bus.emit() que DEBE
+            # ser no bloqueante (fire-and-forget via create_task / run_coroutine_threadsafe).
+            # Si EventBus.emit alguna vez despachara síncronamente, cualquier handler
+            # que llamara actualizar_exposure() causaría deadlock aquí (threading.Lock
+            # no es reentrable). Verificado: event_bus.py::emit siempre retorna inmediato.
             self._refresh_metrics()
             # H-06: avoid blocking the event loop with synchronous I/O.
             # When called from an async context (the normal runtime path), offload
