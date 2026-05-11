@@ -480,3 +480,84 @@ async def test_incremental_indicators_sincronizados_con_batch() -> None:
 
     cache_obj = df_final.attrs.get("_indicators_cache")
     assert cache_obj is not None
+
+
+# ---------------------------------------------------------------------------
+# PIPELINE-MTM-DOUBLE-EMIT: actualizar_mark_to_market debe llamarse una sola vez
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_mark_to_market_called_once_per_candle() -> None:
+    """PIPELINE-MTM-DOUBLE-EMIT: la segunda _ensure_gating_end() fue eliminada.
+
+    Verifica que actualizar_mark_to_market se invoca exactamente una vez por vela,
+    no dos veces como ocurría antes del fix (la segunda llamada causaba doble emit
+    del evento pnl_update al bus por cada vela cerrada).
+    """
+    mtm_calls: list[tuple[str, float]] = []
+
+    class TrackingOrders(DummyOrders):
+        def actualizar_mark_to_market(self, symbol: str, precio: float) -> None:
+            mtm_calls.append((symbol, precio))
+
+    class MTMTrader(DummyTrader):
+        def __init__(self) -> None:
+            super().__init__(side="long", generar_propuesta=False)
+            self.orders = TrackingOrders()
+
+    trader = MTMTrader()
+    # Necesitamos una posición abierta para que la rama MTM se active
+    # (orders.obtener devuelve None por defecto → no hay posición → MTM se llama igual,
+    # el guard solo es "orders is not None and hasattr(orders, 'actualizar_mark_to_market')")
+    candle = _build_candle(50_000.0)
+    candle["is_closed"] = True
+
+    await procesar_vela(trader, candle)
+
+    assert len(mtm_calls) == 1, (
+        f"actualizar_mark_to_market debe llamarse exactamente 1 vez por vela, "
+        f"se llamó {len(mtm_calls)} veces: {mtm_calls}"
+    )
+    assert mtm_calls[0] == ("BTCUSDT", 50_000.0)
+
+
+# ---------------------------------------------------------------------------
+# PIPELINE-SILENT-OBTENER: excepción en ya_abierta guard debe loguearse
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_ya_abierta_obtener_exception_is_logged(monkeypatch: pytest.MonkeyPatch) -> None:
+    """PIPELINE-SILENT-OBTENER: si orders.obtener lanza, se registra warning (no silencio).
+
+    El logger usa propagate=False (handler JSON propio), así que caplog no lo captura.
+    Se espía directamente log.warning del módulo pipeline_procesar.
+    """
+    import core.vela.pipeline_procesar as pp_mod
+
+    warnings_logged: list[str] = []
+    real_warning = pp_mod.log.warning
+
+    def _spy_warning(msg: str, *args: object, **kwargs: object) -> None:
+        warnings_logged.append(msg)
+        real_warning(msg, *args, **kwargs)
+
+    monkeypatch.setattr(pp_mod.log, "warning", _spy_warning)
+
+    class ExplodingOrders(DummyOrders):
+        def obtener(self, symbol: str) -> None:
+            raise RuntimeError("db_locked")
+
+    class ExplodingTrader(DummyTrader):
+        def __init__(self) -> None:
+            super().__init__(side="long", generar_propuesta=True)
+            self.orders = ExplodingOrders()
+
+    trader = ExplodingTrader()
+    candle = _build_candle(50_000.0)
+    candle["is_closed"] = True
+
+    await procesar_vela(trader, candle)
+
+    assert any("ya_abierta_check.error" in m for m in warnings_logged), (
+        f"Se esperaba un warning 'ya_abierta_check.error', se obtuvieron: {warnings_logged}"
+    )

@@ -453,7 +453,11 @@ async def procesar_vela(trader: Any, vela: dict) -> None:
             propuesta = await trader.evaluar_condiciones_de_entrada(symbol, df, estado_symbol)
         finally:
             _ensure_strategy_end()
-        _ensure_gating_end()
+        # [FIX PIPELINE-MTM-DOUBLE-EMIT] La segunda llamada a _ensure_gating_end() aquí
+        # era redundante: gating_end ya está marcado por la llamada anterior (L-451).
+        # Aunque el timestamp es idempotente, actualizar_mark_to_market dentro de la
+        # función NO está guardada por "if gating_end is None", por lo que se ejecutaba
+        # dos veces por vela emitiendo dos eventos pnl_update al bus.
         skip_reason = getattr(trader, "_last_eval_skip_reason", None)
         skip_details = getattr(trader, "_last_eval_skip_details", None)
         score = None
@@ -553,7 +557,14 @@ async def procesar_vela(trader: Any, vela: dict) -> None:
                 _mark_skip(vela, "ya_abierta", score=score)
                 return
         except Exception:
-            pass
+            # [FIX PIPELINE-SILENT-OBTENER] Antes se absorbía silenciosamente.
+            # Si orders.obtener lanza, el guard ya_abierta se bypass y se intenta
+            # abrir sin saber si ya hay posición. Se registra para diagnóstico.
+            log.warning(
+                "ya_abierta_check.error",
+                extra={"symbol": symbol, "timeframe": timeframe_label},
+                exc_info=True,
+            )
 
         try:
             status = await _abrir_orden(
