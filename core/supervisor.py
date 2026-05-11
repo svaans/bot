@@ -373,7 +373,12 @@ class Supervisor:
                 task.cancel()
                 try:
                     await asyncio.wait_for(task, timeout=self.close_timeout)
-                except Exception:
+                except (asyncio.CancelledError, Exception):
+                    # [SUPER-RESTART-CANCEL-LEAK-01] asyncio.CancelledError es
+                    # BaseException (Python 3.8+), no es capturado por
+                    # "except Exception". Cuando wait_for espera una tarea ya
+                    # cancelada, re-lanza CancelledError al caller, lo que
+                    # propagaba la excepción al watchdog y lo terminaba.
                     pass
             finally:
                 if self.tasks.get(task_name) is task:
