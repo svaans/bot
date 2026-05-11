@@ -422,6 +422,11 @@ async def abrir_async(
                             orden.entradas[0]["precio"] = precio_registro
                         orden.precio_ultima_piramide = precio_registro
                     if cantidad <= 0:
+                        # [FIX ORPHAN-GHOST-01] execution.executed == 0 significa
+                        # que Binance confirmó que no ejecutó ningún fill.
+                        # El intent es un fantasma: borrarlo para evitar bloqueos
+                        # innecesarios al próximo arranque.
+                        _borrar_intent_pre_ejecucion(symbol)
                         if manager.bus:
                             await manager.bus.publish(
                                 'notify',
