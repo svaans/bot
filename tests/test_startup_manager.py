@@ -383,6 +383,47 @@ def test_restore_persistencia_state(monkeypatch: pytest.MonkeyPatch, tmp_path: P
     assert trader.persistencia.conteo == {"BTCUSDT": {"long": 2}}
 
 
+def test_restore_persistencia_state_resets_conteo_when_snapshot_is_stale(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """SNAPSHOT-STALE-01: conteo debe resetearse si el snapshot es muy viejo.
+
+    minimo y peso_extra (parámetros de config) deben preservarse.
+    conteo (estado efímero de velas consecutivas) debe quedar vacío.
+    """
+    snapshot_path = tmp_path / "startup_snapshot.json"
+    monkeypatch.setattr(startup_module, "SNAPSHOT_PATH", snapshot_path)
+    # threshold mínimo para forzar el stale en el test
+    monkeypatch.setenv("SNAPSHOT_STALE_SECONDS", "1")
+
+    persistencia_prev = PersistenciaTecnica(minimo=3, peso_extra=1.25)
+    persistencia_prev.actualizar("BTCUSDT", {"long": True})
+    persistencia_prev.actualizar("BTCUSDT", {"long": True})
+    assert persistencia_prev.conteo == {"BTCUSDT": {"long": 2}}
+
+    stale_ts = time.time() - 7200  # 2 horas atrás → claramente stale
+    snapshot_payload = {
+        "symbols": ["BTCUSDT"],
+        "modo_real": False,
+        "timestamp": stale_ts,
+        "persistencia_tecnica": persistencia_prev.export_state(),
+    }
+    snapshot_path.write_text(json.dumps(snapshot_payload))
+
+    config = SimpleNamespace(symbols=["BTCUSDT"], modo_real=False)
+    trader = SimpleNamespace(config=config, persistencia=PersistenciaTecnica())
+
+    manager = StartupManager(trader=trader, config=config)
+    manager._inspect_previous_snapshot()
+    manager._restore_persistencia_state()
+
+    # Configuración restaurada aunque el snapshot sea viejo
+    assert trader.persistencia.minimo == 3
+    assert trader.persistencia.peso_extra == pytest.approx(1.25)
+    # Estado efímero: conteo reseteado por snapshot viejo
+    assert trader.persistencia.conteo == {}
+
+
 @pytest.mark.asyncio
 async def test_wait_ws_polling_is_active_method() -> None:
     """La ruta de fallback ``is_active()`` debe habilitar el flujo."""

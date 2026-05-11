@@ -154,14 +154,39 @@ class SnapshotMixin:
         if persistencia is None:
             return
         load_fn = getattr(persistencia, 'load_state', None)
-        if callable(load_fn):
-            try:
-                load_fn(estado)
-            except Exception:
-                self.log.debug(
-                    'No se pudo restaurar estado de PersistenciaTecnica desde snapshot',
-                    exc_info=True,
-                )
+        if not callable(load_fn):
+            return
+
+        # SNAPSHOT-STALE-01: conteo guarda activaciones CONSECUTIVAS por vela.
+        # Tras una pausa larga, esos conteos son inválidos y podrían bypass el
+        # filtro de persistencia (minimo > 1) en la primera vela del nuevo ciclo.
+        # minimo y peso_extra son parámetros de configuración → siempre seguros.
+        stale_threshold = float(
+            os.getenv("SNAPSHOT_STALE_SECONDS", "3600")  # 12 velas de 5m
+        )
+        timestamp = snapshot.get('timestamp')
+        age: float | None = (
+            max(0.0, time.time() - float(timestamp))
+            if isinstance(timestamp, (int, float))
+            else None
+        )
+        if age is not None and age > stale_threshold:
+            self.log.warning(
+                "Snapshot de persistencia técnica demasiado viejo (%.0fs > %.0fs); "
+                "conteo reseteado. minimo y peso_extra preservados.",
+                age,
+                stale_threshold,
+            )
+            estado = dict(estado)   # copia shallow para no mutar el snapshot original
+            estado['conteo'] = {}
+
+        try:
+            load_fn(estado)
+        except Exception:
+            self.log.debug(
+                'No se pudo restaurar estado de PersistenciaTecnica desde snapshot',
+                exc_info=True,
+            )
 
     async def _check_clock_drift(self) -> bool:
         """Comprueba desfase local vs Binance. Solo fuerza fallo si el drift es alto.
