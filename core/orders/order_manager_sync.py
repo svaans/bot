@@ -76,7 +76,32 @@ async def run_sync_once(manager: Any) -> bool:
             )
         merged[sym] = remoto
 
+    # [FIX SYNC-RACE-NEW-ORDER-01] Preservar órdenes abiertas durante la ventana de
+    # sincronización. reconciliar_ordenes tarda segundos (await asyncio.to_thread);
+    # durante esa espera _abrir_async puede haber añadido nuevas órdenes a manager.ordenes
+    # que no figuran ni en reconciliadas (aún no visibles en exchange) ni en local_only
+    # (no existían cuando se calculó actuales). Sin este bloque, manager.ordenes = merged
+    # las sobreescribiría silenciosamente — la posición existiría en el exchange pero no
+    # en memoria hasta el siguiente ciclo.
+    for sym in list(manager.ordenes.keys()):
+        if sym not in merged and sym not in local_only:
+            log.warning(
+                "orders.sync.new_order_preserved_during_sync",
+                extra=safe_extra({"symbol": sym}),
+            )
+            merged[sym] = manager.ordenes[sym]
+
     manager.ordenes = merged
+
+    # [FIX SYNC-CAPITAL-LEAK-01] Liberar capital para órdenes cerradas forzosamente en
+    # el exchange (liquidación, stop automático, cierre manual). El loop local_only sólo
+    # logueaba; el capital quedaba bloqueado indefinidamente en capital_manager.
+    # Se llama DESPUÉS de manager.ordenes = merged para que _actualizar_capital_disponible
+    # resuelva vigente=None → comprometido=0 → disponible=asignado (capital completo liberado).
+    for sym in local_only:
+        manager._actualizar_capital_disponible(sym)
+        limpiar_registro_pendiente(sym)
+        manager._registro_pendiente_paused.discard(sym)
 
     errores_registro = False
     for sym, ord_ in list(manager.ordenes.items()):
