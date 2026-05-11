@@ -271,7 +271,11 @@ async def stream_combinado(feed: "DataFeed", symbols: List[str]) -> None:
             for _s in symbols:
                 feed._last_monotonic[_s] = _now
 
-            async def wrap(sym: str):
+            # [STREAM-WRAP-ASYNC-01] wrap era async sin ningún await interno;
+            # await wrap(s) en la dict-comprehension creaba una coroutine vacía
+            # por símbolo en cada reconexión. Convertida a def regular: misma
+            # semántica, sin dispatch innecesario del event loop.
+            def wrap(sym: str):
                 async def _handler(candle: dict) -> None:
                     await feed._handle_candle(sym, candle)
 
@@ -279,7 +283,7 @@ async def stream_combinado(feed: "DataFeed", symbols: List[str]) -> None:
 
             # Las claves deben coincidir con kline["s"] de Binance (p. ej. ETHEUR), no con CCXT (ETH/EUR).
             handlers = {
-                normalize_symbol_for_rest(s): await wrap(s) for s in symbols
+                normalize_symbol_for_rest(s): wrap(s) for s in symbols
             }
 
             await escuchar_velas_combinado(
