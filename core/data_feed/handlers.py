@@ -1114,9 +1114,22 @@ async def reiniciar_consumer(feed: "DataFeed", symbol: str) -> None:
     """Reinicia el consumidor asociado al símbolo."""
 
     task = feed._consumer_tasks.get(symbol)
-    if task and not task.done():
+    # [FIX HANDLERS-REINICIAR-SELF-CANCEL-01] Cuando reiniciar_consumer es llamado
+    # desde dentro del propio consumer_loop (detección de timestamp en loop, L1108),
+    # feed._consumer_tasks[symbol] ES asyncio.current_task(). Cancelarse y awaitearse
+    # a sí mismo produce un auto-deadlock que solo se resuelve por la CancelledError
+    # inmediatamente programada — frágil ante carga alta o cambios en el scheduler.
+    # Si es la propia tarea, no es necesario cancelarla: consumer_loop ya está
+    # retornando de forma natural con el "return" que sigue a esta llamada.
+    if task and not task.done() and task is not asyncio.current_task():
         task.cancel()
-        with contextlib.suppress(Exception):
+        # [FIX HANDLERS-SUPPRESS-CANCELLERROR-01] En Python 3.8+, CancelledError es
+        # BaseException (no Exception). contextlib.suppress(Exception) NO la captura,
+        # por lo que una CancelledError del task cancelado se propagaba al llamador
+        # (p.ej. monitor_consumers), terminando el watchdog de forma inesperada.
+        # Se agrega asyncio.CancelledError explícitamente para cubrir ambos casos:
+        # TimeoutError (task tardó más que cancel_timeout) y CancelledError (lo esperado).
+        with contextlib.suppress(Exception, asyncio.CancelledError):
             await asyncio.wait_for(task, timeout=feed.cancel_timeout)
     feed._consumer_tasks[symbol] = asyncio.create_task(
         consumer_loop(feed, symbol), name=f"consumer_{symbol}"
