@@ -492,7 +492,10 @@ class Trader(TraderLite):
             if task.done():
                 continue
             task.cancel()
-            with contextlib.suppress(Exception):
+            # [TRADER-BG-TASKS-SUPPRESS-01] asyncio.CancelledError is BaseException in
+            # Python 3.8+ and is NOT caught by suppress(Exception).  Adding it explicitly
+            # mirrors the same fix applied to handlers.py (commit e288610).
+            with contextlib.suppress(Exception, asyncio.CancelledError):
                 await task
         if getattr(self, "bus", None) is not None and hasattr(self.bus, "close"):
             with contextlib.suppress(Exception):
@@ -1452,7 +1455,11 @@ class Trader(TraderLite):
         """Delegates synchronous pipelines to a worker thread to avoid blocking."""
 
         loop = asyncio.get_running_loop()
-        df_copy = df.copy(deep=False)
+        # [TRADER-DF-SHALLOW-COPY-01] deep=False shares underlying numpy arrays between
+        # the main thread and the worker thread — potential data race if a strategy
+        # mutates array data in-place.  Default copy() is deep=True and is consistent
+        # with the deep clone already performed for EstadoSimbolo (_snapshot_offload_state).
+        df_copy = df.copy()
         estado_copy = self._snapshot_offload_state(estado)
 
         _threadsafe_event: Callable[[str, dict], None] | None
@@ -1508,7 +1515,10 @@ class Trader(TraderLite):
             finally:
                 loop.close()
         try:
-            return future.result()
+            # [TRADER-BLOCKING-NO-TIMEOUT-01] Use an explicit timeout so that a hung
+            # worker loop never blocks this thread indefinitely.  60 s is a conservative
+            # upper bound — real evaluations complete in milliseconds.
+            return future.result(timeout=60.0)
         except asyncio.CancelledError:  # pragma: no cover - defensive
             future.cancel()
             raise

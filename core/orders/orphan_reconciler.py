@@ -234,7 +234,13 @@ class OrphanReconciler:
         finally:
             for _t in (wait_ccxt_task, wait_shutdown_task):
                 if not _t.done():
-                    _t.cancel()
+                    try:
+                        _t.cancel()
+                    except RuntimeError:
+                        # Event loop is already closed (e.g. coroutine garbage-collected
+                        # after the loop stops).  Task.cancel() calls loop.call_soon()
+                        # which raises RuntimeError in that case — safe to ignore.
+                        continue
                     try:
                         await _t
                     except (asyncio.CancelledError, Exception):
