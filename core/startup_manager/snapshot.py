@@ -7,6 +7,7 @@ import errno
 import json
 import os
 import secrets
+import tempfile
 import time
 from importlib import import_module
 from pathlib import Path
@@ -129,12 +130,21 @@ class SnapshotMixin:
                 else:
                     if estado:
                         data['persistencia_tecnica'] = estado
+        tmp: Path | None = None
         try:
             path = _current_snapshot_path()
             path.parent.mkdir(parents=True, exist_ok=True)
-            with path.open('w', encoding='utf-8') as f:
+            fd, tmp_str = tempfile.mkstemp(dir=path.parent, suffix=".tmp")
+            tmp = Path(tmp_str)
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
                 json.dump(data, f, indent=2)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(tmp, path)
+            tmp = None
         except Exception as e:
+            if tmp is not None:
+                tmp.unlink(missing_ok=True)
             self.log.error(
                 'No se pudo guardar snapshot: %s',
                 format_exception_for_log(e),

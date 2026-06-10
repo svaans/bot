@@ -5,6 +5,7 @@ from __future__ import annotations
 import errno
 import json
 import os
+import tempfile
 import threading
 import time
 from copy import deepcopy
@@ -187,16 +188,22 @@ def persist_critical_state(*, reason: str | None = None) -> CriticalState | None
         }
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
-            tmp_path = path.with_suffix(".tmp")
+            tmp_path: Path | None = None
             for attempt in range(8):
                 try:
-                    with tmp_path.open("w", encoding="utf-8") as fh:
+                    fd, tmp_str = tempfile.mkstemp(dir=path.parent, suffix=".tmp")
+                    tmp_path = Path(tmp_str)
+                    with os.fdopen(fd, "w", encoding="utf-8") as fh:
                         json.dump(payload, fh, indent=2, ensure_ascii=False)
                         fh.flush()
                         os.fsync(fh.fileno())
                     tmp_path.replace(path)
+                    tmp_path = None
                     break
                 except OSError as exc:
+                    if tmp_path is not None:
+                        tmp_path.unlink(missing_ok=True)
+                        tmp_path = None
                     win_share = getattr(exc, "winerror", None) == 32
                     busy = exc.errno in (errno.EACCES, errno.EPERM, errno.EBUSY) or win_share
                     if not busy or attempt >= 7:

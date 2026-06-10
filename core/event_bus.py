@@ -333,7 +333,11 @@ class EventBus:
         loop = self._loop
         assert loop is not None
         for event_type, payload in pending:
-            loop.call_soon_threadsafe(asyncio.create_task, self.publish(event_type, payload))
+            # _drain_pending_emits solo se llama desde start(), que requiere
+            # asyncio.get_running_loop() => ya estamos en el hilo del loop.
+            # Usar create_task directamente es correcto y evita el round-trip
+            # extra por la self-pipe que add_soon_threadsafe haría innecesariamente.
+            loop.create_task(self.publish(event_type, payload))
 
     def _resolve_waiters(self, event_type: str, data: Any | None) -> None:
         waiters = self._waiters.pop(event_type, [])

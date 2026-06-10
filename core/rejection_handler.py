@@ -210,7 +210,11 @@ class RejectionHandler:
                     break
 
                 try:
-                    self.flush()
+                    # [FIX REJECTION-FLUSH-BLOCKING-01] _write_with_retries() llama
+                    # time.sleep() en el path de error (0.5–5s); ejecutarlo directamente
+                    # desde un contexto async bloqueaba el event loop.  Se delega a un
+                    # hilo con to_thread para no congelar el scheduler.
+                    await asyncio.to_thread(self.flush)
                 except Exception as exc:  # pragma: no cover - logging path
                     self._flush_failures += 1
                     log.error('❌ Error al hacer flush periódico de rechazos: %s', exc, exc_info=exc)
@@ -221,6 +225,9 @@ class RejectionHandler:
             cancelled = True
         finally:
             try:
+                # En el finally (shutdown o cancelación) se acepta llamada síncrona:
+                # el loop se está cerrando, un bloqueo breve aquí es inocuo y evita
+                # la complejidad de asyncio.shield() bajo CancelledError.
                 self.flush()
             except Exception as exc:  # pragma: no cover - logging path
                 self._flush_failures += 1

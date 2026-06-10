@@ -5,10 +5,12 @@ from __future__ import annotations
 import atexit
 import json
 import os
+import tempfile
 import threading
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from pathlib import Path
 
 UTC = timezone.utc
 from queue import Empty, SimpleQueue
@@ -69,11 +71,31 @@ def cargar_estado_riesgo() ->dict:
 
 
 def guardar_estado_riesgo_seguro(estado: dict) ->None:
-    """Guarda ``estado`` en ``riesgo.json`` de forma atómica y segura."""
+    """Guarda ``estado`` en ``riesgo.json`` de forma atómica y segura.
+
+    Usa ``tempfile.mkstemp`` + ``os.replace`` para evitar que un crash
+    durante la escritura deje el archivo truncado a cero bytes.
+    """
     lock = FileLock(_LOCK_PATH)
+    dest = Path(RUTA_ESTADO)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    tmp: Path | None = None
     try:
-        with lock, open(RUTA_ESTADO, 'w') as f:
-            json.dump(estado, f, indent=4)
+        with lock:
+            fd, tmp_str = tempfile.mkstemp(dir=dest.parent, suffix=".tmp")
+            tmp = Path(tmp_str)
+            try:
+                with os.fdopen(fd, 'w', encoding='utf-8') as f:
+                    json.dump(estado, f, indent=4)
+                    f.flush()
+                    os.fsync(f.fileno())
+                os.replace(tmp, dest)
+                tmp = None
+            except Exception:
+                if tmp is not None:
+                    tmp.unlink(missing_ok=True)
+                    tmp = None
+                raise
         try:
             with open(RUTA_ESTADO_BAK, 'w') as fb:
                 json.dump(estado, fb, indent=4)
@@ -200,13 +222,19 @@ class AsyncRiskPersistence:
 
 
 _PERSISTENCIA: Optional[AsyncRiskPersistence] = None
+# Lock para la inicialización perezosa de _PERSISTENCIA (evita doble instanciación
+# bajo contención de múltiples threads del _STRATEGY_EXECUTOR).
+_PERSISTENCIA_INIT_LOCK = threading.Lock()
 
 
 def _obtener_persistencia() -> AsyncRiskPersistence:
     global _PERSISTENCIA
-    if _PERSISTENCIA is None:
-        _PERSISTENCIA = AsyncRiskPersistence()
-        atexit.register(detener_persistencia)
+    if _PERSISTENCIA is not None:
+        return _PERSISTENCIA
+    with _PERSISTENCIA_INIT_LOCK:
+        if _PERSISTENCIA is None:
+            _PERSISTENCIA = AsyncRiskPersistence()
+            atexit.register(detener_persistencia)
     return _PERSISTENCIA
 
 

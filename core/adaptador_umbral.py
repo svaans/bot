@@ -18,6 +18,8 @@ from __future__ import annotations
 import json
 import math
 import os
+import tempfile
+import threading
 import time
 from collections import deque
 from pathlib import Path
@@ -46,6 +48,10 @@ RUTA_ESTADO = Path(ESTADO_DIR) / "umbral_adaptativo.json"
 _UMBRAL_ESTADO_CARGADO = False
 _LAST_UMBRAL_PERSIST_MONO: float = 0.0
 _UMBRAL_PERSIST_MIN_SEC = 45.0
+# Lock para serializar lecturas y escrituras de estado en disco.
+# Necesario en Windows: os.replace falla con WinError 5 si varios threads
+# del _STRATEGY_EXECUTOR llegan a guardar_estado() simultaneamente.
+_UMBRAL_IO_LOCK = threading.Lock()
 # Parámetros de suavizado
 ALPHA_BASE = 0.3
 ALPHA_VOLATILIDAD_ALTA = 0.5
@@ -95,20 +101,29 @@ def guardar_estado() -> None:
     garantizar que ``umbral_adaptativo.json`` nunca quede en estado parcial
     si el proceso muere a mitad de la escritura.  Coherente con
     ``pesos.py._atomic_write_json``.
+
+    En Windows, llamadas concurrentes pueden competir por el mismo ``.tmp``.
+    Se usa un archivo temporal único por llamada (``tempfile.mkstemp``) para
+    eliminar la race condition, y se limpia el tmp si el replace falla.
     """
+    tmp: Path | None = None
     try:
         RUTA_ESTADO.parent.mkdir(parents=True, exist_ok=True)
-        tmp = RUTA_ESTADO.with_suffix(".tmp")
         payload = {
             "umbral_suavizado": _UMBRAL_SUAVIZADO,
             "histeresis_skips": _HISTERESIS_SKIPS,
         }
-        with open(tmp, "w", encoding="utf-8") as fh:
+        fd, tmp_str = tempfile.mkstemp(dir=RUTA_ESTADO.parent, suffix=".tmp")
+        tmp = Path(tmp_str)
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
             json.dump(payload, fh, indent=2)
             fh.flush()
             os.fsync(fh.fileno())
         os.replace(tmp, RUTA_ESTADO)
+        tmp = None  # replace exitoso: el archivo ya no existe como tmp
     except Exception as e:  # pragma: no cover - logging de guardado
+        if tmp is not None:
+            tmp.unlink(missing_ok=True)
         log.warning(
             "⚠️ Error guardando estado umbral: %s",
             format_exception_for_log(e),
@@ -142,10 +157,15 @@ def _ensure_umbral_estado_cargado() -> None:
 
 def _maybe_persist_umbral_estado() -> None:
     global _LAST_UMBRAL_PERSIST_MONO
-    ahora = time.monotonic()
-    if ahora - _LAST_UMBRAL_PERSIST_MONO >= _UMBRAL_PERSIST_MIN_SEC:
+    # Fast-path sin lock: evita contención cuando el throttle está activo.
+    if time.monotonic() - _LAST_UMBRAL_PERSIST_MONO < _UMBRAL_PERSIST_MIN_SEC:
+        return
+    # Double-checked locking: solo un thread persiste; el resto sale sin escribir.
+    with _UMBRAL_IO_LOCK:
+        if time.monotonic() - _LAST_UMBRAL_PERSIST_MONO < _UMBRAL_PERSIST_MIN_SEC:
+            return
         guardar_estado()
-        _LAST_UMBRAL_PERSIST_MONO = ahora
+        _LAST_UMBRAL_PERSIST_MONO = time.monotonic()
 
 
 def calcular_umbral_adaptativo(

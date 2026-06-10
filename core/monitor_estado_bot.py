@@ -125,7 +125,12 @@ async def monitorear_estado_bot(
 
 
     try:
-        orden_abierta = obtener_orden_abierta()
+        # [FIX MONITOR-SYNC-01] obtener_orden_abierta() puede llamar a
+        # sincronizar_ordenes_binance() → fetch_open_orders() (HTTP síncrono,
+        # CCXT) → time.sleep() en el path de reintento de red.  Invocarla
+        # directamente desde un async def bloqueaba el event loop hasta ~0.3 s
+        # por cada NetworkError.  Se delega a thread pool para ser seguro.
+        orden_abierta = await asyncio.to_thread(obtener_orden_abierta)
         if not orden_abierta and ordenes_memoria:
             orden_abierta = ordenes_memoria
 

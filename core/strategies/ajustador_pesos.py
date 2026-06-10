@@ -1,5 +1,8 @@
 import json
+import os
+import tempfile
 from math import isclose
+from pathlib import Path
 
 import numpy as np
 
@@ -39,12 +42,21 @@ def ajustar_pesos_por_desempeno(resultados_backtest: dict, ruta_salida: str
         pesos_ajustados[symbol] = pesos_normalizados
         log.info(f'✅ Pesos calculados para {symbol}: {pesos_normalizados}')
     path_out = resolve_under_repo(ruta_salida)
+    tmp: Path | None = None
     try:
         path_out.parent.mkdir(parents=True, exist_ok=True)
-        with path_out.open("w", encoding="utf-8") as f:
+        fd, tmp_str = tempfile.mkstemp(dir=path_out.parent, suffix=".tmp")
+        tmp = Path(tmp_str)
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
             json.dump(pesos_ajustados, f, indent=4)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, path_out)
+        tmp = None
         log.info("📁 Pesos ajustados guardados en %s", path_out)
     except OSError as e:
+        if tmp is not None:
+            tmp.unlink(missing_ok=True)
         log.error(
             "❌ Error al guardar pesos en %s: %s",
             path_out,

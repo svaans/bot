@@ -1332,7 +1332,14 @@ class Trader(TraderLite):
                     asyncio.set_event_loop(new_loop)
                     with self._eval_offload_monitor_lock:
                         self._eval_offload_loop = new_loop
-                    start_signal.set()
+                    # [EVAL-OFFLOAD-SIGNAL-01] Encolar la señal dentro del loop
+                    # en lugar de emitirla antes de run_forever().  La secuencia
+                    # original era: asignar loop → set(signal) → run_forever().
+                    # El hilo principal podía despertar entre set() y run_forever()
+                    # y ver loop.is_running() == False, lanzando RuntimeError.
+                    # Con call_soon() la señal se emite desde la primera iteración
+                    # de run_forever(), garantizando is_running() == True.
+                    new_loop.call_soon(start_signal.set)
                     new_loop.run_forever()
                 except Exception:
                     log.exception("Error en loop dedicado de evaluaciones offloaded")

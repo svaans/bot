@@ -1,5 +1,8 @@
 import json
+import os
+import tempfile
 from collections import defaultdict
+from pathlib import Path
 
 import pandas as pd
 
@@ -55,8 +58,20 @@ def calcular_pesos_desde_backtest(
         datos_anteriores = {}
     datos_anteriores.update(pesos_por_symbol)
     out_p.parent.mkdir(parents=True, exist_ok=True)
-    with out_p.open("w", encoding="utf-8") as f:
-        json.dump(datos_anteriores, f, indent=4)
+    tmp_path: Path | None = None
+    try:
+        fd, tmp_str = tempfile.mkstemp(dir=out_p.parent, suffix=".tmp")
+        tmp_path = Path(tmp_str)
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(datos_anteriores, f, indent=4)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp_path, out_p)
+        tmp_path = None
+    except Exception:
+        if tmp_path is not None:
+            tmp_path.unlink(missing_ok=True)
+        raise
     persist_entry_weights(
         gestor_pesos,
         datos_anteriores,

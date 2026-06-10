@@ -1,6 +1,8 @@
 import json
 import os
 import asyncio
+import tempfile
+from pathlib import Path
 from typing import Dict
 import pandas as pd
 from indicadores.helpers import get_rsi
@@ -217,8 +219,22 @@ async def actualizar_pesos_tecnicos(symbol: str, detalles: dict, retorno: float,
         if modificados:
             _pesos_cache[symbol] = pesos
             def _escribir_pesos() -> None:
-                with open(RUTA_PESOS, 'w', encoding='utf-8') as fh:
-                    json.dump(_pesos_cache, fh, indent=2)
+                dest = Path(RUTA_PESOS)
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                tmp: Path | None = None
+                try:
+                    fd, tmp_str = tempfile.mkstemp(dir=dest.parent, suffix=".tmp")
+                    tmp = Path(tmp_str)
+                    with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                        json.dump(_pesos_cache, fh, indent=2)
+                        fh.flush()
+                        os.fsync(fh.fileno())
+                    os.replace(tmp, dest)
+                    tmp = None
+                except Exception:
+                    if tmp is not None:
+                        tmp.unlink(missing_ok=True)
+                    raise
             try:
                 await asyncio.to_thread(_escribir_pesos)
                 n_sym = len(_pesos_cache) if isinstance(_pesos_cache, dict) else 0

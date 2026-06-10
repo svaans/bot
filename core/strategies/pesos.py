@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import math
 import os
+import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Tuple, Union
@@ -60,14 +61,27 @@ def _read_json(path: Path) -> dict:
 
 
 def _atomic_write_json(path: Path, data: dict) -> None:
-    """Escribe JSON de forma atómica (tmp + replace). Crea directorio si no existe."""
+    """Escribe JSON de forma atómica (tmp único + replace). Crea directorio si no existe.
+
+    Usa ``tempfile.mkstemp`` para generar un nombre de tmp único por llamada,
+    eliminando la race condition que ocurre cuando múltiples threads llaman a
+    ``guardar()`` simultáneamente y comparten el mismo archivo ``.tmp``.
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    with tmp.open("w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2, sort_keys=True)
-        f.flush()
-        os.fsync(f.fileno())
-    os.replace(tmp, path)
+    tmp: Path | None = None
+    try:
+        fd, tmp_str = tempfile.mkstemp(dir=path.parent, suffix=".tmp")
+        tmp = Path(tmp_str)
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2, sort_keys=True)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, path)
+        tmp = None  # replace exitoso; ya no existe como tmp
+    except Exception:
+        if tmp is not None:
+            tmp.unlink(missing_ok=True)
+        raise
 
 
 def _safe_float(x: Any, default: float = 0.0) -> float:

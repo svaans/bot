@@ -80,6 +80,49 @@ from core.utils.pid_lock import (
 
 _log = configurar_logger("entrypoint")
 
+# Dashboard embebido (carga diferida para no bloquear si hay error de import)
+try:
+    from dashboard.server import run_dashboard as _run_dashboard
+    from dashboard.state import on_bot_event as _dashboard_on_bot_event
+    import dashboard.state as _dashboard_state_mod
+    _DASHBOARD_AVAILABLE = True
+except Exception:
+    _run_dashboard = None  # type: ignore[assignment]
+    _dashboard_on_bot_event = None  # type: ignore[assignment]
+    _dashboard_state_mod = None  # type: ignore[assignment]
+    _DASHBOARD_AVAILABLE = False
+
+
+def _setup_dashboard_bot(bot: Any, config: Any) -> None:
+    """Conecta bot.on_event con el dashboard (idempotente, nunca lanza)."""
+    if not _DASHBOARD_AVAILABLE or bot is None:
+        return
+    try:
+        modo = getattr(config, "modo_operativo", None)
+        if not modo:
+            modo = "real" if getattr(config, "modo_real", False) else "simulado"
+        modo_str = str(modo).upper().replace("OPERATIONALMODE.", "").replace("_", " ")
+        if _dashboard_state_mod is not None:
+            with _dashboard_state_mod._lock:
+                _dashboard_state_mod._state["modo_operativo"] = modo_str
+        _dashboard_state_mod.set_bot_ref(bot)
+        existing = getattr(bot, "on_event", None)
+
+        def _wrapped_on_event(evt: str, data: dict) -> None:
+            try:
+                _dashboard_on_bot_event(evt, data)
+            except Exception:
+                pass
+            if existing:
+                try:
+                    existing(evt, data)
+                except Exception:
+                    pass
+
+        bot.on_event = _wrapped_on_event
+    except Exception:
+        pass
+
 
 # --- Utilidades internas ---
 
@@ -259,10 +302,19 @@ async def main():
     notificador: Any = None
     last_counted_crash_task_id: Optional[int] = None
     pid_lock: Optional[PidLock] = None
+    _dashboard_task: Optional[asyncio.Task] = None
 
     async def shutdown_runtime() -> None:
         """Apagado idempotente: se ejecuta siempre al salir de ``main()``."""
-        nonlocal observer, exporter_server, mode_service, alert_dispatcher, pid_lock
+        nonlocal observer, exporter_server, mode_service, alert_dispatcher, pid_lock, _dashboard_task
+        dt = _dashboard_task
+        _dashboard_task = None
+        if dt is not None and not dt.done():
+            dt.cancel()
+            try:
+                await asyncio.wait_for(asyncio.shield(dt), timeout=2.0)
+            except Exception:
+                pass
 
         if stop_event is not None and not stop_event.is_set():
             stop_event.set()
@@ -373,6 +425,7 @@ async def main():
             bot, tarea_bot, config = triple
             tarea_bot = _normalize_tarea_bot(tarea_bot)
             mode_service = _start_mode_service_safe(bot, config)
+            _setup_dashboard_bot(bot, config)
         except Exception as e:
             msg = str(e)
             if "Storage no disponible" in msg:
@@ -480,6 +533,9 @@ async def main():
         # 4) Señales/parada
         stop_event = asyncio.Event()
         tarea_stop = asyncio.create_task(stop_event.wait())
+
+        if _DASHBOARD_AVAILABLE and _run_dashboard is not None:
+            _dashboard_task = asyncio.create_task(_run_dashboard(), name="dashboard_server")
 
         def detener_bot():
             _log.info(
@@ -595,6 +651,7 @@ async def main():
                         mode_service, alert_dispatcher = _bind_trader_after_restart(
                             bot, config, notificador
                         )
+                        _setup_dashboard_bot(bot, config)
                     except Exception as e:
                         print(f"❌ Error reiniciando bot: {format_exception_for_log(e)}")
                         traceback.print_exc()

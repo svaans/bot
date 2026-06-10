@@ -37,6 +37,7 @@ Notas
 """
 from __future__ import annotations
 import asyncio
+import functools
 import json
 import os
 from dataclasses import dataclass
@@ -141,7 +142,13 @@ class GestorOrdenes:
             return
         loop = asyncio.get_running_loop()
         try:
-            await loop.run_in_executor(None, self.auditor.registrar, **kwargs)
+            # [FIX GESTOR-AUDITAR-01] run_in_executor() solo acepta *args, no **kwargs.
+            # Pasar **kwargs directamente se expandía como argumentos de la propia
+            # run_in_executor(), causando TypeError en tiempo de ejecución.
+            # functools.partial captura los kwargs y los entrega a registrar().
+            await loop.run_in_executor(
+                None, functools.partial(self.auditor.registrar, **kwargs)
+            )
         except Exception:
             self._emit("audit_error", kwargs)
 

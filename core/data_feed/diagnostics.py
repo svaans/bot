@@ -31,10 +31,10 @@ class TaskSnapshot:
 def _resolve_loop(loop: asyncio.AbstractEventLoop | None) -> asyncio.AbstractEventLoop:
     if loop is not None:
         return loop
-    try:
-        return asyncio.get_running_loop()
-    except RuntimeError:
-        return asyncio.get_event_loop()
+    # asyncio.get_event_loop() está deprecado en Python 3.10+ y puede lanzar
+    # RuntimeError en Python 3.12+ cuando no hay loop activo.
+    # Esta función solo tiene sentido dentro de un loop en ejecución.
+    return asyncio.get_running_loop()
 
 
 def _find_first_by_name(tasks: Iterable[asyncio.Task[object]], names: set[str]) -> asyncio.Task[object] | None:

@@ -400,7 +400,12 @@ class Supervisor:
                 self.task_cooldown.pop(task_name, None)
             else:
                 self.task_cooldown[task_name] = self._now() + timedelta(seconds=cooldown_seconds)
-        asyncio.create_task(_starter(), name=f"{task_name}_restart")
+        # Guardar referencia fuerte para evitar que la tarea sea recolectada
+        # por el GC antes de que el backoff termine (Python 3.13+).
+        _restart_key = f"__restart_{task_name}"
+        _rt = asyncio.create_task(_starter(), name=f"{task_name}_restart")
+        self.tasks[_restart_key] = _rt
+        _rt.add_done_callback(lambda _t: self.tasks.pop(_restart_key, None))
         self.task_backoff[task_name] = attempt + 1
         self._emit("task_restart", {"name": task_name, "attempt": attempt + 1})
 

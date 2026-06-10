@@ -331,9 +331,32 @@ class ConfigurationService:
             raise
 
     def _escribir_json(self, path: Path, data: dict[str, Any]) -> Path:
+        """Escribe ``data`` en ``path`` de forma atómica (mkstemp + replace).
+
+        Usar ``path.open('w', ...)`` trunca el archivo antes de escribir; si el
+        proceso muere durante la escritura el archivo queda a cero bytes.  Con
+        ``mkstemp + os.replace`` el destino solo se actualiza si la escritura
+        completa con éxito.
+        """
+        def _atomic_write(dest: Path) -> None:
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            tmp_path: Path | None = None
+            try:
+                fd, tmp_str = tempfile.mkstemp(dir=dest.parent, suffix=".tmp")
+                tmp_path = Path(tmp_str)
+                with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                    json.dump(data, fh, indent=4)
+                    fh.flush()
+                    os.fsync(fh.fileno())
+                os.replace(tmp_path, dest)
+                tmp_path = None
+            except Exception:
+                if tmp_path is not None:
+                    tmp_path.unlink(missing_ok=True)
+                raise
+
         try:
-            with path.open('w', encoding='utf-8') as fh:
-                json.dump(data, fh, indent=4)
+            _atomic_write(path)
             return path
         except PermissionError as exc:
             log.error(
@@ -341,9 +364,7 @@ class ConfigurationService:
                 extra={"path": str(path), "error": format_exception_for_log(exc)},
             )
             fallback = _fallback_path(path)
-            fallback.parent.mkdir(parents=True, exist_ok=True)
-            with fallback.open('w', encoding='utf-8') as fh:
-                json.dump(data, fh, indent=4)
+            _atomic_write(fallback)
             log.warning(
                 '⚠️ Configuración persistida en directorio temporal',
                 extra={"path": str(fallback)},
@@ -355,10 +376,8 @@ class ConfigurationService:
                 extra={"path": str(path), "error": format_exception_for_log(exc)},
             )
             fallback = _fallback_path(path)
-            fallback.parent.mkdir(parents=True, exist_ok=True)
             try:
-                with fallback.open('w', encoding='utf-8') as fh:
-                    json.dump(data, fh, indent=4)
+                _atomic_write(fallback)
             except (OSError, PermissionError) as inner_exc:
                 log.error(
                     '❌ No fue posible persistir la configuración',

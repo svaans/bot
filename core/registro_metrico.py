@@ -128,7 +128,14 @@ class RegistroMetrico:
             debe_exportar = guardar_inmediatamente or len(self.buffer) >= self.buffer_max
 
         if debe_exportar:
-            self.exportar()
+            # [FIX REGISTRO-EXPORTAR-01] exportar() llama time.sleep(1) en el
+            # path de reintento (fallo de escritura CSV).  Si se invoca desde el
+            # event loop (sin to_thread), ese sleep bloquea todo el bot hasta
+            # 3 s (3 intentos × 1 s).  Se delega a un hilo daemon para que el
+            # sleep nunca toque el event loop.  El Lock interno de exportar()
+            # garantiza que dos hilos concurrentes no escriban el mismo buffer.
+            t = threading.Thread(target=self.exportar, daemon=True)
+            t.start()
 
     def exportar(self, intentos: int = 3) ->None:
         """Guarda todos los registros actuales del buffer a disco."""

@@ -1,5 +1,6 @@
 import os
 import json
+import tempfile
 from datetime import datetime, timedelta, timezone
 
 UTC = timezone.utc
@@ -50,16 +51,25 @@ class MetricasTracker:
         directorio = os.path.dirname(self.archivo)
         if directorio:
             os.makedirs(directorio, exist_ok=True)
-        tmp = self.archivo + ".tmp"
+        tmp_path = None
         for intento in range(1, intentos + 1):
             try:
-                with open(tmp, "w", encoding="utf-8") as f:
+                fd, tmp_str = tempfile.mkstemp(dir=directorio or ".", suffix=".tmp")
+                tmp_path = tmp_str
+                with os.fdopen(fd, "w", encoding="utf-8") as f:
                     json.dump(self.data, f)
                     f.flush()
                     os.fsync(f.fileno())
-                os.replace(tmp, self.archivo)
+                os.replace(tmp_path, self.archivo)
+                tmp_path = None
                 return
             except Exception as e:
+                if tmp_path is not None:
+                    try:
+                        os.unlink(tmp_path)
+                    except OSError:
+                        pass
+                    tmp_path = None
                 if intento == intentos:
                     log.warning(
                         '⚠️ No se pudo guardar métricas tras %s intentos: %s',

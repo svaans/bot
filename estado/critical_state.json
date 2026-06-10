@@ -1,5 +1,5 @@
 {
-  "timestamp": 1778115432.2406592,
+  "timestamp": 1779699594.696073,
   "reason": "shutdown",
   "entries": {
     "risk_manager": {
@@ -8,7 +8,7 @@
       "kill_switch_disparado": false,
       "perdidas_consecutivas": 0,
       "riesgo_diario": 0.0,
-      "fecha_riesgo": "2026-04-14",
+      "fecha_riesgo": "2026-05-25",
       "cooldown_fin": null,
       "capital_alerta_activa": false,
       "capital_alerta_fecha": null,
@@ -21,7 +21,7 @@
     },
     "reporter_diario": {
       "ultimas_operaciones": {},
-      "fecha_actual": "2026-04-14"
+      "fecha_actual": "2026-05-25"
     }
   }
 }

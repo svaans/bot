@@ -41,7 +41,7 @@ except Exception:  # pragma: no cover
         return df is not None and not df.empty and all(col in df.columns for col in columnas)
 
 # Logging estructurado
-from core.utils.logger import configurar_logger
+from core.utils.logger import configurar_logger, _should_log
 from core.utils.log_utils import format_exception_for_log, safe_extra
 from core.metrics_helpers import safe_inc, safe_set
 from core.utils.metrics_compat import Counter, Gauge
@@ -810,14 +810,15 @@ async def verificar_entrada(
         # (primera fila del df al abrir la vela). El engine usa volumen_media
         # del buffer historico (rolling 20 velas), por lo que los dos valores
         # son intencionalmente distintos y no indican inconsistencia de datos.
-        log.warning(
-            "diagnostico.volumen_cero",
-            extra={
-                "symbol": symbol_norm,
-                "volume": vol_ultimo,
-                "nota": "tick_actual_vs_buffer_historico_en_engine_es_esperado",
-            },
-        )
+        if _should_log(f"volumen_cero:{symbol_norm}", every=60.0):
+            log.warning(
+                "diagnostico.volumen_cero",
+                extra={
+                    "symbol": symbol_norm,
+                    "volume": vol_ultimo,
+                    "nota": "tick_actual_vs_buffer_historico_en_engine_es_esperado",
+                },
+            )
 
         o = last.get("open")
         h = last.get("high")
@@ -920,6 +921,10 @@ async def verificar_entrada(
             "validaciones_fallidas": resultado_engine.get("validaciones_fallidas"),
             "contradicciones": resultado_engine.get("contradicciones"),
             "regimen_volatilidad": resultado_engine.get("regimen_volatilidad"),
+            "estrategias_activas": {
+                str(k): bool(v)
+                for k, v in (resultado_engine.get("estrategias_activas") or {}).items()
+            },
         }
         return _reject_with_skip("engine_denegado", extra=extra)
 
