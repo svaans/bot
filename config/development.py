@@ -9,7 +9,11 @@ class DevelopmentConfig:
     """Valores por defecto para el entorno de desarrollo."""
     modo_real: bool = False
     modo_operativo: OperationalMode = OperationalMode.PAPER_TRADING
-    intervalo_velas: str = '5m'
+    # Velas diarias: el estudio de timeframes (backtesting/backtest_rapido.py
+    # --study, 2 años, validación 70/30) dio PF<1 en 5m/15m/1h y solo 1d
+    # mantuvo PF>1 fuera de muestra. En intradía las comisiones acumuladas
+    # por sobreoperar dominan el resultado.
+    intervalo_velas: str = '1d'
     # Spot Binance (CCXT): mercados líquidos USDT; evita */EUR por defecto que en
     # binance.com suelen no existir o no coincidir con el feed WS usado en paper.
     symbols: List[str] = field(default_factory=lambda: ["BTC/USDT", "ETH/USDT"])

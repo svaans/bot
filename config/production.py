@@ -11,7 +11,7 @@ class ProductionConfig(DevelopmentConfig):
     """Configuración base para producción."""
     modo_real: bool = True
     modo_operativo: OperationalMode = OperationalMode.REAL
-    intervalo_velas: str = '5m'
+    intervalo_velas: str = '1d'  # ver nota en DevelopmentConfig.intervalo_velas
     symbols: List[str] = field(default_factory=lambda: ["BTC/USDT", "ETH/USDT"])
     contradicciones_bloquean_entrada: bool = True
     entrada_cooldown_tras_crear_failed_sec: float = 0.0

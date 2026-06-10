@@ -47,11 +47,21 @@ def validar_slope(df: pd.DataFrame, tendencia: (str | None)) ->bool:
     return True
 
 
-def validar_bollinger(df: pd.DataFrame) ->bool:
-    _, banda_sup, precio = calcular_bollinger(df)
-    if banda_sup is None or precio is None:
+def validar_bollinger(df: pd.DataFrame, fraccion_minima: float=0.25) ->bool:
+    """Valida que el precio no esté pegado a la banda superior.
+
+    La distancia se mide como fracción del ancho de banda en lugar de un
+    porcentaje fijo del precio: un umbral absoluto (p. ej. 1%) es casi
+    imposible de cumplir en timeframes cortos, donde el ancho típico de la
+    banda es inferior a ese umbral, y bloquea todas las entradas.
+    """
+    banda_inf, banda_sup, precio = calcular_bollinger(df)
+    if banda_sup is None or precio is None or banda_inf is None:
         return True
-    return bool(abs(banda_sup - precio) / precio >= 0.01)
+    ancho = banda_sup - banda_inf
+    if ancho <= 0:
+        return True
+    return bool((banda_sup - precio) / ancho >= fraccion_minima)
 
 
 def validar_max_min(df: pd.DataFrame, ventana: int=30, umbral: float=0.005
