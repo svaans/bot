@@ -17,3 +17,5 @@ class ProductionConfig(DevelopmentConfig):
     entrada_cooldown_tras_crear_failed_sec: float = 0.0
     # Guardia adaptativa de volatilidad (calibración en DevelopmentConfig).
     regimen_entrada_enabled: bool = True
+    # Filtro macro BTC: no comprar mientras BTC < EMA200 (ver filtro_macro.py).
+    filtro_macro_btc_enabled: bool = True

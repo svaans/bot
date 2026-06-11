@@ -151,6 +151,7 @@ class Config:
     diversidad_minima: int = 2
     max_posiciones_cartera: int = 0
     max_posiciones_mismo_sentido: int = 0
+    filtro_macro_btc_enabled: bool = False
     regimen_entrada_enabled: bool = False
     regimen_vol_atr_ratio_alto: float = 0.025
     regimen_vol_atr_ratio_bajo: float = 0.008
@@ -632,6 +633,10 @@ class ConfigManager:
                 getattr(defaults, 'max_posiciones_mismo_sentido', 0),
             ),
         )
+        filtro_macro_btc_enabled = _env_bool(
+            'FILTRO_MACRO_BTC_ENABLED',
+            getattr(defaults, 'filtro_macro_btc_enabled', False),
+        )
         regimen_entrada_enabled = _env_bool(
             'REGIMEN_ENTRADA_ENABLED',
             getattr(defaults, 'regimen_entrada_enabled', False),
@@ -713,6 +718,7 @@ class ConfigManager:
             diversidad_minima=diversidad_minima,
             max_posiciones_cartera=max_posiciones_cartera,
             max_posiciones_mismo_sentido=max_posiciones_mismo_sentido,
+            filtro_macro_btc_enabled=filtro_macro_btc_enabled,
             regimen_entrada_enabled=regimen_entrada_enabled,
             regimen_vol_atr_ratio_alto=regimen_vol_atr_ratio_alto,
             regimen_vol_atr_ratio_bajo=regimen_vol_atr_ratio_bajo,

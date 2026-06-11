@@ -528,6 +528,7 @@ def _config_para_motor(trader: Any, symbol: str) -> dict[str, Any]:
         "umbral_score_tecnico",
         "diversidad_minima",
         "umbral_empate_abs_tol",
+        "filtro_macro_btc_enabled",
         "regimen_entrada_enabled",
         "regimen_vol_atr_ratio_alto",
         "regimen_vol_atr_ratio_bajo",

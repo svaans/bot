@@ -131,9 +131,14 @@ def calcular_indicadores(velas: list[list[float]]) -> dict[str, list[float]]:
             s -= vol[i - 20]
             vol_ma[i] = s / 20
 
+    # máximo de los 20 high previos (canal Donchian, excluye la vela actual)
+    don_hi = [math.nan] * n
+    for i in range(20, n):
+        don_hi[i] = max(high[i - 20:i])
+
     return {"close": close, "ema9": ema9, "ema21": ema21, "ema200": ema200,
             "rsi": rsi, "macd": macd, "macd_signal": macd_signal, "atr": atr,
-            "vol": vol, "vol_ma": vol_ma}
+            "vol": vol, "vol_ma": vol_ma, "don_hi": don_hi}
 
 
 # -------------------------------------------------------------- estrategia
@@ -161,6 +166,15 @@ def score_entrada(ind: dict[str, list[float]], i: int) -> float:
     # volumen por encima de la media (peso 2)
     if not math.isnan(ind["vol_ma"][i]) and ind["vol"][i] > 1.5 * ind["vol_ma"][i]:
         s += 2.0
+    return s
+
+
+def score_entrada_v2(ind: dict[str, list[float]], i: int) -> float:
+    """Score v1 + ruptura Donchian-20 (seguimiento de tendencia)."""
+    s = score_entrada(ind, i)
+    dh = ind["don_hi"][i]
+    if not math.isnan(dh) and ind["close"][i] > dh:
+        s += 3.0
     return s
 
 
@@ -193,9 +207,14 @@ def backtest(velas: list[list[float]], symbol: str, capital0: float = 1000.0,
              ind: dict[str, list[float]] | None = None,
              i0: int = 0, i1: int | None = None,
              sl_ratio: float = SL_RATIO, tp_ratio: float = TP_RATIO,
-             vol_guard: bool = False) -> Resultado:
+             vol_guard: bool = False, riesgo: float = RIESGO_POR_TRADE,
+             senal_v2: bool = False,
+             btc_ind: dict[str, list[float]] | None = None) -> Resultado:
     """vol_guard: modo adaptativo — no entra cuando la volatilidad (ATR/precio)
-    supera 2x su media de 100 velas (régimen anómalo)."""
+    supera 2x su media de 100 velas (régimen anómalo).
+    btc_ind: si se pasa, filtro macro — solo entra cuando BTC > su EMA200
+    (las altcoins caen con BTC; se asume el mismo índice temporal).
+    senal_v2: añade ruptura Donchian-20 al score."""
     if ind is None:
         ind = calcular_indicadores(velas)
     close = ind["close"]
@@ -269,10 +288,14 @@ def backtest(velas: list[list[float]], symbol: str, capital0: float = 1000.0,
             ratio = ind["atr"][i] / close[i]
             if not math.isnan(ratio) and ratio > 2.0 * atr_ratio_ma[i]:
                 continue  # régimen de volatilidad anómala: no operar
-        if cooldown == 0 and score_entrada(ind, i) >= umbral and not math.isnan(ind["atr"][i]):
+        if btc_ind is not None and i < len(btc_ind["close"]):
+            if not btc_ind["close"][i] > btc_ind["ema200"][i]:
+                continue  # mercado macro bajista: no comprar
+        score_fn = score_entrada_v2 if senal_v2 else score_entrada
+        if cooldown == 0 and score_fn(ind, i) >= umbral and not math.isnan(ind["atr"][i]):
             precio = close[i] * (1 + FEE + SLIPPAGE)
             riesgo_unitario = sl_ratio * ind["atr"][i]
-            qty = (capital * RIESGO_POR_TRADE) / riesgo_unitario
+            qty = (capital * riesgo) / riesgo_unitario
             qty = min(qty, capital / precio)  # sin apalancamiento
             if qty * precio < 10:  # mínimo de orden ~10 EUR
                 continue
@@ -419,6 +442,122 @@ def estudio_profundo(symbols: list[str], days: int, capital0: float) -> None:
               f"{pf1:>6s} {t1['ret']:+7.2f}% {t1['trades']:4d}")
 
 
+def estudio_mejoras(symbols: list[str], days: int, capital0: float) -> None:
+    """Palancas de rentabilidad sobre la base ganadora del study2.
+
+    Base fija: 1d, umbral 5, SL 1.0xATR, sin trailing, guardia vol ON.
+    Grid: señal v1/v2 (Donchian) x filtro macro BTC x TP x riesgo/trade.
+    """
+    datos, indicadores = {}, {}
+    for s in symbols:
+        datos[s] = descargar_klines(s, "1d", days)
+        indicadores[s] = calcular_indicadores(datos[s])
+    btc = indicadores.get("BTCEUR") or calcular_indicadores(
+        descargar_klines("BTCEUR", "1d", days))
+
+    filas = []
+    for v2 in (False, True):
+        for btc_f in (False, True):
+            for tp in (3.0, 4.5, 6.0):
+                for riesgo in (0.02, 0.04):
+                    agg = {}
+                    for fase in ("train", "test"):
+                        cap = gan = per = 0.0
+                        ntr = 0
+                        dd = 0.0
+                        for s in symbols:
+                            n_s = len(datos[s])
+                            corte = int(n_s * 0.7)
+                            a, b = (0, corte) if fase == "train" else (corte, None)
+                            r = backtest(
+                                datos[s], s, capital0, 5.0,
+                                use_trailing=False, trend_filter=False,
+                                ind=indicadores[s], i0=a, i1=b,
+                                sl_ratio=1.0, tp_ratio=tp, vol_guard=True,
+                                riesgo=riesgo, senal_v2=v2,
+                                btc_ind=btc if btc_f else None)
+                            cap += r.capital_final
+                            gan += r.bruto_ganado
+                            per += r.bruto_perdido
+                            ntr += r.trades
+                            dd = max(dd, r.max_drawdown)
+                        agg[fase] = {
+                            "ret": (cap / (capital0 * len(symbols)) - 1) * 100,
+                            "pf": gan / per if per > 0 else float("inf"),
+                            "trades": ntr,
+                            "dd": dd,
+                        }
+                    filas.append((v2, btc_f, tp, riesgo, agg))
+
+    filas.sort(key=lambda f: min(f[4]["train"]["pf"], f[4]["test"]["pf"])
+               if f[4]["test"]["pf"] != float("inf") else 0, reverse=True)
+    dias_train = days * 0.7
+    dias_test = days * 0.3
+    print(f"\n{'don':>4s} {'btcF':>4s} {'tp':>4s} {'rsg':>4s} | "
+          f"{'PF tr':>6s} {'anual tr':>9s} {'n':>4s} | "
+          f"{'PF te':>6s} {'anual te':>9s} {'n':>4s} {'DDmax':>6s}")
+    for v2, btc_f, tp, riesgo, agg in filas:
+        t0, t1 = agg["train"], agg["test"]
+        an0 = ((1 + t0["ret"] / 100) ** (365 / dias_train) - 1) * 100
+        an1 = ((1 + t1["ret"] / 100) ** (365 / dias_test) - 1) * 100
+        pf1 = f"{t1['pf']:.2f}" if t1["pf"] != float("inf") else "inf"
+        print(f"{str(v2):>4s} {str(btc_f):>4s} {tp:4.1f} {riesgo:4.2f} | "
+              f"{t0['pf']:6.2f} {an0:+8.2f}% {t0['trades']:4d} | "
+              f"{pf1:>6s} {an1:+8.2f}% {t1['trades']:4d} {t1['dd']:5.1f}%")
+
+
+def backtest_rotacion(symbols: list[str], days: int, capital0: float) -> None:
+    """Estrategia alternativa de referencia: rotación de momentum.
+
+    Cada 7 días invierte a partes iguales en las 2 monedas con mejor
+    retorno de 90 días (si es positivo) siempre que BTC > EMA200;
+    si no, queda en efectivo. Comisiones en cada rebalanceo.
+    """
+    datos = {s: descargar_klines(s, "1d", days) for s in symbols}
+    n = min(len(v) for v in datos.values())
+    closes = {s: [v[4] for v in datos[s][-n:]] for s in symbols}
+    btc_ind = calcular_indicadores(datos["BTCEUR"][-n:])
+
+    for fase, a, b in (("train", 200, int(n * 0.7)), ("test", int(n * 0.7), n)):
+        capital = capital0
+        pico = capital
+        dd = 0.0
+        posicion: dict[str, float] = {}  # symbol -> unidades
+        rebalanceos = 0
+        for i in range(a, b):
+            eq = capital + sum(q * closes[s][i] for s, q in posicion.items())
+            pico = max(pico, eq)
+            dd = max(dd, (pico - eq) / pico * 100)
+            if (i - a) % 7 != 0:
+                continue
+            alcista = btc_ind["close"][i] > btc_ind["ema200"][i]
+            ranking = sorted(
+                ((closes[s][i] / closes[s][i - 90] - 1, s) for s in symbols
+                 if i >= 90),
+                reverse=True)
+            objetivo = [s for roc, s in ranking[:2] if roc > 0] if alcista else []
+            actuales = set(posicion)
+            if set(objetivo) == actuales:
+                continue
+            # vender todo y comprar el objetivo (simplificado)
+            for s, q in posicion.items():
+                capital += q * closes[s][i] * (1 - FEE - SLIPPAGE)
+            posicion = {}
+            if objetivo:
+                por_moneda = capital / len(objetivo)
+                for s in objetivo:
+                    precio = closes[s][i] * (1 + FEE + SLIPPAGE)
+                    posicion[s] = por_moneda / precio
+                capital = 0.0
+            rebalanceos += 1
+        eq = capital + sum(q * closes[s][b - 1] for s, q in posicion.items())
+        dias_fase = b - a
+        anual = ((eq / capital0) ** (365 / dias_fase) - 1) * 100
+        print(f"rotacion[{fase}] {capital0:.0f} -> {eq:.2f} EUR "
+              f"({(eq / capital0 - 1) * 100:+.2f}%, {anual:+.2f}% anualizado) "
+              f"maxDD={dd:.1f}% rebalanceos={rebalanceos}")
+
+
 # ----------------------------------------------------------------- main
 
 def fmt(res: Resultado, capital0: float, dias: int) -> str:
@@ -444,6 +583,10 @@ def main() -> None:
                    help="estudio timeframe x parametros con validacion 70/30")
     p.add_argument("--study2", action="store_true",
                    help="estudio profundo 4h/1d: sl/tp/tendencia/guardia vol")
+    p.add_argument("--study3", action="store_true",
+                   help="palancas: Donchian, filtro BTC, TP amplio, riesgo")
+    p.add_argument("--rotacion", action="store_true",
+                   help="estrategia de referencia: rotacion de momentum")
     args = p.parse_args()
 
     symbols = args.symbol or ["BTCEUR", "ETHEUR", "SOLEUR", "ADAEUR", "BNBEUR"]
@@ -458,6 +601,18 @@ def main() -> None:
         t0 = time.perf_counter()
         estudio_profundo(symbols, args.days, args.capital)
         print(f"\n[tiempo] estudio profundo: {time.perf_counter() - t0:.1f}s")
+        return
+
+    if args.study3:
+        t0 = time.perf_counter()
+        estudio_mejoras(symbols, args.days, args.capital)
+        print(f"\n[tiempo] estudio mejoras: {time.perf_counter() - t0:.1f}s")
+        return
+
+    if args.rotacion:
+        t0 = time.perf_counter()
+        backtest_rotacion(symbols, args.days, args.capital)
+        print(f"\n[tiempo] rotacion: {time.perf_counter() - t0:.1f}s")
         return
 
     t0 = time.perf_counter()

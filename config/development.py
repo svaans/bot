@@ -58,6 +58,12 @@ class DevelopmentConfig:
     # order manager; se activa en ProductionConfig y, para paper trading,
     # exportando REGIMEN_ENTRADA_ENABLED=true.
     regimen_entrada_enabled: bool = False
+    # Filtro macro BTC (core/strategies/filtro_macro.py): bloquea entradas
+    # mientras BTC < EMA200. La palanca con más impacto del estudio --study3:
+    # sin él, las configs con TP amplio pierden fuera de muestra (PF 0.8-0.9);
+    # con él se mantienen en PF>=1.2. Activo en producción / vía
+    # FILTRO_MACRO_BTC_ENABLED=true (False aquí: tests usan estos defaults).
+    filtro_macro_btc_enabled: bool = False
     regimen_vol_atr_ratio_alto: float = 0.06
     regimen_vol_atr_ratio_bajo: float = 0.02
     regimen_atr_periodo: int = 14

@@ -27,6 +27,7 @@ from core.strategies.entry.validadores import (
 )
 from core.strategies.exit.gestor_salidas import evaluar_salidas
 from core.strategies.pesos import gestor_pesos
+from core.strategies.filtro_macro import btc_en_tendencia
 from core.strategies.regimen_mercado import (
     aplicar_multiplicadores_regimen,
     etiqueta_volatilidad,
@@ -96,6 +97,8 @@ class StrategyEngine:
         self._synergy_lock = Lock()
         self._synergy_check_interval = 300.0
         self._last_synergy_check_by_symbol: dict[str, float] = {}
+        # último df visto de un par BTC/* para el filtro macro
+        self._btc_df_macro: pd.DataFrame | None = None
 
 
     @staticmethod
@@ -306,17 +309,32 @@ class StrategyEngine:
         empate = math.isclose(score_total, umbral, rel_tol=0.0, abs_tol=_emp_tol) or math.isclose(
             score_tec, umbral_score, rel_tol=0.0, abs_tol=_emp_tol
         )
+
+        # Filtro macro: cachear el df de BTC y, si está habilitado, bloquear
+        # entradas mientras BTC cotice bajo su EMA200 (ver filtro_macro.py).
+        base_symbol = str(symbol).split("/")[0].split("-")[0].upper()
+        if base_symbol == "BTC":
+            self._btc_df_macro = df
+        macro_ok = True
+        if bool(config.get("filtro_macro_btc_enabled", False)):
+            df_btc = df if base_symbol == "BTC" else self._btc_df_macro
+            if btc_en_tendencia(df_btc) is False:
+                macro_ok = False
+
         permitido = (
             score_total > umbral
             and score_tec > umbral_score
             and cumple_div
             and not validaciones_fallidas
             and not contradiccion
+            and macro_ok
         )
 
         motivo = None
         if not permitido:
-            if empate:
+            if not macro_ok:
+                motivo = "macro_bajista"
+            elif empate:
                 motivo = "empate_umbral"
             elif contradiccion:
                 motivo = "contradiccion"
