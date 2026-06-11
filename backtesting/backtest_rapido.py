@@ -73,6 +73,59 @@ def descargar_klines(symbol: str, interval: str, days: int) -> list[list[float]]
 # ------------------------------------------------------------ indicadores
 # Todos en una sola pasada O(n), listas pre-asignadas: es lo que lo hace rápido.
 
+def _calcular_adx(high: list[float], low: list[float], close: list[float],
+                  periodo: int = 14) -> list[float]:
+    """ADX de Wilder. Requiere >= 2*periodo+1 velas; el resto queda como nan."""
+    n = len(close)
+    adx_out = [math.nan] * n
+    if n < 2 * periodo + 1:
+        return adx_out
+
+    tr_r = [0.0] * n
+    pdm_r = [0.0] * n
+    mdm_r = [0.0] * n
+    for i in range(1, n):
+        tr_r[i] = max(high[i] - low[i], abs(high[i] - close[i - 1]),
+                      abs(low[i] - close[i - 1]))
+        up = high[i] - high[i - 1]
+        dn = low[i - 1] - low[i]
+        pdm_r[i] = up if (up > dn and up > 0) else 0.0
+        mdm_r[i] = dn if (dn > up and dn > 0) else 0.0
+
+    # primer suavizado Wilder: suma simple de las primeras `periodo` velas
+    atr_w = sum(tr_r[1: periodo + 1])
+    pdm_w = sum(pdm_r[1: periodo + 1])
+    mdm_w = sum(mdm_r[1: periodo + 1])
+
+    dx_buf: list[float] = []
+    adx_val = 0.0
+    adx_ready = False
+
+    for i in range(periodo, n):
+        if i > periodo:
+            atr_w = atr_w - atr_w / periodo + tr_r[i]
+            pdm_w = pdm_w - pdm_w / periodo + pdm_r[i]
+            mdm_w = mdm_w - mdm_w / periodo + mdm_r[i]
+        if atr_w == 0:
+            dx_buf.append(0.0)
+            continue
+        pdi = 100.0 * pdm_w / atr_w
+        mdi = 100.0 * mdm_w / atr_w
+        d_sum = pdi + mdi
+        dx = 100.0 * abs(pdi - mdi) / d_sum if d_sum > 0 else 0.0
+        dx_buf.append(dx)
+        if not adx_ready:
+            if len(dx_buf) >= periodo:
+                adx_val = sum(dx_buf) / periodo
+                adx_ready = True
+                adx_out[i] = adx_val
+        else:
+            adx_val = (adx_val * (periodo - 1) + dx) / periodo
+            adx_out[i] = adx_val
+
+    return adx_out
+
+
 def calcular_indicadores(velas: list[list[float]]) -> dict[str, list[float]]:
     n = len(velas)
     close = [v[4] for v in velas]
@@ -136,9 +189,11 @@ def calcular_indicadores(velas: list[list[float]]) -> dict[str, list[float]]:
     for i in range(20, n):
         don_hi[i] = max(high[i - 20:i])
 
+    adx = _calcular_adx(high, low, close)
+
     return {"close": close, "ema9": ema9, "ema21": ema21, "ema200": ema200,
             "rsi": rsi, "macd": macd, "macd_signal": macd_signal, "atr": atr,
-            "vol": vol, "vol_ma": vol_ma, "don_hi": don_hi}
+            "vol": vol, "vol_ma": vol_ma, "don_hi": don_hi, "adx": adx}
 
 
 # -------------------------------------------------------------- estrategia
@@ -190,6 +245,7 @@ class Resultado:
     bruto_ganado: float = 0.0
     bruto_perdido: float = 0.0
     retornos: list[float] = field(default_factory=list)
+    be_activados: int = 0
 
     @property
     def winrate(self) -> float:
@@ -209,12 +265,18 @@ def backtest(velas: list[list[float]], symbol: str, capital0: float = 1000.0,
              sl_ratio: float = SL_RATIO, tp_ratio: float = TP_RATIO,
              vol_guard: bool = False, riesgo: float = RIESGO_POR_TRADE,
              senal_v2: bool = False,
-             btc_ind: dict[str, list[float]] | None = None) -> Resultado:
+             btc_ind: dict[str, list[float]] | None = None,
+             be_atr: float = 0.0,
+             adx_min: float = 0.0) -> Resultado:
     """vol_guard: modo adaptativo — no entra cuando la volatilidad (ATR/precio)
     supera 2x su media de 100 velas (régimen anómalo).
     btc_ind: si se pasa, filtro macro — solo entra cuando BTC > su EMA200
     (las altcoins caen con BTC; se asume el mismo índice temporal).
-    senal_v2: añade ruptura Donchian-20 al score."""
+    senal_v2: añade ruptura Donchian-20 al score.
+    be_atr: break-even stop — cuando el precio gana be_atr*ATR, SL sube a entrada
+    (0 = desactivado). Reduce el riesgo en operaciones que se vuelven ganadoras.
+    adx_min: filtro ADX — solo entra cuando ADX(14) >= adx_min (0 = desactivado).
+    Evita entradas en mercados laterales sin tendencia definida."""
     if ind is None:
         ind = calcular_indicadores(velas)
     close = ind["close"]
@@ -246,6 +308,8 @@ def backtest(velas: list[list[float]], symbol: str, capital0: float = 1000.0,
     en_pos = False
     qty = entrada = sl = tp = maximo = 0.0
     cooldown = 0
+    be_activado = False
+    entrada_mercado = 0.0
 
     for i in range(max(30, i0), n - 1):
         if cooldown > 0:
@@ -257,6 +321,12 @@ def backtest(velas: list[list[float]], symbol: str, capital0: float = 1000.0,
             if use_trailing:
                 # trailing por ATR sobre el máximo alcanzado
                 sl = max(sl, maximo - sl_ratio * ind["atr"][i])
+            # break-even: cuando el precio sube be_atr*ATR, SL sube a entrada
+            if be_atr > 0.0 and not be_activado and not math.isnan(ind["atr"][i]):
+                if close[i] >= entrada_mercado + be_atr * ind["atr"][i]:
+                    sl = max(sl, entrada_mercado)
+                    be_activado = True
+                    res.be_activados += 1
             precio_salida = None
             if l <= sl:
                 precio_salida = sl
@@ -291,6 +361,11 @@ def backtest(velas: list[list[float]], symbol: str, capital0: float = 1000.0,
         if btc_ind is not None and i < len(btc_ind["close"]):
             if not btc_ind["close"][i] > btc_ind["ema200"][i]:
                 continue  # mercado macro bajista: no comprar
+        # filtro ADX: solo entrar en mercados con tendencia definida
+        if adx_min > 0.0:
+            adx_val = ind["adx"][i]
+            if math.isnan(adx_val) or adx_val < adx_min:
+                continue
         score_fn = score_entrada_v2 if senal_v2 else score_entrada
         if cooldown == 0 and score_fn(ind, i) >= umbral and not math.isnan(ind["atr"][i]):
             precio = close[i] * (1 + FEE + SLIPPAGE)
@@ -300,6 +375,8 @@ def backtest(velas: list[list[float]], symbol: str, capital0: float = 1000.0,
             if qty * precio < 10:  # mínimo de orden ~10 EUR
                 continue
             entrada = precio
+            entrada_mercado = close[i]
+            be_activado = False
             sl = close[i] - sl_ratio * ind["atr"][i]
             tp = close[i] + tp_ratio * ind["atr"][i]
             maximo = close[i]
@@ -558,6 +635,76 @@ def backtest_rotacion(symbols: list[str], days: int, capital0: float) -> None:
               f"maxDD={dd:.1f}% rebalanceos={rebalanceos}")
 
 
+def estudio_v4(symbols: list[str], days: int, capital0: float) -> None:
+    """Break-even stop + filtro ADX sobre la base ganadora del study3.
+
+    Base fija: 1d, umbral 5, SL 1.0xATR, sin trailing, guardia vol ON,
+    filtro macro BTC ON.  Grid: be_atr x adx_min x TP x riesgo/trade.
+
+    Hipótesis: BE stop reduce el DD al convertir en breakeven las
+    operaciones que revierten; ADX filtra entradas en mercados sin
+    tendencia.  Juntos permiten usar 6% riesgo/trade manteniendo DD
+    aceptable y alcanzar el objetivo 16-20% anualizado.
+    """
+    datos, indicadores = {}, {}
+    for s in symbols:
+        datos[s] = descargar_klines(s, "1d", days)
+        indicadores[s] = calcular_indicadores(datos[s])
+    btc = indicadores.get("BTCEUR") or calcular_indicadores(
+        descargar_klines("BTCEUR", "1d", days))
+
+    filas = []
+    for be in (0.0, 0.8, 1.0, 1.5):
+        for adx_min in (0, 18, 22, 25):
+            for tp in (3.0, 4.5):
+                for riesgo in (0.04, 0.06):
+                    agg: dict[str, dict[str, float]] = {}
+                    for fase in ("train", "test"):
+                        cap = gan = per = 0.0
+                        ntr = 0
+                        dd = 0.0
+                        for s in symbols:
+                            n_s = len(datos[s])
+                            corte = int(n_s * 0.7)
+                            a, b = (0, corte) if fase == "train" else (corte, None)
+                            r = backtest(
+                                datos[s], s, capital0, 5.0,
+                                use_trailing=False, trend_filter=False,
+                                ind=indicadores[s], i0=a, i1=b,
+                                sl_ratio=1.0, tp_ratio=tp, vol_guard=True,
+                                riesgo=riesgo, senal_v2=False,
+                                btc_ind=btc,
+                                be_atr=be, adx_min=float(adx_min))
+                            cap += r.capital_final
+                            gan += r.bruto_ganado
+                            per += r.bruto_perdido
+                            ntr += r.trades
+                            dd = max(dd, r.max_drawdown)
+                        agg[fase] = {
+                            "ret": (cap / (capital0 * len(symbols)) - 1) * 100,
+                            "pf": gan / per if per > 0 else float("inf"),
+                            "trades": ntr,
+                            "dd": dd,
+                        }
+                    filas.append((be, adx_min, tp, riesgo, agg))
+
+    filas.sort(key=lambda f: min(f[4]["train"]["pf"], f[4]["test"]["pf"])
+               if f[4]["test"]["pf"] != float("inf") else 0, reverse=True)
+    dias_train = days * 0.7
+    dias_test = days * 0.3
+    print(f"\n{'be':>5s} {'adx':>4s} {'tp':>4s} {'rsg':>4s} | "
+          f"{'PF tr':>6s} {'anual tr':>9s} {'n':>4s} | "
+          f"{'PF te':>6s} {'anual te':>9s} {'n':>4s} {'DDmax':>6s}")
+    for be, adx_min, tp, riesgo, agg in filas:
+        t0, t1 = agg["train"], agg["test"]
+        an0 = ((1 + t0["ret"] / 100) ** (365 / dias_train) - 1) * 100
+        an1 = ((1 + t1["ret"] / 100) ** (365 / dias_test) - 1) * 100
+        pf1 = f"{t1['pf']:.2f}" if t1["pf"] != float("inf") else "inf"
+        print(f"{be:5.1f} {adx_min:4d} {tp:4.1f} {riesgo:4.2f} | "
+              f"{t0['pf']:6.2f} {an0:+8.2f}% {t0['trades']:4d} | "
+              f"{pf1:>6s} {an1:+8.2f}% {t1['trades']:4d} {t1['dd']:5.1f}%")
+
+
 # ----------------------------------------------------------------- main
 
 def fmt(res: Resultado, capital0: float, dias: int) -> str:
@@ -585,6 +732,8 @@ def main() -> None:
                    help="estudio profundo 4h/1d: sl/tp/tendencia/guardia vol")
     p.add_argument("--study3", action="store_true",
                    help="palancas: Donchian, filtro BTC, TP amplio, riesgo")
+    p.add_argument("--study4", action="store_true",
+                   help="break-even stop + filtro ADX: camino a 16-20% anual")
     p.add_argument("--rotacion", action="store_true",
                    help="estrategia de referencia: rotacion de momentum")
     args = p.parse_args()
@@ -607,6 +756,12 @@ def main() -> None:
         t0 = time.perf_counter()
         estudio_mejoras(symbols, args.days, args.capital)
         print(f"\n[tiempo] estudio mejoras: {time.perf_counter() - t0:.1f}s")
+        return
+
+    if args.study4:
+        t0 = time.perf_counter()
+        estudio_v4(symbols, args.days, args.capital)
+        print(f"\n[tiempo] estudio v4 (BE+ADX): {time.perf_counter() - t0:.1f}s")
         return
 
     if args.rotacion:
