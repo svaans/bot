@@ -381,7 +381,8 @@ def backtest(velas: list[list[float]], symbol: str, capital0: float = 1000.0,
              senal_v2: bool = False,
              btc_ind: dict[str, list[float]] | None = None,
              be_atr: float = 0.0,
-             adx_min: float = 0.0) -> Resultado:
+             adx_min: float = 0.0,
+             fg_mask: list[bool] | None = None) -> Resultado:
     """vol_guard: modo adaptativo — no entra cuando la volatilidad (ATR/precio)
     supera 2x su media de 100 velas (régimen anómalo).
     btc_ind: si se pasa, filtro macro — solo entra cuando BTC > su EMA200
@@ -390,7 +391,8 @@ def backtest(velas: list[list[float]], symbol: str, capital0: float = 1000.0,
     be_atr: break-even stop — cuando el precio gana be_atr*ATR, SL sube a entrada
     (0 = desactivado). Reduce el riesgo en operaciones que se vuelven ganadoras.
     adx_min: filtro ADX — solo entra cuando ADX(14) >= adx_min (0 = desactivado).
-    Evita entradas en mercados laterales sin tendencia definida."""
+    Evita entradas en mercados laterales sin tendencia definida.
+    fg_mask: lista bool por vela; False = bloquear entrada (Fear&Greed filter)."""
     if ind is None:
         ind = calcular_indicadores(velas)
     close = ind["close"]
@@ -480,6 +482,8 @@ def backtest(velas: list[list[float]], symbol: str, capital0: float = 1000.0,
             adx_val = ind["adx"][i]
             if math.isnan(adx_val) or adx_val < adx_min:
                 continue
+        if fg_mask is not None and i < len(fg_mask) and not fg_mask[i]:
+            continue  # Fear & Greed filter bloquea esta vela
         score_fn = score_entrada_v2 if senal_v2 else score_entrada
         if cooldown == 0 and score_fn(ind, i) >= umbral and not math.isnan(ind["atr"][i]):
             precio = close[i] * (1 + FEE + SLIPPAGE)
@@ -899,6 +903,222 @@ def estudio_simbolos(symbols: list[str], days: int, capital0: float) -> None:
           f"({', '.join(f['symbol'] for f in positivos_test)})")
 
 
+def _descargar_fear_greed(dias: int = 1825) -> dict[int, int]:
+    """Descarga el Fear & Greed Index histórico de alternative.me (sin API key).
+
+    Devuelve un dict {timestamp_dia_ms: valor_0_100}.
+    Cachea en backtesting/cache/fear_greed.json para no pedir en cada run.
+    """
+    ruta = os.path.join(CACHE_DIR, "fear_greed.json")
+    os.makedirs(CACHE_DIR, exist_ok=True)
+
+    # usar caché si tiene menos de 24h
+    if os.path.exists(ruta):
+        mtime = os.path.getmtime(ruta)
+        if time.time() - mtime < 86_400:
+            with open(ruta) as f:
+                raw = json.load(f)
+            return {int(k): int(v) for k, v in raw.items()}
+
+    url = f"https://api.alternative.me/fng/?limit={dias + 30}&format=json"
+    print(f"  [fear&greed] descargando histórico desde alternative.me…")
+    try:
+        with urllib.request.urlopen(url, timeout=15) as r:
+            data = json.load(r)
+    except Exception as exc:
+        print(f"  [fear&greed] falló: {exc!r}")
+        return {}
+
+    resultado: dict[int, int] = {}
+    for item in data.get("data", []):
+        ts_s = int(item["timestamp"])
+        # normalizar al inicio del día UTC (truncar a día)
+        dia_ms = (ts_s // 86_400) * 86_400 * 1000
+        resultado[dia_ms] = int(item["value"])
+
+    with open(ruta, "w") as f:
+        json.dump({str(k): v for k, v in resultado.items()}, f)
+    print(f"  [fear&greed] {len(resultado)} días descargados OK")
+    return resultado
+
+
+def _fg_valor(fg_map: dict[int, int], ts_ms: float) -> int | None:
+    """Retorna el valor F&G para el timestamp dado (ms), buscando el día exacto
+    o el día anterior si no hay dato exacto. Retorna None si no hay dato."""
+    dia_ms = (int(ts_ms) // (86_400 * 1000)) * 86_400 * 1000
+    for offset in (0, -86_400_000, -2 * 86_400_000):
+        v = fg_map.get(dia_ms + offset)
+        if v is not None:
+            return v
+    return None
+
+
+def estudio_eth_riesgo(days: int, capital0: float) -> None:
+    """Busca el riesgo óptimo por trade para ETH con la config validada.
+
+    Grid: riesgo_por_trade de 2% a 10% en pasos de 1%.
+    Config base fija: 1d, umbral=5, SL=1×ATR, TP=3×ATR, vol_guard ON,
+    filtro macro BTC ON, be=0, adx=0.
+
+    Muestra train/test con DD y retorno para encontrar el sweet-spot
+    entre rentabilidad máxima y drawdown aceptable (<20%).
+    """
+    print("  descargando ETHEUR…")
+    eth_data = descargar_klines("ETHEUR", "1d", days)
+    eth_ind = calcular_indicadores(eth_data)
+    btc_data = descargar_klines("BTCEUR", "1d", days)
+    btc_ind = calcular_indicadores(btc_data)
+
+    n = len(eth_data)
+    corte = int(n * 0.7)
+    dias_train = corte
+    dias_test = n - corte
+
+    riesgos = [0.02, 0.03, 0.04, 0.05, 0.06, 0.07, 0.08, 0.09, 0.10]
+
+    print(f"\n{'riesgo':>7s} | "
+          f"{'PF tr':>6s} {'anual tr':>9s} {'DD tr':>6s} {'n tr':>4s} | "
+          f"{'PF te':>6s} {'anual te':>9s} {'DD te':>6s} {'n te':>4s}  decisión")
+    print("-" * 88)
+
+    for riesgo in riesgos:
+        resultados = {}
+        for fase, a, b in (("train", 0, corte), ("test", corte, n)):
+            r = backtest(
+                eth_data, "ETHEUR", capital0, 5.0,
+                use_trailing=False, trend_filter=False,
+                ind=eth_ind, i0=a, i1=b,
+                sl_ratio=1.0, tp_ratio=3.0, vol_guard=True,
+                riesgo=riesgo, senal_v2=False,
+                btc_ind=btc_ind,
+                be_atr=0.0, adx_min=0.0,
+            )
+            dias_f = b - a
+            anual = ((r.capital_final / capital0) ** (365 / dias_f) - 1) * 100
+            pf = r.profit_factor if r.profit_factor != float("inf") else 999.0
+            resultados[fase] = {"pf": pf, "anual": anual, "dd": r.max_drawdown, "n": r.trades}
+
+        tr, te = resultados["train"], resultados["test"]
+        pf_tr = f"{tr['pf']:.2f}" if tr["pf"] < 900 else "inf"
+        pf_te = f"{te['pf']:.2f}" if te["pf"] < 900 else "inf"
+
+        # decisión: marcamos el riesgo si DD test < 20% y mejora vs riesgo 4%
+        decision = ""
+        if te["dd"] <= 20.0 and te["anual"] > 0:
+            decision = "✓ viable"
+        if te["dd"] > 25.0:
+            decision = "✗ DD alto"
+
+        print(f"{riesgo*100:6.0f}% | "
+              f"{pf_tr:>6s} {tr['anual']:+8.2f}% {tr['dd']:5.1f}% {tr['n']:4d} | "
+              f"{pf_te:>6s} {te['anual']:+8.2f}% {te['dd']:5.1f}% {te['n']:4d}  {decision}")
+
+    print(f"\nconfig fija: 1d umbral=5 SL=1×ATR TP=3×ATR vol_guard+BTC_macro  "
+          f"(ETH, {days}d, 70/30 OOS)")
+
+
+def estudio_fear_greed(symbols: list[str], days: int, capital0: float) -> None:
+    """Evalúa el Fear & Greed Index como filtro de entradas (alternative.me).
+
+    Compara 4 regímenes de filtro vs baseline sin filtro:
+      - sin_filtro:    todas las entradas (baseline)
+      - evitar_codicia: bloquea entradas cuando F&G > 75
+      - evitar_miedo:   bloquea entradas cuando F&G < 25
+      - zona_neutral:  solo entra cuando 25 ≤ F&G ≤ 75
+      - solo_miedo:    solo entra cuando F&G < 40 (teoría contrarian)
+
+    Usa la config óptima validada sobre todos los símbolos del portfolio.
+    """
+    fg_map = _descargar_fear_greed(days)
+    if not fg_map:
+        print("  [fear&greed] sin datos históricos — omitiendo estudio")
+        return
+
+    print("  descargando datos de mercado…")
+    datos, indicadores = {}, {}
+    for s in symbols:
+        try:
+            datos[s] = descargar_klines(s, "1d", days)
+            indicadores[s] = calcular_indicadores(datos[s])
+        except Exception as e:
+            print(f"  [ERROR] {s}: {e}")
+    btc_ind = indicadores.get("BTCEUR") or calcular_indicadores(
+        descargar_klines("BTCEUR", "1d", days))
+
+    # variantes de filtro: None = sin límite
+    variantes = [
+        ("sin_filtro",     None,   None),
+        ("evitar_codicia", None,   75),
+        ("evitar_miedo",   25,     None),
+        ("zona_neutral",   25,     75),
+        ("solo_miedo",     None,   40),
+    ]
+
+    print(f"\n{'variante':>16s} | "
+          f"{'PF tr':>6s} {'anual tr':>9s} {'n tr':>5s} | "
+          f"{'PF te':>6s} {'anual te':>9s} {'n te':>5s} {'DD te':>6s}")
+    print("-" * 82)
+
+    for nombre, fg_min, fg_max in variantes:
+        agg: dict[str, dict] = {}
+        for fase in ("train", "test"):
+            cap = gan = per = 0.0
+            ntr = 0
+            dd = 0.0
+            for s, data in datos.items():
+                n_s = len(data)
+                corte = int(n_s * 0.7)
+                a, b = (0, corte) if fase == "train" else (corte, n_s)
+                ind = indicadores[s]
+
+                # construir máscara F&G: lista de bool (True = permitido operar)
+                fg_mask: list[bool] | None = None
+                if fg_map and (fg_min is not None or fg_max is not None):
+                    fg_mask = []
+                    for v in data:
+                        fg_val = _fg_valor(fg_map, v[0])
+                        permitido = True
+                        if fg_val is not None:
+                            if fg_min is not None and fg_val < fg_min:
+                                permitido = False
+                            if fg_max is not None and fg_val > fg_max:
+                                permitido = False
+                        fg_mask.append(permitido)
+
+                r = backtest(
+                    data, s, capital0, 5.0,
+                    use_trailing=False, trend_filter=False,
+                    ind=ind, i0=a, i1=b,
+                    sl_ratio=1.0, tp_ratio=3.0, vol_guard=True,
+                    riesgo=0.04, senal_v2=False,
+                    btc_ind=btc_ind,
+                    be_atr=0.0, adx_min=0.0,
+                    fg_mask=fg_mask,
+                )
+                cap += r.capital_final
+                gan += r.bruto_ganado
+                per += r.bruto_perdido
+                ntr += r.trades
+                dd = max(dd, r.max_drawdown)
+
+            n_sym = len(datos)
+            dias_fase = (corte if fase == "train" else (len(list(datos.values())[0]) - corte)) if datos else 1
+            ret = (cap / (capital0 * n_sym) - 1) * 100 if n_sym else 0
+            anual = ((cap / (capital0 * n_sym)) ** (365 / dias_fase) - 1) * 100 if n_sym and dias_fase > 0 else 0
+            pf = gan / per if per > 0 else float("inf")
+            agg[fase] = {"pf": pf, "anual": anual, "n": ntr, "dd": dd}
+
+        tr, te = agg["train"], agg["test"]
+        pf_tr = f"{tr['pf']:.2f}" if tr["pf"] != float("inf") else "inf"
+        pf_te = f"{te['pf']:.2f}" if te["pf"] != float("inf") else "inf"
+        print(f"{nombre:>16s} | "
+              f"{pf_tr:>6s} {tr['anual']:+8.2f}% {tr['n']:5d} | "
+              f"{pf_te:>6s} {te['anual']:+8.2f}% {te['n']:5d} {te['dd']:5.1f}%")
+
+    print(f"\nFuente: alternative.me/fng  |  {len(fg_map)} días históricos  |  "
+          f"config: 1d umbral=5 SL=1×ATR TP=3×ATR riesgo=4% vol_guard+BTC_macro")
+
+
 # ----------------------------------------------------------------- main
 
 def fmt(res: Resultado, capital0: float, dias: int) -> str:
@@ -930,6 +1150,10 @@ def main() -> None:
                    help="break-even stop + filtro ADX: camino a 16-20% anual")
     p.add_argument("--study_simbolos", action="store_true",
                    help="ranking de simbolos: actuales + candidatos con config optima validada")
+    p.add_argument("--study_eth_riesgo", action="store_true",
+                   help="grid de riesgo por trade para ETH: busca sweet-spot retorno/DD")
+    p.add_argument("--study_fear_greed", action="store_true",
+                   help="Fear & Greed Index como filtro de entradas (alternative.me)")
     p.add_argument("--rotacion", action="store_true",
                    help="estrategia de referencia: rotacion de momentum")
     args = p.parse_args()
@@ -963,10 +1187,21 @@ def main() -> None:
 
     if args.study_simbolos:
         t0 = time.perf_counter()
-        # si el usuario no pasó --symbol explícito, usar actuales + candidatos
         all_syms = args.symbol or (["BTCEUR", "ETHEUR", "SOLEUR", "XRPEUR", "AVAXEUR"] + CANDIDATOS)
         estudio_simbolos(all_syms, args.days, args.capital)
         print(f"\n[tiempo] estudio simbolos: {time.perf_counter() - t0:.1f}s")
+        return
+
+    if args.study_eth_riesgo:
+        t0 = time.perf_counter()
+        estudio_eth_riesgo(args.days, args.capital)
+        print(f"\n[tiempo] estudio ETH riesgo: {time.perf_counter() - t0:.1f}s")
+        return
+
+    if args.study_fear_greed:
+        t0 = time.perf_counter()
+        estudio_fear_greed(symbols, args.days, args.capital)
+        print(f"\n[tiempo] estudio fear&greed: {time.perf_counter() - t0:.1f}s")
         return
 
     if args.rotacion:

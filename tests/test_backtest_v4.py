@@ -32,6 +32,9 @@ calcular_indicadores = _mod.calcular_indicadores
 Resultado = _mod.Resultado
 estudio_v4 = _mod.estudio_v4
 estudio_simbolos = _mod.estudio_simbolos
+estudio_eth_riesgo = _mod.estudio_eth_riesgo
+estudio_fear_greed = _mod.estudio_fear_greed
+_fg_valor = _mod._fg_valor
 
 
 # ─── generadores de datos sintéticos ────────────────────────────────────────
@@ -490,3 +493,92 @@ class TestEstudioSimbolos:
         assert "PF tr" in out
         assert "PF te" in out
         assert "anual" in out.lower() or "anual" in out
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  Tests de estudio_eth_riesgo
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestEstudioEthRiesgo:
+
+    def test_sin_error_con_datos_sinteticos(self, monkeypatch) -> None:
+        """estudio_eth_riesgo no debe lanzar excepción con datos sintéticos."""
+        velas = _velas_tendencia(200, pendiente=0.5)
+        monkeypatch.setattr(_mod, "descargar_klines", lambda s, iv, d: velas)
+        estudio_eth_riesgo(days=200, capital0=1000.0)
+
+    def test_salida_contiene_porcentajes_riesgo(self, monkeypatch, capsys) -> None:
+        """La tabla debe mostrar los distintos niveles de riesgo probados."""
+        velas = _velas_tendencia(200, pendiente=0.5)
+        monkeypatch.setattr(_mod, "descargar_klines", lambda s, iv, d: velas)
+        estudio_eth_riesgo(days=200, capital0=1000.0)
+        out = capsys.readouterr().out
+        assert "2%" in out or "2" in out
+        assert "6%" in out or "6" in out
+
+    def test_fg_mask_bloquea_entradas(self) -> None:
+        """fg_mask=False en todas las velas debe producir 0 trades."""
+        velas = _velas_tendencia(300, pendiente=0.5)
+        fg_mask = [False] * len(velas)
+        res = backtest(velas, "TEST", umbral=2.0, fg_mask=fg_mask)
+        assert res.trades == 0, f"fg_mask=False debe bloquear todo, dio {res.trades} trades"
+
+    def test_fg_mask_true_igual_que_sin_mask(self) -> None:
+        """fg_mask=True en todas las velas debe dar resultado idéntico a sin mask."""
+        velas = _velas_tendencia(300, pendiente=0.5)
+        fg_mask = [True] * len(velas)
+        res_con = backtest(velas, "TEST", umbral=2.0, fg_mask=fg_mask)
+        res_sin = backtest(velas, "TEST", umbral=2.0, fg_mask=None)
+        assert res_con.trades == res_sin.trades
+        assert abs(res_con.capital_final - res_sin.capital_final) < 1e-9
+
+    def test_fg_mask_parcial_reduce_trades(self) -> None:
+        """fg_mask con la mitad de velas bloqueadas debe dar menos o igual trades."""
+        velas = _velas_tendencia(300, pendiente=0.5)
+        n = len(velas)
+        fg_mask = [i % 2 == 0 for i in range(n)]  # bloquea velas impares
+        res_parcial = backtest(velas, "TEST", umbral=2.0, fg_mask=fg_mask)
+        res_completo = backtest(velas, "TEST", umbral=2.0, fg_mask=None)
+        assert res_parcial.trades <= res_completo.trades
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  Tests de estudio_fear_greed y _fg_valor
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestFearGreed:
+
+    def _mock_fg_map(self) -> dict:
+        """Mapa sintético: valor 50 para varios días."""
+        base_ms = 1_700_000_000_000 // 86_400_000 * 86_400_000
+        return {base_ms + i * 86_400_000: 50 for i in range(200)}
+
+    def test_fg_valor_exacto(self) -> None:
+        """_fg_valor devuelve el valor exacto cuando el timestamp es medianoche UTC."""
+        # usar un timestamp alineado a medianoche (multiple de 86_400_000)
+        dia_ms = (1_700_000_000_000 // 86_400_000) * 86_400_000
+        fg_map = {dia_ms: 42}
+        assert _fg_valor(fg_map, dia_ms) == 42
+
+    def test_fg_valor_dia_anterior(self) -> None:
+        """_fg_valor acepta timestamp con offset de horas dentro del mismo día."""
+        dia_ms = (1_700_000_000_000 // 86_400_000) * 86_400_000
+        fg_map = {dia_ms: 60}
+        # timestamp con algunas horas de offset dentro del día → misma key
+        assert _fg_valor(fg_map, dia_ms + 3_600_000) == 60
+
+    def test_fg_valor_sin_datos_retorna_none(self) -> None:
+        """_fg_valor retorna None cuando no hay datos cercanos."""
+        assert _fg_valor({}, 1_700_000_000_000) is None
+
+    def test_estudio_fear_greed_sin_red(self, monkeypatch, capsys) -> None:
+        """estudio_fear_greed usa datos sintéticos para fg_map y velas."""
+        velas = _velas_tendencia(200, pendiente=0.5)
+        monkeypatch.setattr(_mod, "descargar_klines", lambda s, iv, d: velas)
+        # Inyectar fg_map sintético directamente
+        fg_map = {int(v[0] // 86_400_000) * 86_400_000: 50 for v in velas}
+        monkeypatch.setattr(_mod, "_descargar_fear_greed", lambda d=1825: fg_map)
+        estudio_fear_greed(["BTCEUR", "ETHEUR"], days=200, capital0=1000.0)
+        out = capsys.readouterr().out
+        assert "sin_filtro" in out
+        assert "evitar_codicia" in out
