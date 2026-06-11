@@ -34,6 +34,7 @@ estudio_v4 = _mod.estudio_v4
 estudio_simbolos = _mod.estudio_simbolos
 estudio_eth_riesgo = _mod.estudio_eth_riesgo
 estudio_fear_greed = _mod.estudio_fear_greed
+estudio_walk_forward = _mod.estudio_walk_forward
 _fg_valor = _mod._fg_valor
 
 
@@ -582,3 +583,52 @@ class TestFearGreed:
         out = capsys.readouterr().out
         assert "sin_filtro" in out
         assert "evitar_codicia" in out
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  Tests de estudio_walk_forward
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestWalkForward:
+
+    def _patch(self, monkeypatch, velas):
+        monkeypatch.setattr(_mod, "descargar_klines", lambda s, iv, d: velas)
+
+    def test_ejecuta_sin_excepcion(self, monkeypatch) -> None:
+        """walk-forward no debe lanzar excepción con datos sintéticos."""
+        velas = _velas_tendencia(300, pendiente=0.5)
+        self._patch(monkeypatch, velas)
+        estudio_walk_forward(["BTCEUR", "ETHEUR"], days=300, capital0=1000.0, n_folds=3)
+
+    def test_salida_contiene_n_folds(self, monkeypatch, capsys) -> None:
+        """La tabla debe tener exactamente n_folds filas de resultado."""
+        velas = _velas_tendencia(300, pendiente=0.5)
+        self._patch(monkeypatch, velas)
+        estudio_walk_forward(["BTCEUR"], days=300, capital0=1000.0, n_folds=3)
+        out = capsys.readouterr().out
+        # cada fold aparece como "    1", "    2", "    3" en la columna fold
+        assert out.count("✓") + out.count("✗") == 3
+
+    def test_consistencia_aparece_en_salida(self, monkeypatch, capsys) -> None:
+        """La línea de consistencia debe aparecer al final."""
+        velas = _velas_tendencia(300, pendiente=0.5)
+        self._patch(monkeypatch, velas)
+        estudio_walk_forward(["BTCEUR"], days=300, capital0=1000.0, n_folds=3)
+        out = capsys.readouterr().out
+        assert "Consistencia:" in out
+        assert "/3" in out
+
+    def test_un_fold_funciona(self, monkeypatch) -> None:
+        """n_folds=1 no debe crashear."""
+        velas = _velas_tendencia(200, pendiente=0.5)
+        self._patch(monkeypatch, velas)
+        estudio_walk_forward(["BTCEUR"], days=200, capital0=1000.0, n_folds=1)
+
+    def test_sin_datos_no_crashea(self, monkeypatch, capsys) -> None:
+        """Si la descarga falla para todos los símbolos, debe salir con mensaje."""
+        def falla(s, iv, d):
+            raise RuntimeError("sin datos")
+        monkeypatch.setattr(_mod, "descargar_klines", falla)
+        estudio_walk_forward(["BTCEUR"], days=200, capital0=1000.0, n_folds=3)
+        out = capsys.readouterr().out
+        assert "sin datos" in out or "ERROR" in out or "sin datos" in out.lower()

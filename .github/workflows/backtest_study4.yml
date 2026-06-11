@@ -18,6 +18,7 @@ on:
         type: choice
         options:
           - study_simbolos
+          - study_wf
           - study_eth_riesgo
           - study_fear_greed
           - study4

@@ -1119,6 +1119,100 @@ def estudio_fear_greed(symbols: list[str], days: int, capital0: float) -> None:
           f"config: 1d umbral=5 SL=1×ATR TP=3×ATR riesgo=4% vol_guard+BTC_macro")
 
 
+def estudio_walk_forward(symbols: list[str], days: int, capital0: float,
+                         n_folds: int = 5) -> None:
+    """Walk-Forward Validation: divide el histórico en N ventanas y evalúa
+    la estrategia en cada período independientemente.
+
+    A diferencia del split estático 70/30, esto responde a:
+    '¿Es la estrategia consistente en TODOS los períodos de mercado o
+    solo funciona en algunos?'
+
+    Config fija (la óptima validada): 1d umbral=5 SL=1×ATR TP=3×ATR
+    riesgo=4% vol_guard ON BTC_macro ON.
+
+    Cada fold es un segmento consecutivo del histórico total.
+    Se reporta el PF, retorno anual y DD de cada ventana temporal.
+    Al final se muestra consistencia: cuántas ventanas son positivas.
+    """
+    print("  descargando datos…")
+    datos, indicadores = {}, {}
+    for s in symbols:
+        try:
+            datos[s] = descargar_klines(s, "1d", days)
+            indicadores[s] = calcular_indicadores(datos[s])
+        except Exception as e:
+            print(f"  [ERROR] {s}: {e}")
+    if not datos:
+        print("  [walk-forward] sin datos")
+        return
+
+    btc_ind = indicadores.get("BTCEUR") or calcular_indicadores(
+        descargar_klines("BTCEUR", "1d", days))
+
+    # longitud mínima entre todos los símbolos
+    n_min = min(len(v) for v in datos.values())
+    tam_fold = n_min // n_folds
+
+    print(f"\n  {n_min} velas × {len(datos)} símbolos → {n_folds} folds "
+          f"de ~{tam_fold} días cada uno")
+
+    print(f"\n{'fold':>5s} {'periodo':>22s} | "
+          f"{'PF':>6s} {'anual':>9s} {'trades':>7s} {'DD':>6s}  resultado")
+    print("-" * 75)
+
+    fold_positivos = 0
+    for k in range(n_folds):
+        a = k * tam_fold
+        b = (k + 1) * tam_fold if k < n_folds - 1 else n_min
+
+        # fecha aproximada del período (usando timestamps del primer símbolo)
+        primer_sym = next(iter(datos))
+        ts_a = datos[primer_sym][a][0] / 1000
+        ts_b = datos[primer_sym][min(b - 1, len(datos[primer_sym]) - 1)][0] / 1000
+        import datetime as _dt
+        fecha_a = _dt.datetime.utcfromtimestamp(ts_a).strftime("%Y-%m")
+        fecha_b = _dt.datetime.utcfromtimestamp(ts_b).strftime("%Y-%m")
+
+        cap = gan = per = 0.0
+        ntr = 0
+        dd = 0.0
+        for s, data in datos.items():
+            n_s = len(data)
+            b_s = min(b, n_s)
+            r = backtest(
+                data, s, capital0, 5.0,
+                use_trailing=False, trend_filter=False,
+                ind=indicadores[s], i0=a, i1=b_s,
+                sl_ratio=1.0, tp_ratio=3.0, vol_guard=True,
+                riesgo=0.04, senal_v2=False,
+                btc_ind=btc_ind,
+                be_atr=0.0, adx_min=0.0,
+            )
+            cap += r.capital_final
+            gan += r.bruto_ganado
+            per += r.bruto_perdido
+            ntr += r.trades
+            dd = max(dd, r.max_drawdown)
+
+        n_sym = len(datos)
+        dias_fold = b - a
+        ret_total = (cap / (capital0 * n_sym) - 1) * 100
+        anual = ((cap / (capital0 * n_sym)) ** (365 / dias_fold) - 1) * 100
+        pf = gan / per if per > 0 else float("inf")
+        pf_str = f"{pf:.2f}" if pf != float("inf") else "inf"
+        positivo = anual > 0 and pf > 1.0
+        if positivo:
+            fold_positivos += 1
+        marca = "✓" if positivo else "✗"
+        print(f"{k+1:>5d} {fecha_a}→{fecha_b:>7s} | "
+              f"{pf_str:>6s} {anual:+8.2f}% {ntr:7d} {dd:5.1f}%  {marca}")
+
+    print(f"\nConsistencia: {fold_positivos}/{n_folds} períodos positivos "
+          f"({'ROBUSTO' if fold_positivos >= n_folds * 0.8 else 'INESTABLE — revisa la estrategia'})")
+    print("config: 1d umbral=5 SL=1×ATR TP=3×ATR riesgo=4% vol_guard+BTC_macro")
+
+
 # ----------------------------------------------------------------- main
 
 def fmt(res: Resultado, capital0: float, dias: int) -> str:
@@ -1154,6 +1248,10 @@ def main() -> None:
                    help="grid de riesgo por trade para ETH: busca sweet-spot retorno/DD")
     p.add_argument("--study_fear_greed", action="store_true",
                    help="Fear & Greed Index como filtro de entradas (alternative.me)")
+    p.add_argument("--study_wf", action="store_true",
+                   help="walk-forward validation: N folds temporales, mide consistencia")
+    p.add_argument("--wf_folds", type=int, default=5,
+                   help="número de folds para walk-forward (default 5)")
     p.add_argument("--rotacion", action="store_true",
                    help="estrategia de referencia: rotacion de momentum")
     args = p.parse_args()
@@ -1202,6 +1300,12 @@ def main() -> None:
         t0 = time.perf_counter()
         estudio_fear_greed(symbols, args.days, args.capital)
         print(f"\n[tiempo] estudio fear&greed: {time.perf_counter() - t0:.1f}s")
+        return
+
+    if args.study_wf:
+        t0 = time.perf_counter()
+        estudio_walk_forward(symbols, args.days, args.capital, n_folds=args.wf_folds)
+        print(f"\n[tiempo] walk-forward: {time.perf_counter() - t0:.1f}s")
         return
 
     if args.rotacion:
