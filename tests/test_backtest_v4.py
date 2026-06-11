@@ -31,6 +31,7 @@ backtest = _mod.backtest
 calcular_indicadores = _mod.calcular_indicadores
 Resultado = _mod.Resultado
 estudio_v4 = _mod.estudio_v4
+estudio_simbolos = _mod.estudio_simbolos
 
 
 # ─── generadores de datos sintéticos ────────────────────────────────────────
@@ -431,3 +432,61 @@ class TestEstudioV4Logica:
                 assert r.be_activados <= r.trades, (
                     f"be_activados={r.be_activados} > trades={r.trades}"
                 )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  Tests de estudio_simbolos (sin red, datos sintéticos)
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestEstudioSimbolos:
+    """Verifica estudio_simbolos usando monkeypatching de descargar_klines."""
+
+    def _patch_descarga(self, monkeypatch, velas: list[list[float]]) -> None:
+        """Reemplaza descargar_klines en el módulo para devolver datos sintéticos."""
+        monkeypatch.setattr(_mod, "descargar_klines", lambda s, iv, d: velas)
+
+    def test_sin_error_multiples_simbolos(self, monkeypatch) -> None:
+        """estudio_simbolos no debe lanzar excepción con varios símbolos sintéticos."""
+        velas = _velas_tendencia(200, pendiente=0.5)
+        self._patch_descarga(monkeypatch, velas)
+        # No debe lanzar excepción
+        estudio_simbolos(["BTCEUR", "ETHEUR", "SOLEUR"], days=200, capital0=1000.0)
+
+    def test_un_solo_simbolo(self, monkeypatch) -> None:
+        """estudio_simbolos funciona con un solo símbolo."""
+        velas = _velas_tendencia(200, pendiente=0.5)
+        self._patch_descarga(monkeypatch, velas)
+        estudio_simbolos(["BTCEUR"], days=200, capital0=1000.0)
+
+    def test_simbolo_candidato_marcado(self, monkeypatch, capsys) -> None:
+        """Símbolos fuera de los 5 actuales se marcan con (*) en la salida."""
+        velas = _velas_tendencia(200, pendiente=0.5)
+        self._patch_descarga(monkeypatch, velas)
+        estudio_simbolos(["BTCEUR", "XRPEUR"], days=200, capital0=1000.0)
+        out = capsys.readouterr().out
+        assert "*" in out, "Los candidatos deben marcarse con (*) en la salida"
+
+    def test_error_simbolo_no_bloquea_resto(self, monkeypatch) -> None:
+        """Si un símbolo falla la descarga, los demás se procesan igual."""
+        velas = _velas_tendencia(200, pendiente=0.5)
+        call_count = {"n": 0}
+
+        def mock_descarga(s, iv, d):
+            call_count["n"] += 1
+            if s == "BADEUR":
+                raise RuntimeError("símbolo inválido simulado")
+            return velas
+
+        monkeypatch.setattr(_mod, "descargar_klines", mock_descarga)
+        # No debe lanzar excepción aunque BADEUR falle
+        estudio_simbolos(["BTCEUR", "BADEUR", "ETHEUR"], days=200, capital0=1000.0)
+
+    def test_salida_contiene_header_tabla(self, monkeypatch, capsys) -> None:
+        """La tabla de resultados incluye columnas clave."""
+        velas = _velas_tendencia(200, pendiente=0.5)
+        self._patch_descarga(monkeypatch, velas)
+        estudio_simbolos(["BTCEUR", "ETHEUR"], days=200, capital0=1000.0)
+        out = capsys.readouterr().out
+        assert "PF tr" in out
+        assert "PF te" in out
+        assert "anual" in out.lower() or "anual" in out

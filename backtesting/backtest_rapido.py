@@ -819,6 +819,86 @@ def estudio_v4(symbols: list[str], days: int, capital0: float) -> None:
               f"{pf1:>6s} {an1:+8.2f}% {t1['trades']:4d} {t1['dd']:5.1f}%")
 
 
+def estudio_simbolos(symbols: list[str], days: int, capital0: float) -> None:
+    """Ranking de símbolos con la config óptima validada (study3/study4).
+
+    Config fija: 1d, umbral 5, SL 1.0×ATR, TP 3.0×ATR, vol_guard ON,
+    filtro macro BTC ON, riesgo 4%/trade, be=0, adx=0.
+
+    Evalúa cada símbolo individualmente con validación 70% train / 30% test
+    (out-of-sample). Admite símbolos actuales y candidatos mezclados.
+    Los símbolos candidatos se marcan con (*) en la tabla de resultados.
+    """
+    SIMBOLOS_ACTUALES = {"BTCEUR", "ETHEUR", "SOLEUR", "ADAEUR", "BNBEUR"}
+
+    # BTC siempre descargado para filtro macro
+    btc_data = descargar_klines("BTCEUR", "1d", days)
+    btc_ind = calcular_indicadores(btc_data)
+
+    filas = []
+    for s in symbols:
+        print(f"  descargando {s}...")
+        try:
+            data = descargar_klines(s, "1d", days)
+            ind = calcular_indicadores(data)
+        except Exception as e:
+            print(f"  [ERROR] {s}: {e}")
+            continue
+
+        n = len(data)
+        corte = int(n * 0.7)
+        fila: dict = {"symbol": s, "candidato": s not in SIMBOLOS_ACTUALES}
+
+        for fase, a, b in (("train", 0, corte), ("test", corte, n)):
+            r = backtest(
+                data, s, capital0, 5.0,
+                use_trailing=False, trend_filter=False,
+                ind=ind, i0=a, i1=b,
+                sl_ratio=1.0, tp_ratio=3.0, vol_guard=True,
+                riesgo=0.04, senal_v2=False,
+                btc_ind=btc_ind,
+                be_atr=0.0, adx_min=0.0,
+            )
+            dias_fase = b - a
+            anual = ((r.capital_final / capital0) ** (365 / dias_fase) - 1) * 100 if dias_fase > 0 else 0.0
+            pf_val = r.profit_factor if r.profit_factor != float("inf") else 999.0
+            fila[fase] = {
+                "pf": pf_val,
+                "anual": anual,
+                "trades": r.trades,
+                "wr": r.winrate,
+                "dd": r.max_drawdown,
+                "bh": r.buy_hold,
+            }
+        filas.append(fila)
+
+    # ordenar por PF test descendente
+    filas.sort(key=lambda f: f.get("test", {}).get("pf", 0), reverse=True)
+
+    print(f"\n{'Símbolo':>10s}  {'':1s} | "
+          f"{'PF tr':>6s} {'anual tr':>9s} {'n tr':>5s} | "
+          f"{'PF te':>6s} {'anual te':>9s} {'n te':>5s} {'WR te':>6s} {'DD te':>6s} {'B&H te':>7s}")
+    print("-" * 90)
+    for f in filas:
+        mark = "*" if f["candidato"] else " "
+        tr, te = f.get("train", {}), f.get("test", {})
+        pf_tr = f"{tr['pf']:.2f}" if tr.get("pf", 0) < 900 else "inf"
+        pf_te = f"{te['pf']:.2f}" if te.get("pf", 0) < 900 else "inf"
+        print(f"{f['symbol']:>10s}  {mark:1s} | "
+              f"{pf_tr:>6s} {tr.get('anual', 0):+8.2f}% {tr.get('trades', 0):5d} | "
+              f"{pf_te:>6s} {te.get('anual', 0):+8.2f}% {te.get('trades', 0):5d} "
+              f"{te.get('wr', 0):5.1f}% {te.get('dd', 0):5.1f}% {te.get('bh', 0):+6.2f}%")
+
+    print("\n(*) = candidato nuevo  |  config: 1d umbral=5 SL=1×ATR TP=3×ATR riesgo=4% vol_guard+BTC_macro")
+
+    # resumen cartera: símbolos actuales vs selección óptima
+    actuales_en_lista = [f for f in filas if not f["candidato"]]
+    positivos_test = [f for f in filas if f.get("test", {}).get("pf", 0) >= 1.2]
+    print(f"\nActuales en la lista: {len(actuales_en_lista)} | "
+          f"Símbolos con PF test ≥1.2: {len(positivos_test)} "
+          f"({', '.join(f['symbol'] for f in positivos_test)})")
+
+
 # ----------------------------------------------------------------- main
 
 def fmt(res: Resultado, capital0: float, dias: int) -> str:
@@ -848,10 +928,13 @@ def main() -> None:
                    help="palancas: Donchian, filtro BTC, TP amplio, riesgo")
     p.add_argument("--study4", action="store_true",
                    help="break-even stop + filtro ADX: camino a 16-20% anual")
+    p.add_argument("--study_simbolos", action="store_true",
+                   help="ranking de simbolos: actuales + candidatos con config optima validada")
     p.add_argument("--rotacion", action="store_true",
                    help="estrategia de referencia: rotacion de momentum")
     args = p.parse_args()
 
+    CANDIDATOS = ["XRPEUR", "AVAXEUR", "LINKEUR", "DOGEEUR", "LTCEUR", "DOTEUR"]
     symbols = args.symbol or ["BTCEUR", "ETHEUR", "SOLEUR", "ADAEUR", "BNBEUR"]
 
     if args.study:
@@ -876,6 +959,14 @@ def main() -> None:
         t0 = time.perf_counter()
         estudio_v4(symbols, args.days, args.capital)
         print(f"\n[tiempo] estudio v4 (BE+ADX): {time.perf_counter() - t0:.1f}s")
+        return
+
+    if args.study_simbolos:
+        t0 = time.perf_counter()
+        # si el usuario no pasó --symbol explícito, usar actuales + candidatos
+        all_syms = args.symbol or (["BTCEUR", "ETHEUR", "SOLEUR", "ADAEUR", "BNBEUR"] + CANDIDATOS)
+        estudio_simbolos(all_syms, args.days, args.capital)
+        print(f"\n[tiempo] estudio simbolos: {time.perf_counter() - t0:.1f}s")
         return
 
     if args.rotacion:

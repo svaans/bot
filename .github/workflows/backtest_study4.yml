@@ -1,4 +1,4 @@
-name: Backtest Study4 — ADX + Break-even (BE+ADX hacia 16-20% anual)
+name: Backtest Studies — ADX/BE/Simbolos (hacia 16-20% anual)
 
 on:
   workflow_dispatch:
@@ -8,15 +8,16 @@ on:
         required: false
         default: "1825"
       symbols:
-        description: "Símbolos separados por coma (ej: BTCEUR,ETHEUR)"
+        description: "Símbolos separados por coma (vacío = automático según estudio)"
         required: false
-        default: "BTCEUR,ETHEUR,SOLEUR,ADAEUR,BNBEUR"
+        default: ""
       study:
         description: "Estudio a ejecutar"
         required: false
-        default: "study4"
+        default: "study_simbolos"
         type: choice
         options:
+          - study_simbolos
           - study4
           - study3
           - study2
@@ -24,7 +25,7 @@ on:
 
 jobs:
   backtest:
-    name: "Backtesting ${{ inputs.study || 'study4' }} — ${{ inputs.days || '1825' }} días"
+    name: "Backtesting ${{ inputs.study || 'study_simbolos' }} — ${{ inputs.days || '1825' }} días"
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
@@ -49,12 +50,17 @@ jobs:
           curl -s --max-time 5 -o /dev/null -w "CryptoCompare: %{http_code} (%{time_total}s)\n" \
             "https://min-api.cryptocompare.com/data/price?fsym=BTC&tsyms=EUR" || echo "CryptoCompare: no accesible"
           echo "=== Argumentos ==="
-          echo "  --${{ inputs.study || 'study4' }} --days ${{ inputs.days || '1825' }} --interval 1d"
+          echo "  --${{ inputs.study || 'study_simbolos' }} --days ${{ inputs.days || '1825' }} --interval 1d"
 
       - name: Calcular cache key (sin comas)
         id: cachekey
         run: |
-          RAW="${{ inputs.symbols || 'BTCEUR,ETHEUR,SOLEUR,ADAEUR,BNBEUR' }}"
+          STUDY_NOW="${{ inputs.study || 'study_simbolos' }}"
+          if [ "$STUDY_NOW" = "study_simbolos" ] && [ -z "${{ inputs.symbols }}" ]; then
+            RAW="BTCEUR,ETHEUR,SOLEUR,ADAEUR,BNBEUR,XRPEUR,AVAXEUR,LINKEUR,DOGEEUR,LTCEUR,DOTEUR"
+          else
+            RAW="${{ inputs.symbols || 'BTCEUR,ETHEUR,SOLEUR,ADAEUR,BNBEUR' }}"
+          fi
           SAFE=$(echo "$RAW" | tr ',' '_')
           echo "key=binance-${SAFE}-${{ inputs.days || '1825' }}d" >> "$GITHUB_OUTPUT"
 
@@ -73,15 +79,20 @@ jobs:
         env:
           PYTHONUNBUFFERED: "1"
         run: |
-          SYMBOLS="${{ inputs.symbols || 'BTCEUR,ETHEUR,SOLEUR,ADAEUR,BNBEUR' }}"
+          STUDY="${{ inputs.study || 'study_simbolos' }}"
           DAYS="${{ inputs.days || '1825' }}"
-          STUDY="${{ inputs.study || 'study4' }}"
 
-          SYMBOL_ARGS=""
-          IFS=',' read -ra SYM_LIST <<< "$SYMBOLS"
-          for s in "${SYM_LIST[@]}"; do
-            SYMBOL_ARGS="$SYMBOL_ARGS --symbol ${s// /}"
-          done
+          # study_simbolos sin symbols explícito usa la lista completa automáticamente
+          if [ "$STUDY" = "study_simbolos" ] && [ -z "${{ inputs.symbols }}" ]; then
+            SYMBOL_ARGS=""
+          else
+            SYMBOLS="${{ inputs.symbols || 'BTCEUR,ETHEUR,SOLEUR,ADAEUR,BNBEUR' }}"
+            SYMBOL_ARGS=""
+            IFS=',' read -ra SYM_LIST <<< "$SYMBOLS"
+            for s in "${SYM_LIST[@]}"; do
+              SYMBOL_ARGS="$SYMBOL_ARGS --symbol ${s// /}"
+            done
+          fi
 
           echo "Corriendo: python backtesting/backtest_rapido.py --${STUDY} --days ${DAYS} --interval 1d ${SYMBOL_ARGS}"
           echo ""
