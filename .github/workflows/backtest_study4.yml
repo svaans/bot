@@ -17,6 +17,7 @@ on:
         default: "study_simbolos"
         type: choice
         options:
+          - study_completo
           - study_simbolos
           - study_wf
           - study_sharpe

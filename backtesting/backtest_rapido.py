@@ -1248,6 +1248,116 @@ def estudio_sharpe_allocation(symbols: list[str], days: int, capital0: float) ->
         print(f"  {sym_slash}: riesgo_por_trade = {r:.2f}  (Sharpe={sharpes[s]:+.3f})")
 
 
+
+def estudio_completo(symbols: list[str], days: int, capital0: float) -> None:
+    """Backtest con la configuración completa actual del portfolio.
+
+    Compara 3 escenarios en train (70%) y test (30%):
+      baseline:     4% riesgo igual, sin filtro F&G
+      solo_sharpe:  asignación Sharpe (ETH 8%, BTC/SOL/XRP 3%, AVAX 2%)
+      completo:     Sharpe + Fear&Greed zona_neutral (25-75)
+
+    Todos los escenarios incluyen vol_guard + BTC_macro (siempre activos).
+    """
+    # Asignación Sharpe validada por study_sharpe (2026-06)
+    SHARPE_RIESGO = {
+        "ETHEUR": 0.08, "BTCEUR": 0.03,
+        "SOLEUR": 0.03, "XRPEUR": 0.03, "AVAXEUR": 0.02,
+    }
+
+    print("  descargando Fear&Greed histórico…")
+    fg_map = _descargar_fear_greed(days)
+    if not fg_map:
+        print("  [aviso] sin datos F&G — se omite el filtro zona_neutral")
+
+    print("  descargando datos de mercado…")
+    datos: dict[str, list] = {}
+    indicadores: dict[str, list] = {}
+    for s in symbols:
+        try:
+            datos[s] = descargar_klines(s, "1d", days)
+            indicadores[s] = calcular_indicadores(datos[s])
+        except Exception as e:
+            print(f"  [ERROR] {s}: {e}")
+    if not datos:
+        return
+
+    btc_ind = indicadores.get("BTCEUR") or calcular_indicadores(
+        descargar_klines("BTCEUR", "1d", days))
+
+    def _fg_mask_zona_neutral(data: list) -> list[bool] | None:
+        if not fg_map:
+            return None
+        mask = []
+        for v in data:
+            fg_val = _fg_valor(fg_map, v[0])
+            ok = True
+            if fg_val is not None:
+                ok = 25 <= fg_val <= 75
+            mask.append(ok)
+        return mask
+
+    def _eval_config(riesgo_map: dict[str, float], usar_fg: bool) -> dict[str, dict]:
+        resultado: dict[str, dict] = {}
+        for fase in ("train", "test"):
+            cap = gan = per = 0.0
+            ntr = 0
+            dd = 0.0
+            for s, data in datos.items():
+                n_s = len(data)
+                corte = int(n_s * 0.7)
+                a, b = (0, corte) if fase == "train" else (corte, n_s)
+                fg_mask = _fg_mask_zona_neutral(data) if usar_fg else None
+                r = backtest(
+                    data, s, capital0, 5.0,
+                    use_trailing=False, trend_filter=False,
+                    ind=indicadores[s], i0=a, i1=b,
+                    sl_ratio=1.0, tp_ratio=3.0, vol_guard=True,
+                    riesgo=riesgo_map.get(s, 0.04), senal_v2=False,
+                    btc_ind=btc_ind, be_atr=0.0, adx_min=0.0,
+                    fg_mask=fg_mask,
+                )
+                cap += r.capital_final
+                gan += r.bruto_ganado
+                per += r.bruto_perdido
+                ntr += r.trades
+                dd = max(dd, r.max_drawdown)
+            n_sym = len(datos)
+            dias = (corte if fase == "train" else
+                    len(list(datos.values())[0]) - corte) if datos else 1
+            anual = ((cap / (capital0 * n_sym)) ** (365 / dias) - 1) * 100 if n_sym and dias > 0 else 0
+            pf = gan / per if per > 0 else float("inf")
+            resultado[fase] = {"pf": pf, "anual": anual, "n": ntr, "dd": dd}
+        return resultado
+
+    escenarios = [
+        ("baseline",     {s: 0.04 for s in datos},  False),
+        ("solo_sharpe",  SHARPE_RIESGO,              False),
+        ("completo",     SHARPE_RIESGO,              bool(fg_map)),
+    ]
+
+    print(f"\n{'escenario':>14s} | "
+          f"{'PF tr':>6s} {'anual tr':>9s} {'n tr':>5s} | "
+          f"{'PF te':>6s} {'anual te':>9s} {'n te':>5s} {'DD te':>6s}")
+    print("-" * 78)
+
+    for nombre, riesgo_map, usar_fg in escenarios:
+        res = _eval_config(riesgo_map, usar_fg)
+        tr, te = res["train"], res["test"]
+        pf_tr = f"{tr['pf']:.2f}" if tr["pf"] != float("inf") else " inf"
+        pf_te = f"{te['pf']:.2f}" if te["pf"] != float("inf") else " inf"
+        print(f"{nombre:>14s} | "
+              f"{pf_tr:>6s} {tr['anual']:+8.2f}% {tr['n']:5d} | "
+              f"{pf_te:>6s} {te['anual']:+8.2f}% {te['n']:5d} {te['dd']:5.1f}%")
+
+    n_sym = len(datos)
+    n_test = int(len(list(datos.values())[0]) * 0.3) if datos else 0
+    print(f"\nconfig: {n_sym} símbolos × 1d | "
+          f"test ~{n_test} días | vol_guard+BTC_macro+Sharpe+FG_zona_neutral")
+    print("asignación Sharpe: "
+          + "  ".join(f"{s.replace('EUR','')}/{r*100:.0f}%" for s, r in SHARPE_RIESGO.items()))
+
+
 def estudio_equity_filter(symbols: list[str], days: int, capital0: float) -> None:
     """Evalúa el Equity Curve Filter: reducir riesgo o pausar entradas cuando
     el capital está en drawdown respecto a su máximo histórico.
@@ -1465,6 +1575,8 @@ def main() -> None:
                    help="asignación de riesgo ponderada por Sharpe ratio por símbolo")
     p.add_argument("--study_equity_filter", action="store_true",
                    help="equity curve filter: reducir/pausar entradas en drawdown")
+    p.add_argument("--study_completo", action="store_true",
+                   help="rentabilidad actual: baseline vs Sharpe vs Sharpe+FG zona_neutral")
     p.add_argument("--rotacion", action="store_true",
                    help="estrategia de referencia: rotacion de momentum")
     args = p.parse_args()
@@ -1531,6 +1643,12 @@ def main() -> None:
         t0 = time.perf_counter()
         estudio_equity_filter(symbols, args.days, args.capital)
         print(f"\n[tiempo] equity filter: {time.perf_counter() - t0:.1f}s")
+        return
+
+    if args.study_completo:
+        t0 = time.perf_counter()
+        estudio_completo(symbols, args.days, args.capital)
+        print(f"\n[tiempo] estudio completo: {time.perf_counter() - t0:.1f}s")
         return
 
     if args.rotacion:
