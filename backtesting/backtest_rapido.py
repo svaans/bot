@@ -1358,6 +1358,151 @@ def estudio_completo(symbols: list[str], days: int, capital0: float) -> None:
           + "  ".join(f"{s.replace('EUR','')}/{r*100:.0f}%" for s, r in SHARPE_RIESGO.items()))
 
 
+def estudio_senal_v2(symbols: list[str], days: int, capital0: float) -> None:
+    """Compara señal v1 (RSI+MACD+volumen) vs v2 (+Donchian-20 breakout).
+
+    Ambas versiones usan la config completa validada:
+      Sharpe allocation + Fear&Greed zona_neutral (25-75) + vol_guard + BTC_macro
+
+    Muestra resultados agregados train/test y desglose por símbolo en test.
+    Donchian-20 breakout añade +3.0 al score cuando close > max(high, 20 velas).
+    """
+    SHARPE_RIESGO = {
+        "ETHEUR": 0.08, "BTCEUR": 0.03,
+        "SOLEUR": 0.03, "XRPEUR": 0.03, "AVAXEUR": 0.02,
+    }
+
+    print("  descargando Fear&Greed histórico…")
+    fg_map = _descargar_fear_greed(days)
+    if not fg_map:
+        print("  [aviso] sin datos F&G — se omite el filtro zona_neutral")
+
+    print("  descargando datos de mercado…")
+    datos: dict[str, list] = {}
+    indicadores: dict[str, list] = {}
+    for s in symbols:
+        try:
+            datos[s] = descargar_klines(s, "1d", days)
+            indicadores[s] = calcular_indicadores(datos[s])
+        except Exception as e:
+            print(f"  [ERROR] {s}: {e}")
+    if not datos:
+        return
+
+    btc_ind = indicadores.get("BTCEUR") or calcular_indicadores(
+        descargar_klines("BTCEUR", "1d", days))
+
+    def _fg_mask(data: list) -> list[bool] | None:
+        if not fg_map:
+            return None
+        mask = []
+        for v in data:
+            fg_val = _fg_valor(fg_map, v[0])
+            ok = True
+            if fg_val is not None:
+                ok = 25 <= fg_val <= 75
+            mask.append(ok)
+        return mask
+
+    def _eval_agregado(usar_v2: bool) -> dict[str, dict]:
+        resultado: dict[str, dict] = {}
+        corte_ref = 0
+        for fase in ("train", "test"):
+            cap = gan = per = 0.0
+            ntr = 0
+            dd = 0.0
+            for s, data in datos.items():
+                n_s = len(data)
+                corte = int(n_s * 0.7)
+                corte_ref = corte
+                a, b = (0, corte) if fase == "train" else (corte, n_s)
+                fg_mask = _fg_mask(data)
+                r = backtest(
+                    data, s, capital0, 5.0,
+                    use_trailing=False, trend_filter=False,
+                    ind=indicadores[s], i0=a, i1=b,
+                    sl_ratio=1.0, tp_ratio=3.0, vol_guard=True,
+                    riesgo=SHARPE_RIESGO.get(s, 0.03), senal_v2=usar_v2,
+                    btc_ind=btc_ind, be_atr=0.0, adx_min=0.0,
+                    fg_mask=fg_mask,
+                )
+                cap += r.capital_final
+                gan += r.bruto_ganado
+                per += r.bruto_perdido
+                ntr += r.trades
+                dd = max(dd, r.max_drawdown)
+            n_sym = len(datos)
+            first_data = list(datos.values())[0] if datos else []
+            dias = (corte_ref if fase == "train" else
+                    len(first_data) - corte_ref) if first_data else 1
+            anual = ((cap / (capital0 * n_sym)) ** (365 / dias) - 1) * 100 if n_sym and dias > 0 else 0
+            pf = gan / per if per > 0 else float("inf")
+            resultado[fase] = {"pf": pf, "anual": anual, "n": ntr, "dd": dd}
+        return resultado
+
+    escenarios = [
+        ("senal_v1", False),
+        ("senal_v2", True),
+    ]
+
+    print(f"\n{'escenario':>10s} | "
+          f"{'PF tr':>6s} {'anual tr':>9s} {'n tr':>5s} | "
+          f"{'PF te':>6s} {'anual te':>9s} {'n te':>5s} {'DD te':>6s}")
+    print("-" * 72)
+
+    for nombre, usar_v2 in escenarios:
+        res = _eval_agregado(usar_v2)
+        tr, te = res["train"], res["test"]
+        pf_tr = f"{tr['pf']:.2f}" if tr["pf"] != float("inf") else " inf"
+        pf_te = f"{te['pf']:.2f}" if te["pf"] != float("inf") else " inf"
+        print(f"{nombre:>10s} | "
+              f"{pf_tr:>6s} {tr['anual']:+8.2f}% {tr['n']:5d} | "
+              f"{pf_te:>6s} {te['anual']:+8.2f}% {te['n']:5d} {te['dd']:5.1f}%")
+
+    # desglose por símbolo en test
+    print("\n--- desglose por símbolo en TEST ---")
+    print(f"{'symbol':>8s}  {'PF v1':>6s} {'anual v1':>9s} {'n v1':>5s}  "
+          f"{'PF v2':>6s} {'anual v2':>9s} {'n v2':>5s}  {'delta':>7s}")
+    print("-" * 76)
+    for s, data in datos.items():
+        n_s = len(data)
+        corte = int(n_s * 0.7)
+        dias = n_s - corte
+        fg_mask = _fg_mask(data)
+        r1 = backtest(
+            data, s, capital0, 5.0,
+            use_trailing=False, trend_filter=False,
+            ind=indicadores[s], i0=corte, i1=n_s,
+            sl_ratio=1.0, tp_ratio=3.0, vol_guard=True,
+            riesgo=SHARPE_RIESGO.get(s, 0.03), senal_v2=False,
+            btc_ind=btc_ind, be_atr=0.0, adx_min=0.0,
+            fg_mask=fg_mask,
+        )
+        r2 = backtest(
+            data, s, capital0, 5.0,
+            use_trailing=False, trend_filter=False,
+            ind=indicadores[s], i0=corte, i1=n_s,
+            sl_ratio=1.0, tp_ratio=3.0, vol_guard=True,
+            riesgo=SHARPE_RIESGO.get(s, 0.03), senal_v2=True,
+            btc_ind=btc_ind, be_atr=0.0, adx_min=0.0,
+            fg_mask=fg_mask,
+        )
+        anual1 = ((r1.capital_final / capital0) ** (365 / dias) - 1) * 100 if dias > 0 else 0.0
+        anual2 = ((r2.capital_final / capital0) ** (365 / dias) - 1) * 100 if dias > 0 else 0.0
+        pf1 = f"{r1.profit_factor:.2f}" if r1.profit_factor != float("inf") else " inf"
+        pf2 = f"{r2.profit_factor:.2f}" if r2.profit_factor != float("inf") else " inf"
+        delta = anual2 - anual1
+        signo = "↑" if delta > 0.5 else ("↓" if delta < -0.5 else "≈")
+        print(f"{s:>8s}  {pf1:>6s} {anual1:+8.2f}% {r1.trades:5d}  "
+              f"{pf2:>6s} {anual2:+8.2f}% {r2.trades:5d}  {delta:+6.2f}% {signo}")
+
+    n_sym = len(datos)
+    n_test = int(len(list(datos.values())[0]) * 0.3) if datos else 0
+    print(f"\nconfig: {n_sym} símbolos × 1d | test ~{n_test} días | "
+          "Sharpe+FG_zona_neutral+vol_guard+BTC_macro")
+    print("senal_v2: ruptura Donchian-20 (+3.0 score cuando close > max(high,20))")
+
+
 def estudio_equity_filter(symbols: list[str], days: int, capital0: float) -> None:
     """Evalúa el Equity Curve Filter: reducir riesgo o pausar entradas cuando
     el capital está en drawdown respecto a su máximo histórico.
@@ -1577,6 +1722,8 @@ def main() -> None:
                    help="equity curve filter: reducir/pausar entradas en drawdown")
     p.add_argument("--study_completo", action="store_true",
                    help="rentabilidad actual: baseline vs Sharpe vs Sharpe+FG zona_neutral")
+    p.add_argument("--study_senal_v2", action="store_true",
+                   help="señal v1 vs v2 (Donchian-20 breakout) sobre config completa validada")
     p.add_argument("--rotacion", action="store_true",
                    help="estrategia de referencia: rotacion de momentum")
     args = p.parse_args()
@@ -1649,6 +1796,12 @@ def main() -> None:
         t0 = time.perf_counter()
         estudio_completo(symbols, args.days, args.capital)
         print(f"\n[tiempo] estudio completo: {time.perf_counter() - t0:.1f}s")
+        return
+
+    if args.study_senal_v2:
+        t0 = time.perf_counter()
+        estudio_senal_v2(symbols, args.days, args.capital)
+        print(f"\n[tiempo] estudio senal_v2: {time.perf_counter() - t0:.1f}s")
         return
 
     if args.rotacion:

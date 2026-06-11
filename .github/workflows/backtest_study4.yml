@@ -18,6 +18,7 @@ on:
         type: choice
         options:
           - study_completo
+          - study_senal_v2
           - study_simbolos
           - study_wf
           - study_sharpe
