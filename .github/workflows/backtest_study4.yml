@@ -1,0 +1,82 @@
+name: Backtest Study4 — ADX + Break-even (BE+ADX hacia 16-20% anual)
+
+on:
+  workflow_dispatch:
+    inputs:
+      days:
+        description: "Días de historia (730=2yr, 1825=5yr)"
+        required: false
+        default: "1825"
+      symbols:
+        description: "Símbolos separados por coma (ej: BTCEUR,ETHEUR)"
+        required: false
+        default: "BTCEUR,ETHEUR,SOLEUR,ADAEUR,BNBEUR"
+      study:
+        description: "Estudio a ejecutar"
+        required: false
+        default: "study4"
+        type: choice
+        options:
+          - study4
+          - study3
+          - study2
+          - study
+
+jobs:
+  backtest:
+    name: "Backtesting ${{ inputs.study || 'study4' }} — ${{ inputs.days || '1825' }} días"
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Restaurar caché de datos Binance
+        uses: actions/cache@v4
+        with:
+          path: backtesting/cache
+          key: binance-cache-${{ inputs.symbols || 'default' }}-${{ inputs.days || '1825' }}d
+          restore-keys: |
+            binance-cache-${{ inputs.symbols || 'default' }}-
+            binance-cache-
+
+      - name: Ejecutar backtest
+        env:
+          PYTHONUNBUFFERED: "1"
+        run: |
+          SYMBOLS="${{ inputs.symbols || 'BTCEUR,ETHEUR,SOLEUR,ADAEUR,BNBEUR' }}"
+          DAYS="${{ inputs.days || '1825' }}"
+          STUDY="${{ inputs.study || 'study4' }}"
+
+          # Construir args --symbol para cada símbolo
+          SYMBOL_ARGS=""
+          IFS=',' read -ra SYM_LIST <<< "$SYMBOLS"
+          for s in "${SYM_LIST[@]}"; do
+            SYMBOL_ARGS="$SYMBOL_ARGS --symbol ${s// /}"
+          done
+
+          echo "==== Configuración ===="
+          echo "  Estudio  : --$STUDY"
+          echo "  Días     : $DAYS"
+          echo "  Símbolos : $SYMBOLS"
+          echo "  Python   : $(python --version)"
+          echo "========================"
+          echo ""
+
+          python backtesting/backtest_rapido.py \
+            --$STUDY \
+            --days "$DAYS" \
+            $SYMBOL_ARGS
+
+      - name: Guardar caché de datos descargados
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: backtesting/cache
+          key: binance-cache-${{ inputs.symbols || 'default' }}-${{ inputs.days || '1825' }}d
