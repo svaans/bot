@@ -1119,6 +1119,124 @@ def estudio_fear_greed(symbols: list[str], days: int, capital0: float) -> None:
           f"config: 1d umbral=5 SL=1×ATR TP=3×ATR riesgo=4% vol_guard+BTC_macro")
 
 
+def _sharpe(retornos: list[float], dias_año: float = 365.0) -> float:
+    """Sharpe anualizado desde lista de retornos diarios (fracción del capital0)."""
+    n = len(retornos)
+    if n < 2:
+        return 0.0
+    media = sum(retornos) / n
+    var = sum((r - media) ** 2 for r in retornos) / (n - 1)
+    std = math.sqrt(var) if var > 0 else 0.0
+    if std == 0:
+        return 0.0
+    return (media / std) * math.sqrt(dias_año)
+
+
+def estudio_sharpe_allocation(symbols: list[str], days: int, capital0: float) -> None:
+    """Calcula la asignación óptima de riesgo por símbolo basada en Sharpe ratio.
+
+    Cada símbolo recibe un riesgo_por_trade proporcional a su Sharpe en
+    el período de TEST (out-of-sample). El total permanece igual que usar
+    4% en todos (presupuesto de riesgo constante).
+
+    Rango permitido: 2% min — 8% max por símbolo para evitar concentración.
+
+    Muestra:
+    - Sharpe test de cada símbolo con riesgo base 4%
+    - Riesgo asignado con ponderación Sharpe
+    - Backtest con nueva asignación vs baseline igualitario
+    """
+    print("  descargando datos…")
+    datos, indicadores = {}, {}
+    for s in symbols:
+        try:
+            datos[s] = descargar_klines(s, "1d", days)
+            indicadores[s] = calcular_indicadores(datos[s])
+        except Exception as e:
+            print(f"  [ERROR] {s}: {e}")
+    if not datos:
+        return
+    btc_ind = indicadores.get("BTCEUR") or calcular_indicadores(
+        descargar_klines("BTCEUR", "1d", days))
+
+    # --- fase 1: medir Sharpe en test (out-of-sample) con riesgo 4% igual ---
+    sharpes: dict[str, float] = {}
+    for s, data in datos.items():
+        n_s = len(data)
+        corte = int(n_s * 0.7)
+        r = backtest(
+            data, s, capital0, 5.0,
+            use_trailing=False, trend_filter=False,
+            ind=indicadores[s], i0=corte, i1=n_s,
+            sl_ratio=1.0, tp_ratio=3.0, vol_guard=True,
+            riesgo=0.04, senal_v2=False, btc_ind=btc_ind,
+        )
+        sharpes[s] = _sharpe(r.retornos)
+
+    # --- fase 2: normalizar Sharpe → asignación de riesgo ---
+    sharpe_pos = {s: max(v, 0.01) for s, v in sharpes.items()}  # mín 0.01 para no excluir
+    total_sharpe = sum(sharpe_pos.values())
+    n_sym = len(sharpe_pos)
+    riesgo_base_total = 0.04 * n_sym  # mismo presupuesto total que baseline
+    RIESGO_MIN, RIESGO_MAX = 0.02, 0.08
+
+    asignaciones: dict[str, float] = {}
+    for s, sh in sharpe_pos.items():
+        raw = (sh / total_sharpe) * riesgo_base_total
+        asignaciones[s] = max(RIESGO_MIN, min(RIESGO_MAX, raw))
+
+    print(f"\n{'símbolo':>10s} {'Sharpe te':>10s} {'riesgo base':>12s} {'riesgo Sharpe':>14s}")
+    print("-" * 50)
+    for s in sorted(asignaciones, key=lambda x: sharpes[x], reverse=True):
+        print(f"{s:>10s} {sharpes[s]:+9.3f}  {'4.0%':>12s}  {asignaciones[s]*100:>12.1f}%")
+
+    # --- fase 3: comparar baseline vs asignación Sharpe en test ---
+    def _eval_portfolio(riesgo_map: dict[str, float]) -> dict:
+        cap = gan = per = 0.0
+        ntr = 0
+        dd = 0.0
+        for s, data in datos.items():
+            n_s = len(data)
+            corte = int(n_s * 0.7)
+            r = backtest(
+                data, s, capital0, 5.0,
+                use_trailing=False, trend_filter=False,
+                ind=indicadores[s], i0=corte, i1=n_s,
+                sl_ratio=1.0, tp_ratio=3.0, vol_guard=True,
+                riesgo=riesgo_map.get(s, 0.04), senal_v2=False,
+                btc_ind=btc_ind,
+            )
+            cap += r.capital_final
+            gan += r.bruto_ganado
+            per += r.bruto_perdido
+            ntr += r.trades
+            dd = max(dd, r.max_drawdown)
+        dias_test = int(len(list(datos.values())[0]) * 0.3)
+        anual = ((cap / (capital0 * n_sym)) ** (365 / dias_test) - 1) * 100
+        pf = gan / per if per > 0 else float("inf")
+        return {"anual": anual, "pf": pf, "n": ntr, "dd": dd}
+
+    baseline = _eval_portfolio({s: 0.04 for s in datos})
+    sharpe_alloc = _eval_portfolio(asignaciones)
+
+    print(f"\n{'config':>16s} {'PF te':>6s} {'anual te':>9s} {'trades':>7s} {'DD te':>6s}")
+    print("-" * 50)
+    pf_b = f"{baseline['pf']:.2f}" if baseline["pf"] != float("inf") else "inf"
+    pf_s = f"{sharpe_alloc['pf']:.2f}" if sharpe_alloc["pf"] != float("inf") else "inf"
+    print(f"{'4% igual (base)':>16s} {pf_b:>6s} {baseline['anual']:+8.2f}% "
+          f"{baseline['n']:7d} {baseline['dd']:5.1f}%")
+    print(f"{'ponderado Sharpe':>16s} {pf_s:>6s} {sharpe_alloc['anual']:+8.2f}% "
+          f"{sharpe_alloc['n']:7d} {sharpe_alloc['dd']:5.1f}%")
+
+    mejora = sharpe_alloc["anual"] - baseline["anual"]
+    print(f"\nMejora: {mejora:+.2f}% anual  "
+          f"({'↑ Sharpe allocation MEJOR' if mejora > 0 else '↓ asignación igual más robusta'})")
+    print("\nAsignaciones recomendadas para config/configuraciones_optimas.json:")
+    for s, r in sorted(asignaciones.items(), key=lambda x: x[1], reverse=True):
+        sym_slash = s[:-3] + "/" + s[-3:]  # ETHEUR → ETH/EUR
+        print(f"  {sym_slash}: riesgo_por_trade = {r:.2f}  (Sharpe={sharpes[s]:+.3f})")
+
+
 def estudio_walk_forward(symbols: list[str], days: int, capital0: float,
                          n_folds: int = 5) -> None:
     """Walk-Forward Validation: divide el histórico en N ventanas y evalúa
@@ -1252,6 +1370,8 @@ def main() -> None:
                    help="walk-forward validation: N folds temporales, mide consistencia")
     p.add_argument("--wf_folds", type=int, default=5,
                    help="número de folds para walk-forward (default 5)")
+    p.add_argument("--study_sharpe", action="store_true",
+                   help="asignación de riesgo ponderada por Sharpe ratio por símbolo")
     p.add_argument("--rotacion", action="store_true",
                    help="estrategia de referencia: rotacion de momentum")
     args = p.parse_args()
@@ -1306,6 +1426,12 @@ def main() -> None:
         t0 = time.perf_counter()
         estudio_walk_forward(symbols, args.days, args.capital, n_folds=args.wf_folds)
         print(f"\n[tiempo] walk-forward: {time.perf_counter() - t0:.1f}s")
+        return
+
+    if args.study_sharpe:
+        t0 = time.perf_counter()
+        estudio_sharpe_allocation(symbols, args.days, args.capital)
+        print(f"\n[tiempo] sharpe allocation: {time.perf_counter() - t0:.1f}s")
         return
 
     if args.rotacion:

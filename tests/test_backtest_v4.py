@@ -35,6 +35,8 @@ estudio_simbolos = _mod.estudio_simbolos
 estudio_eth_riesgo = _mod.estudio_eth_riesgo
 estudio_fear_greed = _mod.estudio_fear_greed
 estudio_walk_forward = _mod.estudio_walk_forward
+estudio_sharpe_allocation = _mod.estudio_sharpe_allocation
+_sharpe = _mod._sharpe
 _fg_valor = _mod._fg_valor
 
 
@@ -632,3 +634,52 @@ class TestWalkForward:
         estudio_walk_forward(["BTCEUR"], days=200, capital0=1000.0, n_folds=3)
         out = capsys.readouterr().out
         assert "sin datos" in out or "ERROR" in out or "sin datos" in out.lower()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  Tests de _sharpe y estudio_sharpe_allocation
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestSharpeAllocation:
+
+    def test_sharpe_lista_vacia_retorna_cero(self) -> None:
+        assert _sharpe([]) == 0.0
+
+    def test_sharpe_un_elemento_retorna_cero(self) -> None:
+        assert _sharpe([0.05]) == 0.0
+
+    def test_sharpe_positivo_en_tendencia(self) -> None:
+        """Con retornos todos positivos el Sharpe debe ser positivo."""
+        retornos = [0.01] * 30
+        assert _sharpe(retornos) > 0
+
+    def test_sharpe_tendencia_mayor_que_lateral(self) -> None:
+        """Sharpe de retornos crecientes > Sharpe de retornos ruidosos."""
+        retornos_trend = [0.01 + i * 0.0001 for i in range(50)]
+        retornos_noise = [0.01 * (1 if i % 2 == 0 else -1) for i in range(50)]
+        assert _sharpe(retornos_trend) > _sharpe(retornos_noise)
+
+    def test_estudio_sharpe_sin_excepcion(self, monkeypatch) -> None:
+        """estudio_sharpe_allocation no debe lanzar excepción con datos sintéticos."""
+        velas = _velas_tendencia(300, pendiente=0.5)
+        monkeypatch.setattr(_mod, "descargar_klines", lambda s, iv, d: velas)
+        estudio_sharpe_allocation(["BTCEUR", "ETHEUR", "SOLEUR"], days=300, capital0=1000.0)
+
+    def test_estudio_sharpe_salida_contiene_tabla(self, monkeypatch, capsys) -> None:
+        """La salida debe mostrar Sharpe y riesgo por símbolo."""
+        velas = _velas_tendencia(300, pendiente=0.5)
+        monkeypatch.setattr(_mod, "descargar_klines", lambda s, iv, d: velas)
+        estudio_sharpe_allocation(["BTCEUR", "ETHEUR"], days=300, capital0=1000.0)
+        out = capsys.readouterr().out
+        assert "Sharpe" in out
+        assert "BTCEUR" in out or "BTC/EUR" in out
+        assert "riesgo" in out.lower() or "%" in out
+
+    def test_estudio_sharpe_salida_contiene_comparacion(self, monkeypatch, capsys) -> None:
+        """La salida debe comparar baseline vs asignación Sharpe."""
+        velas = _velas_tendencia(300, pendiente=0.5)
+        monkeypatch.setattr(_mod, "descargar_klines", lambda s, iv, d: velas)
+        estudio_sharpe_allocation(["BTCEUR", "ETHEUR"], days=300, capital0=1000.0)
+        out = capsys.readouterr().out
+        assert "base" in out.lower() or "igual" in out.lower()
+        assert "Sharpe" in out
