@@ -37,6 +37,29 @@ jobs:
         with:
           python-version: "3.11"
 
+      - name: Diagnóstico de entorno
+        run: |
+          echo "=== Python ==="
+          python --version
+          echo "=== Script importable ==="
+          python -c "
+          import sys, importlib.util, pathlib
+          spec = importlib.util.spec_from_file_location('br', 'backtesting/backtest_rapido.py')
+          mod = importlib.util.module_from_spec(spec)
+          sys.modules['backtesting.backtest_rapido'] = mod
+          spec.loader.exec_module(mod)
+          print('OK — backtest_rapido cargado')
+          print(f'funciones: {[f for f in dir(mod) if not f.startswith(\"_\")][:8]}')
+          "
+          echo "=== Conectividad ==="
+          curl -s --max-time 5 -o /dev/null -w "Binance: %{http_code} (%{time_total}s)\n" \
+            "https://api.binance.com/api/v3/ping" || echo "Binance: no accesible"
+          curl -s --max-time 5 -o /dev/null -w "CryptoCompare: %{http_code} (%{time_total}s)\n" \
+            "https://min-api.cryptocompare.com/data/price?fsym=BTC&tsyms=EUR" || echo "CryptoCompare: no accesible"
+          echo "=== Argumentos que se pasarán ==="
+          STUDY="${{ inputs.study || 'study4' }}"
+          echo "  --$STUDY --days ${{ inputs.days || '1825' }} --interval 1d"
+
       - name: Calcular cache key (sin comas)
         id: cachekey
         run: |
@@ -60,24 +83,15 @@ jobs:
           DAYS="${{ inputs.days || '1825' }}"
           STUDY="${{ inputs.study || 'study4' }}"
 
-          # Construir args --symbol para cada símbolo
           SYMBOL_ARGS=""
           IFS=',' read -ra SYM_LIST <<< "$SYMBOLS"
           for s in "${SYM_LIST[@]}"; do
             SYMBOL_ARGS="$SYMBOL_ARGS --symbol ${s// /}"
           done
 
-          echo "==== Configuración ===="
-          echo "  Estudio  : --$STUDY"
-          echo "  Días     : $DAYS"
-          echo "  Símbolos : $SYMBOLS"
-          echo "  Python   : $(python --version)"
-          echo "========================"
+          echo "Corriendo: python backtesting/backtest_rapido.py --${STUDY} --days ${DAYS} --interval 1d ${SYMBOL_ARGS}"
           echo ""
 
-          # study/study2 pueden usar otros intervalos; study3/study4 solo 1d.
-          # El script ya hace fallback automático a CryptoCompare si Binance
-          # no está disponible desde GitHub Actions.
           python backtesting/backtest_rapido.py \
             --$STUDY \
             --days "$DAYS" \

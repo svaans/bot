@@ -22,7 +22,9 @@ import csv
 import json
 import math
 import os
+import sys
 import time
+import traceback
 import urllib.request
 from dataclasses import dataclass, field
 
@@ -846,4 +848,9 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception:
+        print("\n[FATAL] Error no capturado:", file=sys.stderr)
+        traceback.print_exc(file=sys.stderr)
+        sys.exit(1)
