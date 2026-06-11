@@ -58,6 +58,9 @@ jobs:
           SAFE=$(echo "$RAW" | tr ',' '_')
           echo "key=binance-${SAFE}-${{ inputs.days || '1825' }}d" >> "$GITHUB_OUTPUT"
 
+      - name: Instalar yfinance (fallback de datos)
+        run: pip install yfinance --quiet
+
       - name: Restaurar caché de datos Binance
         uses: actions/cache@v4
         with:

@@ -53,18 +53,18 @@ def _symbol_a_cc(symbol: str) -> tuple[str, str]:
 
 
 def _descargar_klines_cc(symbol: str, days: int) -> list[list[float]]:
-    """Fallback CryptoCompare (solo 1d). Funciona desde GitHub Actions / cloud."""
+    """Fallback CryptoCompare (solo 1d). Requiere API key desde 2024."""
     base, quote = _symbol_a_cc(symbol)
     url = f"{CC_BASE}/histoday?fsym={base}&tsym={quote}&limit={days}"
     print(f"  [cryptocompare] {url}")
-    with urllib.request.urlopen(url, timeout=30) as r:
+    with urllib.request.urlopen(url, timeout=15) as r:
         data = json.load(r)
     if data.get("Response") != "Success":
         raise RuntimeError(f"CryptoCompare error {symbol}: {data.get('Message', data)}")
     velas = []
     for item in data["Data"]["Data"]:
         if item["open"] == 0 and item["close"] == 0:
-            continue  # vela vacía (sin trading ese día)
+            continue
         velas.append([float(item["time"]) * 1000,
                       float(item["open"]), float(item["high"]),
                       float(item["low"]),  float(item["close"]),
@@ -73,9 +73,61 @@ def _descargar_klines_cc(symbol: str, days: int) -> list[list[float]]:
     return velas
 
 
+def _descargar_klines_yf(symbol: str, days: int) -> list[list[float]]:
+    """Fallback Yahoo Finance vía yfinance (pip install yfinance).
+    Funciona desde GitHub Actions sin autenticación."""
+    try:
+        import yfinance as yf
+    except ImportError:
+        raise RuntimeError("yfinance no instalado — ejecutar: pip install yfinance")
+
+    # BTCEUR → BTC-EUR, ETHEUR → ETH-EUR
+    for quote in ("USDT", "EUR", "USD", "GBP"):
+        if symbol.endswith(quote):
+            yf_sym = f"{symbol[:-len(quote)]}-{quote}"
+            break
+    else:
+        raise ValueError(f"No se puede mapear a Yahoo Finance: {symbol}")
+
+    import datetime
+    fin = datetime.datetime.utcnow()
+    inicio = fin - datetime.timedelta(days=days + 10)
+    print(f"  [yfinance] descargando {yf_sym} desde {inicio.date()} hasta {fin.date()}")
+
+    df = yf.download(
+        yf_sym,
+        start=inicio.strftime("%Y-%m-%d"),
+        end=fin.strftime("%Y-%m-%d"),
+        interval="1d",
+        progress=False,
+        auto_adjust=True,
+    )
+    if df is None or df.empty:
+        raise RuntimeError(f"Yahoo Finance: sin datos para {yf_sym}")
+
+    # yfinance >= 0.2.31 puede devolver MultiIndex — aplanamos
+    if hasattr(df.columns, "levels"):
+        df.columns = df.columns.get_level_values(0)
+
+    velas: list[list[float]] = []
+    for ts, row in df.iterrows():
+        try:
+            o, h, lo, c = float(row["Open"]), float(row["High"]), float(row["Low"]), float(row["Close"])
+            v = float(row.get("Volume", 0) or 0)
+        except (KeyError, TypeError, ValueError):
+            continue
+        if any(x != x for x in (o, h, lo, c)):  # NaN check
+            continue
+        ts_ms = float(ts.value) / 1_000_000  # ns → ms
+        velas.append([ts_ms, o, h, lo, c, v])
+    velas.sort(key=lambda x: x[0])
+    return velas
+
+
 def descargar_klines(symbol: str, interval: str, days: int) -> list[list[float]]:
-    """Descarga velas (con caché en CSV). Primero intenta Binance; si la IP
-    está bloqueada (ej: GitHub Actions), usa CryptoCompare como fallback (1d)."""
+    """Descarga velas (con caché en CSV).
+    Cadena de fallback: Binance → CryptoCompare → Yahoo Finance (yfinance).
+    Solo 1d soportado en fallback."""
     os.makedirs(CACHE_DIR, exist_ok=True)
     ruta = os.path.join(CACHE_DIR, f"{symbol}_{interval}_{days}d.csv")
     if os.path.exists(ruta):
@@ -86,7 +138,6 @@ def descargar_klines(symbol: str, interval: str, days: int) -> list[list[float]]
     inicio = fin - days * 86_400_000
     velas: list[list[float]] = []
     cursor = inicio
-    binance_ok = True
     try:
         while cursor < fin:
             url = (f"{BINANCE}?symbol={symbol}&interval={interval}"
@@ -101,17 +152,33 @@ def descargar_klines(symbol: str, interval: str, days: int) -> list[list[float]]
             cursor = int(lote[-1][0]) + MS[interval]
             time.sleep(0.15)
     except Exception as exc:
-        print(f"  [binance] {symbol}/{interval} no disponible: {exc!r}")
-        binance_ok = False
+        print(f"  [binance] {symbol}/{interval} bloqueado: {exc!r}")
+        velas = []
 
-    if not binance_ok or not velas:
+    if not velas:
         if interval != "1d":
             raise RuntimeError(
-                f"Binance no disponible e intervalo {interval!r} no soportado "
-                "por CryptoCompare. Usa --interval 1d o ejecuta localmente."
+                f"Binance bloqueado e intervalo {interval!r} no soportado en fallback. "
+                "Usa --interval 1d o ejecuta localmente."
             )
-        print(f"  [fallback] usando CryptoCompare para {symbol}…")
-        velas = _descargar_klines_cc(symbol, days)
+        for nombre, fn in [
+            ("CryptoCompare", lambda: _descargar_klines_cc(symbol, days)),
+            ("Yahoo Finance",  lambda: _descargar_klines_yf(symbol, days)),
+        ]:
+            try:
+                print(f"  [fallback] probando {nombre} para {symbol}…")
+                velas = fn()
+                if velas:
+                    print(f"  [{nombre}] {symbol}: {len(velas)} velas OK")
+                    break
+            except Exception as exc2:
+                print(f"  [{nombre}] falló: {exc2!r}")
+        else:
+            raise RuntimeError(
+                f"Todas las fuentes fallaron para {symbol}. "
+                "Comprueba conectividad o ejecuta localmente."
+            )
+
     with open(ruta, "w", newline="") as f:
         csv.writer(f).writerows(velas)
     return velas
