@@ -156,6 +156,9 @@ class Config:
     pf_guard_ventana: int = 20
     pf_guard_umbral_pf: float = 0.7
     filtro_macro_btc_enabled: bool = False
+    filtro_fear_greed_enabled: bool = False
+    fg_umbral_codicia: int = 75
+    fg_umbral_miedo: int = 0
     regimen_entrada_enabled: bool = False
     regimen_vol_atr_ratio_alto: float = 0.025
     regimen_vol_atr_ratio_bajo: float = 0.008
@@ -654,6 +657,12 @@ class ConfigManager:
             'FILTRO_MACRO_BTC_ENABLED',
             getattr(defaults, 'filtro_macro_btc_enabled', False),
         )
+        filtro_fear_greed_enabled = _env_bool(
+            'FILTRO_FEAR_GREED_ENABLED',
+            getattr(defaults, 'filtro_fear_greed_enabled', False),
+        )
+        fg_umbral_codicia = _cargar_int('FG_UMBRAL_CODICIA', getattr(defaults, 'fg_umbral_codicia', 75))
+        fg_umbral_miedo = _cargar_int('FG_UMBRAL_MIEDO', getattr(defaults, 'fg_umbral_miedo', 0))
         regimen_entrada_enabled = _env_bool(
             'REGIMEN_ENTRADA_ENABLED',
             getattr(defaults, 'regimen_entrada_enabled', False),
@@ -740,6 +749,9 @@ class ConfigManager:
             pf_guard_ventana=pf_guard_ventana,
             pf_guard_umbral_pf=pf_guard_umbral_pf,
             filtro_macro_btc_enabled=filtro_macro_btc_enabled,
+            filtro_fear_greed_enabled=filtro_fear_greed_enabled,
+            fg_umbral_codicia=fg_umbral_codicia,
+            fg_umbral_miedo=fg_umbral_miedo,
             regimen_entrada_enabled=regimen_entrada_enabled,
             regimen_vol_atr_ratio_alto=regimen_vol_atr_ratio_alto,
             regimen_vol_atr_ratio_bajo=regimen_vol_atr_ratio_bajo,

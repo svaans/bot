@@ -26,6 +26,9 @@ class ProductionConfig(DevelopmentConfig):
     # Fear & Greed: bloquear entradas en codicia extrema (>75).
     filtro_fear_greed_enabled: bool = True
     fg_umbral_codicia: int = 75
+    # zona_neutral: bloquear también pánico extremo (F&G < 25).
+    # Estudio fear_greed: zona_neutral → +15.58% test vs +14.96% solo codicia.
+    fg_umbral_miedo: int = 25
     # Límite alts correladas: máx 2 de {SOL, XRP, AVAX} simultáneas.
     max_posiciones_alts: int = 2
     # Rolling PF Guard: si el PF de las últimas 20 ops cae < 0.7, pausar entradas.

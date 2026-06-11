@@ -78,6 +78,9 @@ class DevelopmentConfig:
     # Desactivado por defecto; activar en producción o con FILTRO_FEAR_GREED_ENABLED=true.
     filtro_fear_greed_enabled: bool = False
     fg_umbral_codicia: int = 75
+    # Umbral inferior F&G: bloquea entradas cuando el pánico es extremo (< umbral).
+    # 0 = desactivado (solo bloqueo superior). Con 25 activa zona_neutral.
+    fg_umbral_miedo: int = 0
     regimen_vol_atr_ratio_alto: float = 0.06
     regimen_vol_atr_ratio_bajo: float = 0.02
     regimen_atr_periodo: int = 14

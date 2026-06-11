@@ -324,7 +324,8 @@ class StrategyEngine:
         fg_ok = True
         if bool(config.get("filtro_fear_greed_enabled", False)):
             umbral_codicia = int(config.get("fg_umbral_codicia", 75))
-            resultado_fg = fear_greed_permite_entrada(umbral_codicia)
+            umbral_miedo = int(config.get("fg_umbral_miedo", 0))
+            resultado_fg = fear_greed_permite_entrada(umbral_codicia, umbral_miedo)
             if resultado_fg is False:
                 fg_ok = False
 

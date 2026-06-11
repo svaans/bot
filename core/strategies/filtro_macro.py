@@ -55,17 +55,27 @@ def obtener_fear_greed() -> int | None:
         return valor_cache
 
 
-def fear_greed_permite_entrada(umbral_codicia: int = 75) -> bool | None:
-    """Retorna False si el índice supera umbral_codicia (codicia extrema).
+def fear_greed_permite_entrada(
+    umbral_codicia: int = 75,
+    umbral_miedo: int = 0,
+) -> bool | None:
+    """Retorna False si el índice está fuera de la zona de operación.
 
-    Retorna None si no hay datos (el llamador no debe bloquear en ese caso).
-    Lógica: en codicia extrema el mercado está sobrecomprado y las entradas
-    tienen peor relación riesgo/beneficio histórica.
+    Con ``umbral_miedo > 0`` implementa zona_neutral: bloquea tanto la
+    codicia extrema (F&G > umbral_codicia) como el pánico extremo
+    (F&G < umbral_miedo). El estudio empírico muestra que en pánico
+    extremo el downtrend sigue activo y las entradas tienen peor RR.
+
+    Retorna None si no hay datos (el llamador no debe bloquear).
     """
     valor = obtener_fear_greed()
     if valor is None:
         return None
-    return valor <= umbral_codicia
+    if valor > umbral_codicia:
+        return False
+    if umbral_miedo > 0 and valor < umbral_miedo:
+        return False
+    return True
 
 
 def btc_en_tendencia(df_btc: pd.DataFrame | None, periodo: int = 200) -> bool | None:

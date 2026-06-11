@@ -59,6 +59,38 @@ def test_umbral_0_siempre_bloquea_si_hay_datos() -> None:
         assert fear_greed_permite_entrada(umbral_codicia=0) is False
 
 
+# ─── tests de zona_neutral (umbral_miedo) ────────────────────────────────────
+
+def test_zona_neutral_bloquea_panico_extremo() -> None:
+    """F&G=15 (pánico) con umbral_miedo=25 → bloquea entrada."""
+    with patch("core.strategies.filtro_macro.obtener_fear_greed", return_value=15):
+        assert fear_greed_permite_entrada(umbral_codicia=75, umbral_miedo=25) is False
+
+
+def test_zona_neutral_permite_zona_media() -> None:
+    """F&G=50 (neutral) con zona 25-75 → permite entrada."""
+    with patch("core.strategies.filtro_macro.obtener_fear_greed", return_value=50):
+        assert fear_greed_permite_entrada(umbral_codicia=75, umbral_miedo=25) is True
+
+
+def test_zona_neutral_bloquea_codicia_extrema() -> None:
+    """F&G=80 (codicia) con zona 25-75 → bloquea entrada."""
+    with patch("core.strategies.filtro_macro.obtener_fear_greed", return_value=80):
+        assert fear_greed_permite_entrada(umbral_codicia=75, umbral_miedo=25) is False
+
+
+def test_zona_neutral_exactamente_en_limite_inferior_permite() -> None:
+    """F&G=25 con umbral_miedo=25 → permite (límite no es estricto)."""
+    with patch("core.strategies.filtro_macro.obtener_fear_greed", return_value=25):
+        assert fear_greed_permite_entrada(umbral_codicia=75, umbral_miedo=25) is True
+
+
+def test_umbral_miedo_cero_no_bloquea_panico() -> None:
+    """umbral_miedo=0 (desactivado) no bloquea aunque F&G sea muy bajo."""
+    with patch("core.strategies.filtro_macro.obtener_fear_greed", return_value=5):
+        assert fear_greed_permite_entrada(umbral_codicia=75, umbral_miedo=0) is True
+
+
 # ─── tests de obtener_fear_greed (caché en memoria) ──────────────────────────
 
 def test_obtener_fear_greed_usa_cache() -> None:
