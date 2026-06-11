@@ -152,6 +152,9 @@ class Config:
     max_posiciones_cartera: int = 0
     max_posiciones_mismo_sentido: int = 0
     max_posiciones_alts: int = 0
+    pf_guard_enabled: bool = False
+    pf_guard_ventana: int = 20
+    pf_guard_umbral_pf: float = 0.7
     filtro_macro_btc_enabled: bool = False
     regimen_entrada_enabled: bool = False
     regimen_vol_atr_ratio_alto: float = 0.025
@@ -641,6 +644,12 @@ class ConfigManager:
                 getattr(defaults, 'max_posiciones_alts', 0),
             ),
         )
+        pf_guard_enabled = _env_bool(
+            'PF_GUARD_ENABLED',
+            getattr(defaults, 'pf_guard_enabled', False),
+        )
+        pf_guard_ventana = max(5, _cargar_int('PF_GUARD_VENTANA', getattr(defaults, 'pf_guard_ventana', 20)))
+        pf_guard_umbral_pf = _cargar_float('PF_GUARD_UMBRAL_PF', getattr(defaults, 'pf_guard_umbral_pf', 0.7))
         filtro_macro_btc_enabled = _env_bool(
             'FILTRO_MACRO_BTC_ENABLED',
             getattr(defaults, 'filtro_macro_btc_enabled', False),
@@ -727,6 +736,9 @@ class ConfigManager:
             max_posiciones_cartera=max_posiciones_cartera,
             max_posiciones_mismo_sentido=max_posiciones_mismo_sentido,
             max_posiciones_alts=max_posiciones_alts,
+            pf_guard_enabled=pf_guard_enabled,
+            pf_guard_ventana=pf_guard_ventana,
+            pf_guard_umbral_pf=pf_guard_umbral_pf,
             filtro_macro_btc_enabled=filtro_macro_btc_enabled,
             regimen_entrada_enabled=regimen_entrada_enabled,
             regimen_vol_atr_ratio_alto=regimen_vol_atr_ratio_alto,

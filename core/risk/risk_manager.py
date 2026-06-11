@@ -15,6 +15,7 @@ poner a cero ``_perdidas_consecutivas`` sin cerrar posiciones.
 from __future__ import annotations
 
 import asyncio
+from collections import deque
 from datetime import datetime, timedelta, timezone
 import math
 
@@ -76,6 +77,9 @@ class RiskManager:
         max_posiciones_cartera: int = 0,
         max_posiciones_mismo_sentido: int = 0,
         max_posiciones_alts: int = 0,
+        pf_guard_enabled: bool = False,
+        pf_guard_ventana: int = 20,
+        pf_guard_umbral_pf: float = 0.7,
     ) -> None:
         self.umbral = umbral
         self._factor_kelly_prev = None
@@ -108,6 +112,10 @@ class RiskManager:
         self.max_posiciones_cartera = max(0, int(max_posiciones_cartera))
         self.max_posiciones_mismo_sentido = max(0, int(max_posiciones_mismo_sentido))
         self.max_posiciones_alts = max(0, int(max_posiciones_alts))
+        self.pf_guard_enabled = bool(pf_guard_enabled)
+        self.pf_guard_ventana = max(5, int(pf_guard_ventana))
+        self.pf_guard_umbral_pf = max(0.1, float(pf_guard_umbral_pf))
+        self._rolling_retornos: deque[float] = deque(maxlen=self.pf_guard_ventana)
         self._perdidas_consecutivas = 0
         self._kill_switch_disparado = False
         self._risk_subscribed_bus_ids: set[int] = set()
@@ -163,15 +171,22 @@ class RiskManager:
             pm = self._coerce_float(raw_pm)
             if pm > 0:
                 perdida_moneda = pm
+        retorno = self._coerce_float(data.get('perdida', 0.0))
         self.registrar_perdida(
             data.get('symbol'),
-            self._coerce_float(data.get('perdida', 0.0)),
+            retorno,
             perdida_moneda=perdida_moneda,
         )
+        if retorno < 0:
+            self._rolling_retornos.append(retorno)
         await self._maybe_activate_kill_switch()
 
     async def _on_win_streak_reset(self, data: Any) -> None:
         self._perdidas_consecutivas = 0
+        if isinstance(data, Mapping):
+            retorno = self._coerce_float(data.get('retorno', 0.0))
+            if retorno > 0:
+                self._rolling_retornos.append(retorno)
 
     async def _on_pnl_update(self, payload: Any) -> None:
         if not isinstance(payload, Mapping):
@@ -694,6 +709,21 @@ class RiskManager:
             return 0.0
         return float(np.mean(valores))
 
+    def _pf_rolling(self) -> float | None:
+        """PF de las últimas ``pf_guard_ventana`` operaciones cerradas.
+
+        Devuelve None si no hay suficientes datos (< ventana completa).
+        PF = suma_ganancias / suma_pérdidas; >1 rentable, <1 perdedor.
+        """
+        retornos = list(self._rolling_retornos)
+        if len(retornos) < self.pf_guard_ventana:
+            return None
+        ganancias = sum(r for r in retornos if r > 0)
+        perdidas = sum(abs(r) for r in retornos if r < 0)
+        if perdidas == 0:
+            return float("inf")
+        return ganancias / perdidas
+
     def permite_entrada(
         self, symbol: str, correlaciones: dict[str, float], diversidad_minima: float
     ) -> bool:
@@ -708,6 +738,14 @@ class RiskManager:
         if self.cooldown_activo:
             log.info('🚫 Cooldown activo, no se permiten nuevas entradas')
             return False
+        if self.pf_guard_enabled:
+            pf_actual = self._pf_rolling()
+            if pf_actual is not None and pf_actual < self.pf_guard_umbral_pf:
+                log.warning(
+                    '🚫 PF rolling %.2f < %.2f — estrategia en modo degradado, bloqueando entrada',
+                    pf_actual, self.pf_guard_umbral_pf,
+                )
+                return False
         total_abiertas, _, _ = self._conteo_ordenes_abiertas()
         if self.max_posiciones_cartera > 0 and total_abiertas >= self.max_posiciones_cartera:
             log.info(

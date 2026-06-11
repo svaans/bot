@@ -318,7 +318,7 @@ async def _finalizar_cierre_completo_async(
         if retorno < 0:
             await manager._publish_registrar_perdida(symbol, retorno, orden)
         else:
-            await manager.bus.publish("risk.win_streak_reset", {})
+            await manager.bus.publish("risk.win_streak_reset", {"retorno": retorno, "symbol": symbol})
 
     log.info("📤 Orden cerrada para %s @ %.2f | %s", symbol, precio_cierre, motivo)
 

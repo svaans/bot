@@ -422,10 +422,16 @@ class Trader(TraderLite):
         max_pos_cartera = 0
         max_pos_sentido = 0
         max_pos_alts = 0
+        pf_guard_enabled = False
+        pf_guard_ventana = 20
+        pf_guard_umbral_pf = 0.7
         try:
             max_pos_cartera = max(0, int(getattr(cfg, "max_posiciones_cartera", 0)))
             max_pos_sentido = max(0, int(getattr(cfg, "max_posiciones_mismo_sentido", 0)))
             max_pos_alts = max(0, int(getattr(cfg, "max_posiciones_alts", 0)))
+            pf_guard_enabled = bool(getattr(cfg, "pf_guard_enabled", False))
+            pf_guard_ventana = max(5, int(getattr(cfg, "pf_guard_ventana", 20)))
+            pf_guard_umbral_pf = float(getattr(cfg, "pf_guard_umbral_pf", 0.7))
         except (TypeError, ValueError):
             max_pos_cartera = 0
             max_pos_sentido = 0
@@ -442,6 +448,9 @@ class Trader(TraderLite):
                 max_posiciones_cartera=max_pos_cartera,
                 max_posiciones_mismo_sentido=max_pos_sentido,
                 max_posiciones_alts=max_pos_alts,
+                pf_guard_enabled=pf_guard_enabled,
+                pf_guard_ventana=pf_guard_ventana,
+                pf_guard_umbral_pf=pf_guard_umbral_pf,
             )
             orders.risk_manager = self.risk
         except Exception:

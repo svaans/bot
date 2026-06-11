@@ -28,3 +28,5 @@ class ProductionConfig(DevelopmentConfig):
     fg_umbral_codicia: int = 75
     # Límite alts correladas: máx 2 de {SOL, XRP, AVAX} simultáneas.
     max_posiciones_alts: int = 2
+    # Rolling PF Guard: si el PF de las últimas 20 ops cae < 0.7, pausar entradas.
+    pf_guard_enabled: bool = True

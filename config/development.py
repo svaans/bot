@@ -51,6 +51,12 @@ class DevelopmentConfig:
     # Límite de posiciones abiertas en alts correladas (SOL/XRP/AVAX).
     # 0 = desactivado. En producción se activa vía config o env.
     max_posiciones_alts: int = 0
+    # Rolling PF Guard: bloquea entradas si el PF de las últimas N operaciones
+    # cae por debajo del umbral (adaptaciones del bot que empeoran el resultado).
+    # Desactivado en dev para no interferir con tests; activo en producción.
+    pf_guard_enabled: bool = False
+    pf_guard_ventana: int = 20
+    pf_guard_umbral_pf: float = 0.7
     # Régimen adaptativo: el estudio profundo (--study2, 5 años, validación
     # 70/30) muestra que endurecer entradas en volatilidad anómala mejora el
     # PF fuera de muestra. Umbrales recalibrados para velas 1d (ATR/precio

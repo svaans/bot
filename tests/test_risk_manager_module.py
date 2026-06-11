@@ -554,3 +554,57 @@ def test_max_posiciones_alts_cero_desactiva_limite() -> None:
     m = RiskManager(0.05, capital_manager=cap, max_posiciones_alts=0)
     m.posiciones_abiertas = {"SOL/USDT", "XRP/USDT", "DOGE/USDT"}
     assert m.permite_entrada("AVAX/USDT", {}, diversidad_minima=99) is True
+
+
+# ──────────────────────────── pf_guard (rolling PF) ─────────────────────────
+
+def test_pf_guard_sin_datos_no_bloquea() -> None:
+    """Con ventana vacía (< 20 ops) nunca bloquea — protege el arranque."""
+    cap = DummyCapitalManager({"ETH/USDT": 100.0})
+    m = RiskManager(0.05, capital_manager=cap, pf_guard_enabled=True, pf_guard_ventana=5)
+    # solo 4 pérdidas → ventana incompleta → no bloquea
+    for _ in range(4):
+        m._rolling_retornos.append(-0.04)
+    assert m.permite_entrada("ETH/USDT", {}, diversidad_minima=99) is True
+
+
+def test_pf_guard_bloquea_pf_bajo() -> None:
+    """Con ventana llena y PF < 0.7, permite_entrada devuelve False."""
+    cap = DummyCapitalManager({"ETH/USDT": 100.0})
+    m = RiskManager(0.05, capital_manager=cap, pf_guard_enabled=True,
+                    pf_guard_ventana=5, pf_guard_umbral_pf=0.7)
+    # 1 ganancia pequeña + 4 pérdidas → PF = 0.04 / (4×0.04) = 0.25
+    m._rolling_retornos.extend([0.04, -0.04, -0.04, -0.04, -0.04])
+    assert m._pf_rolling() is not None
+    assert m._pf_rolling() < 0.7
+    assert m.permite_entrada("ETH/USDT", {}, diversidad_minima=99) is False
+
+
+def test_pf_guard_permite_pf_aceptable() -> None:
+    """Con PF ≥ 0.7 (estrategia rentable) no bloquea."""
+    cap = DummyCapitalManager({"ETH/USDT": 100.0})
+    m = RiskManager(0.05, capital_manager=cap, pf_guard_enabled=True,
+                    pf_guard_ventana=5, pf_guard_umbral_pf=0.7)
+    # 2 ganancias (12%) + 3 pérdidas (4%) → PF = 0.24 / 0.12 = 2.0
+    m._rolling_retornos.extend([0.12, 0.12, -0.04, -0.04, -0.04])
+    assert m._pf_rolling() >= 0.7
+    assert m.permite_entrada("ETH/USDT", {}, diversidad_minima=99) is True
+
+
+def test_pf_guard_desactivado_no_bloquea() -> None:
+    """pf_guard_enabled=False nunca bloquea aunque el PF sea malo."""
+    cap = DummyCapitalManager({"ETH/USDT": 100.0})
+    m = RiskManager(0.05, capital_manager=cap, pf_guard_enabled=False,
+                    pf_guard_ventana=5, pf_guard_umbral_pf=0.7)
+    m._rolling_retornos.extend([0.01, -0.04, -0.04, -0.04, -0.04])
+    assert m.permite_entrada("ETH/USDT", {}, diversidad_minima=99) is True
+
+
+def test_pf_guard_solo_perdidas_da_pf_cero() -> None:
+    """Ventana con 0 ganancias → PF=0, siempre bloqueado."""
+    cap = DummyCapitalManager({"BTC/USDT": 100.0})
+    m = RiskManager(0.05, capital_manager=cap, pf_guard_enabled=True,
+                    pf_guard_ventana=5, pf_guard_umbral_pf=0.7)
+    m._rolling_retornos.extend([-0.04] * 5)
+    assert m._pf_rolling() == 0.0
+    assert m.permite_entrada("BTC/USDT", {}, diversidad_minima=99) is False
