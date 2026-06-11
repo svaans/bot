@@ -37,14 +37,20 @@ jobs:
         with:
           python-version: "3.11"
 
+      - name: Calcular cache key (sin comas)
+        id: cachekey
+        run: |
+          RAW="${{ inputs.symbols || 'BTCEUR,ETHEUR,SOLEUR,ADAEUR,BNBEUR' }}"
+          SAFE=$(echo "$RAW" | tr ',' '_')
+          echo "key=binance-${SAFE}-${{ inputs.days || '1825' }}d" >> "$GITHUB_OUTPUT"
+
       - name: Restaurar caché de datos Binance
         uses: actions/cache@v4
         with:
           path: backtesting/cache
-          key: binance-cache-${{ inputs.symbols || 'default' }}-${{ inputs.days || '1825' }}d
+          key: ${{ steps.cachekey.outputs.key }}
           restore-keys: |
-            binance-cache-${{ inputs.symbols || 'default' }}-
-            binance-cache-
+            binance-
 
       - name: Ejecutar backtest
         env:
@@ -73,10 +79,3 @@ jobs:
             --$STUDY \
             --days "$DAYS" \
             $SYMBOL_ARGS
-
-      - name: Guardar caché de datos descargados
-        if: always()
-        uses: actions/cache/save@v4
-        with:
-          path: backtesting/cache
-          key: binance-cache-${{ inputs.symbols || 'default' }}-${{ inputs.days || '1825' }}d
