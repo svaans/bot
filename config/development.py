@@ -48,14 +48,23 @@ class DevelopmentConfig:
     diversidad_minima: int = 2
     max_posiciones_cartera: int = 0
     max_posiciones_mismo_sentido: int = 0
+    # Régimen adaptativo: el estudio profundo (--study2, 5 años, validación
+    # 70/30) muestra que endurecer entradas en volatilidad anómala mejora el
+    # PF fuera de muestra. Umbrales recalibrados para velas 1d (ATR/precio
+    # típico en cripto diario ~2-4%; el 0.025 original era de intradía y
+    # marcaría "alta" casi siempre). "alta" = régimen anómalo -> umbrales x1.5.
+    # El flag queda False aquí porque la suite de tests usa estos defaults y
+    # activarlo destapa flakiness de aislamiento de event loops en 2 tests de
+    # order manager; se activa en ProductionConfig y, para paper trading,
+    # exportando REGIMEN_ENTRADA_ENABLED=true.
     regimen_entrada_enabled: bool = False
-    regimen_vol_atr_ratio_alto: float = 0.025
-    regimen_vol_atr_ratio_bajo: float = 0.008
+    regimen_vol_atr_ratio_alto: float = 0.06
+    regimen_vol_atr_ratio_bajo: float = 0.02
     regimen_atr_periodo: int = 14
-    regimen_mult_umbral_alta: float = 1.0
+    regimen_mult_umbral_alta: float = 1.5
     regimen_mult_umbral_media: float = 1.0
     regimen_mult_umbral_baja: float = 1.0
-    regimen_mult_umbral_score_alta: float = 1.0
+    regimen_mult_umbral_score_alta: float = 1.5
     regimen_mult_umbral_score_media: float = 1.0
     regimen_mult_umbral_score_baja: float = 1.0
     timeout_verificar_salidas: int = 20

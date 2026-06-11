@@ -191,11 +191,36 @@ def backtest(velas: list[list[float]], symbol: str, capital0: float = 1000.0,
              umbral: float = 4.0, use_trailing: bool = True,
              trend_filter: bool = False,
              ind: dict[str, list[float]] | None = None,
-             i0: int = 0, i1: int | None = None) -> Resultado:
+             i0: int = 0, i1: int | None = None,
+             sl_ratio: float = SL_RATIO, tp_ratio: float = TP_RATIO,
+             vol_guard: bool = False) -> Resultado:
+    """vol_guard: modo adaptativo — no entra cuando la volatilidad (ATR/precio)
+    supera 2x su media de 100 velas (régimen anómalo)."""
     if ind is None:
         ind = calcular_indicadores(velas)
     close = ind["close"]
     n = i1 if i1 is not None else len(velas)
+
+    # media móvil del ratio ATR/precio para la guardia de volatilidad
+    atr_ratio_ma: list[float] = []
+    if vol_guard:
+        atr_ratio_ma = [math.nan] * len(close)
+        s = cnt = 0.0
+        buf: list[float] = []
+        for j in range(len(close)):
+            a = ind["atr"][j]
+            r = a / close[j] if not math.isnan(a) and close[j] > 0 else math.nan
+            buf.append(r)
+            if not math.isnan(r):
+                s += r
+                cnt += 1
+            if len(buf) > 100:
+                viejo = buf.pop(0)
+                if not math.isnan(viejo):
+                    s -= viejo
+                    cnt -= 1
+            if cnt >= 50:
+                atr_ratio_ma[j] = s / cnt
     res = Resultado(symbol=symbol, capital_final=capital0)
     capital = capital0
     pico = capital
@@ -212,7 +237,7 @@ def backtest(velas: list[list[float]], symbol: str, capital0: float = 1000.0,
             maximo = max(maximo, h)
             if use_trailing:
                 # trailing por ATR sobre el máximo alcanzado
-                sl = max(sl, maximo - SL_RATIO * ind["atr"][i])
+                sl = max(sl, maximo - sl_ratio * ind["atr"][i])
             precio_salida = None
             if l <= sl:
                 precio_salida = sl
@@ -240,16 +265,20 @@ def backtest(velas: list[list[float]], symbol: str, capital0: float = 1000.0,
         # entrada
         if trend_filter and not close[i] > ind["ema200"][i]:
             continue
+        if vol_guard and not math.isnan(atr_ratio_ma[i]) and close[i] > 0:
+            ratio = ind["atr"][i] / close[i]
+            if not math.isnan(ratio) and ratio > 2.0 * atr_ratio_ma[i]:
+                continue  # régimen de volatilidad anómala: no operar
         if cooldown == 0 and score_entrada(ind, i) >= umbral and not math.isnan(ind["atr"][i]):
             precio = close[i] * (1 + FEE + SLIPPAGE)
-            riesgo_unitario = SL_RATIO * ind["atr"][i]
+            riesgo_unitario = sl_ratio * ind["atr"][i]
             qty = (capital * RIESGO_POR_TRADE) / riesgo_unitario
             qty = min(qty, capital / precio)  # sin apalancamiento
             if qty * precio < 10:  # mínimo de orden ~10 EUR
                 continue
             entrada = precio
-            sl = close[i] - SL_RATIO * ind["atr"][i]
-            tp = close[i] + TP_RATIO * ind["atr"][i]
+            sl = close[i] - sl_ratio * ind["atr"][i]
+            tp = close[i] + tp_ratio * ind["atr"][i]
             maximo = close[i]
             capital -= qty * precio  # capital restante queda líquido
             en_pos = True
@@ -328,6 +357,68 @@ def estudio_timeframes(symbols: list[str], days: int, capital0: float) -> None:
               f"{pf1:>8s} {t1['ret']:+8.2f}% {t1['trades']:4d}")
 
 
+def estudio_profundo(symbols: list[str], days: int, capital0: float) -> None:
+    """Grid amplio en 4h/1d: umbral x sl x tp x tendencia x guardia de vol.
+
+    Train 0-70%, test 70-100% (fuera de muestra). Imprime el top 25 por PF
+    de test entre las configs con PF>1 en train y >=30 trades en train.
+    """
+    filas = []
+    for itv in ("4h", "1d"):
+        datos, indicadores = {}, {}
+        for s in symbols:
+            datos[s] = descargar_klines(s, itv, days)
+            indicadores[s] = calcular_indicadores(datos[s])
+        n_por_simbolo = {s: len(v) for s, v in datos.items()}
+        print(f"[{itv}] velas por símbolo: {n_por_simbolo}")
+
+        for umbral in (4.0, 5.0):
+            for sl in (1.0, 1.5, 2.0):
+                for tp in (2.0, 3.0, 4.5):
+                    for tendencia in (True, False):
+                        for guardia in (True, False):
+                            agg = {}
+                            for fase in ("train", "test"):
+                                cap = gan = per = 0.0
+                                ntr = 0
+                                for s in symbols:
+                                    n_s = n_por_simbolo[s]
+                                    corte = int(n_s * 0.7)
+                                    a, b = (0, corte) if fase == "train" else (corte, None)
+                                    r = backtest(
+                                        datos[s], s, capital0, umbral,
+                                        use_trailing=False,
+                                        trend_filter=tendencia,
+                                        ind=indicadores[s], i0=a, i1=b,
+                                        sl_ratio=sl, tp_ratio=tp,
+                                        vol_guard=guardia)
+                                    cap += r.capital_final
+                                    gan += r.bruto_ganado
+                                    per += r.bruto_perdido
+                                    ntr += r.trades
+                                agg[fase] = {
+                                    "ret": (cap / (capital0 * len(symbols)) - 1) * 100,
+                                    "pf": gan / per if per > 0 else float("inf"),
+                                    "trades": ntr,
+                                }
+                            filas.append((itv, umbral, sl, tp, tendencia,
+                                          guardia, agg))
+
+    robustas = [f for f in filas
+                if f[6]["train"]["pf"] > 1.0 and f[6]["train"]["trades"] >= 30]
+    robustas.sort(key=lambda f: min(f[6]["train"]["pf"], f[6]["test"]["pf"])
+                  if f[6]["test"]["pf"] != float("inf") else 0, reverse=True)
+    print(f"\nConfigs con PF>1 en train y >=30 trades: {len(robustas)} de {len(filas)}")
+    print(f"\n{'tf':>4s} {'umb':>4s} {'sl':>4s} {'tp':>4s} {'tend':>5s} {'vgrd':>5s} | "
+          f"{'PF tr':>6s} {'ret tr':>8s} {'n':>4s} | {'PF te':>6s} {'ret te':>8s} {'n':>4s}")
+    for itv, u, sl, tp, te, vg, agg in robustas[:25]:
+        t0, t1 = agg["train"], agg["test"]
+        pf1 = f"{t1['pf']:.2f}" if t1["pf"] != float("inf") else "inf"
+        print(f"{itv:>4s} {u:4.1f} {sl:4.1f} {tp:4.1f} {str(te):>5s} {str(vg):>5s} | "
+              f"{t0['pf']:6.2f} {t0['ret']:+7.2f}% {t0['trades']:4d} | "
+              f"{pf1:>6s} {t1['ret']:+7.2f}% {t1['trades']:4d}")
+
+
 # ----------------------------------------------------------------- main
 
 def fmt(res: Resultado, capital0: float, dias: int) -> str:
@@ -351,6 +442,8 @@ def main() -> None:
                    help="barrido de umbrales 2.0..6.0")
     p.add_argument("--study", action="store_true",
                    help="estudio timeframe x parametros con validacion 70/30")
+    p.add_argument("--study2", action="store_true",
+                   help="estudio profundo 4h/1d: sl/tp/tendencia/guardia vol")
     args = p.parse_args()
 
     symbols = args.symbol or ["BTCEUR", "ETHEUR", "SOLEUR", "ADAEUR", "BNBEUR"]
@@ -359,6 +452,12 @@ def main() -> None:
         t0 = time.perf_counter()
         estudio_timeframes(symbols, args.days, args.capital)
         print(f"\n[tiempo] estudio completo: {time.perf_counter() - t0:.1f}s")
+        return
+
+    if args.study2:
+        t0 = time.perf_counter()
+        estudio_profundo(symbols, args.days, args.capital)
+        print(f"\n[tiempo] estudio profundo: {time.perf_counter() - t0:.1f}s")
         return
 
     t0 = time.perf_counter()

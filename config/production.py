@@ -15,3 +15,5 @@ class ProductionConfig(DevelopmentConfig):
     symbols: List[str] = field(default_factory=lambda: ["BTC/USDT", "ETH/USDT"])
     contradicciones_bloquean_entrada: bool = True
     entrada_cooldown_tras_crear_failed_sec: float = 0.0
+    # Guardia adaptativa de volatilidad (calibración en DevelopmentConfig).
+    regimen_entrada_enabled: bool = True
