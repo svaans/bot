@@ -25,6 +25,8 @@ dist/
 
 # Base de datos
 backend/db.sqlite3
+*.db-shm
+*.db-wal
 
 # Logs
 logs/
