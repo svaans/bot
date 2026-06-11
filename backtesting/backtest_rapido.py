@@ -382,17 +382,20 @@ def backtest(velas: list[list[float]], symbol: str, capital0: float = 1000.0,
              btc_ind: dict[str, list[float]] | None = None,
              be_atr: float = 0.0,
              adx_min: float = 0.0,
-             fg_mask: list[bool] | None = None) -> Resultado:
+             fg_mask: list[bool] | None = None,
+             eq_dd_pausa: float = 0.0,
+             eq_dd_reduccion: float = 0.0) -> Resultado:
     """vol_guard: modo adaptativo — no entra cuando la volatilidad (ATR/precio)
     supera 2x su media de 100 velas (régimen anómalo).
-    btc_ind: si se pasa, filtro macro — solo entra cuando BTC > su EMA200
-    (las altcoins caen con BTC; se asume el mismo índice temporal).
+    btc_ind: si se pasa, filtro macro — solo entra cuando BTC > su EMA200.
     senal_v2: añade ruptura Donchian-20 al score.
-    be_atr: break-even stop — cuando el precio gana be_atr*ATR, SL sube a entrada
-    (0 = desactivado). Reduce el riesgo en operaciones que se vuelven ganadoras.
-    adx_min: filtro ADX — solo entra cuando ADX(14) >= adx_min (0 = desactivado).
-    Evita entradas en mercados laterales sin tendencia definida.
-    fg_mask: lista bool por vela; False = bloquear entrada (Fear&Greed filter)."""
+    be_atr: break-even stop — SL sube a entrada cuando precio gana be_atr×ATR.
+    adx_min: filtro ADX mínimo para entrar (0 = desactivado).
+    fg_mask: lista bool por vela; False = bloquear entrada (Fear&Greed filter).
+    eq_dd_pausa: DD de equity (0-1) a partir del cual se pausan nuevas entradas.
+      Ej: 0.15 = pausar si el capital cae >15% desde su máximo. 0 = desactivado.
+    eq_dd_reduccion: DD de equity (0-1) a partir del cual se reduce riesgo a la mitad.
+      Ej: 0.10 = reducir riesgo al 50% si DD >10%. 0 = desactivado."""
     if ind is None:
         ind = calcular_indicadores(velas)
     close = ind["close"]
@@ -484,11 +487,19 @@ def backtest(velas: list[list[float]], symbol: str, capital0: float = 1000.0,
                 continue
         if fg_mask is not None and i < len(fg_mask) and not fg_mask[i]:
             continue  # Fear & Greed filter bloquea esta vela
+        # Equity Curve Filter: ajuste dinámico de riesgo según drawdown actual
+        riesgo_efectivo = riesgo
+        if eq_dd_pausa > 0.0 or eq_dd_reduccion > 0.0:
+            dd_actual = (pico - capital) / pico if pico > 0 else 0.0
+            if eq_dd_pausa > 0.0 and dd_actual >= eq_dd_pausa:
+                continue  # pausa total de entradas
+            if eq_dd_reduccion > 0.0 and dd_actual >= eq_dd_reduccion:
+                riesgo_efectivo = riesgo * 0.5  # mitad del riesgo
         score_fn = score_entrada_v2 if senal_v2 else score_entrada
         if cooldown == 0 and score_fn(ind, i) >= umbral and not math.isnan(ind["atr"][i]):
             precio = close[i] * (1 + FEE + SLIPPAGE)
             riesgo_unitario = sl_ratio * ind["atr"][i]
-            qty = (capital * riesgo) / riesgo_unitario
+            qty = (capital * riesgo_efectivo) / riesgo_unitario
             qty = min(qty, capital / precio)  # sin apalancamiento
             if qty * precio < 10:  # mínimo de orden ~10 EUR
                 continue
@@ -1237,6 +1248,86 @@ def estudio_sharpe_allocation(symbols: list[str], days: int, capital0: float) ->
         print(f"  {sym_slash}: riesgo_por_trade = {r:.2f}  (Sharpe={sharpes[s]:+.3f})")
 
 
+def estudio_equity_filter(symbols: list[str], days: int, capital0: float) -> None:
+    """Evalúa el Equity Curve Filter: reducir riesgo o pausar entradas cuando
+    el capital está en drawdown respecto a su máximo histórico.
+
+    Compara 5 configuraciones vs baseline sin filtro:
+      sin_filtro:    todas las entradas con riesgo 4% (baseline)
+      reducir_10:    reducir riesgo a 2% cuando DD > 10%
+      reducir_15:    reducir riesgo a 2% cuando DD > 15%
+      pausar_15:     pausar entradas cuando DD > 15%
+      pausar_20:     pausar entradas cuando DD > 20%
+
+    El objetivo: el filtro reduce el DD máximo sin sacrificar demasiado
+    retorno. Un buen filtro sube el Sharpe aunque baje el CAGR bruto.
+    """
+    print("  descargando datos…")
+    datos, indicadores = {}, {}
+    for s in symbols:
+        try:
+            datos[s] = descargar_klines(s, "1d", days)
+            indicadores[s] = calcular_indicadores(datos[s])
+        except Exception as e:
+            print(f"  [ERROR] {s}: {e}")
+    if not datos:
+        return
+    btc_ind = indicadores.get("BTCEUR") or calcular_indicadores(
+        descargar_klines("BTCEUR", "1d", days))
+    n_sym = len(datos)
+
+    variantes = [
+        ("sin_filtro",  0.0,  0.0),
+        ("reducir_10%", 0.0,  0.10),
+        ("reducir_15%", 0.0,  0.15),
+        ("pausar_15%",  0.15, 0.0),
+        ("pausar_20%",  0.20, 0.0),
+    ]
+
+    print(f"\n{'variante':>14s} | "
+          f"{'PF tr':>6s} {'anual tr':>9s} {'DD tr':>6s} | "
+          f"{'PF te':>6s} {'anual te':>9s} {'DD te':>6s}  resultado")
+    print("-" * 82)
+
+    for nombre, dd_pausa, dd_red in variantes:
+        agg = {}
+        for fase in ("train", "test"):
+            cap = gan = per = 0.0
+            ntr = 0
+            dd = 0.0
+            for s, data in datos.items():
+                n_s = len(data)
+                corte = int(n_s * 0.7)
+                a, b = (0, corte) if fase == "train" else (corte, n_s)
+                r = backtest(
+                    data, s, capital0, 5.0,
+                    use_trailing=False, trend_filter=False,
+                    ind=indicadores[s], i0=a, i1=b,
+                    sl_ratio=1.0, tp_ratio=3.0, vol_guard=True,
+                    riesgo=0.04, senal_v2=False, btc_ind=btc_ind,
+                    eq_dd_pausa=dd_pausa, eq_dd_reduccion=dd_red,
+                )
+                cap += r.capital_final
+                gan += r.bruto_ganado
+                per += r.bruto_perdido
+                ntr += r.trades
+                dd = max(dd, r.max_drawdown)
+            dias_f = (corte if fase == "train" else (len(list(datos.values())[0]) - corte))
+            anual = ((cap / (capital0 * n_sym)) ** (365 / dias_f) - 1) * 100 if dias_f > 0 else 0
+            pf = gan / per if per > 0 else float("inf")
+            agg[fase] = {"pf": pf, "anual": anual, "dd": dd, "n": ntr}
+
+        tr, te = agg["train"], agg["test"]
+        pf_tr = f"{tr['pf']:.2f}" if tr["pf"] != float("inf") else "inf"
+        pf_te = f"{te['pf']:.2f}" if te["pf"] != float("inf") else "inf"
+        mejora = "✓ DD↓" if te["dd"] < agg["test"]["dd"] else ""
+        print(f"{nombre:>14s} | "
+              f"{pf_tr:>6s} {tr['anual']:+8.2f}% {tr['dd']:5.1f}% | "
+              f"{pf_te:>6s} {te['anual']:+8.2f}% {te['dd']:5.1f}%  {mejora}")
+
+    print(f"\nconfig base: 1d umbral=5 SL=1×ATR TP=3×ATR riesgo=4% vol_guard+BTC_macro")
+
+
 def estudio_walk_forward(symbols: list[str], days: int, capital0: float,
                          n_folds: int = 5) -> None:
     """Walk-Forward Validation: divide el histórico en N ventanas y evalúa
@@ -1372,6 +1463,8 @@ def main() -> None:
                    help="número de folds para walk-forward (default 5)")
     p.add_argument("--study_sharpe", action="store_true",
                    help="asignación de riesgo ponderada por Sharpe ratio por símbolo")
+    p.add_argument("--study_equity_filter", action="store_true",
+                   help="equity curve filter: reducir/pausar entradas en drawdown")
     p.add_argument("--rotacion", action="store_true",
                    help="estrategia de referencia: rotacion de momentum")
     args = p.parse_args()
@@ -1432,6 +1525,12 @@ def main() -> None:
         t0 = time.perf_counter()
         estudio_sharpe_allocation(symbols, args.days, args.capital)
         print(f"\n[tiempo] sharpe allocation: {time.perf_counter() - t0:.1f}s")
+        return
+
+    if args.study_equity_filter:
+        t0 = time.perf_counter()
+        estudio_equity_filter(symbols, args.days, args.capital)
+        print(f"\n[tiempo] equity filter: {time.perf_counter() - t0:.1f}s")
         return
 
     if args.rotacion:

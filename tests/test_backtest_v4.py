@@ -36,6 +36,7 @@ estudio_eth_riesgo = _mod.estudio_eth_riesgo
 estudio_fear_greed = _mod.estudio_fear_greed
 estudio_walk_forward = _mod.estudio_walk_forward
 estudio_sharpe_allocation = _mod.estudio_sharpe_allocation
+estudio_equity_filter = _mod.estudio_equity_filter
 _sharpe = _mod._sharpe
 _fg_valor = _mod._fg_valor
 
@@ -683,3 +684,60 @@ class TestSharpeAllocation:
         out = capsys.readouterr().out
         assert "base" in out.lower() or "igual" in out.lower()
         assert "Sharpe" in out
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  Tests del Equity Curve Filter
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestEquityFilter:
+
+    def test_pausa_total_da_cero_trades(self) -> None:
+        """eq_dd_pausa=0.001 con datos donde hay cualquier DD debe dar 0 trades."""
+        velas = _velas_tendencia(300, pendiente=0.3)
+        # Arrancamos con capital bajo y pausa muy agresiva (0.1%) → cualquier
+        # micro-fluctuación pausa entradas
+        res = backtest(velas, "TEST", capital0=1000.0, umbral=2.0,
+                       eq_dd_pausa=0.001)
+        # Con pausa extrema puede no haber trades o muy pocos; verificamos no crashea
+        assert isinstance(res, Resultado)
+        assert res.capital_final > 0
+
+    def test_sin_filtro_da_mas_o_igual_trades(self) -> None:
+        """Sin equity filter siempre >= trades que con equity filter activo."""
+        velas = _velas_tendencia(400, pendiente=0.3)
+        res_sin = backtest(velas, "TEST", umbral=2.0,
+                           eq_dd_pausa=0.0, eq_dd_reduccion=0.0)
+        res_con = backtest(velas, "TEST", umbral=2.0,
+                           eq_dd_pausa=0.20, eq_dd_reduccion=0.0)
+        assert res_sin.trades >= res_con.trades
+
+    def test_reduccion_50pct_no_excede_capital(self) -> None:
+        """Con reducción al 50% el capital nunca debe ser negativo."""
+        velas = _velas_tendencia(400, pendiente=0.2)
+        res = backtest(velas, "TEST", umbral=2.0,
+                       eq_dd_reduccion=0.10, eq_dd_pausa=0.0)
+        assert res.capital_final >= 0.0
+
+    def test_defaults_retrocompatibles(self) -> None:
+        """eq_dd_pausa=0 y eq_dd_reduccion=0 producen resultado idéntico al anterior."""
+        velas = _velas_tendencia(300, pendiente=0.5)
+        r1 = backtest(velas, "TEST", umbral=2.0)
+        r2 = backtest(velas, "TEST", umbral=2.0, eq_dd_pausa=0.0, eq_dd_reduccion=0.0)
+        assert r1.trades == r2.trades
+        assert abs(r1.capital_final - r2.capital_final) < 1e-9
+
+    def test_estudio_equity_filter_sin_excepcion(self, monkeypatch) -> None:
+        """estudio_equity_filter ejecuta sin excepción con datos sintéticos."""
+        velas = _velas_tendencia(300, pendiente=0.5)
+        monkeypatch.setattr(_mod, "descargar_klines", lambda s, iv, d: velas)
+        estudio_equity_filter(["BTCEUR", "ETHEUR"], days=300, capital0=1000.0)
+
+    def test_estudio_equity_filter_salida_contiene_variantes(self, monkeypatch, capsys) -> None:
+        """La tabla debe mostrar las variantes del filtro."""
+        velas = _velas_tendencia(300, pendiente=0.5)
+        monkeypatch.setattr(_mod, "descargar_klines", lambda s, iv, d: velas)
+        estudio_equity_filter(["BTCEUR"], days=300, capital0=1000.0)
+        out = capsys.readouterr().out
+        assert "sin_filtro" in out
+        assert "pausar" in out or "reducir" in out

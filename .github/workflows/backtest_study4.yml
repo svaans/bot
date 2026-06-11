@@ -19,6 +19,8 @@ on:
         options:
           - study_simbolos
           - study_wf
+          - study_sharpe
+          - study_equity_filter
           - study_eth_riesgo
           - study_fear_greed
           - study4
