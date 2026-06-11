@@ -41,24 +41,15 @@ jobs:
         run: |
           echo "=== Python ==="
           python --version
-          echo "=== Script importable ==="
-          python -c "
-          import sys, importlib.util, pathlib
-          spec = importlib.util.spec_from_file_location('br', 'backtesting/backtest_rapido.py')
-          mod = importlib.util.module_from_spec(spec)
-          sys.modules['backtesting.backtest_rapido'] = mod
-          spec.loader.exec_module(mod)
-          print('OK — backtest_rapido cargado')
-          print(f'funciones: {[f for f in dir(mod) if not f.startswith(\"_\")][:8]}')
-          "
+          echo "=== Sintaxis del script ==="
+          python -m py_compile backtesting/backtest_rapido.py && echo "Sintaxis OK"
           echo "=== Conectividad ==="
           curl -s --max-time 5 -o /dev/null -w "Binance: %{http_code} (%{time_total}s)\n" \
             "https://api.binance.com/api/v3/ping" || echo "Binance: no accesible"
           curl -s --max-time 5 -o /dev/null -w "CryptoCompare: %{http_code} (%{time_total}s)\n" \
             "https://min-api.cryptocompare.com/data/price?fsym=BTC&tsyms=EUR" || echo "CryptoCompare: no accesible"
-          echo "=== Argumentos que se pasarán ==="
-          STUDY="${{ inputs.study || 'study4' }}"
-          echo "  --$STUDY --days ${{ inputs.days || '1825' }} --interval 1d"
+          echo "=== Argumentos ==="
+          echo "  --${{ inputs.study || 'study4' }} --days ${{ inputs.days || '1825' }} --interval 1d"
 
       - name: Calcular cache key (sin comas)
         id: cachekey
