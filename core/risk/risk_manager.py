@@ -75,6 +75,7 @@ class RiskManager:
         kill_switch_max_perdidas_consecutivas: int = 5,
         max_posiciones_cartera: int = 0,
         max_posiciones_mismo_sentido: int = 0,
+        max_posiciones_alts: int = 0,
     ) -> None:
         self.umbral = umbral
         self._factor_kelly_prev = None
@@ -106,6 +107,7 @@ class RiskManager:
         self.kill_switch_max_perdidas_consecutivas = max(0, int(kill_switch_max_perdidas_consecutivas))
         self.max_posiciones_cartera = max(0, int(max_posiciones_cartera))
         self.max_posiciones_mismo_sentido = max(0, int(max_posiciones_mismo_sentido))
+        self.max_posiciones_alts = max(0, int(max_posiciones_alts))
         self._perdidas_consecutivas = 0
         self._kill_switch_disparado = False
         self._risk_subscribed_bus_ids: set[int] = set()
@@ -714,6 +716,21 @@ class RiskManager:
                 self.max_posiciones_cartera,
             )
             return False
+        # Límite de alts correladas: BTC/ETH actúan como ancla; limitar las
+        # altcoins puras (SOL, XRP, AVAX) que se mueven casi en sincronía.
+        if self.max_posiciones_alts > 0:
+            base = str(symbol).split("/")[0].split("-")[0].upper()
+            if base not in ("BTC", "ETH"):
+                alts_abiertas = sum(
+                    1 for s in self.posiciones_abiertas
+                    if s.split("/")[0].split("-")[0].upper() not in ("BTC", "ETH")
+                )
+                if alts_abiertas >= self.max_posiciones_alts:
+                    log.info(
+                        '🚫 Límite alts correladas: %d/%d alts abiertas, bloqueando %s',
+                        alts_abiertas, self.max_posiciones_alts, symbol,
+                    )
+                    return False
         if self.capital_manager and not self.capital_manager.hay_capital_libre():
             log.info('🚫 Sin capital libre para nuevas posiciones')
             return False

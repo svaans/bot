@@ -512,3 +512,45 @@ def test_max_posiciones_mismo_sentido() -> None:
     assert m.permite_cartera_mismo_sentido("long") is False
     assert m.permite_cartera_mismo_sentido("short") is True
     assert m.resumen_cartera_abierta() == {"total": 2, "long": 2, "short": 0}
+
+
+# ──────────────────────────── max_posiciones_alts ────────────────────────────
+
+def test_max_posiciones_alts_bloquea_tercera_alt() -> None:
+    """Con límite=2 y 2 alts abiertas la tercera alt es bloqueada."""
+    cap = DummyCapitalManager({"SOL/USDT": 100.0})
+    m = RiskManager(0.05, capital_manager=cap, max_posiciones_alts=2)
+    m.posiciones_abiertas = {"SOL/USDT", "XRP/USDT"}
+    # AVAX sería la tercera alt → bloqueado
+    assert m.permite_entrada("AVAX/USDT", {}, diversidad_minima=99) is False
+
+
+def test_max_posiciones_alts_permite_btc_con_alts_llenas() -> None:
+    """BTC nunca se bloquea por el límite de alts."""
+    cap = DummyCapitalManager({"BTC/USDT": 100.0})
+    m = RiskManager(0.05, capital_manager=cap, max_posiciones_alts=2)
+    m.posiciones_abiertas = {"SOL/USDT", "XRP/USDT"}
+    assert m.permite_entrada("BTC/USDT", {}, diversidad_minima=99) is True
+
+
+def test_max_posiciones_alts_permite_eth_con_alts_llenas() -> None:
+    """ETH tampoco se bloquea por el límite de alts."""
+    cap = DummyCapitalManager({"ETH/USDT": 100.0})
+    m = RiskManager(0.05, capital_manager=cap, max_posiciones_alts=2)
+    m.posiciones_abiertas = {"SOL/USDT", "XRP/USDT"}
+    assert m.permite_entrada("ETH/USDT", {}, diversidad_minima=99) is True
+
+
+def test_max_posiciones_alts_permite_primera_alt() -> None:
+    """Con 0 alts abiertas cualquier alt pasa el límite."""
+    cap = DummyCapitalManager({"SOL/USDT": 100.0})
+    m = RiskManager(0.05, capital_manager=cap, max_posiciones_alts=2)
+    assert m.permite_entrada("SOL/USDT", {}, diversidad_minima=99) is True
+
+
+def test_max_posiciones_alts_cero_desactiva_limite() -> None:
+    """max_posiciones_alts=0 no restringe nada."""
+    cap = DummyCapitalManager({"AVAX/USDT": 100.0})
+    m = RiskManager(0.05, capital_manager=cap, max_posiciones_alts=0)
+    m.posiciones_abiertas = {"SOL/USDT", "XRP/USDT", "DOGE/USDT"}
+    assert m.permite_entrada("AVAX/USDT", {}, diversidad_minima=99) is True

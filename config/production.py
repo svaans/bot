@@ -26,3 +26,5 @@ class ProductionConfig(DevelopmentConfig):
     # Fear & Greed: bloquear entradas en codicia extrema (>75).
     filtro_fear_greed_enabled: bool = True
     fg_umbral_codicia: int = 75
+    # Límite alts correladas: máx 2 de {SOL, XRP, AVAX} simultáneas.
+    max_posiciones_alts: int = 2

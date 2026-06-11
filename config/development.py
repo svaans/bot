@@ -48,6 +48,9 @@ class DevelopmentConfig:
     diversidad_minima: int = 2
     max_posiciones_cartera: int = 0
     max_posiciones_mismo_sentido: int = 0
+    # Límite de posiciones abiertas en alts correladas (SOL/XRP/AVAX).
+    # 0 = desactivado. En producción se activa vía config o env.
+    max_posiciones_alts: int = 0
     # Régimen adaptativo: el estudio profundo (--study2, 5 años, validación
     # 70/30) muestra que endurecer entradas en volatilidad anómala mejora el
     # PF fuera de muestra. Umbrales recalibrados para velas 1d (ATR/precio
