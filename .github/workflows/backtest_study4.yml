@@ -91,7 +91,7 @@ jobs:
           if [ "$STUDY" = "study_simbolos" ] && [ -z "${{ inputs.symbols }}" ]; then
             SYMBOL_ARGS=""
           else
-            SYMBOLS="${{ inputs.symbols || 'BTCEUR,ETHEUR,SOLEUR,ADAEUR,BNBEUR' }}"
+            SYMBOLS="${{ inputs.symbols || 'BTCEUR,ETHEUR,SOLEUR,XRPEUR,AVAXEUR' }}"
             SYMBOL_ARGS=""
             IFS=',' read -ra SYM_LIST <<< "$SYMBOLS"
             for s in "${SYM_LIST[@]}"; do
