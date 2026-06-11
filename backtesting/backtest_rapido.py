@@ -28,6 +28,7 @@ from dataclasses import dataclass, field
 
 CACHE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cache")
 BINANCE = "https://api.binance.com/api/v3/klines"
+CC_BASE = "https://min-api.cryptocompare.com/data/v2"  # fallback cloud-friendly
 MS = {"15m": 900_000, "1h": 3_600_000, "4h": 14_400_000, "1d": 86_400_000}
 
 # Parámetros alineados con config/configuraciones_optimas.json
@@ -41,8 +42,38 @@ SLIPPAGE = 0.0005       # deslizamiento estimado por lado
 
 # ---------------------------------------------------------------- datos
 
+def _symbol_a_cc(symbol: str) -> tuple[str, str]:
+    """BTCEUR → ('BTC','EUR'), ETHUSDT → ('ETH','USDT')."""
+    for quote in ("USDT", "EUR", "USD", "GBP", "BTC", "ETH"):
+        if symbol.endswith(quote):
+            return symbol[: -len(quote)], quote
+    raise ValueError(f"No se puede parsear símbolo: {symbol}")
+
+
+def _descargar_klines_cc(symbol: str, days: int) -> list[list[float]]:
+    """Fallback CryptoCompare (solo 1d). Funciona desde GitHub Actions / cloud."""
+    base, quote = _symbol_a_cc(symbol)
+    url = f"{CC_BASE}/histoday?fsym={base}&tsym={quote}&limit={days}"
+    print(f"  [cryptocompare] {url}")
+    with urllib.request.urlopen(url, timeout=30) as r:
+        data = json.load(r)
+    if data.get("Response") != "Success":
+        raise RuntimeError(f"CryptoCompare error {symbol}: {data.get('Message', data)}")
+    velas = []
+    for item in data["Data"]["Data"]:
+        if item["open"] == 0 and item["close"] == 0:
+            continue  # vela vacía (sin trading ese día)
+        velas.append([float(item["time"]) * 1000,
+                      float(item["open"]), float(item["high"]),
+                      float(item["low"]),  float(item["close"]),
+                      float(item.get("volumefrom", 0))])
+    velas.sort(key=lambda v: v[0])
+    return velas
+
+
 def descargar_klines(symbol: str, interval: str, days: int) -> list[list[float]]:
-    """Descarga velas (con caché en CSV). Devuelve [ts, o, h, l, c, v]."""
+    """Descarga velas (con caché en CSV). Primero intenta Binance; si la IP
+    está bloqueada (ej: GitHub Actions), usa CryptoCompare como fallback (1d)."""
     os.makedirs(CACHE_DIR, exist_ok=True)
     ruta = os.path.join(CACHE_DIR, f"{symbol}_{interval}_{days}d.csv")
     if os.path.exists(ruta):
@@ -53,18 +84,32 @@ def descargar_klines(symbol: str, interval: str, days: int) -> list[list[float]]
     inicio = fin - days * 86_400_000
     velas: list[list[float]] = []
     cursor = inicio
-    while cursor < fin:
-        url = (f"{BINANCE}?symbol={symbol}&interval={interval}"
-               f"&startTime={cursor}&limit=1000")
-        with urllib.request.urlopen(url, timeout=30) as r:
-            lote = json.load(r)
-        if not lote:
-            break
-        for k in lote:
-            velas.append([float(k[0]), float(k[1]), float(k[2]),
-                          float(k[3]), float(k[4]), float(k[5])])
-        cursor = int(lote[-1][0]) + MS[interval]
-        time.sleep(0.15)  # respetar rate limit
+    binance_ok = True
+    try:
+        while cursor < fin:
+            url = (f"{BINANCE}?symbol={symbol}&interval={interval}"
+                   f"&startTime={cursor}&limit=1000")
+            with urllib.request.urlopen(url, timeout=15) as r:
+                lote = json.load(r)
+            if not lote:
+                break
+            for k in lote:
+                velas.append([float(k[0]), float(k[1]), float(k[2]),
+                              float(k[3]), float(k[4]), float(k[5])])
+            cursor = int(lote[-1][0]) + MS[interval]
+            time.sleep(0.15)
+    except Exception as exc:
+        print(f"  [binance] {symbol}/{interval} no disponible: {exc!r}")
+        binance_ok = False
+
+    if not binance_ok or not velas:
+        if interval != "1d":
+            raise RuntimeError(
+                f"Binance no disponible e intervalo {interval!r} no soportado "
+                "por CryptoCompare. Usa --interval 1d o ejecuta localmente."
+            )
+        print(f"  [fallback] usando CryptoCompare para {symbol}…")
+        velas = _descargar_klines_cc(symbol, days)
     with open(ruta, "w", newline="") as f:
         csv.writer(f).writerows(velas)
     return velas

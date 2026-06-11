@@ -75,7 +75,11 @@ jobs:
           echo "========================"
           echo ""
 
+          # study/study2 pueden usar otros intervalos; study3/study4 solo 1d.
+          # El script ya hace fallback automático a CryptoCompare si Binance
+          # no está disponible desde GitHub Actions.
           python backtesting/backtest_rapido.py \
             --$STUDY \
             --days "$DAYS" \
+            --interval 1d \
             $SYMBOL_ARGS
