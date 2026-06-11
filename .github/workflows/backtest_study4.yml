@@ -57,9 +57,9 @@ jobs:
         run: |
           STUDY_NOW="${{ inputs.study || 'study_simbolos' }}"
           if [ "$STUDY_NOW" = "study_simbolos" ] && [ -z "${{ inputs.symbols }}" ]; then
-            RAW="BTCEUR,ETHEUR,SOLEUR,ADAEUR,BNBEUR,XRPEUR,AVAXEUR,LINKEUR,DOGEEUR,LTCEUR,DOTEUR"
+            RAW="BTCEUR,ETHEUR,SOLEUR,XRPEUR,AVAXEUR,ADAEUR,BNBEUR,LINKEUR,DOGEEUR,LTCEUR,DOTEUR"
           else
-            RAW="${{ inputs.symbols || 'BTCEUR,ETHEUR,SOLEUR,ADAEUR,BNBEUR' }}"
+            RAW="${{ inputs.symbols || 'BTCEUR,ETHEUR,SOLEUR,XRPEUR,AVAXEUR' }}"
           fi
           SAFE=$(echo "$RAW" | tr ',' '_')
           echo "key=binance-${SAFE}-${{ inputs.days || '1825' }}d" >> "$GITHUB_OUTPUT"

@@ -2,9 +2,9 @@
   "symbols": [
     "BTC/EUR",
     "ETH/EUR",
-    "ADA/EUR",
     "SOL/EUR",
-    "BNB/EUR"
+    "XRP/EUR",
+    "AVAX/EUR"
   ],
   "modo_real": true,
   "modo_operativo": "real",

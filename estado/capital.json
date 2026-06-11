@@ -1,10 +1,10 @@
 {
   "capital_por_simbolo": {
-    "ADA/EUR": 10.0,
-    "BNB/EUR": 10.0,
     "BTC/EUR": 10.0,
     "ETH/EUR": 10.0,
-    "SOL/EUR": 10.0
+    "SOL/EUR": 10.0,
+    "XRP/EUR": 10.0,
+    "AVAX/EUR": 10.0
   },
   "disponible_global": 50.0
 }

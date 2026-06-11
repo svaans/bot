@@ -829,7 +829,7 @@ def estudio_simbolos(symbols: list[str], days: int, capital0: float) -> None:
     (out-of-sample). Admite símbolos actuales y candidatos mezclados.
     Los símbolos candidatos se marcan con (*) en la tabla de resultados.
     """
-    SIMBOLOS_ACTUALES = {"BTCEUR", "ETHEUR", "SOLEUR", "ADAEUR", "BNBEUR"}
+    SIMBOLOS_ACTUALES = {"BTCEUR", "ETHEUR", "SOLEUR", "XRPEUR", "AVAXEUR"}
 
     # BTC siempre descargado para filtro macro
     btc_data = descargar_klines("BTCEUR", "1d", days)
@@ -934,8 +934,8 @@ def main() -> None:
                    help="estrategia de referencia: rotacion de momentum")
     args = p.parse_args()
 
-    CANDIDATOS = ["XRPEUR", "AVAXEUR", "LINKEUR", "DOGEEUR", "LTCEUR", "DOTEUR"]
-    symbols = args.symbol or ["BTCEUR", "ETHEUR", "SOLEUR", "ADAEUR", "BNBEUR"]
+    CANDIDATOS = ["ADAEUR", "BNBEUR", "LINKEUR", "DOGEEUR", "LTCEUR", "DOTEUR"]
+    symbols = args.symbol or ["BTCEUR", "ETHEUR", "SOLEUR", "XRPEUR", "AVAXEUR"]
 
     if args.study:
         t0 = time.perf_counter()
@@ -964,7 +964,7 @@ def main() -> None:
     if args.study_simbolos:
         t0 = time.perf_counter()
         # si el usuario no pasó --symbol explícito, usar actuales + candidatos
-        all_syms = args.symbol or (["BTCEUR", "ETHEUR", "SOLEUR", "ADAEUR", "BNBEUR"] + CANDIDATOS)
+        all_syms = args.symbol or (["BTCEUR", "ETHEUR", "SOLEUR", "XRPEUR", "AVAXEUR"] + CANDIDATOS)
         estudio_simbolos(all_syms, args.days, args.capital)
         print(f"\n[tiempo] estudio simbolos: {time.perf_counter() - t0:.1f}s")
         return
