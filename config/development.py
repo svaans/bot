@@ -64,6 +64,11 @@ class DevelopmentConfig:
     # con él se mantienen en PF>=1.2. Activo en producción / vía
     # FILTRO_MACRO_BTC_ENABLED=true (False aquí: tests usan estos defaults).
     filtro_macro_btc_enabled: bool = False
+    # Fear & Greed Index (alternative.me): bloquea entradas cuando el índice
+    # supera fg_umbral_codicia (codicia extrema = mercado sobrecomprado).
+    # Desactivado por defecto; activar en producción o con FILTRO_FEAR_GREED_ENABLED=true.
+    filtro_fear_greed_enabled: bool = False
+    fg_umbral_codicia: int = 75
     regimen_vol_atr_ratio_alto: float = 0.06
     regimen_vol_atr_ratio_bajo: float = 0.02
     regimen_atr_periodo: int = 14

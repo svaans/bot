@@ -2,6 +2,7 @@
 
 Valida la función pura ``btc_en_tendencia`` y su integración como compuerta
 en ``StrategyEngine._procesar_resultado_entrada`` (motivo ``macro_bajista``).
+Tests de Fear & Greed en tests/test_fear_greed_filtro.py (sin dep. ta).
 """
 from __future__ import annotations
 

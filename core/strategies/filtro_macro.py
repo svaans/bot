@@ -1,19 +1,71 @@
-"""Filtro macro de mercado: tendencia de BTC como interruptor de entradas.
+"""Filtro macro de mercado: tendencia de BTC + Fear & Greed Index.
 
-Las altcoins están altamente correlacionadas con BTC: cuando BTC cae bajo
-su EMA200 diaria, los rebotes en alts tienen esperanza negativa. El estudio
-empírico (``backtesting/backtest_rapido.py --study3``, 5 años, validación
-70/30) muestra que sin este filtro las configuraciones con TP amplio pasan
-de PF>1.4 a PF<0.9 fuera de muestra, y con él todas las variantes ganadoras
-se mantienen rentables en test.
+BTC macro filter: cuando BTC cae bajo su EMA200 diaria, los rebotes en
+alts tienen esperanza negativa. El estudio empírico (backtest_rapido.py
+--study3, 5 años, 70/30) muestra que sin este filtro las configs con TP
+amplio pasan de PF>1.4 a PF<0.9 fuera de muestra.
 
-Se desactiva por defecto (``filtro_macro_btc_enabled=False``); se activa en
-``ProductionConfig`` o con la variable de entorno
-``FILTRO_MACRO_BTC_ENABLED=true``.
+Fear & Greed filter: bloquea entradas cuando el índice supera el umbral
+de codicia extrema (default >75). Fuente: alternative.me/fng (sin API key).
+El índice se refresca máximo una vez al día y se cachea en memoria.
+
+Ambos filtros se desactivan por defecto; se activan en ProductionConfig o
+vía variables de entorno FILTRO_MACRO_BTC_ENABLED=true /
+FILTRO_FEAR_GREED_ENABLED=true.
 """
 from __future__ import annotations
 
+import json
+import logging
+import time
+import urllib.request
+
 import pandas as pd
+
+_logger = logging.getLogger(__name__)
+
+# Cache en memoria: (timestamp_ultimo_fetch, valor_actual)
+_fg_cache: tuple[float, int | None] = (0.0, None)
+_FG_TTL = 3_600 * 6  # refrescar cada 6 horas máximo
+
+
+def obtener_fear_greed() -> int | None:
+    """Obtiene el valor actual del Fear & Greed Index (0-100) de alternative.me.
+
+    Cachea el resultado en memoria durante _FG_TTL segundos para no hacer
+    una petición HTTP en cada vela. Devuelve None si no hay conectividad.
+    """
+    global _fg_cache
+    ts_ahora, valor_cache = _fg_cache
+    if valor_cache is not None and (time.time() - ts_ahora) < _FG_TTL:
+        return valor_cache
+
+    try:
+        url = "https://api.alternative.me/fng/?limit=1&format=json"
+        with urllib.request.urlopen(url, timeout=5) as r:
+            data = json.load(r)
+        valor = int(data["data"][0]["value"])
+        _fg_cache = (time.time(), valor)
+        _logger.info("Fear&Greed actualizado: %d (%s)",
+                     valor, data["data"][0].get("value_classification", ""))
+        return valor
+    except Exception as exc:
+        _logger.warning("Fear&Greed no disponible: %s", exc)
+        # Si falla, no bloqueamos entradas — devolvemos el valor cacheado si lo hay
+        return valor_cache
+
+
+def fear_greed_permite_entrada(umbral_codicia: int = 75) -> bool | None:
+    """Retorna False si el índice supera umbral_codicia (codicia extrema).
+
+    Retorna None si no hay datos (el llamador no debe bloquear en ese caso).
+    Lógica: en codicia extrema el mercado está sobrecomprado y las entradas
+    tienen peor relación riesgo/beneficio histórica.
+    """
+    valor = obtener_fear_greed()
+    if valor is None:
+        return None
+    return valor <= umbral_codicia
 
 
 def btc_en_tendencia(df_btc: pd.DataFrame | None, periodo: int = 200) -> bool | None:

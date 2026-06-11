@@ -27,7 +27,7 @@ from core.strategies.entry.validadores import (
 )
 from core.strategies.exit.gestor_salidas import evaluar_salidas
 from core.strategies.pesos import gestor_pesos
-from core.strategies.filtro_macro import btc_en_tendencia
+from core.strategies.filtro_macro import btc_en_tendencia, fear_greed_permite_entrada
 from core.strategies.regimen_mercado import (
     aplicar_multiplicadores_regimen,
     etiqueta_volatilidad,
@@ -321,6 +321,13 @@ class StrategyEngine:
             if btc_en_tendencia(df_btc) is False:
                 macro_ok = False
 
+        fg_ok = True
+        if bool(config.get("filtro_fear_greed_enabled", False)):
+            umbral_codicia = int(config.get("fg_umbral_codicia", 75))
+            resultado_fg = fear_greed_permite_entrada(umbral_codicia)
+            if resultado_fg is False:
+                fg_ok = False
+
         permitido = (
             score_total > umbral
             and score_tec > umbral_score
@@ -328,12 +335,15 @@ class StrategyEngine:
             and not validaciones_fallidas
             and not contradiccion
             and macro_ok
+            and fg_ok
         )
 
         motivo = None
         if not permitido:
             if not macro_ok:
                 motivo = "macro_bajista"
+            elif not fg_ok:
+                motivo = "fear_greed_codicia"
             elif empate:
                 motivo = "empate_umbral"
             elif contradiccion:

@@ -23,3 +23,6 @@ class ProductionConfig(DevelopmentConfig):
     regimen_entrada_enabled: bool = True
     # Filtro macro BTC: no comprar mientras BTC < EMA200 (ver filtro_macro.py).
     filtro_macro_btc_enabled: bool = True
+    # Fear & Greed: bloquear entradas en codicia extrema (>75).
+    filtro_fear_greed_enabled: bool = True
+    fg_umbral_codicia: int = 75
