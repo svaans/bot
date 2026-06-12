@@ -800,6 +800,45 @@ class TraderLite(TraderLiteBackfillMixin, TraderLiteProcessingMixin):
             lambda: self._heartbeat_loop(), name="heartbeat_loop", expected_interval=60
         )
 
+        # Ciclo de aprendizaje continuo (pesos/configs a partir de cierres).
+        # Apagado salvo que la config lo habilite (Development/Production: sí;
+        # los tests usan DummyConfig sin el atributo → off).
+        if bool(getattr(self.config, "aprendizaje_continuo_enabled", False)):
+            intervalo_ap = int(
+                getattr(self.config, "aprendizaje_intervalo_sec", 86400) or 86400
+            )
+
+            def _entrenar() -> None:
+                from learning.aprendizaje_continuo import ejecutar_ciclo
+
+                ejecutar_ciclo()
+
+            class _BeatAdapter:
+                """Adapta watchdog.latido(nombre, causa) → supervisor.beat."""
+
+                def __init__(self, supervisor: Any) -> None:
+                    self._sup = supervisor
+
+                def latido(self, nombre: str, causa: str | None = None) -> None:
+                    self._sup.beat(nombre, causa)
+
+            from core.gestor_aprendizaje import ciclo_aprendizaje_periodico
+
+            beat_adapter = _BeatAdapter(self.supervisor)
+            self.supervisor.supervised_task(
+                lambda: ciclo_aprendizaje_periodico(
+                    _entrenar,
+                    intervalo=intervalo_ap,
+                    watchdog=beat_adapter,
+                    nombre_latido="aprendizaje",
+                ),
+                name="aprendizaje_continuo",
+            )
+            log.info(
+                "trader:aprendizaje_continuo_activado",
+                extra={"intervalo_sec": intervalo_ap},
+            )
+
         # Lanzar DataFeedLite supervisado
         log.info(
             "trader:starting_ws",

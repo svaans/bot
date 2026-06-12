@@ -18,6 +18,11 @@ class DevelopmentConfig:
     # binance.com suelen no existir o no coincidir con el feed WS usado en paper.
     symbols: List[str] = field(default_factory=lambda: ["BTC/USDT", "ETH/USDT"])
     umbral_riesgo_diario: float = 0.03
+    # Aprendizaje continuo: ciclo periódico (learning/aprendizaje_continuo)
+    # ejecutado como tarea supervisada del trader. Los cierres alimentan el
+    # parquet por símbolo (learning/registro_aprendizaje).
+    aprendizaje_continuo_enabled: bool = True
+    aprendizaje_intervalo_sec: int = 86400
     risk_kill_switch_max_consecutive_losses: int = 5
     risk_alerta_capital_pct: float = 0.85
     min_order_eur: float = 10.0

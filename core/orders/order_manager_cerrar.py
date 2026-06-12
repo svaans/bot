@@ -327,6 +327,21 @@ async def _finalizar_cierre_completo_async(
     except Exception:
         pass
 
+    # Aprendizaje continuo: persistir la operación cerrada en el parquet por
+    # símbolo que consume learning/aprendizaje_continuo. Nunca debe impedir
+    # el cierre: errores solo se loguean (dentro del propio registrador).
+    try:
+        from learning.registro_aprendizaje import registrar_cierre_para_aprendizaje
+        await asyncio.to_thread(
+            registrar_cierre_para_aprendizaje, orden.to_parquet_record()
+        )
+    except Exception as e:
+        log.warning(
+            "⚠️ No se pudo registrar cierre para aprendizaje (%s): %s",
+            symbol,
+            _fmt_exchange_err(e),
+        )
+
     log.info("📤 Orden cerrada para %s @ %.2f | %s", symbol, precio_cierre, motivo)
 
     if manager.bus:

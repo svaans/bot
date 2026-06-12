@@ -83,6 +83,7 @@ def aislar_estado_en_disco(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
     import core.orders.orphan_reconciler as orphan_reconciler
     import core.risk.per_symbol_guard as per_symbol_guard
     import core.risk.riesgo as riesgo
+    import learning.historial_operaciones as historial_operaciones
 
     # El Event singleton de ccxt-ready queda ligado al loop del primer test
     # que lo crea; tests posteriores (loop nuevo) reciben RuntimeError
@@ -103,6 +104,12 @@ def aislar_estado_en_disco(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
         riesgo, "RUTA_ESTADO_BAK", str(tmp_path / "riesgo.json.bak")
     )
     monkeypatch.setattr(riesgo, "_LOCK_PATH", str(tmp_path / "riesgo.json.lock"))
+    # El registrador de cierres para aprendizaje escribe en CARPETA_ORDENES
+    # (raíz del repo): redirigido para que los tests de cierre no creen
+    # ordenes_simuladas/*.parquet reales.
+    monkeypatch.setattr(
+        historial_operaciones, "CARPETA_ORDENES", tmp_path / "ordenes_parquet"
+    )
 
     yield
 
