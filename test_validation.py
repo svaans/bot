@@ -5,7 +5,7 @@ import json
 from pathlib import Path
 from collections import Counter
 
-from backtesting.replay import load_ohlcv_csv, replay_entradas_async, summarize_replay
+from backtesting.replay import load_ohlcv_csv, replay_entradas_async
 
 
 SYMBOLS_CSV = {
@@ -59,8 +59,6 @@ async def evaluate_symbol(symbol: str, csv_path: str) -> dict:
         "bollinger": {"pass": 0, "fail": 0},
     }
 
-    duplicate_count = 0
-    volume_zero_count = 0
 
     for r in rows:
         if not r.get("permitido"):
@@ -79,19 +77,19 @@ async def evaluate_symbol(symbol: str, csv_path: str) -> dict:
     # Calcular métricas
     permitido_rate = (permitidos / len(rows) * 100) if len(rows) > 0 else 0
 
-    print(f"\n   📈 RESULTADOS:")
+    print("\n   📈 RESULTADOS:")
     print(f"   ├─ Velas totales: {len(rows)}")
     print(f"   ├─ Permitidas: {permitidos} ({permitido_rate:.1f}%)")
     print(f"   ├─ Rechazadas: {rechazados} ({100 - permitido_rate:.1f}%)")
 
-    print(f"\n   🔍 VALIDACIONES (fallos):")
+    print("\n   🔍 VALIDACIONES (fallos):")
     for vname, stats in validaciones_stats.items():
         total = stats["pass"] + stats["fail"]
         if total > 0:
             fail_pct = stats["fail"] / total * 100
             print(f"   ├─ {vname}: {stats['fail']}/{total} fallos ({fail_pct:.1f}%)")
 
-    print(f"\n   🚫 MOTIVOS RECHAZO:")
+    print("\n   🚫 MOTIVOS RECHAZO:")
     for motivo, count in motivos.most_common(5):
         print(f"   ├─ {motivo}: {count} ({count/len(rows)*100:.1f}%)")
 
@@ -135,7 +133,7 @@ async def main():
     print(f"Ratio global: {total_permitidas/total_evaluadas*100:.1f}%")
 
     # Diagnóstico
-    print(f"\n🏥 DIAGNÓSTICO:")
+    print("\n🏥 DIAGNÓSTICO:")
 
     all_good = True
 
@@ -163,11 +161,11 @@ async def main():
                 print(f"      ⚠️  Bollinger falla {bfail/btotal*100:.0f}% (revisar umbral)")
 
     if all_good and total_permitidas > 0:
-        print(f"\n✅ ESTADO: FUNCIONANDO_CORRECTAMENTE")
+        print("\n✅ ESTADO: FUNCIONANDO_CORRECTAMENTE")
     elif all_good:
-        print(f"\n⚠️  ESTADO: VALIDACIONES_DEMASIADO_RESTRICTIVAS")
+        print("\n⚠️  ESTADO: VALIDACIONES_DEMASIADO_RESTRICTIVAS")
     else:
-        print(f"\n❌ ESTADO: REQUIERE REVISIÓN")
+        print("\n❌ ESTADO: REQUIERE REVISIÓN")
 
     # Guardar resultados
     output_path = Path("logs/validation_results.json")

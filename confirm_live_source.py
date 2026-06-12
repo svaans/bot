@@ -1,6 +1,5 @@
 """Confirmación de fuente real de datos en MODO_REAL=True."""
 import os
-import sys
 
 print("="*70)
 print("CONFIRMACIÓN DE FUENTE DE DATOS - MODO_REAL")

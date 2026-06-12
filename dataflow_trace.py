@@ -1,6 +1,5 @@
 """Rastreo de flujo de datos - Origen del DataFrame en Bollinger."""
 import pandas as pd
-import sys
 
 print("="*70)
 print("TRAZABILIDAD DE DATOS - FLUJO COMPLETO")
@@ -63,7 +62,7 @@ for sym in symbols:
     print(f"    ID de close Series: {close_id}")
     
     # Últimos 5 timestamps
-    print(f"    Últimos 5 timestamps:")
+    print("    Últimos 5 timestamps:")
     for i in range(max(0, len(df)-5), len(df)):
         print(f"      {int(df.iloc[i]['timestamp'])} - close={df.iloc[i]['close']:.4f}")
 
@@ -86,8 +85,8 @@ for sym, df in dataframes.items():
     print(f"    ¿Mismos timestamps?: {has_same_ts}")
     
     if has_same_close:
-        print(f"    ❌ PROBLEMA: Los close prices son IDÉNTICOS")
-        print(f"    Esto explica por qué MA y Std son constantes")
+        print("    ❌ PROBLEMA: Los close prices son IDÉNTICOS")
+        print("    Esto explica por qué MA y Std son constantes")
 
 # 4. Verificar el procesamiento en tiempo real
 print("\n4. VERIFICACIÓN DE PIPELINE EN TIEMPO REAL:")
@@ -149,7 +148,7 @@ std = df_real['close'].rolling(20).std(ddof=1)
 bsup = ma + 2 * std
 binf = ma - 2 * std
 
-print(f"\n  Últimos 10 valores con datos REALES:")
+print("\n  Últimos 10 valores con datos REALES:")
 print(f"  {'ts':>15} {'close':>10} {'MA(20)':>10} {'Std':>10} {'B_sup':>10} {'dist':>10}")
 for i in range(max(19, len(df_real)-10), len(df_real)):
     if i < 19:

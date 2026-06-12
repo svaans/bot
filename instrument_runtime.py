@@ -1,6 +1,5 @@
 """Instrumentación para confirmar fuente de datos en runtime."""
 import os
-import json
 
 print("="*70)
 print("INSTRUMENTACIÓN: CONFIRMAR FUENTE EN RUNTIME")

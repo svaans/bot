@@ -1,6 +1,5 @@
 """Diagnóstico detallado de Bollinger Bands - Versión corregida."""
 import pandas as pd
-import numpy as np
 
 print("=" * 70)
 print("DIAGNÓSTICO BOLLINGER - ANÁLISIS DETALLADO")
@@ -32,7 +31,7 @@ for sym in symbols:
     banda_inf_all = ma_all - desviacion * std_all
     
     # Últimas 20 velas - mostrar evolución
-    print(f"\nÚltimas 20 velas - EVOLUCIÓN:")
+    print("\nÚltimas 20 velas - EVOLUCIÓN:")
     print(f"{'ts':>15} {'close':>10} {'MA(20)':>10} {'std':>10} {'B_inf':>10} {'B_sup':>10} {'dist_Bsup':>12} {'¿>=1%?':>8}")
     print("-" * 95)
     
@@ -49,7 +48,7 @@ for sym in symbols:
         print(f"{ts:>15} {close:>10.4f} {ma:>10.4f} {std:>10.4f} {binf:>10.4f} {bsup:>10.4f} {dist:>12.6f} {cumple:>8}")
     
     # Verificar si las bandas son constantes
-    print(f"\nVerificación de dinamismo (últimas 20 velas):")
+    print("\nVerificación de dinamismo (últimas 20 velas):")
     ma_last_20 = ma_all.tail(20).values
     std_last_20 = std_all.tail(20).values
     bsup_last_20 = banda_sup_all.tail(20).values
@@ -66,7 +65,7 @@ for sym in symbols:
         print(f"  Valor constante: {ma_all_vals[0]:.6f}")
     
     # Verificar los primeros 30 valores para ver si hay variación
-    print(f"\nPrimeros 30 valores de MA(20) y Std:")
+    print("\nPrimeros 30 valores de MA(20) y Std:")
     for i in range(19, min(50, len(df))):
         ma_i = ma_all.iloc[i]
         std_i = std_all.iloc[i]

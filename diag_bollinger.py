@@ -1,6 +1,5 @@
 """Diagnóstico detallado de Bollinger Bands."""
 import pandas as pd
-import numpy as np
 
 print("=" * 70)
 print("DIAGNÓSTICO BOLLINGER - ANÁLISIS DETALLADO")
@@ -28,7 +27,7 @@ for sym in symbols:
     periodo = 20
     desviacion = 2.0
     
-    print(f"\nÚltimas 20 velas:")
+    print("\nÚltimas 20 velas:")
     header = f"{'ts':>15} {'close':>10} {'MA':>10} {'std':>10} {'B_inf':>10} {'B_sup':>10} {'dist_Bsup':>10}"
     print(header)
     print("-" * 75)
@@ -51,7 +50,7 @@ for sym in symbols:
         print(f"{ts:>15} {precio:>10.4f} {ma:>10.4f} {std:>10.4f} {banda_inf:>10.4f} {banda_sup:>10.4f} {dist_sup:>10.6f}")
     
     # Verificar si las bandas son constantes
-    print(f"\nVerificación de dinamismo (últimas 20 velas):")
+    print("\nVerificación de dinamismo (últimas 20 velas):")
     closes = df.tail(20)['close'].values
     print(f"Close min: {closes.min():.4f}, max: {closes.max():.4f}, std: {closes.std():.4f}")
     
@@ -63,7 +62,7 @@ for sym in symbols:
     binf_last = ma_last - 2.0 * std_last
     precio_last = last_window['close'].iloc[-1]
     
-    print(f"\nÚltima vela:")
+    print("\nÚltima vela:")
     print(f"  Precio: {precio_last:.4f}")
     print(f"  MA(20): {ma_last:.4f}")
     print(f"  Std(20): {std_last:.4f}")
@@ -73,7 +72,7 @@ for sym in symbols:
     print(f"  ¿Dist >= 0.01?: {abs(bsup_last - precio_last) / precio_last >= 0.01}")
     
     # Verificar función original
-    print(f"\nVerificando con calcular_bollinger original:")
+    print("\nVerificando con calcular_bollinger original:")
     from indicadores.bollinger import calcular_bollinger
     banda_inf_2, banda_sup_2, precio_2 = calcular_bollinger(last_window)
     if banda_sup_2 is not None:

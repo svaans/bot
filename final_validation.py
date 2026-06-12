@@ -1,6 +1,5 @@
 """Validación final - Confirmación de sistema EN VIVO."""
 import os
-import json
 
 print("="*70)
 print("VALIDACIÓN FINAL - SISTEMA EN MODO_REAL")

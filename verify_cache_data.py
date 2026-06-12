@@ -27,14 +27,14 @@ print(f"\nValores únicos de close en BTC: {np.unique(base)}")
 print(f"Cantidad de valores únicos: {len(np.unique(base))}")
 
 # Verificar si hay variación
-print(f"\nEstadísticas de close en BTC:")
+print("\nEstadísticas de close en BTC:")
 print(f"  Min: {base.min():.4f}")
 print(f"  Max: {base.max():.4f}")
 print(f"  Std: {base.std():.6f}")
 print(f"  Media: {base.mean():.6f}")
 
 # Verificar si MA(20) debería ser constante
-print(f"\nCálculo de MA(20) para verificar:")
+print("\nCálculo de MA(20) para verificar:")
 ma = pd.Series(base).rolling(20).mean()
 print(f"  MA(20) min: {ma.min():.6f}")
 print(f"  MA(20) max: {ma.max():.6f}")

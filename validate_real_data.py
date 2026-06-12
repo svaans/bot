@@ -75,7 +75,7 @@ try:
         print(f"    Std(20) std: {std_std:.6f} {'(DINÁMICO)' if std_std > 0.001 else '(CONSTANTE - ERROR)'}")
         
         # Últimas 5 velas
-        print(f"    Últimas 5 velas:")
+        print("    Últimas 5 velas:")
         for i in range(max(19, len(df)-5), len(df)):
             if i < 19:
                 continue
