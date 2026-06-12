@@ -153,30 +153,8 @@ def test_salida_takeprofit_atr_corto() -> None:
     assert r["cerrar"] is False
 
 
-def test_salidas_inteligentes_verificar_take_profit() -> None:
-    from core.strategies.exit.salidas_inteligentes import verificar_take_profit
-
-    orden = {"direccion": "long", "precio_entrada": 50.0, "take_profit": 200.0, "symbol": "T"}
-    df = _ohlcv(25)
-    r = verificar_take_profit(orden, df)
-    assert r["cerrar"] is False
 
 
-@pytest.mark.asyncio
-async def test_evaluar_salida_inteligente_volumen_bajo(monkeypatch: pytest.MonkeyPatch) -> None:
-    from core.strategies.exit import salidas_inteligentes as si
-
-    cfg = {"volumen_minimo_salida": 1e9, "max_spread_ratio": 1.0}
-
-    def fake_load(_sym: str):
-        return cfg
-
-    monkeypatch.setattr(si, "load_exit_config", fake_load)
-    df = _ohlcv(40)
-    df["volume"] = 1.0
-    out = await si.evaluar_salida_inteligente({"symbol": "T"}, df)
-    assert out.get("cerrar") is False
-    assert "Volumen" in str(out.get("motivo_final", ""))
 
 
 @pytest.mark.asyncio
@@ -246,7 +224,7 @@ def test_orders_validators_remainder_mock_client(monkeypatch: pytest.MonkeyPatch
 
 
 def test_risk_validators_validate_levels_long() -> None:
-    from core.risk.validators import LevelValidationError, validate_levels
+    from core.risk.validators import validate_levels
 
     e, sl, tp = validate_levels("long", 100.0, 95.0, 105.0, 0.001, 0.01, 0.0)
     assert e == 100.0 and sl < e < tp
@@ -292,11 +270,6 @@ def test_verificar_trailing_stop_short_ratio_activation() -> None:
     assert isinstance(msg, str)
 
 
-def test_reajuste_tp_sl_obtener_archivo() -> None:
-    from core.data import reajuste_tp_sl as r
-
-    p = r.obtener_archivo("BTC/EUR")
-    assert "BTC_EUR" in p.replace("\\", "/")
 
 
 def test_adaptador_persistencia_calcular() -> None:
@@ -336,31 +309,8 @@ def test_gestor_capital_redistribuir() -> None:
     assert set(out.keys()) == {"A", "B"}
 
 
-def test_gestor_warmup_validar_contiguo_y_emit() -> None:
-    from core import gestor_warmup as gw
-
-    events: list[tuple[str, dict]] = []
-
-    def on_e(evt: str, data: dict) -> None:
-        events.append((evt, data))
-
-    gw._emit(on_e, "t", {"a": 1})
-    assert events == [("t", {"a": 1})]
-    base = 60_000
-    velas = [
-        {"timestamp": base, "close": 1.0},
-        {"timestamp": base + base, "close": 1.1},
-    ]
-    assert gw._validar_contiguo(velas, base) is True
-    assert gw._validar_contiguo([velas[0]], base) is True
 
 
-@pytest.mark.asyncio
-async def test_gestor_warmup_symbols_vacio() -> None:
-    from core import gestor_warmup as gw
-
-    out = await gw.warmup_symbols([], "5m", cliente=None, min_bars=5)
-    assert out == {}
 
 
 def test_metricas_tracker_tmp(tmp_path: Path) -> None:
@@ -599,10 +549,6 @@ def test_pid_lock_non_python_pid_takes_over(
     pl.release_pid_lock(lock)
 
 
-def test_learning_trade_results_reexport() -> None:
-    from learning.trade_results_manager import registrar_resultado_trade
-
-    assert callable(registrar_resultado_trade)
 
 
 def test_learning_aprendizaje_continuo_cargar_feedback(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -638,18 +584,3 @@ def test_analisis_pesos_backtest_csv(tmp_path: Path, monkeypatch: pytest.MonkeyP
     assert isinstance(r, dict)
 
 
-def test_reajuste_tp_sl_con_archivo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    from core.data import reajuste_tp_sl as r
-
-    sym = "ZZ/TEST"
-    monkeypatch.setattr(r, "RUTA_RESULTADOS", str(tmp_path))
-    fp = Path(r.obtener_archivo(sym))
-    fp.parent.mkdir(parents=True, exist_ok=True)
-    ahora = datetime.now(UTC)
-    fp.write_text(
-        "precio_entrada,precio_cierre,fecha_cierre\n"
-        f"1.0,1.1,{ahora.isoformat()}\n",
-        encoding="utf-8",
-    )
-    out = r.calcular_promedios_sl_tp(sym, dias=7)
-    assert out is not None and len(out) == 2

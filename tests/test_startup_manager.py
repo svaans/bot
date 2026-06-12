@@ -5,7 +5,6 @@ import asyncio
 import json
 import threading
 import time
-from contextlib import suppress
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any

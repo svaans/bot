@@ -7,7 +7,6 @@ from __future__ import annotations
 
 from unittest.mock import patch
 
-import pytest
 
 from core.strategies.filtro_macro import fear_greed_permite_entrada, obtener_fear_greed
 
@@ -111,7 +110,6 @@ def test_obtener_fear_greed_cache_expirado_intenta_fetch() -> None:
     mock_data = {"data": [{"value": "55", "value_classification": "Greed"}]}
     with patch("urllib.request.urlopen") as mock_url:
         mock_url.return_value.__enter__.return_value.read.return_value = b'{}'
-        import io
         mock_response = mock_url.return_value.__enter__.return_value
         mock_response.__iter__ = lambda s: iter([])
         # Simulamos urlopen devolviendo JSON válido

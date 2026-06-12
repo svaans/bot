@@ -1,8 +1,6 @@
 """Tests for order_manager_sync — reconciliación periódica con el exchange."""
 from __future__ import annotations
 
-import asyncio
-import types
 from typing import Any
 
 import pytest

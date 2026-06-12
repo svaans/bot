@@ -14,7 +14,6 @@ import math
 import sys
 from pathlib import Path
 
-import pytest
 
 # Importar backtest_rapido directamente (no depende de `ta` ni del core stack).
 # Se registra manualmente en sys.modules para que @dataclass resuelva __module__.

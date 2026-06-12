@@ -314,7 +314,14 @@ class FeedLifecycleMixin:
                 publish = getattr(bus, "publish", None)
                 if callable(publish):
                     try:
-                        asyncio.create_task(publish("datafeed_connected", dict(bus_payload)))
+                        task = asyncio.create_task(publish("datafeed_connected", dict(bus_payload)))
+                        # Retener la referencia: asyncio solo guarda referencias
+                        # débiles y el GC podría cancelar la tarea en vuelo.
+                        bg = getattr(self, "_bg_tasks", None)
+                        if bg is None:
+                            bg = self._bg_tasks = set()
+                        bg.add(task)
+                        task.add_done_callback(bg.discard)
                         announced = True
                     except Exception:
                         self.log.debug(

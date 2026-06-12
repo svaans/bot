@@ -9,7 +9,7 @@ from __future__ import annotations
 import asyncio
 from datetime import datetime, timezone
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -94,7 +94,7 @@ async def test_cleanup_backfill_absorbs_cancelled_error() -> None:
 def _make_order_for_t_inicio() -> Any:
     """Crea un Order con los campos mínimos necesarios para la prueba."""
     from core.orders.order_model import Order
-    from datetime import datetime, timezone
+    from datetime import datetime
 
     return Order(
         symbol="BTCUSDT",

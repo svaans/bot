@@ -132,7 +132,6 @@ def test_resolve_timeframe_trader_config_none() -> None:
     import pandas as pd
     from core.strategies.entry.verificar_entradas import _resolve_timeframe  # type: ignore[attr-defined]
 
-    from types import SimpleNamespace
 
     df = pd.DataFrame()  # sin atributo .tf ni .attrs["tf"]
     trader_no_config = SimpleNamespace()  # sin atributo config → getattr devuelve None

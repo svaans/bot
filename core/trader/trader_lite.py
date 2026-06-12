@@ -259,6 +259,9 @@ class TraderLite(TraderLiteBackfillMixin, TraderLiteProcessingMixin):
         # Tareas
         self._stop_event = asyncio.Event()
         self._runner_task: Optional[asyncio.Task] = None
+        # Tareas fire-and-forget: sin referencia fuerte el GC puede cancelarlas
+        # a mitad de ejecución (asyncio solo guarda referencias débiles).
+        self._bg_tasks: set[asyncio.Task] = set()
 
         # --- Lazy imports de módulos pesados / acoplados ---
         # Se difieren hasta ahora para evitar ciclos, con soporte para inyección
@@ -512,7 +515,9 @@ class TraderLite(TraderLiteBackfillMixin, TraderLiteProcessingMixin):
         try:
             res = self.supervisor.start_supervision()
             if _is_awaitable(res):
-                asyncio.create_task(res, name="supervisor_start")
+                task = asyncio.create_task(res, name="supervisor_start")
+                self._bg_tasks.add(task)
+                task.add_done_callback(self._bg_tasks.discard)
         except Exception:
             log.exception("Error iniciando supervisor (start_supervision)")
         if self._runner_task is None or self._runner_task.done():
@@ -1008,7 +1013,9 @@ class TraderLite(TraderLiteBackfillMixin, TraderLiteProcessingMixin):
         publish = getattr(bus, "publish", None)
         if callable(publish):
             try:
-                asyncio.create_task(publish("datafeed_connected", payload))
+                task = asyncio.create_task(publish("datafeed_connected", payload))
+                self._bg_tasks.add(task)
+                task.add_done_callback(self._bg_tasks.discard)
                 self._datafeed_connected_emitted = True
             except Exception:
                 log.debug("No se pudo publicar evento datafeed_connected", exc_info=True)

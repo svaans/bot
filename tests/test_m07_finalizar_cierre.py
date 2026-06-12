@@ -8,9 +8,7 @@ Verifies that:
 """
 from __future__ import annotations
 
-import asyncio
-from typing import Any
-from unittest.mock import AsyncMock, MagicMock, patch, call
+from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from core.orders.order_manager_cerrar import _finalizar_cierre_completo_async

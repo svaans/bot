@@ -1,7 +1,6 @@
 """Tests for order_manager_cerrar — cierre total/parcial."""
 from __future__ import annotations
 
-import asyncio
 from datetime import datetime, timezone
 from typing import Any
 

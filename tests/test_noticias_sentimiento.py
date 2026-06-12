@@ -3,10 +3,8 @@ from __future__ import annotations
 
 import time
 import xml.etree.ElementTree as ET
-from io import BytesIO
 from unittest.mock import MagicMock, patch
 
-import pytest
 
 from core.strategies.noticias_sentimiento import (
     _puntuar_titulares,

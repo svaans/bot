@@ -64,7 +64,6 @@ def test_permite_entrada_permitida_cuando_kill_switch_inactivo() -> None:
 
 def test_permite_entrada_kill_switch_tiene_prioridad_sobre_cooldown() -> None:
     """Kill switch debe bloquear incluso si cooldown no está activo."""
-    from datetime import datetime, timezone, timedelta
 
     rm = _make_risk()
     rm._kill_switch_disparado = True
@@ -77,7 +76,7 @@ def test_permite_entrada_kill_switch_tiene_prioridad_sobre_cooldown() -> None:
 
 def test_kill_switch_reset_por_nuevo_dia_permite_entradas() -> None:
     """Tras reset de día, kill switch se limpia y permite_entrada puede ser True."""
-    from datetime import datetime, timedelta, timezone, date
+    from datetime import datetime, timedelta, timezone
 
     rm = _make_risk()
     rm._kill_switch_disparado = True

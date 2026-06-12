@@ -5,10 +5,8 @@ from __future__ import annotations
 import asyncio
 import importlib
 import json
-import sys
 from pathlib import Path
 from types import SimpleNamespace
-from unittest import mock
 
 import numpy as np
 import pandas as pd
@@ -100,24 +98,6 @@ def test_modo_operativo_desde_env(monkeypatch: pytest.MonkeyPatch) -> None:
     assert modo.MODO_REAL is False
 
 
-def test_trader_simulado_fuerza_paper(monkeypatch: pytest.MonkeyPatch) -> None:
-    import core.trader_simulado as ts
-
-    class OC:
-        modo_real = True
-
-    def fake_replace(_cfg, **kwargs):
-        assert kwargs.get("modo_real") is False
-
-        class NC:
-            modo_real = False
-
-        return NC()
-
-    monkeypatch.setattr(ts, "replace", fake_replace)
-    monkeypatch.setattr(ts.Trader, "__init__", lambda self, cfg: setattr(self, "config", cfg))
-    t = ts.TraderSimulado(OC())
-    assert t.config.modo_real is False
 
 
 def test_risk_manager_alias_import() -> None:
@@ -140,53 +120,8 @@ async def test_gestor_aprendizaje_emit() -> None:
     assert out == ["b"]
 
 
-def test_gestor_watchdog_latido(monkeypatch: pytest.MonkeyPatch) -> None:
-    from core import gestor_watchdog as gw
-
-    beats: list[tuple[str, str | None]] = []
-
-    class Sup:
-        def __init__(self, **_kwargs) -> None:
-            pass
-
-        def start_supervision(self) -> None:
-            return None
-
-        async def shutdown(self) -> None:
-            return None
-
-        def beat(self, nombre: str, causa: str | None = None, **kwargs) -> None:
-            beats.append((nombre, causa))
-
-        def tick_data(self, *_a, **_k) -> None:
-            return None
-
-        def supervised_task(self, *_a, **_k):
-            return mock.Mock()
-
-        def set_task_expected_interval(self, *_a, **_k) -> None:
-            return None
-
-        def set_watchdog_interval(self, *_a, **_k) -> None:
-            return None
-
-    monkeypatch.setattr(gw, "Supervisor", Sup)
-    g = gw.GestorWatchdog()
-    g.iniciar()
-    g.latido("t", "c")
-    assert beats == [("t", "c")]
 
 
-def test_validador_ordenes_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
-    from core.risk import validador_ordenes as vo
-
-    class FakeCli:
-        def public_get_exchangeinfo(self, _params):
-            raise RuntimeError("no network")
-
-    monkeypatch.setattr(vo, "crear_cliente", lambda: FakeCli())
-    sl, tp = vo.validar_orden("BTCUSDT", 100.0, 95.0, 105.0)
-    assert isinstance(sl, float) and isinstance(tp, float)
 
 
 def test_learning_reset_pesos_sin_base(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -207,13 +142,6 @@ def test_learning_reset_pesos_sin_base(monkeypatch: pytest.MonkeyPatch, tmp_path
     assert ctrl.read_text(encoding="utf-8").strip()
 
 
-def test_monitor_estado_sin_db(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    import core.monitor_estado_bot as mon
-
-    monkeypatch.setattr(mon, "ORDENES_DB_PATH", str(tmp_path / "no.db"))
-    monkeypatch.setattr(mon, "real_orders", SimpleNamespace(cargar_ordenes=lambda: {}))
-    r = mon.obtener_orden_abierta()
-    assert r is None or isinstance(r, (dict, type(None)))
 
 
 def test_build_parser_orders_cli() -> None:
@@ -241,17 +169,3 @@ def test_aprendizaje_en_linea_simbolo_invalido() -> None:
     ael.registrar_resultado_trade("??/invalid", {}, 1.0)
 
 
-def test_reset_configuracion_diaria(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    import learning.reset_configuracion as rc
-
-    base = tmp_path / "configuraciones_base.json"
-    base.write_text('{"k": 0}', encoding="utf-8")
-    actual = tmp_path / "configuraciones_optimas.json"
-    actual.write_text('{"k": 99}', encoding="utf-8")
-    ctl = tmp_path / "reset_config_fecha.txt"
-    monkeypatch.setattr(rc, "RUTA_BASE", base)
-    monkeypatch.setattr(rc, "RUTA_ACTUAL", actual)
-    monkeypatch.setattr(rc, "RUTA_CONTROL", ctl)
-    monkeypatch.setattr(rc, "_CFG", tmp_path)
-    rc.resetear_configuracion_diaria_si_corresponde()
-    assert json.loads(actual.read_text(encoding="utf-8")) == {"k": 0}

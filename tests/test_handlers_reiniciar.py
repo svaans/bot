@@ -4,7 +4,6 @@ from __future__ import annotations
 import asyncio
 import contextlib
 from typing import Any
-from unittest.mock import AsyncMock
 
 import pytest
 
@@ -151,7 +150,6 @@ async def test_consumer_loop_restart_on_stuck_timestamp() -> None:
     sí mismo (bug anterior) ni deje tasks huérfanas.
     """
     from core.data_feed.handlers import consumer_loop, reiniciar_consumer
-    from core.data_feed._shared import ConsumerState
 
     restarts: list[str] = []
 
