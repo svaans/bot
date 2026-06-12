@@ -34,6 +34,11 @@ on:
           - study_equity_filter
           - study_eth_riesgo
           - study_fear_greed
+          - study_ema50
+          - study_vol_confirm
+          - study_time_exit
+          - study_rsi_momentum
+          - study_pro
           - study4
           - study3
           - study2

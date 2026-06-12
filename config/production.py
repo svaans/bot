@@ -37,6 +37,10 @@ class ProductionConfig(DevelopmentConfig):
     # Estudio equity_filter: reducir_10% → DD↓1.4pp sin pérdida de retorno.
     equity_dd_filter_enabled: bool = True
     equity_dd_reduccion_umbral: float = 0.10
+    # Per-Symbol Loss Streak Guard: activo en producción.
+    # Tras 2 pérdidas consecutivas en un símbolo, reduce su riesgo al 50%.
+    per_symbol_guard_enabled: bool = True
+    per_symbol_losses_umbral: int = 2
     # Filtro noticias: off por defecto hasta validar con datos reales en vivo.
     # Activar con FILTRO_NOTICIAS_ENABLED=true cuando el bot lleve 30+ días.
     filtro_noticias_enabled: bool = False

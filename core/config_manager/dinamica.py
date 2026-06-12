@@ -50,4 +50,21 @@ def adaptar_configuracion(symbol: str, df: pd.DataFrame, base_config: dict | Non
                 )
         except Exception:
             pass
+    # Per-Symbol Loss Streak Guard: reducir riesgo de un símbolo concreto
+    # tras N pérdidas consecutivas (granularidad más fina que equity_dd_guard).
+    if os.environ.get("PER_SYMBOL_GUARD_ENABLED", "").lower() in ("1", "true", "yes") \
+            or config.get("per_symbol_guard_enabled", False):
+        try:
+            from core.risk.per_symbol_guard import factor_reduccion_simbolo
+            umbral_ps = int(config.get(
+                "per_symbol_losses_umbral",
+                os.environ.get("PER_SYMBOL_LOSSES_UMBRAL", "2"),
+            ))
+            factor_ps = factor_reduccion_simbolo(symbol, umbral=umbral_ps)
+            if factor_ps < 1.0 and "riesgo_maximo_diario" in config:
+                config["riesgo_maximo_diario"] = round(
+                    config["riesgo_maximo_diario"] * factor_ps, 4
+                )
+        except Exception:
+            pass
     return config

@@ -304,8 +304,9 @@ def calcular_indicadores(velas: list[list[float]]) -> dict[str, list[float]]:
         don_hi[i] = max(high[i - 20:i])
 
     adx = _calcular_adx(high, low, close)
+    ema50 = ema(close, 50)
 
-    return {"close": close, "ema9": ema9, "ema21": ema21, "ema200": ema200,
+    return {"close": close, "ema9": ema9, "ema21": ema21, "ema50": ema50, "ema200": ema200,
             "rsi": rsi, "macd": macd, "macd_signal": macd_signal, "atr": atr,
             "vol": vol, "vol_ma": vol_ma, "don_hi": don_hi, "adx": adx}
 
@@ -360,6 +361,8 @@ class Resultado:
     bruto_perdido: float = 0.0
     retornos: list[float] = field(default_factory=list)
     be_activados: int = 0
+    duraciones: list[int] = field(default_factory=list)
+    racha_max_perdidas: int = 0
 
     @property
     def winrate(self) -> float:
@@ -369,6 +372,23 @@ class Resultado:
     def profit_factor(self) -> float:
         return (self.bruto_ganado / self.bruto_perdido
                 if self.bruto_perdido > 0 else float("inf"))
+
+    @property
+    def sortino(self) -> float:
+        """Sortino ratio anualizado (denominator: sólo downside volatility)."""
+        n = len(self.retornos)
+        if n < 2:
+            return 0.0
+        media = sum(self.retornos) / n
+        dd_sq = sum(r ** 2 for r in self.retornos if r < 0)
+        dd_std = math.sqrt(dd_sq / n) if dd_sq > 0 else 0.0
+        if dd_std == 0:
+            return 0.0
+        return (media / dd_std) * math.sqrt(365.0)
+
+    @property
+    def duracion_media(self) -> float:
+        return sum(self.duraciones) / len(self.duraciones) if self.duraciones else 0.0
 
 
 def backtest(velas: list[list[float]], symbol: str, capital0: float = 1000.0,
@@ -387,7 +407,11 @@ def backtest(velas: list[list[float]], symbol: str, capital0: float = 1000.0,
              eq_dd_reduccion: float = 0.0,
              trail_activacion_atr: float = 0.0,
              cp_frac: float = 0.0,
-             cp_tp_ratio: float = 0.0) -> Resultado:
+             cp_tp_ratio: float = 0.0,
+             ema50_filter: bool = False,
+             vol_confirm_ratio: float = 0.0,
+             max_hold_days: int = 0,
+             rsi_min_entrada: float = 0.0) -> Resultado:
     """vol_guard: modo adaptativo — no entra cuando la volatilidad (ATR/precio)
     supera 2x su media de 100 velas (régimen anómalo).
     btc_ind: si se pasa, filtro macro — solo entra cuando BTC > su EMA200.
@@ -403,7 +427,12 @@ def backtest(velas: list[list[float]], symbol: str, capital0: float = 1000.0,
       Ej: 0.10 = reducir riesgo al 50% si DD >10%. 0 = desactivado.
     trail_activacion_atr: trailing diferido — solo activa el trailing cuando el precio
       gana trail_activacion_atr×ATR desde la entrada. 0 = inmediato (comportamiento
-      clásico). Requiere use_trailing=True para tener efecto."""
+      clásico). Requiere use_trailing=True para tener efecto.
+    ema50_filter: sólo entra cuando precio > EMA50 del símbolo (tendencia medio plazo).
+    vol_confirm_ratio: sólo entra cuando vol ≥ ratio × vol_ma20 (confirmación volumen).
+      0 = desactivado. Ej: 1.0 = requiere vol ≥ media; 1.2 = 20% sobre la media.
+    max_hold_days: salida forzada tras N velas si ni SL ni TP se activaron. 0 = desactivado.
+    rsi_min_entrada: RSI mínimo para abrir posición (momentum alcista). 0 = desactivado."""
     if ind is None:
         ind = calcular_indicadores(velas)
     close = ind["close"]
@@ -440,6 +469,8 @@ def backtest(velas: list[list[float]], symbol: str, capital0: float = 1000.0,
     entrada_mercado = 0.0
     cp_ejecutado = False
     tp_parcial = 0.0
+    entrada_idx = 0
+    racha_perdidas_actual = 0
 
     for i in range(max(30, i0), n - 1):
         if cooldown > 0:
@@ -482,6 +513,8 @@ def backtest(velas: list[list[float]], symbol: str, capital0: float = 1000.0,
                 precio_salida = sl
             elif h >= tp:
                 precio_salida = tp
+            elif max_hold_days > 0 and (i - entrada_idx) >= max_hold_days:
+                precio_salida = close[i]  # salida forzada por tiempo
             if precio_salida is not None:
                 salida_neta = precio_salida * (1 - FEE - SLIPPAGE)
                 pnl = qty * (salida_neta - entrada)
@@ -489,12 +522,16 @@ def backtest(velas: list[list[float]], symbol: str, capital0: float = 1000.0,
                 res.trades += 1
                 res.pnl_total += pnl
                 res.retornos.append(pnl / capital0)
+                res.duraciones.append(i - entrada_idx)
                 if pnl > 0:
                     res.ganadores += 1
                     res.bruto_ganado += pnl
+                    racha_perdidas_actual = 0
                 else:
                     res.bruto_perdido += -pnl
                     cooldown = COOLDOWN_TRAS_PERDIDA
+                    racha_perdidas_actual += 1
+                    res.racha_max_perdidas = max(res.racha_max_perdidas, racha_perdidas_actual)
                 en_pos = False
             pico = max(pico, capital if not en_pos else capital + qty * close[i])
             eq = capital if not en_pos else capital + qty * close[i]
@@ -518,6 +555,16 @@ def backtest(velas: list[list[float]], symbol: str, capital0: float = 1000.0,
                 continue
         if fg_mask is not None and i < len(fg_mask) and not fg_mask[i]:
             continue  # Fear & Greed filter bloquea esta vela
+        if ema50_filter:
+            ema50_v = ind["ema50"][i]
+            if math.isnan(ema50_v) or close[i] <= ema50_v:
+                continue  # precio bajo EMA50: tendencia de medio plazo negativa
+        if vol_confirm_ratio > 0.0 and not math.isnan(ind["vol_ma"][i]) and ind["vol_ma"][i] > 0:
+            if ind["vol"][i] < vol_confirm_ratio * ind["vol_ma"][i]:
+                continue  # volumen insuficiente para confirmar señal
+        if rsi_min_entrada > 0.0 and not math.isnan(ind["rsi"][i]):
+            if ind["rsi"][i] < rsi_min_entrada:
+                continue  # RSI bajo umbral: momentum insuficiente
         # Equity Curve Filter: ajuste dinámico de riesgo según drawdown actual
         riesgo_efectivo = riesgo
         if eq_dd_pausa > 0.0 or eq_dd_reduccion > 0.0:
@@ -536,6 +583,7 @@ def backtest(velas: list[list[float]], symbol: str, capital0: float = 1000.0,
                 continue
             entrada = precio
             entrada_mercado = close[i]
+            entrada_idx = i
             be_activado = False
             trailing_activo = False
             sl = close[i] - sl_ratio * ind["atr"][i]
@@ -556,6 +604,7 @@ def backtest(velas: list[list[float]], symbol: str, capital0: float = 1000.0,
         res.trades += 1
         res.pnl_total += pnl
         res.retornos.append(pnl / capital0)
+        res.duraciones.append(n - 1 - entrada_idx)
         if pnl > 0:
             res.ganadores += 1
             res.bruto_ganado += pnl
@@ -1336,6 +1385,30 @@ def _sharpe(retornos: list[float], dias_año: float = 365.0) -> float:
     if std == 0:
         return 0.0
     return (media / std) * math.sqrt(dias_año)
+
+
+def _sortino(retornos: list[float], dias_año: float = 365.0) -> float:
+    """Sortino ratio anualizado (denominator: sólo downside volatility).
+
+    Más apropiado que Sharpe para estrategias asimétricas: penaliza sólo
+    las pérdidas, no la volatilidad al alza.
+    """
+    n = len(retornos)
+    if n < 2:
+        return 0.0
+    media = sum(retornos) / n
+    dd_sq = sum(r ** 2 for r in retornos if r < 0)
+    dd_std = math.sqrt(dd_sq / n) if dd_sq > 0 else 0.0
+    if dd_std == 0:
+        return 0.0
+    return (media / dd_std) * math.sqrt(dias_año)
+
+
+def _calmar(anual_pct: float, max_dd_pct: float) -> float:
+    """Calmar ratio = retorno anual% / max drawdown%. Métrica institucional estándar."""
+    if max_dd_pct <= 0:
+        return 0.0
+    return anual_pct / max_dd_pct
 
 
 def estudio_sharpe_allocation(symbols: list[str], days: int, capital0: float) -> None:
@@ -3042,6 +3115,421 @@ def estudio_allocation(symbols: list[str], days: int, capital0: float) -> None:
     print(f"\nconfig: 1d umbral=5 TP_OPT SL_OPT vol_guard+BTC_macro+FG_zona_neutral")
 
 
+def _base_config_eval(datos, indicadores, btc_ind, fg_map, capital0,
+                      ema50_filter=False, vol_confirm_ratio=0.0,
+                      max_hold_days=0, rsi_min_entrada=0.0,
+                      eq_dd_reduccion=0.0) -> dict[str, dict]:
+    """Función auxiliar reutilizable: evalúa config óptima completa con filtros extras."""
+    SHARPE_RIESGO = {
+        "ETHEUR": 0.08, "BTCEUR": 0.03,
+        "SOLEUR": 0.03, "XRPEUR": 0.03, "AVAXEUR": 0.02,
+    }
+    TP_OPT = {"ETHEUR": 3.5, "BTCEUR": 3.0, "SOLEUR": 2.5, "XRPEUR": 4.0, "AVAXEUR": 3.0}
+    SL_OPT = {"ETHEUR": 0.8, "BTCEUR": 1.0, "SOLEUR": 0.7, "XRPEUR": 0.8, "AVAXEUR": 0.7}
+
+    resultado: dict[str, dict] = {}
+    corte_ref = 0
+    for fase in ("train", "test"):
+        cap = gan = per = 0.0
+        ntr = 0
+        dd = 0.0
+        retornos_agg: list[float] = []
+        for s, data in datos.items():
+            n_s = len(data)
+            corte = int(n_s * 0.7)
+            corte_ref = corte
+            a, b = (0, corte) if fase == "train" else (corte, n_s)
+            fg_mask = _fg_mask_build(fg_map, data, 25, 75) if fg_map else None
+            r = backtest(
+                data, s, capital0, 5.0,
+                use_trailing=False, vol_guard=True,
+                ind=indicadores[s], i0=a, i1=b,
+                sl_ratio=SL_OPT.get(s, 1.0),
+                tp_ratio=TP_OPT.get(s, 3.0),
+                riesgo=SHARPE_RIESGO.get(s, 0.03),
+                btc_ind=btc_ind,
+                fg_mask=fg_mask,
+                eq_dd_reduccion=eq_dd_reduccion,
+                ema50_filter=ema50_filter,
+                vol_confirm_ratio=vol_confirm_ratio,
+                max_hold_days=max_hold_days,
+                rsi_min_entrada=rsi_min_entrada,
+            )
+            cap += r.capital_final
+            gan += r.bruto_ganado
+            per += r.bruto_perdido
+            ntr += r.trades
+            dd = max(dd, r.max_drawdown)
+            retornos_agg.extend(r.retornos)
+        n_sym = len(datos)
+        first_data = list(datos.values())[0] if datos else []
+        dias_f = (corte_ref if fase == "train" else
+                  len(first_data) - corte_ref) if first_data else 1
+        anual = ((cap / (capital0 * n_sym)) ** (365 / dias_f) - 1) * 100 if n_sym and dias_f > 0 else 0
+        pf = gan / per if per > 0 else float("inf")
+        sortino = _sortino(retornos_agg)
+        calmar = _calmar(anual, dd)
+        resultado[fase] = {"pf": pf, "anual": anual, "n": ntr, "dd": dd,
+                           "sortino": sortino, "calmar": calmar}
+    return resultado
+
+
+def estudio_ema50_filter(symbols: list[str], days: int, capital0: float) -> None:
+    """Evalúa EMA50 como filtro de tendencia de medio plazo por símbolo.
+
+    Solo entra cuando precio > EMA50 del propio símbolo (no solo BTC_macro).
+    Compara también EMA200 per-símbolo (trend_filter=True).
+
+    Hipótesis: entradas sobre EMA50 tienen mayor win rate y menor DD porque
+    el precio ya superó la resistencia de medio plazo antes de entrar.
+    """
+    print("  descargando datos…")
+    datos, indicadores = {}, {}
+    for s in symbols:
+        try:
+            datos[s] = descargar_klines(s, "1d", days)
+            indicadores[s] = calcular_indicadores(datos[s])
+        except Exception as e:
+            print(f"  [ERROR] {s}: {e}")
+    if not datos:
+        return
+    fg_map = _descargar_fear_greed(days)
+    btc_ind = indicadores.get("BTCEUR") or calcular_indicadores(
+        descargar_klines("BTCEUR", "1d", days))
+
+    escenarios = [
+        ("sin_ema_local",   False, False),
+        ("ema50_local",     True,  False),
+        ("ema200_local",    False, True),
+    ]
+
+    print(f"\n{'config':>16s} | "
+          f"{'PF tr':>6s} {'anual tr':>9s} {'n tr':>5s} | "
+          f"{'PF te':>6s} {'anual te':>9s} {'n te':>5s} {'DD te':>6s} "
+          f"{'Sortino':>8s} {'Calmar':>7s}")
+    print("-" * 90)
+
+    for nombre, ema50_on, ema200_local in escenarios:
+        SHARPE_RIESGO = {
+            "ETHEUR": 0.08, "BTCEUR": 0.03,
+            "SOLEUR": 0.03, "XRPEUR": 0.03, "AVAXEUR": 0.02,
+        }
+        TP_OPT = {"ETHEUR": 3.5, "BTCEUR": 3.0, "SOLEUR": 2.5, "XRPEUR": 4.0, "AVAXEUR": 3.0}
+        SL_OPT = {"ETHEUR": 0.8, "BTCEUR": 1.0, "SOLEUR": 0.7, "XRPEUR": 0.8, "AVAXEUR": 0.7}
+
+        resultado: dict[str, dict] = {}
+        corte_ref = 0
+        for fase in ("train", "test"):
+            cap = gan = per = 0.0; ntr = 0; dd = 0.0; rets: list[float] = []
+            for s, data in datos.items():
+                n_s = len(data)
+                corte = int(n_s * 0.7); corte_ref = corte
+                a, b = (0, corte) if fase == "train" else (corte, n_s)
+                fg_mask = _fg_mask_build(fg_map, data, 25, 75) if fg_map else None
+                r = backtest(
+                    data, s, capital0, 5.0,
+                    use_trailing=False, vol_guard=True,
+                    ind=indicadores[s], i0=a, i1=b,
+                    sl_ratio=SL_OPT.get(s, 1.0), tp_ratio=TP_OPT.get(s, 3.0),
+                    riesgo=SHARPE_RIESGO.get(s, 0.03),
+                    btc_ind=btc_ind, fg_mask=fg_mask,
+                    trend_filter=ema200_local,
+                    ema50_filter=ema50_on,
+                    eq_dd_reduccion=0.10,
+                )
+                cap += r.capital_final; gan += r.bruto_ganado; per += r.bruto_perdido
+                ntr += r.trades; dd = max(dd, r.max_drawdown); rets.extend(r.retornos)
+            n_sym = len(datos)
+            first = list(datos.values())[0] if datos else []
+            dias_f = (corte_ref if fase == "train" else len(first) - corte_ref) if first else 1
+            anual = ((cap / (capital0 * n_sym)) ** (365 / dias_f) - 1) * 100 if n_sym and dias_f > 0 else 0
+            pf = gan / per if per > 0 else float("inf")
+            resultado[fase] = {"pf": pf, "anual": anual, "n": ntr, "dd": dd,
+                               "sortino": _sortino(rets), "calmar": _calmar(anual, dd)}
+
+        tr, te = resultado["train"], resultado["test"]
+        pf_tr = f"{tr['pf']:.2f}" if tr["pf"] != float("inf") else " inf"
+        pf_te = f"{te['pf']:.2f}" if te["pf"] != float("inf") else " inf"
+        tag = " ← actual" if nombre == "sin_ema_local" else ""
+        print(f"{nombre:>16s} | "
+              f"{pf_tr:>6s} {tr['anual']:+8.2f}% {tr['n']:5d} | "
+              f"{pf_te:>6s} {te['anual']:+8.2f}% {te['n']:5d} {te['dd']:5.1f}% "
+              f"{te['sortino']:+7.2f}  {te['calmar']:+6.2f}{tag}")
+
+    n_test = int(len(list(datos.values())[0]) * 0.3) if datos else 0
+    print(f"\nconfig base: Sharpe+FG+vol_guard+BTC_macro+TP_OPT+SL_OPT+eq_dd=10% | test ~{n_test}d")
+    print("sin_ema_local = baseline actual (BTC_macro ya activo, no EMA50 per-símbolo)")
+
+
+def estudio_vol_confirm(symbols: list[str], days: int, capital0: float) -> None:
+    """Evalúa confirmación de volumen como hard filter (no score-bonus).
+
+    Requiere que el volumen en la vela de entrada supere un múltiplo de la
+    media móvil de 20 velas. Evita entrar en señales de bajo volumen que
+    suelen ser falsas rupturas.
+
+    Ratios probados: 0.0 (sin filtro), 0.8x, 1.0x, 1.2x, 1.5x vol_ma20.
+    """
+    print("  descargando datos…")
+    datos, indicadores = {}, {}
+    for s in symbols:
+        try:
+            datos[s] = descargar_klines(s, "1d", days)
+            indicadores[s] = calcular_indicadores(datos[s])
+        except Exception as e:
+            print(f"  [ERROR] {s}: {e}")
+    if not datos:
+        return
+    fg_map = _descargar_fear_greed(days)
+    btc_ind = indicadores.get("BTCEUR") or calcular_indicadores(
+        descargar_klines("BTCEUR", "1d", days))
+
+    escenarios = [
+        ("sin_vol_filter", 0.0),
+        ("vol_0.8x",       0.8),
+        ("vol_1.0x",       1.0),
+        ("vol_1.2x",       1.2),
+        ("vol_1.5x",       1.5),
+    ]
+
+    print(f"\n{'config':>16s} | "
+          f"{'PF tr':>6s} {'anual tr':>9s} {'n tr':>5s} | "
+          f"{'PF te':>6s} {'anual te':>9s} {'n te':>5s} {'DD te':>6s} "
+          f"{'Sortino':>8s} {'Calmar':>7s}")
+    print("-" * 90)
+
+    for nombre, ratio in escenarios:
+        res = _base_config_eval(datos, indicadores, btc_ind, fg_map, capital0,
+                                vol_confirm_ratio=ratio, eq_dd_reduccion=0.10)
+        tr, te = res["train"], res["test"]
+        pf_tr = f"{tr['pf']:.2f}" if tr["pf"] != float("inf") else " inf"
+        pf_te = f"{te['pf']:.2f}" if te["pf"] != float("inf") else " inf"
+        tag = " ← actual" if nombre == "sin_vol_filter" else ""
+        print(f"{nombre:>16s} | "
+              f"{pf_tr:>6s} {tr['anual']:+8.2f}% {tr['n']:5d} | "
+              f"{pf_te:>6s} {te['anual']:+8.2f}% {te['n']:5d} {te['dd']:5.1f}% "
+              f"{te['sortino']:+7.2f}  {te['calmar']:+6.2f}{tag}")
+
+    n_test = int(len(list(datos.values())[0]) * 0.3) if datos else 0
+    print(f"\nconfig base: Sharpe+FG+vol_guard+BTC_macro+TP_OPT+SL_OPT+eq_dd=10% | test ~{n_test}d")
+    print("vol_Nx = requiere volumen ≥ N × vol_ma20 para entrar")
+
+
+def estudio_time_exit(symbols: list[str], days: int, capital0: float) -> None:
+    """Evalúa salida forzada por tiempo máximo en posición.
+
+    Si ni SL ni TP se activaron tras max_hold_days velas, cierra al precio
+    de cierre. Libera capital de posiciones estancadas y reduce el tiempo
+    de exposición al mercado.
+
+    Horizontes probados: sin límite, 5, 10, 15, 20 días.
+    """
+    print("  descargando datos…")
+    datos, indicadores = {}, {}
+    for s in symbols:
+        try:
+            datos[s] = descargar_klines(s, "1d", days)
+            indicadores[s] = calcular_indicadores(datos[s])
+        except Exception as e:
+            print(f"  [ERROR] {s}: {e}")
+    if not datos:
+        return
+    fg_map = _descargar_fear_greed(days)
+    btc_ind = indicadores.get("BTCEUR") or calcular_indicadores(
+        descargar_klines("BTCEUR", "1d", days))
+
+    escenarios = [
+        ("sin_limite",  0),
+        ("max_5d",      5),
+        ("max_10d",    10),
+        ("max_15d",    15),
+        ("max_20d",    20),
+    ]
+
+    print(f"\n{'config':>12s} | "
+          f"{'PF tr':>6s} {'anual tr':>9s} {'n tr':>5s} | "
+          f"{'PF te':>6s} {'anual te':>9s} {'n te':>5s} {'DD te':>6s} "
+          f"{'Sortino':>8s} {'dur_med':>7s}")
+    print("-" * 88)
+
+    SHARPE_RIESGO = {
+        "ETHEUR": 0.08, "BTCEUR": 0.03,
+        "SOLEUR": 0.03, "XRPEUR": 0.03, "AVAXEUR": 0.02,
+    }
+    TP_OPT = {"ETHEUR": 3.5, "BTCEUR": 3.0, "SOLEUR": 2.5, "XRPEUR": 4.0, "AVAXEUR": 3.0}
+    SL_OPT = {"ETHEUR": 0.8, "BTCEUR": 1.0, "SOLEUR": 0.7, "XRPEUR": 0.8, "AVAXEUR": 0.7}
+
+    for nombre, max_d in escenarios:
+        resultado: dict[str, dict] = {}
+        corte_ref = 0
+        for fase in ("train", "test"):
+            cap = gan = per = 0.0; ntr = 0; dd = 0.0
+            rets: list[float] = []; durs: list[int] = []
+            for s, data in datos.items():
+                n_s = len(data)
+                corte = int(n_s * 0.7); corte_ref = corte
+                a, b = (0, corte) if fase == "train" else (corte, n_s)
+                fg_mask = _fg_mask_build(fg_map, data, 25, 75) if fg_map else None
+                r = backtest(
+                    data, s, capital0, 5.0,
+                    use_trailing=False, vol_guard=True,
+                    ind=indicadores[s], i0=a, i1=b,
+                    sl_ratio=SL_OPT.get(s, 1.0), tp_ratio=TP_OPT.get(s, 3.0),
+                    riesgo=SHARPE_RIESGO.get(s, 0.03),
+                    btc_ind=btc_ind, fg_mask=fg_mask,
+                    eq_dd_reduccion=0.10, max_hold_days=max_d,
+                )
+                cap += r.capital_final; gan += r.bruto_ganado; per += r.bruto_perdido
+                ntr += r.trades; dd = max(dd, r.max_drawdown)
+                rets.extend(r.retornos); durs.extend(r.duraciones)
+            n_sym = len(datos)
+            first = list(datos.values())[0] if datos else []
+            dias_f = (corte_ref if fase == "train" else len(first) - corte_ref) if first else 1
+            anual = ((cap / (capital0 * n_sym)) ** (365 / dias_f) - 1) * 100 if n_sym and dias_f > 0 else 0
+            pf = gan / per if per > 0 else float("inf")
+            dur_media = sum(durs) / len(durs) if durs else 0.0
+            resultado[fase] = {"pf": pf, "anual": anual, "n": ntr, "dd": dd,
+                               "sortino": _sortino(rets), "dur": dur_media}
+
+        tr, te = resultado["train"], resultado["test"]
+        pf_tr = f"{tr['pf']:.2f}" if tr["pf"] != float("inf") else " inf"
+        pf_te = f"{te['pf']:.2f}" if te["pf"] != float("inf") else " inf"
+        tag = " ← actual" if nombre == "sin_limite" else ""
+        print(f"{nombre:>12s} | "
+              f"{pf_tr:>6s} {tr['anual']:+8.2f}% {tr['n']:5d} | "
+              f"{pf_te:>6s} {te['anual']:+8.2f}% {te['n']:5d} {te['dd']:5.1f}% "
+              f"{te['sortino']:+7.2f}  {te['dur']:5.1f}d{tag}")
+
+    n_test = int(len(list(datos.values())[0]) * 0.3) if datos else 0
+    print(f"\nconfig base: Sharpe+FG+vol_guard+BTC_macro+TP_OPT+SL_OPT+eq_dd=10% | test ~{n_test}d")
+    print("max_Nd = salida forzada al cierre si posición lleva N días sin tocar SL/TP")
+
+
+def estudio_rsi_momentum(symbols: list[str], days: int, capital0: float) -> None:
+    """Evalúa RSI mínimo de entrada como filtro de momentum alcista.
+
+    Solo entra cuando RSI ≥ umbral. Evita entrar en tendencias bajistas donde
+    el RSI cae sostenidamente. Diferente al score: aquí es hard filter, no bonus.
+
+    Umbrales probados: sin filtro, 40, 45, 50, 55.
+    RSI 50 separa momentum positivo/negativo (nivel clave institucional).
+    """
+    print("  descargando datos…")
+    datos, indicadores = {}, {}
+    for s in symbols:
+        try:
+            datos[s] = descargar_klines(s, "1d", days)
+            indicadores[s] = calcular_indicadores(datos[s])
+        except Exception as e:
+            print(f"  [ERROR] {s}: {e}")
+    if not datos:
+        return
+    fg_map = _descargar_fear_greed(days)
+    btc_ind = indicadores.get("BTCEUR") or calcular_indicadores(
+        descargar_klines("BTCEUR", "1d", days))
+
+    escenarios = [
+        ("sin_rsi_min",  0.0),
+        ("rsi_min_40",  40.0),
+        ("rsi_min_45",  45.0),
+        ("rsi_min_50",  50.0),
+        ("rsi_min_55",  55.0),
+    ]
+
+    print(f"\n{'config':>13s} | "
+          f"{'PF tr':>6s} {'anual tr':>9s} {'n tr':>5s} | "
+          f"{'PF te':>6s} {'anual te':>9s} {'n te':>5s} {'DD te':>6s} "
+          f"{'Sortino':>8s} {'Calmar':>7s}")
+    print("-" * 90)
+
+    for nombre, rsi_min in escenarios:
+        res = _base_config_eval(datos, indicadores, btc_ind, fg_map, capital0,
+                                rsi_min_entrada=rsi_min, eq_dd_reduccion=0.10)
+        tr, te = res["train"], res["test"]
+        pf_tr = f"{tr['pf']:.2f}" if tr["pf"] != float("inf") else " inf"
+        pf_te = f"{te['pf']:.2f}" if te["pf"] != float("inf") else " inf"
+        tag = " ← actual" if nombre == "sin_rsi_min" else ""
+        print(f"{nombre:>13s} | "
+              f"{pf_tr:>6s} {tr['anual']:+8.2f}% {tr['n']:5d} | "
+              f"{pf_te:>6s} {te['anual']:+8.2f}% {te['n']:5d} {te['dd']:5.1f}% "
+              f"{te['sortino']:+7.2f}  {te['calmar']:+6.2f}{tag}")
+
+    n_test = int(len(list(datos.values())[0]) * 0.3) if datos else 0
+    print(f"\nconfig base: Sharpe+FG+vol_guard+BTC_macro+TP_OPT+SL_OPT+eq_dd=10% | test ~{n_test}d")
+    print("rsi_min_N = entra sólo cuando RSI ≥ N (momentum alcista confirmado)")
+
+
+def estudio_pro_combined(symbols: list[str], days: int, capital0: float) -> None:
+    """Grid de filtros profesionales en combinación — buscando +2-4pp vs baseline.
+
+    Baseline: config óptima completa ya validada (Sharpe+FG+vol_guard+BTC_macro
+              +TP_OPT+SL_OPT+eq_dd_reduccion=10%).
+
+    Nuevos filtros (individualmente y en combinación):
+      ema50     — precio > EMA50 del símbolo (tendencia medio plazo)
+      vol_1.2x  — volumen ≥ 1.2× vol_ma20 (confirmación de ruptura)
+      time_10d  — salida forzada a los 10 días (libera capital muerto)
+      rsi_45    — RSI ≥ 45 (momentum mínimo requerido)
+
+    Muestra Sortino y Calmar para comparación institucional.
+    """
+    print("  descargando datos…")
+    datos, indicadores = {}, {}
+    for s in symbols:
+        try:
+            datos[s] = descargar_klines(s, "1d", days)
+            indicadores[s] = calcular_indicadores(datos[s])
+        except Exception as e:
+            print(f"  [ERROR] {s}: {e}")
+    if not datos:
+        return
+    fg_map = _descargar_fear_greed(days)
+    btc_ind = indicadores.get("BTCEUR") or calcular_indicadores(
+        descargar_klines("BTCEUR", "1d", days))
+
+    escenarios = [
+        # nombre,          ema50,  vol,  hold, rsi
+        ("baseline",        False, 0.0,  0,    0.0),
+        ("+ ema50",         True,  0.0,  0,    0.0),
+        ("+ vol_1.2x",      False, 1.2,  0,    0.0),
+        ("+ time_10d",      False, 0.0,  10,   0.0),
+        ("+ rsi_45",        False, 0.0,  0,    45.0),
+        ("ema50+vol",       True,  1.2,  0,    0.0),
+        ("ema50+time",      True,  0.0,  10,   0.0),
+        ("ema50+rsi45",     True,  0.0,  0,    45.0),
+        ("vol+time",        False, 1.2,  10,   0.0),
+        ("vol+rsi45",       False, 1.2,  0,    45.0),
+        ("ema50+vol+time",  True,  1.2,  10,   0.0),
+        ("ema50+vol+rsi",   True,  1.2,  0,    45.0),
+        ("todo_combinado",  True,  1.2,  10,   45.0),
+    ]
+
+    print(f"\n{'config':>16s} | "
+          f"{'PF tr':>6s} {'anual tr':>9s} {'n tr':>5s} | "
+          f"{'PF te':>6s} {'anual te':>9s} {'n te':>5s} {'DD te':>6s} "
+          f"{'Sortino':>8s} {'Calmar':>7s}")
+    print("-" * 96)
+
+    for nombre, ema50_on, vol_r, max_d, rsi_min in escenarios:
+        res = _base_config_eval(datos, indicadores, btc_ind, fg_map, capital0,
+                                ema50_filter=ema50_on, vol_confirm_ratio=vol_r,
+                                max_hold_days=max_d, rsi_min_entrada=rsi_min,
+                                eq_dd_reduccion=0.10)
+        tr, te = res["train"], res["test"]
+        pf_tr = f"{tr['pf']:.2f}" if tr["pf"] != float("inf") else " inf"
+        pf_te = f"{te['pf']:.2f}" if te["pf"] != float("inf") else " inf"
+        tag = " ← actual" if nombre == "baseline" else ""
+        print(f"{nombre:>16s} | "
+              f"{pf_tr:>6s} {tr['anual']:+8.2f}% {tr['n']:5d} | "
+              f"{pf_te:>6s} {te['anual']:+8.2f}% {te['n']:5d} {te['dd']:5.1f}% "
+              f"{te['sortino']:+7.2f}  {te['calmar']:+6.2f}{tag}")
+
+    n_test = int(len(list(datos.values())[0]) * 0.3) if datos else 0
+    print(f"\nconfig base: 5sym×1d | Sharpe+FG+vol_guard+BTC_macro+TP_OPT+SL_OPT+eq_dd=10% | "
+          f"test ~{n_test}d")
+    print("Sortino = retorno/downside_vol (↑ mejor) | Calmar = retorno_anual/maxDD (↑ mejor)")
+
+
 # ----------------------------------------------------------------- main
 
 def fmt(res: Resultado, capital0: float, dias: int) -> str:
@@ -3107,6 +3595,16 @@ def main() -> None:
                    help="cierre parcial: tomar beneficio parcial a mitad de camino al TP")
     p.add_argument("--study_allocation", action="store_true",
                    help="comparación de asignaciones: equal vs sharpe vs vol_parity vs momentum")
+    p.add_argument("--study_ema50", action="store_true",
+                   help="filtro EMA50 por símbolo: tendencia de medio plazo como hard filter")
+    p.add_argument("--study_vol_confirm", action="store_true",
+                   help="confirmación de volumen: require vol ≥ Nx vol_ma20 para entrar")
+    p.add_argument("--study_time_exit", action="store_true",
+                   help="salida por tiempo máximo: cierra tras N días si ni SL ni TP")
+    p.add_argument("--study_rsi_momentum", action="store_true",
+                   help="RSI mínimo de entrada: momentum alcista confirmado (40/45/50/55)")
+    p.add_argument("--study_pro", action="store_true",
+                   help="grid profesional combinado: ema50 + vol_confirm + time_exit + rsi")
     p.add_argument("--rotacion", action="store_true",
                    help="estrategia de referencia: rotacion de momentum")
     args = p.parse_args()
@@ -3239,6 +3737,36 @@ def main() -> None:
         t0 = time.perf_counter()
         estudio_allocation(symbols, args.days, args.capital)
         print(f"\n[tiempo] estudio allocation: {time.perf_counter() - t0:.1f}s")
+        return
+
+    if args.study_ema50:
+        t0 = time.perf_counter()
+        estudio_ema50_filter(symbols, args.days, args.capital)
+        print(f"\n[tiempo] estudio ema50_filter: {time.perf_counter() - t0:.1f}s")
+        return
+
+    if args.study_vol_confirm:
+        t0 = time.perf_counter()
+        estudio_vol_confirm(symbols, args.days, args.capital)
+        print(f"\n[tiempo] estudio vol_confirm: {time.perf_counter() - t0:.1f}s")
+        return
+
+    if args.study_time_exit:
+        t0 = time.perf_counter()
+        estudio_time_exit(symbols, args.days, args.capital)
+        print(f"\n[tiempo] estudio time_exit: {time.perf_counter() - t0:.1f}s")
+        return
+
+    if args.study_rsi_momentum:
+        t0 = time.perf_counter()
+        estudio_rsi_momentum(symbols, args.days, args.capital)
+        print(f"\n[tiempo] estudio rsi_momentum: {time.perf_counter() - t0:.1f}s")
+        return
+
+    if args.study_pro:
+        t0 = time.perf_counter()
+        estudio_pro_combined(symbols, args.days, args.capital)
+        print(f"\n[tiempo] estudio pro_combined: {time.perf_counter() - t0:.1f}s")
         return
 
     if args.rotacion:

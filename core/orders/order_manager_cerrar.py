@@ -320,6 +320,13 @@ async def _finalizar_cierre_completo_async(
         else:
             await manager.bus.publish("risk.win_streak_reset", {"retorno": retorno, "symbol": symbol})
 
+    # Per-symbol loss streak guard: registra resultado para ajuste de riesgo
+    try:
+        from core.risk.per_symbol_guard import registrar_resultado as _reg_sym
+        _reg_sym(symbol, ganador=(retorno >= 0))
+    except Exception:
+        pass
+
     log.info("📤 Orden cerrada para %s @ %.2f | %s", symbol, precio_cierre, motivo)
 
     if manager.bus:

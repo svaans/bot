@@ -86,6 +86,10 @@ class DevelopmentConfig:
     # Desactivado en dev; activo en producción vía EQUITY_DD_FILTER_ENABLED=true.
     equity_dd_filter_enabled: bool = False
     equity_dd_reduccion_umbral: float = 0.10
+    # Per-Symbol Loss Streak Guard: reduce riesgo del símbolo concreto tras
+    # N pérdidas consecutivas en ese símbolo. Desactivado en dev.
+    per_symbol_guard_enabled: bool = False
+    per_symbol_losses_umbral: int = 2
     # Filtro de noticias (CryptoPanic RSS): bloquea entradas cuando el sentimiento
     # de las últimas noticias del símbolo es muy negativo.
     # Desactivado por defecto; activar en producción o con FILTRO_NOTICIAS_ENABLED=true.
