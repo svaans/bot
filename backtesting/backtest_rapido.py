@@ -384,7 +384,8 @@ def backtest(velas: list[list[float]], symbol: str, capital0: float = 1000.0,
              adx_min: float = 0.0,
              fg_mask: list[bool] | None = None,
              eq_dd_pausa: float = 0.0,
-             eq_dd_reduccion: float = 0.0) -> Resultado:
+             eq_dd_reduccion: float = 0.0,
+             trail_activacion_atr: float = 0.0) -> Resultado:
     """vol_guard: modo adaptativo — no entra cuando la volatilidad (ATR/precio)
     supera 2x su media de 100 velas (régimen anómalo).
     btc_ind: si se pasa, filtro macro — solo entra cuando BTC > su EMA200.
@@ -395,7 +396,10 @@ def backtest(velas: list[list[float]], symbol: str, capital0: float = 1000.0,
     eq_dd_pausa: DD de equity (0-1) a partir del cual se pausan nuevas entradas.
       Ej: 0.15 = pausar si el capital cae >15% desde su máximo. 0 = desactivado.
     eq_dd_reduccion: DD de equity (0-1) a partir del cual se reduce riesgo a la mitad.
-      Ej: 0.10 = reducir riesgo al 50% si DD >10%. 0 = desactivado."""
+      Ej: 0.10 = reducir riesgo al 50% si DD >10%. 0 = desactivado.
+    trail_activacion_atr: trailing diferido — solo activa el trailing cuando el precio
+      gana trail_activacion_atr×ATR desde la entrada. 0 = inmediato (comportamiento
+      clásico). Requiere use_trailing=True para tener efecto."""
     if ind is None:
         ind = calcular_indicadores(velas)
     close = ind["close"]
@@ -428,6 +432,7 @@ def backtest(velas: list[list[float]], symbol: str, capital0: float = 1000.0,
     qty = entrada = sl = tp = maximo = 0.0
     cooldown = 0
     be_activado = False
+    trailing_activo = False
     entrada_mercado = 0.0
 
     for i in range(max(30, i0), n - 1):
@@ -438,8 +443,15 @@ def backtest(velas: list[list[float]], symbol: str, capital0: float = 1000.0,
             h, l = velas[i][2], velas[i][3]
             maximo = max(maximo, h)
             if use_trailing:
-                # trailing por ATR sobre el máximo alcanzado
-                sl = max(sl, maximo - sl_ratio * ind["atr"][i])
+                if trail_activacion_atr > 0.0 and not trailing_activo:
+                    # activación diferida: esperar a que el precio gane el umbral
+                    if not math.isnan(ind["atr"][i]) and ind["atr"][i] > 0:
+                        if close[i] >= entrada_mercado + trail_activacion_atr * ind["atr"][i]:
+                            trailing_activo = True
+                else:
+                    trailing_activo = True  # inmediato (trail_activacion_atr == 0)
+                if trailing_activo:
+                    sl = max(sl, maximo - sl_ratio * ind["atr"][i])
             # break-even: cuando el precio sube be_atr*ATR, SL sube a entrada
             if be_atr > 0.0 and not be_activado and not math.isnan(ind["atr"][i]):
                 if close[i] >= entrada_mercado + be_atr * ind["atr"][i]:
@@ -506,6 +518,7 @@ def backtest(velas: list[list[float]], symbol: str, capital0: float = 1000.0,
             entrada = precio
             entrada_mercado = close[i]
             be_activado = False
+            trailing_activo = False
             sl = close[i] - sl_ratio * ind["atr"][i]
             tp = close[i] + tp_ratio * ind["atr"][i]
             maximo = close[i]
@@ -1369,6 +1382,129 @@ def estudio_completo(symbols: list[str], days: int, capital0: float) -> None:
           + "  ".join(f"{s.replace('EUR','')}/{v}" for s, v in TP_OPT.items()))
 
 
+def estudio_trailing(symbols: list[str], days: int, capital0: float) -> None:
+    """Evalúa trailing stop diferido: activa el trailing solo cuando el trade
+    ya lleva X × ATR de ganancia, dejando al precio correr más allá del TP fijo.
+
+    Escenarios comparados sobre config completa validada (Sharpe+FG+vol_guard+BTC):
+      sin_trailing   — TP fijo por símbolo (config actual, baseline)
+      trail_inm      — trailing inmediato sin TP (tp=20×, use_trailing=True)
+      trail_1.5atr   — trailing activa cuando ganancia ≥ 1.5 × ATR
+      trail_2.0atr   — trailing activa cuando ganancia ≥ 2.0 × ATR
+      trail_2.5atr   — trailing activa cuando ganancia ≥ 2.5 × ATR
+      trail_3.0atr   — trailing activa cuando ganancia ≥ 3.0 × ATR
+    """
+    SHARPE_RIESGO = {
+        "ETHEUR": 0.08, "BTCEUR": 0.03,
+        "SOLEUR": 0.03, "XRPEUR": 0.03, "AVAXEUR": 0.02,
+    }
+    # TP validados por study_tp_por_simbolo
+    TP_OPT = {"ETHEUR": 3.5, "BTCEUR": 3.0, "SOLEUR": 2.5, "XRPEUR": 4.0, "AVAXEUR": 3.0}
+
+    print("  descargando Fear&Greed histórico…")
+    fg_map = _descargar_fear_greed(days)
+    if not fg_map:
+        print("  [aviso] sin datos F&G — se omite el filtro zona_neutral")
+
+    print("  descargando datos de mercado…")
+    datos: dict[str, list] = {}
+    indicadores: dict[str, list] = {}
+    for s in symbols:
+        try:
+            datos[s] = descargar_klines(s, "1d", days)
+            indicadores[s] = calcular_indicadores(datos[s])
+        except Exception as e:
+            print(f"  [ERROR] {s}: {e}")
+    if not datos:
+        return
+
+    btc_ind = indicadores.get("BTCEUR") or calcular_indicadores(
+        descargar_klines("BTCEUR", "1d", days))
+
+    def _fg_mask(data: list) -> list[bool] | None:
+        if not fg_map:
+            return None
+        mask = []
+        for v in data:
+            fg_val = _fg_valor(fg_map, v[0])
+            ok = True
+            if fg_val is not None:
+                ok = 25 <= fg_val <= 75
+            mask.append(ok)
+        return mask
+
+    def _eval(use_trailing: bool, trail_act: float,
+              tp_map: dict[str, float]) -> dict[str, dict]:
+        resultado: dict[str, dict] = {}
+        corte_ref = 0
+        for fase in ("train", "test"):
+            cap = gan = per = 0.0
+            ntr = 0
+            dd = 0.0
+            for s, data in datos.items():
+                n_s = len(data)
+                corte = int(n_s * 0.7)
+                corte_ref = corte
+                a, b = (0, corte) if fase == "train" else (corte, n_s)
+                fg_mask = _fg_mask(data)
+                r = backtest(
+                    data, s, capital0, 5.0,
+                    use_trailing=use_trailing, trend_filter=False,
+                    ind=indicadores[s], i0=a, i1=b,
+                    sl_ratio=1.0, tp_ratio=tp_map.get(s, 3.0), vol_guard=True,
+                    riesgo=SHARPE_RIESGO.get(s, 0.03), senal_v2=False,
+                    btc_ind=btc_ind, be_atr=0.0, adx_min=0.0,
+                    fg_mask=fg_mask,
+                    trail_activacion_atr=trail_act,
+                )
+                cap += r.capital_final
+                gan += r.bruto_ganado
+                per += r.bruto_perdido
+                ntr += r.trades
+                dd = max(dd, r.max_drawdown)
+            n_sym = len(datos)
+            first_data = list(datos.values())[0] if datos else []
+            dias = (corte_ref if fase == "train" else
+                    len(first_data) - corte_ref) if first_data else 1
+            anual = ((cap / (capital0 * n_sym)) ** (365 / dias) - 1) * 100 if n_sym and dias > 0 else 0
+            pf = gan / per if per > 0 else float("inf")
+            resultado[fase] = {"pf": pf, "anual": anual, "n": ntr, "dd": dd}
+        return resultado
+
+    # TP muy amplio para variantes con trailing (sin techo fijo)
+    TP_LIBRE = {s: 20.0 for s in datos}
+
+    escenarios = [
+        ("sin_trailing",  False, 0.0,  TP_OPT),
+        ("trail_inm",     True,  0.0,  TP_LIBRE),
+        ("trail_1.5atr",  True,  1.5,  TP_LIBRE),
+        ("trail_2.0atr",  True,  2.0,  TP_LIBRE),
+        ("trail_2.5atr",  True,  2.5,  TP_LIBRE),
+        ("trail_3.0atr",  True,  3.0,  TP_LIBRE),
+    ]
+
+    print(f"\n{'escenario':>14s} | "
+          f"{'PF tr':>6s} {'anual tr':>9s} {'n tr':>5s} | "
+          f"{'PF te':>6s} {'anual te':>9s} {'n te':>5s} {'DD te':>6s}")
+    print("-" * 74)
+
+    for nombre, use_tr, trail_act, tp_map in escenarios:
+        res = _eval(use_tr, trail_act, tp_map)
+        tr, te = res["train"], res["test"]
+        pf_tr = f"{tr['pf']:.2f}" if tr["pf"] != float("inf") else " inf"
+        pf_te = f"{te['pf']:.2f}" if te["pf"] != float("inf") else " inf"
+        marker = " ← actual" if nombre == "sin_trailing" else ""
+        print(f"{nombre:>14s} | "
+              f"{pf_tr:>6s} {tr['anual']:+8.2f}% {tr['n']:5d} | "
+              f"{pf_te:>6s} {te['anual']:+8.2f}% {te['n']:5d} {te['dd']:5.1f}%"
+              f"{marker}")
+
+    n_test = int(len(list(datos.values())[0]) * 0.3) if datos else 0
+    print(f"\nconfig: {len(datos)} símbolos × 1d | test ~{n_test} días | "
+          "Sharpe+FG_zona_neutral+vol_guard+BTC_macro")
+    print("trailing: SL sigue max_precio − 1×ATR desde activación")
+
+
 def estudio_senal_v2(symbols: list[str], days: int, capital0: float) -> None:
     """Compara señal v1 (RSI+MACD+volumen) vs v2 (+Donchian-20 breakout).
 
@@ -1885,6 +2021,8 @@ def main() -> None:
                    help="señal v1 vs v2 (Donchian-20 breakout) sobre config completa validada")
     p.add_argument("--study_tp_por_simbolo", action="store_true",
                    help="optimiza TP ratio por símbolo: grid 2.0-6.0 en train/test")
+    p.add_argument("--study_trailing", action="store_true",
+                   help="trailing stop diferido: compara activación 1.5-3.0×ATR vs TP fijo")
     p.add_argument("--rotacion", action="store_true",
                    help="estrategia de referencia: rotacion de momentum")
     args = p.parse_args()
@@ -1969,6 +2107,12 @@ def main() -> None:
         t0 = time.perf_counter()
         estudio_tp_por_simbolo(symbols, args.days, args.capital)
         print(f"\n[tiempo] estudio tp_por_simbolo: {time.perf_counter() - t0:.1f}s")
+        return
+
+    if args.study_trailing:
+        t0 = time.perf_counter()
+        estudio_trailing(symbols, args.days, args.capital)
+        print(f"\n[tiempo] estudio trailing: {time.perf_counter() - t0:.1f}s")
         return
 
     if args.rotacion:
