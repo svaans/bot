@@ -58,3 +58,8 @@ class ProductionConfig(DevelopmentConfig):
     # Drift >5% desde peso objetivo → generar señal de rebalanceo.
     rebalancer_enabled: bool = True
     rebalancer_drift_threshold: float = 0.05
+    # Fastpath de trader: mecanismo para velas 5m/15m que evita procesar
+    # entradas cuando la cola está saturada (>800 velas pendientes).
+    # En 1d hay máximo 1 vela/día → threshold nunca se alcanza → apagado
+    # explícitamente para evitar checks condicionales innecesarios.
+    trader_fastpath_enabled: bool = False

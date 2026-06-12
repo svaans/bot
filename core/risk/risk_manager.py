@@ -11,6 +11,18 @@ coherencia tras reinicio.
 
 **Reinicio de racha:** el bus puede emitir ``risk.win_streak_reset`` para
 poner a cero ``_perdidas_consecutivas`` sin cerrar posiciones.
+
+**Jerarquía de guards de pérdidas (3 capas, no redundantes):**
+1. ``per_symbol_guard`` (core/risk/per_symbol_guard.py): granularidad por
+   símbolo. Tras N pérdidas consecutivas en un solo símbolo, reduce su
+   riesgo ×0.5. No afecta al resto de símbolos.
+2. ``pf_guard`` (este módulo, campo ``pf_guard_enabled``): ventana rolling
+   de las últimas 20 operaciones de TODOS los símbolos. Si el Profit Factor
+   cae <0.7 → pausa entradas nuevas hasta que el PF se recupere.
+3. ``kill_switch`` (este módulo): emergencia global. Si la racha de pérdidas
+   consecutivas supera ``kill_switch_max_perdidas_consecutivas`` (default 5)
+   → detiene el bot completamente. Solo se puede resetear manualmente.
+Las 3 actúan en orden creciente de severidad y no se superponen en acción.
 """
 from __future__ import annotations
 

@@ -1,10 +1,8 @@
-"""Funciones de evaluación técnica utilizadas por el engine."""
-from __future__ import annotations
-from typing import Dict
-import pandas as pd
-from core.strategies.entry import gestor_entradas
+"""Módulo de compatibilidad — delegaba en gestor_entradas sin añadir lógica.
 
+Los consumidores deben importar directamente:
+    from core.strategies.entry.gestor_entradas import evaluar_estrategias
+"""
+from core.strategies.entry.gestor_entradas import evaluar_estrategias
 
-async def evaluar_estrategias(symbol: str, df: pd.DataFrame, tendencia: str) -> Dict:
-    """Evalúa las estrategias activas para ``symbol`` y ``tendencia``."""
-    return await gestor_entradas.evaluar_estrategias(symbol, df, tendencia)
+__all__ = ["evaluar_estrategias"]

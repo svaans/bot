@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING, Any, Awaitable, Callable, Dict, Mapping, Optio
 import pandas as pd
 
 from core.adaptador_umbral import calcular_umbral_adaptativo
-from core.evaluacion_tecnica import evaluar_estrategias
+from core.strategies.entry.gestor_entradas import evaluar_estrategias
 from core.estrategias import TENDENCIA_IDEAL
 from core.scoring import calcular_score_tecnico
 from core.strategies.entry.validaciones_tecnicas import hay_contradicciones

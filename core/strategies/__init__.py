@@ -42,7 +42,7 @@ def __getattr__(name: str) -> Any:
 
         return ajustar_pesos_por_desempeno
     if name == "evaluar_estrategias":
-        from core.evaluacion_tecnica import evaluar_estrategias
+        from core.strategies.entry.gestor_entradas import evaluar_estrategias
 
         return evaluar_estrategias
     if name in (

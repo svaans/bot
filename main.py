@@ -446,16 +446,16 @@ async def main():
             # Hot reload: solo tiene sentido en desarrollo. En modo REAL un
             # reinicio espurio (por indexador del IDE, antivirus, sincronización
             # OneDrive, etc. tocando archivos aunque no los hayas editado) puede
-            # dejar órdenes huérfanas o duplicadas. Por eso lo desactivamos por
-            # defecto cuando ``modo_real`` está activo; el usuario puede forzarlo
-            # con ``HOT_RELOAD_ENABLED=true`` si sabe lo que hace.
+            # dejar órdenes huérfanas o duplicadas. Desactivado por defecto en
+            # todos los modos (real y paper); activar con HOT_RELOAD_ENABLED=true
+            # solo en entornos de desarrollo local donde se edita código en vivo.
+            # En velas 1d no hay beneficio: hay 1 evento/día y no justifica el
+            # riesgo de reinicios por cambios de .pyc o archivos de estado.
             hr_env = os.environ.get("HOT_RELOAD_ENABLED", "").strip().lower()
             if hr_env in ("1", "true", "yes", "on"):
                 hot_reload_enabled = True
-            elif hr_env in ("0", "false", "no", "off"):
-                hot_reload_enabled = False
             else:
-                hot_reload_enabled = not bool(getattr(config, "modo_real", False))
+                hot_reload_enabled = False
 
             if hot_reload_enabled:
                 observer = start_hot_reload(
