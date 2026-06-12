@@ -1458,9 +1458,11 @@ def estudio_completo(symbols: list[str], days: int, capital0: float) -> None:
 
     # TP validados por study_tp_por_simbolo (2026-06)
     TP_OPT = {"ETHEUR": 3.5, "BTCEUR": 3.0, "SOLEUR": 2.5, "XRPEUR": 4.0, "AVAXEUR": 3.0}
+    SL_OPT = {"ETHEUR": 0.8, "BTCEUR": 1.0, "SOLEUR": 0.7, "XRPEUR": 0.8, "AVAXEUR": 0.7}
 
     def _eval_config(riesgo_map: dict[str, float], usar_fg: bool,
-                     tp_map: dict[str, float] | None = None) -> dict[str, dict]:
+                     tp_map: dict[str, float] | None = None,
+                     sl_map: dict[str, float] | None = None) -> dict[str, dict]:
         resultado: dict[str, dict] = {}
         corte_ref = 0
         for fase in ("train", "test"):
@@ -1474,11 +1476,12 @@ def estudio_completo(symbols: list[str], days: int, capital0: float) -> None:
                 a, b = (0, corte) if fase == "train" else (corte, n_s)
                 fg_mask = _fg_mask_zona_neutral(data) if usar_fg else None
                 tp = (tp_map.get(s, 3.0) if tp_map else 3.0)
+                sl = (sl_map.get(s, 1.0) if sl_map else 1.0)
                 r = backtest(
                     data, s, capital0, 5.0,
                     use_trailing=False, trend_filter=False,
                     ind=indicadores[s], i0=a, i1=b,
-                    sl_ratio=1.0, tp_ratio=tp, vol_guard=True,
+                    sl_ratio=sl, tp_ratio=tp, vol_guard=True,
                     riesgo=riesgo_map.get(s, 0.04), senal_v2=False,
                     btc_ind=btc_ind, be_atr=0.0, adx_min=0.0,
                     fg_mask=fg_mask,
@@ -1498,10 +1501,11 @@ def estudio_completo(symbols: list[str], days: int, capital0: float) -> None:
         return resultado
 
     escenarios = [
-        ("baseline",     {s: 0.04 for s in datos},  False,         None),
-        ("solo_sharpe",  SHARPE_RIESGO,              False,         None),
-        ("completo",     SHARPE_RIESGO,              bool(fg_map),  None),
-        ("completo+tp",  SHARPE_RIESGO,              bool(fg_map),  TP_OPT),
+        ("baseline",      {s: 0.04 for s in datos},  False,         None,   None),
+        ("solo_sharpe",   SHARPE_RIESGO,              False,         None,   None),
+        ("completo",      SHARPE_RIESGO,              bool(fg_map),  None,   None),
+        ("completo+tp",   SHARPE_RIESGO,              bool(fg_map),  TP_OPT, None),
+        ("completo+tp+sl",SHARPE_RIESGO,              bool(fg_map),  TP_OPT, SL_OPT),
     ]
 
     print(f"\n{'escenario':>14s} | "
@@ -1509,12 +1513,12 @@ def estudio_completo(symbols: list[str], days: int, capital0: float) -> None:
           f"{'PF te':>6s} {'anual te':>9s} {'n te':>5s} {'DD te':>6s}")
     print("-" * 78)
 
-    for nombre, riesgo_map, usar_fg, tp_map in escenarios:
-        res = _eval_config(riesgo_map, usar_fg, tp_map)
+    for nombre, riesgo_map, usar_fg, tp_map, sl_map in escenarios:
+        res = _eval_config(riesgo_map, usar_fg, tp_map, sl_map)
         tr, te = res["train"], res["test"]
         pf_tr = f"{tr['pf']:.2f}" if tr["pf"] != float("inf") else " inf"
         pf_te = f"{te['pf']:.2f}" if te["pf"] != float("inf") else " inf"
-        print(f"{nombre:>14s} | "
+        print(f"{nombre:>16s} | "
               f"{pf_tr:>6s} {tr['anual']:+8.2f}% {tr['n']:5d} | "
               f"{pf_te:>6s} {te['anual']:+8.2f}% {te['n']:5d} {te['dd']:5.1f}%")
 
@@ -1526,6 +1530,8 @@ def estudio_completo(symbols: list[str], days: int, capital0: float) -> None:
           + "  ".join(f"{s.replace('EUR','')}/{r*100:.0f}%" for s, r in SHARPE_RIESGO.items()))
     print("TP óptimos: "
           + "  ".join(f"{s.replace('EUR','')}/{v}" for s, v in TP_OPT.items()))
+    print("SL óptimos: "
+          + "  ".join(f"{s.replace('EUR','')}/{v}" for s, v in SL_OPT.items()))
 
 
 def estudio_funding_rate(symbols: list[str], days: int, capital0: float) -> None:
