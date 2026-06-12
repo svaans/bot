@@ -151,14 +151,12 @@ def test_recalibrar_con_metricas(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
             "retorno_total": [1.0],
         }
     ).to_parquet(pq, index=False)
-    monkeypatch.setattr(rs, "CARPETA_ORDENES", str(tmp_path))
     monkeypatch.setattr(
         rs,
         "analizar_estrategias_en_ordenes",
         lambda _path: pd.DataFrame({"estrategia": ["a"], "retorno_total": [1.0]}),
     )
     monkeypatch.setattr(rs, "ajustar_pesos_por_desempeno", lambda res, p: {"BTC/EUR": {"a": 1.0}})
-    monkeypatch.setattr(rs, "normalizar_scores", lambda d: d)
     monkeypatch.setattr(rs, "persist_entry_weights", lambda *_a, **_k: None)
     monkeypatch.setattr(rs.glob, "glob", lambda pattern: [str(pq)])
     rs.recalibrar_pesos_semana()

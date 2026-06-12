@@ -4,7 +4,7 @@ import pandas as pd
 from collections import defaultdict
 from typing import Dict, Iterable, Mapping, Tuple
 from dotenv import dotenv_values
-from core.strategies.pesos import gestor_pesos
+from core.strategies.pesos import _normalize_with_floor, gestor_pesos
 from core.strategies.pesos_governance import EntryWeightSource, persist_entry_weights
 from core.utils.log_utils import format_exception_for_log
 from core.utils.utils import configurar_logger
@@ -92,6 +92,14 @@ def calcular_pesos_suavizados(
     pesos_suavizados: Dict[str, float] = dict(pesos_actuales)
     cambios = False
 
+    # Objetivo en la MISMA escala que los pesos actuales: el punto fijo del
+    # suavizado queda con cuotas proporcionales al score y la tasa de
+    # convergencia es factor_suavizado por ciclo. Sin este escalado, un score
+    # 0-1 frente a pesos en escala 100 hace el ajuste prácticamente inerte
+    # (~0.01 pp de cuota por ciclo).
+    escala_objetivo = sum(float(v) for v in pesos_actuales.values()) or 1.0
+    suma_scores = sum(nuevos_scores_normalizados.values())
+
     for estrategia, score in nuevos_scores_normalizados.items():
         peso_actual = float(pesos_actuales.get(estrategia, 0.5))
         metrica_test = metricas_test.get(estrategia)
@@ -102,7 +110,8 @@ def calcular_pesos_suavizados(
         ):
             peso_nuevo = peso_actual * (1 - factor_suavizado)
         else:
-            peso_nuevo = peso_actual * (1 - factor_suavizado) + score * factor_suavizado
+            objetivo = score / suma_scores * escala_objetivo
+            peso_nuevo = peso_actual * (1 - factor_suavizado) + objetivo * factor_suavizado
         if abs(peso_nuevo - peso_actual) > 1e-9:
             cambios = True
         pesos_suavizados[estrategia] = peso_nuevo
@@ -188,7 +197,15 @@ def actualizar_pesos_estrategias_symbol(symbol: str):
     if pesos_suavizados is None:
         log.info(f'⚠️ No se generaron ajustes para {symbol}.')
         return
-    pesos_totales[symbol] = pesos_suavizados
+    # Renormalizar a la escala del gestor (total=100, piso=1). Los scores del
+    # suavizado están en 0-1 (normalizar_scores divide por el máximo): persistir
+    # la mezcla cruda haría decaer TODOS los pesos hacia 0-1 en cada ciclo y el
+    # puntaje_total (suma de pesos crudos) acabaría por debajo del umbral de
+    # entrada (~1.5-3). La renormalización conserva la señal relativa del score
+    # y mantiene la escala estable.
+    pesos_totales[symbol] = _normalize_with_floor(
+        pesos_suavizados, total=gestor_pesos.total, piso=gestor_pesos.piso
+    )
     gestor_pesos.pesos = pesos_totales
     persist_entry_weights(
         gestor_pesos,

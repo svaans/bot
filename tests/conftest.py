@@ -83,6 +83,7 @@ def aislar_estado_en_disco(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
     import core.orders.orphan_reconciler as orphan_reconciler
     import core.risk.per_symbol_guard as per_symbol_guard
     import core.risk.riesgo as riesgo
+    import core.strategies.pesos as pesos_mod
     import learning.historial_operaciones as historial_operaciones
 
     # El Event singleton de ccxt-ready queda ligado al loop del primer test
@@ -109,6 +110,17 @@ def aislar_estado_en_disco(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
     # ordenes_simuladas/*.parquet reales.
     monkeypatch.setattr(
         historial_operaciones, "CARPETA_ORDENES", tmp_path / "ordenes_parquet"
+    )
+    # El singleton gestor_pesos persiste en config/estrategias_pesos.json al
+    # llamar guardar(); se redirige la ruta y se copia el mapa en memoria para
+    # que ningún test mute los pesos reales del repo.
+    monkeypatch.setattr(
+        pesos_mod.gestor_pesos, "ruta", tmp_path / "estrategias_pesos.json"
+    )
+    monkeypatch.setattr(
+        pesos_mod.gestor_pesos,
+        "pesos",
+        {k: dict(v) for k, v in pesos_mod.gestor_pesos.pesos.items()},
     )
 
     yield

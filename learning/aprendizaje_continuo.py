@@ -18,10 +18,10 @@ from core.adaptador_umbral import calcular_umbral_adaptativo
 from core.adaptador_dinamico import calcular_tp_sl_adaptativos
 from core.risk import RiskManager
 
+from . import historial_operaciones as _hist
 from .historial_operaciones import symbol_desde_parquet_stem
 CONFIG = dotenv_values('config/claves.env')
 MODO_REAL = CONFIG.get('MODO_REAL', 'False') == 'True'
-CARPETA_ORDENES = 'ordenes_reales' if MODO_REAL else 'ordenes_simuladas'
 FEEDBACK_PATH = 'config/feedback_manual.json'
 log = configurar_logger('aprendizaje_continuo')
 
@@ -127,9 +127,12 @@ def procesar_simbolo(symbol: str, ruta: str) ->None:
 
 
 def ejecutar_ciclo() ->None:
-    archivos = glob.glob(os.path.join(CARPETA_ORDENES, '*.parquet'))
+    # Misma fuente que el writer (learning/registro_aprendizaje): ruta absoluta
+    # basada en la raíz del repo, no relativa al CWD del proceso.
+    carpeta = str(_hist.CARPETA_ORDENES)
+    archivos = glob.glob(os.path.join(carpeta, '*.parquet'))
     if not archivos:
-        log.warning(f'⚠️ No se encontraron órdenes en {CARPETA_ORDENES}')
+        log.warning(f'⚠️ No se encontraron órdenes en {carpeta}')
         return
     for ruta in archivos:
         symbol = symbol_desde_parquet_stem(os.path.splitext(os.path.basename(ruta))[0])
