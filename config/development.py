@@ -87,6 +87,20 @@ class DevelopmentConfig:
     filtro_noticias_enabled: bool = False
     noticias_umbral_negativo: float = -0.3
     noticias_ttl_segundos: int = 3600
+    # Filtro RSI mínimo de entrada: 0.0 = desactivado (dev no filtra por RSI
+    # para no romper tests). En producción se usa 50.0 (validado: +0.74pp anual).
+    rsi_min_entrada: float = 0.0
+    # Filtro ADX mínimo: 0.0 = desactivado en dev. En producción usar 20.0
+    # (validado en study4: filtra entradas en laterales, mejora PF OOS).
+    adx_min_entrada: float = 0.0
+    # DCA (Dollar Cost Averaging): compra periódica automática independiente
+    # de señales técnicas. Desactivado en dev; activo en producción.
+    dca_enabled: bool = False
+    dca_interval_days: int = 7
+    dca_amount_usdt: float = 0.0
+    # Rebalancer: detecta drift vs pesos objetivo y sugiere acciones.
+    rebalancer_enabled: bool = False
+    rebalancer_drift_threshold: float = 0.05
     regimen_vol_atr_ratio_alto: float = 0.06
     regimen_vol_atr_ratio_bajo: float = 0.02
     regimen_atr_periodo: int = 14

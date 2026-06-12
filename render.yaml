@@ -1,0 +1,76 @@
+services:
+  - type: worker                      # Background worker (sin HTTP, sin puerto)
+    name: trading-bot
+    runtime: python
+    plan: starter                     # $7/mes — necesario para disco persistente
+    buildCommand: bash build.sh
+    startCommand: python main.py
+
+    # Disco persistente: estado, órdenes, capital, pesos
+    # CRÍTICO: sin esto todo se pierde en cada deploy/restart
+    disk:
+      name: bot-estado
+      mountPath: /var/data
+      sizeGB: 1                       # $0.25/mes — más que suficiente
+
+    envVars:
+      # ── Modo de operación ─────────────────────────────────────────────────
+      - key: BOT_ENV
+        value: production             # Usa ProductionConfig
+
+      - key: MODO_REAL
+        value: "false"                # CAMBIAR a "true" cuando estés listo para real
+
+      # ── Rutas de estado (disco persistente) ──────────────────────────────
+      - key: ESTADO_DIR
+        value: /var/data/estado       # Todo el estado va al disco persistente
+
+      - key: REPORTES_DIARIOS_PATH
+        value: /var/data/reportes_diarios
+
+      - key: CRITICAL_STATE_PATH
+        value: /var/data/estado/critical_state.json
+
+      - key: MODE_DB_PATH
+        value: /var/data/estado/operational_mode.db
+
+      # ── Binance API (solo para MODO_REAL=true) ────────────────────────────
+      - key: BINANCE_API_KEY
+        sync: false                   # Render te pedirá el valor por UI (secreto)
+
+      - key: BINANCE_API_SECRET
+        sync: false
+
+      # ── Símbolos ──────────────────────────────────────────────────────────
+      - key: SYMBOLS
+        value: "BTC/USDT,ETH/USDT,SOL/USDT,XRP/USDT,AVAX/USDT"
+
+      # ── Telegram (opcional) ───────────────────────────────────────────────
+      - key: TELEGRAM_TOKEN
+        sync: false
+
+      - key: TELEGRAM_CHAT_ID
+        sync: false
+
+      # ── Filtros activos en producción ─────────────────────────────────────
+      - key: FILTRO_MACRO_BTC_ENABLED
+        value: "true"
+
+      - key: FILTRO_FEAR_GREED_ENABLED
+        value: "true"
+
+      - key: REGIMEN_ENTRADA_ENABLED
+        value: "true"
+
+      - key: EQUITY_DD_FILTER_ENABLED
+        value: "true"
+
+      - key: PER_SYMBOL_GUARD_ENABLED
+        value: "true"
+
+      # ── Python / runtime ──────────────────────────────────────────────────
+      - key: PYTHONUNBUFFERED
+        value: "1"                    # Logs en tiempo real en Render dashboard
+
+      - key: PYTHONDONTWRITEBYTECODE
+        value: "1"                    # Evita .pyc en disco persistente

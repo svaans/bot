@@ -37,3 +37,16 @@ class ProductionConfig(DevelopmentConfig):
     # Activar con FILTRO_NOTICIAS_ENABLED=true cuando el bot lleve 30+ días.
     filtro_noticias_enabled: bool = False
     noticias_umbral_negativo: float = -0.3
+    # RSI mínimo de entrada: 50 = confirmar momentum alcista antes de entrar.
+    # Validado en backtesting 5yr: +0.74pp anual (+22.60% → +23.34%), PF 2.79.
+    rsi_min_entrada: float = 50.0
+    # ADX mínimo: 20 = solo entrar en mercados con tendencia definida.
+    # Validado en study4: elimina entradas en laterales, mejora PF OOS.
+    adx_min_entrada: float = 20.0
+    # DCA: compra automática semanal si no hay posición abierta.
+    dca_enabled: bool = True
+    dca_interval_days: int = 7
+    dca_amount_usdt: float = 0.0
+    # Rebalancer: activo para mantener 20% equal-weight por símbolo.
+    rebalancer_enabled: bool = True
+    rebalancer_drift_threshold: float = 0.05
