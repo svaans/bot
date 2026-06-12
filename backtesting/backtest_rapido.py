@@ -1661,6 +1661,154 @@ def estudio_funding_rate(symbols: list[str], days: int, capital0: float) -> None
     print("bloq = días de entrada bloqueados por FR en la ventana test")
 
 
+def estudio_sl_por_simbolo(symbols: list[str], days: int, capital0: float) -> None:
+    """Optimiza el SL ratio por símbolo de forma independiente (fuera de muestra).
+
+    Para cada símbolo prueba SL en [0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.2, 1.4, 1.6, 1.8, 2.0]
+    usando la config completa validada (Sharpe + F&G zona_neutral + vol_guard + BTC_macro
+    + TP óptimo por símbolo).
+
+    Fase 1 — ranking por símbolo: curva SL vs anual en TEST.
+    Fase 2 — comparación agregada: SL uniforme 1.0 (actual) vs SL óptimo por símbolo.
+    """
+    SHARPE_RIESGO = {
+        "ETHEUR": 0.08, "BTCEUR": 0.03,
+        "SOLEUR": 0.03, "XRPEUR": 0.03, "AVAXEUR": 0.02,
+    }
+    TP_OPT = {"ETHEUR": 3.5, "BTCEUR": 3.0, "SOLEUR": 2.5, "XRPEUR": 4.0, "AVAXEUR": 3.0}
+    SL_GRID = [0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.2, 1.4, 1.6, 1.8, 2.0]
+
+    print("  descargando Fear&Greed histórico…")
+    fg_map = _descargar_fear_greed(days)
+
+    print("  descargando datos de mercado…")
+    datos: dict[str, list] = {}
+    indicadores: dict[str, list] = {}
+    for s in symbols:
+        try:
+            datos[s] = descargar_klines(s, "1d", days)
+            indicadores[s] = calcular_indicadores(datos[s])
+        except Exception as e:
+            print(f"  [ERROR] {s}: {e}")
+    if not datos:
+        return
+
+    btc_ind = indicadores.get("BTCEUR") or calcular_indicadores(
+        descargar_klines("BTCEUR", "1d", days))
+
+    def _fg_mask(data: list) -> list[bool] | None:
+        if not fg_map:
+            return None
+        mask = []
+        for v in data:
+            fg_val = _fg_valor(fg_map, v[0])
+            ok = True
+            if fg_val is not None:
+                ok = 25 <= fg_val <= 75
+            mask.append(ok)
+        return mask
+
+    # ── Fase 1: tabla SL × símbolo en TEST ──────────────────────────────────
+    print("\n── Fase 1: ranking SL por símbolo (test, fuera de muestra) ──")
+    sl_hdr = "  ".join(f"{sl:.1f}" for sl in SL_GRID)
+    print(f"\n{'symbol':>8s}  {'SL':>4s}  {sl_hdr}")
+    print(f"{'':>8s}  {'':>4s}  " + "  ".join("-" * 4 for _ in SL_GRID))
+
+    mejores: dict[str, float] = {}
+
+    for s, data in datos.items():
+        n_s = len(data)
+        corte = int(n_s * 0.7)
+        dias_test = n_s - corte
+        fg_mask = _fg_mask(data)
+
+        anuals_test: list[float] = []
+        for sl in SL_GRID:
+            r = backtest(
+                data, s, capital0, 5.0,
+                use_trailing=False, trend_filter=False,
+                ind=indicadores[s], i0=corte, i1=n_s,
+                sl_ratio=sl, tp_ratio=TP_OPT.get(s, 3.0), vol_guard=True,
+                riesgo=SHARPE_RIESGO.get(s, 0.03), senal_v2=False,
+                btc_ind=btc_ind, be_atr=0.0, adx_min=0.0,
+                fg_mask=fg_mask,
+            )
+            anual = ((r.capital_final / capital0) ** (365 / dias_test) - 1) * 100 if dias_test > 0 else 0.0
+            anuals_test.append(anual)
+
+        mejor_idx = anuals_test.index(max(anuals_test))
+        mejores[s] = SL_GRID[mejor_idx]
+
+        valores = "  ".join(
+            f"{'→' if i == mejor_idx else ' '}{anuals_test[i]:+5.1f}%"
+            for i in range(len(SL_GRID))
+        )
+        print(f"{s:>8s}  anual  {valores}")
+
+    # ── Fase 2: comparación agregada ────────────────────────────────────────
+    print("\n── Fase 2: comparación agregada (train 70% / test 30%) ──")
+    print(f"\n{'config':>14s} | "
+          f"{'PF tr':>6s} {'anual tr':>9s} {'n tr':>5s} | "
+          f"{'PF te':>6s} {'anual te':>9s} {'n te':>5s} {'DD te':>6s}")
+    print("-" * 74)
+
+    configs = [
+        ("sl_uniforme_1",  {s: 1.0 for s in datos}),
+        ("sl_por_simbolo", mejores),
+    ]
+
+    for nombre, sl_map in configs:
+        for fase in ("train", "test"):
+            cap = gan = per = 0.0
+            ntr = 0
+            dd = 0.0
+            corte_ref = 0
+            for s, data in datos.items():
+                n_s = len(data)
+                corte = int(n_s * 0.7)
+                corte_ref = corte
+                a, b = (0, corte) if fase == "train" else (corte, n_s)
+                fg_mask = _fg_mask(data)
+                r = backtest(
+                    data, s, capital0, 5.0,
+                    use_trailing=False, trend_filter=False,
+                    ind=indicadores[s], i0=a, i1=b,
+                    sl_ratio=sl_map.get(s, 1.0),
+                    tp_ratio=TP_OPT.get(s, 3.0), vol_guard=True,
+                    riesgo=SHARPE_RIESGO.get(s, 0.03), senal_v2=False,
+                    btc_ind=btc_ind, be_atr=0.0, adx_min=0.0,
+                    fg_mask=fg_mask,
+                )
+                cap += r.capital_final
+                gan += r.bruto_ganado
+                per += r.bruto_perdido
+                ntr += r.trades
+                dd = max(dd, r.max_drawdown)
+
+            first_data = list(datos.values())[0] if datos else []
+            dias = (corte_ref if fase == "train" else
+                    len(first_data) - corte_ref) if first_data else 1
+            n_sym = len(datos)
+            anual = ((cap / (capital0 * n_sym)) ** (365 / dias) - 1) * 100 if n_sym and dias > 0 else 0
+            pf = gan / per if per > 0 else float("inf")
+
+            if fase == "train":
+                tr = {"pf": pf, "anual": anual, "n": ntr, "dd": dd}
+            else:
+                te = {"pf": pf, "anual": anual, "n": ntr, "dd": dd}
+
+        pf_tr = f"{tr['pf']:.2f}" if tr["pf"] != float("inf") else " inf"
+        pf_te = f"{te['pf']:.2f}" if te["pf"] != float("inf") else " inf"
+        print(f"{nombre:>14s} | "
+              f"{pf_tr:>6s} {tr['anual']:+8.2f}% {tr['n']:5d} | "
+              f"{pf_te:>6s} {te['anual']:+8.2f}% {te['n']:5d} {te['dd']:5.1f}%")
+
+    print(f"\nSL óptimos (test): " + "  ".join(
+        f"{s.replace('EUR','')}/{mejores[s]:.1f}" for s in datos))
+    n_test = int(len(list(datos.values())[0]) * 0.3) if datos else 0
+    print(f"config base: Sharpe+FG_zona_neutral+vol_guard+BTC_macro+TP_opt | test ~{n_test} días")
+
+
 def estudio_trailing(symbols: list[str], days: int, capital0: float) -> None:
     """Evalúa trailing stop diferido: activa el trailing solo cuando el trade
     ya lleva X × ATR de ganancia, dejando al precio correr más allá del TP fijo.
@@ -2300,6 +2448,8 @@ def main() -> None:
                    help="señal v1 vs v2 (Donchian-20 breakout) sobre config completa validada")
     p.add_argument("--study_tp_por_simbolo", action="store_true",
                    help="optimiza TP ratio por símbolo: grid 2.0-6.0 en train/test")
+    p.add_argument("--study_sl_por_simbolo", action="store_true",
+                   help="optimiza SL ratio por símbolo: grid 0.5-2.0 en train/test")
     p.add_argument("--study_trailing", action="store_true",
                    help="trailing stop diferido: compara activación 1.5-3.0×ATR vs TP fijo")
     p.add_argument("--study_funding_rate", action="store_true",
@@ -2388,6 +2538,12 @@ def main() -> None:
         t0 = time.perf_counter()
         estudio_tp_por_simbolo(symbols, args.days, args.capital)
         print(f"\n[tiempo] estudio tp_por_simbolo: {time.perf_counter() - t0:.1f}s")
+        return
+
+    if args.study_sl_por_simbolo:
+        t0 = time.perf_counter()
+        estudio_sl_por_simbolo(symbols, args.days, args.capital)
+        print(f"\n[tiempo] estudio sl_por_simbolo: {time.perf_counter() - t0:.1f}s")
         return
 
     if args.study_trailing:
