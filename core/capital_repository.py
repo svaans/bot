@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import os
 import threading
 from dataclasses import dataclass
 from pathlib import Path
@@ -24,7 +25,7 @@ class CapitalRepository:
     """Persistencia en disco usando un archivo JSON con escritura atómica."""
 
     def __init__(self, path: str | Path | None = None) -> None:
-        base_path = Path(path) if path is not None else Path("estado/capital.json")
+        base_path = Path(path) if path is not None else Path(os.getenv("ESTADO_DIR", "estado")) / "capital.json"
         self.path = base_path.expanduser().resolve()
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._lock = threading.Lock()

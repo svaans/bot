@@ -39,7 +39,7 @@ class CriticalState:
 
 
 _STATE_FILE_ENV = "CRITICAL_STATE_PATH"
-_STATE_FILE_DEFAULT = Path("estado/critical_state.json")
+_STATE_FILE_DEFAULT = Path(os.getenv("ESTADO_DIR", "estado")) / "critical_state.json"
 
 _log = configurar_logger("critical_state", modo_silencioso=True)
 

@@ -16,6 +16,7 @@ recomendaciones por símbolo::
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import dataclass
 from functools import lru_cache
 from importlib import import_module
@@ -36,7 +37,7 @@ from indicadores.retornos_volatilidad import (
 )
 
 
-DEFAULT_OUTPUT = Path("estado/auditoria_adaptadores.json")
+DEFAULT_OUTPUT = Path(os.getenv("ESTADO_DIR", "estado")) / "auditoria_adaptadores.json"
 
 
 @lru_cache

@@ -17,7 +17,7 @@ import aiohttp
 
 from core.utils.log_utils import format_exception_for_log
 
-SNAPSHOT_PATH = Path('estado/startup_snapshot.json')
+SNAPSHOT_PATH = Path(os.getenv("ESTADO_DIR", "estado")) / "startup_snapshot.json"
 
 
 def _current_snapshot_path() -> Path:

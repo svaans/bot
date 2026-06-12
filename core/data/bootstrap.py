@@ -20,7 +20,7 @@ log = configurar_logger('bootstrap')
 MIN_BARS = int(os.getenv('MIN_BARS', '400'))
 CACHE_TTL = int(os.getenv('WARMUP_CACHE_TTL', '300'))
 
-_cache_dir = Path('estado/cache')
+_cache_dir = Path(os.getenv("ESTADO_DIR", "estado")) / "cache"
 _cache_dir.mkdir(parents=True, exist_ok=True)
 
 # symbol -> (tf, cliente, min_bars)
