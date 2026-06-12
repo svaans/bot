@@ -71,7 +71,7 @@ async def _run_consumer(
         pass
 
 
-@pytest.mark.asyncio(mode="strict")
+@pytest.mark.asyncio
 async def test_consume_y_procesa_una_vela_cerrada(
     trader_factory,
     datafeed_instance,
@@ -111,7 +111,7 @@ async def test_consume_y_procesa_una_vela_cerrada(
     assert spy.calls >= 1, "Trader._procesar_vela debe invocarse al menos una vez"
 
 
-@pytest.mark.asyncio(mode="strict")
+@pytest.mark.asyncio
 async def test_registra_hitos_de_evaluacion(
     trader_factory,
     datafeed_instance,
@@ -159,7 +159,7 @@ async def test_registra_hitos_de_evaluacion(
     assert not has_event(records, "datafeed", "consumer.skip", symbol="BTCUSDT")
 
 
-@pytest.mark.asyncio(mode="strict")
+@pytest.mark.asyncio
 async def test_no_marca_bar_in_future_con_timestamp_valido(
     trader_factory,
     datafeed_instance,
@@ -184,7 +184,7 @@ async def test_no_marca_bar_in_future_con_timestamp_valido(
     ), "No debe descartarse por bar_ts_out_of_range"
 
 
-@pytest.mark.asyncio(mode="strict")
+@pytest.mark.asyncio
 async def test_fastpath_registra_skip_reason_visible(
     trader_factory,
     datafeed_instance,
@@ -210,7 +210,7 @@ async def test_fastpath_registra_skip_reason_visible(
     )
 
 
-@pytest.mark.asyncio(mode="strict")
+@pytest.mark.asyncio
 async def test_no_pipeline_missing_con_pipeline_configurado(
     trader_factory,
     datafeed_instance,
@@ -254,7 +254,7 @@ class _StrictMetric:
         return None
 
 
-@pytest.mark.asyncio(mode="strict")
+@pytest.mark.asyncio
 async def test_metricas_no_rompen_por_labels(
     trader_factory,
     datafeed_instance,
@@ -295,7 +295,7 @@ async def test_metricas_no_rompen_por_labels(
     "symbol",
     ["BTC/EUR", "ETH/EUR", "SOL/EUR", "ADA/EUR", "BNB/EUR"],
 )
-@pytest.mark.asyncio(mode="strict")
+@pytest.mark.asyncio
 async def test_procesa_multisimbolo_sin_skips(
     symbol: str,
     trader_factory,

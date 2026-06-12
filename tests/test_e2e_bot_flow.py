@@ -162,7 +162,7 @@ class BotFlowHarness:
         return self._procesar_calls
 
 
-@pytest.mark.asyncio(mode="strict")
+@pytest.mark.asyncio
 @pytest.mark.flags(
     "orders.retry_persistencia.enabled",
     "orders.flush_periodico.enabled",
@@ -213,7 +213,7 @@ async def test_flow_happy_path_emits_attempts_and_metrics(trader_factory, caplog
     assert feed._stats[harness.symbol]["processed"] == len(candles)
 
 
-@pytest.mark.asyncio(mode="strict")
+@pytest.mark.asyncio
 @pytest.mark.flags("datafeed.debug_wrapper.enabled")
 async def test_flow_bar_in_future_skips_with_reason(trader_factory, caplog) -> None:
     _enable_flow_logging(caplog)
@@ -244,7 +244,7 @@ async def test_flow_bar_in_future_skips_with_reason(trader_factory, caplog) -> N
     assert last.get("details"), "Los skips deben incluir detalles diagnósticos"
 
 
-@pytest.mark.asyncio(mode="strict")
+@pytest.mark.asyncio
 @pytest.mark.flags("datafeed.debug_wrapper.enabled")
 async def test_flow_out_of_range_skips_with_reason(trader_factory, caplog) -> None:
     _enable_flow_logging(caplog)
@@ -272,7 +272,7 @@ async def test_flow_out_of_range_skips_with_reason(trader_factory, caplog) -> No
     assert skips[-1].get("event") == "consumer.skip"
 
 
-@pytest.mark.asyncio(mode="strict")
+@pytest.mark.asyncio
 @pytest.mark.flags("trader.purge_historial.enabled")
 async def test_flow_warmup_not_met_reports_reason(trader_factory, caplog) -> None:
     _enable_flow_logging(caplog)
@@ -301,7 +301,7 @@ async def test_flow_warmup_not_met_reports_reason(trader_factory, caplog) -> Non
     assert last.get("min_needed") == 4
 
 
-@pytest.mark.asyncio(mode="strict")
+@pytest.mark.asyncio
 @pytest.mark.flags("orders.retry_persistencia.enabled")
 async def test_flow_pipeline_missing_propagates_reason(trader_factory, caplog) -> None:
     _enable_flow_logging(caplog)
@@ -335,7 +335,7 @@ async def test_flow_pipeline_missing_propagates_reason(trader_factory, caplog) -
         assert isinstance(details.get("pipeline_error_message"), str)
 
 
-@pytest.mark.asyncio(mode="strict")
+@pytest.mark.asyncio
 @pytest.mark.flags("orders.retry_persistencia.enabled")
 async def test_flow_pipeline_missing_exposes_component_error(trader_factory, caplog) -> None:
     _enable_flow_logging(caplog)
@@ -361,7 +361,7 @@ async def test_flow_pipeline_missing_exposes_component_error(trader_factory, cap
     assert "pipeline exploded" in details.get("pipeline_error_message", "")
 
 
-@pytest.mark.asyncio(mode="strict")
+@pytest.mark.asyncio
 @pytest.mark.flags("metrics.extended.enabled")
 async def test_flow_fastpath_guard_emits_metric(trader_factory, caplog) -> None:
     _enable_flow_logging(caplog)
@@ -395,7 +395,7 @@ async def test_flow_fastpath_guard_emits_metric(trader_factory, caplog) -> None:
         assert details.get("resume_threshold") == trader.config.trader_fastpath_resume_threshold
 
 
-@pytest.mark.asyncio(mode="strict")
+@pytest.mark.asyncio
 @pytest.mark.flags(
     "datafeed.debug_wrapper.enabled",
     "backfill.ventana.enabled",
@@ -421,7 +421,7 @@ async def test_flow_backpressure_does_not_block_attempt(trader_factory, caplog) 
     assert feed._stats[harness.symbol]["received"] == len(candles)
 
 
-@pytest.mark.asyncio(mode="strict")
+@pytest.mark.asyncio
 @pytest.mark.flags(
     "funding.enabled",
     "datafeed.debug_wrapper.enabled",

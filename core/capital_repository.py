@@ -11,6 +11,8 @@ from core.utils.logger import configurar_logger
 
 log = configurar_logger("capital_repository", modo_silencioso=True)
 
+RUTA_CAPITAL = Path("estado/capital.json")
+
 
 @dataclass(slots=True)
 class CapitalSnapshot:
@@ -24,7 +26,7 @@ class CapitalRepository:
     """Persistencia en disco usando un archivo JSON con escritura atómica."""
 
     def __init__(self, path: str | Path | None = None) -> None:
-        base_path = Path(path) if path is not None else Path("estado/capital.json")
+        base_path = Path(path) if path is not None else RUTA_CAPITAL
         self.path = base_path.expanduser().resolve()
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._lock = threading.Lock()

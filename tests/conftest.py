@@ -70,6 +70,50 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
 
 
 @pytest.fixture(autouse=True)
+def aislar_estado_en_disco(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Redirige a ``tmp_path`` los ficheros de estado que el flujo de cierre
+    de órdenes y los guards de riesgo escriben con rutas relativas al repo.
+
+    Sin esto, la suite muta ``estado/capital.json``, ``config/riesgo.json``,
+    ``estado/umbral_adaptativo.json`` y crea ``estado/per_symbol_losses.json``
+    reales (observado vía ``git status`` tras ejecutar la suite).
+    """
+    import core.adaptador_umbral as adaptador_umbral
+    import core.capital_repository as capital_repository
+    import core.orders.orphan_reconciler as orphan_reconciler
+    import core.risk.per_symbol_guard as per_symbol_guard
+    import core.risk.riesgo as riesgo
+
+    # El Event singleton de ccxt-ready queda ligado al loop del primer test
+    # que lo crea; tests posteriores (loop nuevo) reciben RuntimeError
+    # "bound to a different event loop" al hacer wait(). Reset por test.
+    monkeypatch.setattr(orphan_reconciler, "_CCXT_READY", None)
+
+    monkeypatch.setattr(
+        capital_repository, "RUTA_CAPITAL", tmp_path / "capital.json"
+    )
+    monkeypatch.setattr(
+        per_symbol_guard, "_STATE_PATH", tmp_path / "per_symbol_losses.json"
+    )
+    monkeypatch.setattr(
+        adaptador_umbral, "RUTA_ESTADO", tmp_path / "umbral_adaptativo.json"
+    )
+    monkeypatch.setattr(riesgo, "RUTA_ESTADO", str(tmp_path / "riesgo.json"))
+    monkeypatch.setattr(
+        riesgo, "RUTA_ESTADO_BAK", str(tmp_path / "riesgo.json.bak")
+    )
+    monkeypatch.setattr(riesgo, "_LOCK_PATH", str(tmp_path / "riesgo.json.lock"))
+
+    yield
+
+    # El singleton AsyncRiskPersistence escribe desde un hilo con flush
+    # diferido (0.5 s): hay que drenarlo y destruirlo ANTES de que monkeypatch
+    # restaure las rutas reales, o el flush pendiente escribiría en el repo.
+    if riesgo._PERSISTENCIA is not None:
+        riesgo.detener_persistencia()
+
+
+@pytest.fixture(autouse=True)
 def stub_data_feed(monkeypatch: pytest.MonkeyPatch) -> list[Any]:
     """Reemplaza ``DataFeed`` por un stub liviano durante los tests."""
 
