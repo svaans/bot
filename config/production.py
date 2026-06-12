@@ -33,6 +33,10 @@ class ProductionConfig(DevelopmentConfig):
     max_posiciones_alts: int = 2
     # Rolling PF Guard: si el PF de las últimas 20 ops cae < 0.7, pausar entradas.
     pf_guard_enabled: bool = True
+    # Equity DD Filter: reducir riesgo a la mitad cuando DD > 10%.
+    # Estudio equity_filter: reducir_10% → DD↓1.4pp sin pérdida de retorno.
+    equity_dd_filter_enabled: bool = True
+    equity_dd_reduccion_umbral: float = 0.10
     # Filtro noticias: off por defecto hasta validar con datos reales en vivo.
     # Activar con FILTRO_NOTICIAS_ENABLED=true cuando el bot lleve 30+ días.
     filtro_noticias_enabled: bool = False

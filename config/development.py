@@ -81,6 +81,11 @@ class DevelopmentConfig:
     # Umbral inferior F&G: bloquea entradas cuando el pánico es extremo (< umbral).
     # 0 = desactivado (solo bloqueo superior). Con 25 activa zona_neutral.
     fg_umbral_miedo: int = 0
+    # Equity Drawdown Filter: reduce riesgo_maximo_diario × 0.5 cuando
+    # el portfolio está en DD > equity_dd_reduccion_umbral desde su pico.
+    # Desactivado en dev; activo en producción vía EQUITY_DD_FILTER_ENABLED=true.
+    equity_dd_filter_enabled: bool = False
+    equity_dd_reduccion_umbral: float = 0.10
     # Filtro de noticias (CryptoPanic RSS): bloquea entradas cuando el sentimiento
     # de las últimas noticias del símbolo es muy negativo.
     # Desactivado por defecto; activar en producción o con FILTRO_NOTICIAS_ENABLED=true.
