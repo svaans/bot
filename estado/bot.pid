@@ -1,7 +1,7 @@
 {
-  "pid": 29300,
-  "started_at": 1779734019.4474275,
+  "pid": 18999,
+  "started_at": 1781273126.0065494,
   "argv": [
-    "main.py"
+    "/home/user/bot/main.py"
   ]
 }

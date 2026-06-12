@@ -1,14 +1,14 @@
 {
   "symbols": [
-    "BTC/EUR",
-    "ETH/EUR",
-    "SOL/EUR",
-    "XRP/EUR",
-    "AVAX/EUR"
+    "BTC/USDT",
+    "ETH/USDT",
+    "SOL/USDT",
+    "XRP/USDT",
+    "AVAX/USDT"
   ],
-  "modo_real": true,
-  "modo_operativo": "real",
-  "timestamp": 1779734024.997697,
+  "modo_real": false,
+  "modo_operativo": "paper_trading",
+  "timestamp": 1781273127.7307255,
   "persistencia_tecnica": {
     "minimo": 1,
     "peso_extra": 0.5,

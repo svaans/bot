@@ -1,27 +1,5 @@
 {
-  "timestamp": 1779699594.696073,
+  "timestamp": 1781273097.5874503,
   "reason": "shutdown",
-  "entries": {
-    "risk_manager": {
-      "posiciones_abiertas": [],
-      "correlaciones": {},
-      "kill_switch_disparado": false,
-      "perdidas_consecutivas": 0,
-      "riesgo_diario": 0.0,
-      "fecha_riesgo": "2026-05-25",
-      "cooldown_fin": null,
-      "capital_alerta_activa": false,
-      "capital_alerta_fecha": null,
-      "ultimo_ratio_capital": 0.0,
-      "ultimo_factor_kelly": 1.0,
-      "factor_kelly_prev": null,
-      "exposure_comprometido": {},
-      "pnl_state": {},
-      "latent_stop": []
-    },
-    "reporter_diario": {
-      "ultimas_operaciones": {},
-      "fecha_actual": "2026-05-25"
-    }
-  }
+  "entries": {}
 }
