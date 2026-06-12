@@ -1,5 +1,5 @@
 {
-    "BTC/EUR": {
+    "BTC/USDT": {
         "tops_rectangle": 10.46,
         "symmetrical_triangle_down": 7.03,
         "estrategia_divergencia_rsi": 8.965922101942638,
@@ -45,7 +45,7 @@
         "double_bottom": 6.31,
         "flag_bajista": 4.66
     },
-    "ETH/EUR": {
+    "ETH/USDT": {
         "tops_rectangle": 4.4,
         "symmetrical_triangle_down": 13.25,
         "estrategia_divergencia_rsi": 4.02,
@@ -91,7 +91,7 @@
         "double_bottom": 7.66,
         "flag_bajista": 6.35
     },
-    "SOL/EUR": {
+    "SOL/USDT": {
         "tops_rectangle": 10.46,
         "symmetrical_triangle_down": 7.03,
         "estrategia_divergencia_rsi": 9.3,
@@ -137,7 +137,7 @@
         "double_bottom": 6.31,
         "flag_bajista": 4.66
     },
-    "XRP/EUR": {
+    "XRP/USDT": {
         "tops_rectangle": 10.46,
         "symmetrical_triangle_down": 7.03,
         "estrategia_divergencia_rsi": 9.3,
@@ -183,7 +183,7 @@
         "double_bottom": 6.31,
         "flag_bajista": 4.66
     },
-    "AVAX/EUR": {
+    "AVAX/USDT": {
         "tops_rectangle": 10.46,
         "symmetrical_triangle_down": 7.03,
         "estrategia_divergencia_rsi": 9.3,

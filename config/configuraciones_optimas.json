@@ -1,5 +1,5 @@
 {
-  "BTC/EUR": {
+  "BTC/USDT": {
     "factor_umbral": 1.5,
     "ajuste_volatilidad": 1.5,
     "riesgo_maximo_diario": 0.06,
@@ -22,7 +22,7 @@
     "umbral_peso_estrategia_unica": 3.5,
     "umbral_score_estrategia_unica": 5.0
   },
-  "ETH/EUR": {
+  "ETH/USDT": {
     "factor_umbral": 1.5,
     "ajuste_volatilidad": 1.5,
     "riesgo_maximo_diario": 0.12,
@@ -45,7 +45,7 @@
     "umbral_peso_estrategia_unica": 3.5,
     "umbral_score_estrategia_unica": 5.0
   },
-  "SOL/EUR": {
+  "SOL/USDT": {
     "factor_umbral": 1.5,
     "ajuste_volatilidad": 1.5,
     "riesgo_maximo_diario": 0.06,
@@ -68,7 +68,7 @@
     "umbral_peso_estrategia_unica": 3.5,
     "umbral_score_estrategia_unica": 5.0
   },
-  "XRP/EUR": {
+  "XRP/USDT": {
     "factor_umbral": 1.5,
     "ajuste_volatilidad": 1.5,
     "riesgo_maximo_diario": 0.06,
@@ -91,7 +91,7 @@
     "umbral_peso_estrategia_unica": 3.5,
     "umbral_score_estrategia_unica": 5.0
   },
-  "AVAX/EUR": {
+  "AVAX/USDT": {
     "factor_umbral": 1.5,
     "ajuste_volatilidad": 1.5,
     "riesgo_maximo_diario": 0.04,

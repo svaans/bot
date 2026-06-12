@@ -52,6 +52,7 @@ _log = configurar_logger("gestor_pesos_estrategias", modo_silencioso=True)
 def _read_json(path: Path) -> dict:
     """Lee JSON y devuelve dict. Si no existe o está corrupto, devuelve {}."""
     try:
+        path = Path(path)
         if not path.exists():
             return {}
         with path.open("r", encoding="utf-8") as f:
