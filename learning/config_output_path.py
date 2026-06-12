@@ -12,15 +12,19 @@ _TMP_ROOT = Path(tempfile.gettempdir()).resolve()
 
 
 def _pytest_temp_path_ok(resolved: Path) -> bool:
-    """Permite ``tmp_path`` bajo el directorio temporal del SO solo durante pytest."""
+    """Permite ``tmp_path`` (basetemp ``pytest-*``) solo durante pytest.
+
+    Restringido al árbol que crea el fixture ``tmp_path`` para que otras rutas
+    bajo el directorio temporal del SO sigan rechazándose incluso en tests.
+    """
 
     if not os.environ.get("PYTEST_CURRENT_TEST"):
         return False
     try:
-        resolved.relative_to(_TMP_ROOT)
+        rel = resolved.relative_to(_TMP_ROOT)
     except ValueError:
         return False
-    return True
+    return bool(rel.parts) and rel.parts[0].startswith("pytest-")
 
 
 def resolve_repo_input_path(path: Path) -> Path:

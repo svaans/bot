@@ -33,7 +33,7 @@ def _clear_global_buffers() -> Iterable[None]:
     manager._locks.clear()
 
 
-@pytest.mark.asyncio(mode="strict")
+@pytest.mark.asyncio
 @pytest.mark.flags(
     "orders.retry_persistencia.enabled",
     "orders.flush_periodico.enabled",
@@ -85,7 +85,7 @@ async def test_flujo_integrado_multisimbolo_feed_trader_procesar_vela_ordenes(
         assert len(trader.estado[sym].buffer) == n_per
 
 
-@pytest.mark.asyncio(mode="strict")
+@pytest.mark.asyncio
 @pytest.mark.flags(
     "orders.retry_persistencia.enabled",
     "metrics.extended.enabled",

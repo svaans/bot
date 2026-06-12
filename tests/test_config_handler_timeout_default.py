@@ -22,8 +22,12 @@ def test_development_default_symbols_are_binance_spot_usdt() -> None:
     assert DevelopmentConfig().symbols == ["BTC/USDT", "ETH/USDT"]
 
 
-def test_production_default_symbols_match_development_spot_usdt() -> None:
-    assert ProductionConfig().symbols == ["BTC/USDT", "ETH/USDT"]
+def test_production_default_symbols_are_documented_universe() -> None:
+    # Universo de producción según estudio_simbolos (ver config/production.py):
+    # BTC/ETH/SOL (PF test 1.48-3.97) + XRP/AVAX (reemplazan ADA y BNB).
+    assert ProductionConfig().symbols == [
+        "BTC/USDT", "ETH/USDT", "SOL/USDT", "XRP/USDT", "AVAX/USDT"
+    ]
 
 
 def test_config_manager_respects_symbols_env_override(monkeypatch: pytest.MonkeyPatch) -> None:
