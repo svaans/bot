@@ -23,7 +23,7 @@ from typing import Any, Awaitable, Callable, Dict, Iterable, Mapping, Optional, 
 import websockets
 
 if TYPE_CHECKING:  # pragma: no cover - hints opcionales
-    from .cliente import BinanceClient
+    pass
 
 from core.utils.log_utils import truncate_for_log
 

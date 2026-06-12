@@ -6,7 +6,7 @@ import json
 import time
 import random
 from datetime import datetime, timezone
-from typing import Any, Awaitable, Callable, Dict, Iterable
+from typing import Any, Dict, Iterable
 
 import aiohttp
 import websockets

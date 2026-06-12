@@ -1,7 +1,6 @@
 """Motor de estrategias para el bot de trading."""
 from __future__ import annotations
 import asyncio
-import json
 import math
 import statistics
 from collections import deque

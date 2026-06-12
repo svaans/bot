@@ -177,7 +177,6 @@ def try_sync_via_w32tm_elevated(*, wait_timeout: float = 30.0) -> bool:
         SEE_MASK_NOCLOSEPROCESS = 0x00000040
         SEE_MASK_NOASYNC = 0x00000100
         SW_HIDE = 0
-        INFINITE = 0xFFFFFFFF
 
         class SHELLEXECUTEINFOW(ctypes.Structure):
             _fields_ = [

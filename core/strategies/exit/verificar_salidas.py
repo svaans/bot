@@ -22,14 +22,13 @@ import pandas as pd
 from core.utils import configurar_logger
 from core.utils.log_utils import format_exception_for_log
 from core.contexto_externo import obtener_puntaje_contexto
-from indicadores.helpers import get_rsi, get_momentum, get_atr
+from indicadores.helpers import get_atr
 from core.strategies.tendencia import obtener_tendencia
 from .salida_stoploss import verificar_salida_stoploss
 from .salida_trailing_stop import verificar_trailing_stop
 from .salida_por_tendencia import verificar_reversion_tendencia
 from .gestor_salidas import evaluar_salidas, verificar_filtro_tecnico
-from .analisis_previo_salida import permitir_cierre_tecnico, evaluar_condiciones_de_cierre_anticipado
-from .analisis_salidas import patron_tecnico_fuerte
+from .analisis_previo_salida import permitir_cierre_tecnico
 from core.strategies.exit.filtro_salidas import validar_necesidad_de_salida
 from core.config_manager.dinamica import adaptar_configuracion
 from core.adaptador_umbral import calcular_umbral_adaptativo
@@ -199,7 +198,7 @@ async def _procesar_take_profit(trader, orden, df) -> bool:
     else:
         if precio_max < orden.take_profit:
             return False
-    precio_cierre = float(df['close'].iloc[-1])
+    float(df['close'].iloc[-1])
     config_actual = _get_exit_config(trader, symbol)
     if not getattr(orden, 'parcial_cerrado', False) and orden.cantidad_abierta > 0:
         if await trader.es_salida_parcial_valida(orden, orden.take_profit, config_actual, df):
@@ -415,7 +414,7 @@ async def _aplicar_salidas_adicionales(trader, orden, df) -> bool:
         )
         estrategias = evaluacion.get('estrategias_activas', {})
         puntaje = evaluacion.get('puntaje_total', 0)
-        pesos_symbol = trader.pesos_por_simbolo.get(symbol, {})
+        trader.pesos_por_simbolo.get(symbol, {})
         umbral = calcular_umbral_adaptativo(symbol, df)
         if not validar_necesidad_de_salida(df, orden.to_dict(), estrategias, puntaje=puntaje, umbral=umbral, config=config_actual):
             log.debug(f"cierre_evitado_tecnico: '{razon}' condiciones activas")

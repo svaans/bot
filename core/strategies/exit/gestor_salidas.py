@@ -4,7 +4,6 @@
 ``kill_switch: True`` para que :mod:`verificar_salidas` cierre sin pasar por
 filtros técnicos que podrían aplazar un apagado de emergencia.
 """
-import pandas as pd
 import asyncio
 from datetime import datetime, timezone
 from core.utils.utils import validar_dataframe

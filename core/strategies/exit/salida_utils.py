@@ -1,8 +1,5 @@
 from __future__ import annotations
 from core.utils.utils import configurar_logger
-from core.strategies.exit.gestor_salidas import (
-    PRIORIDADES as PRIORIDAD_EVENTOS,
-)
 log = configurar_logger('salida_utils')
 
 

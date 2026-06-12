@@ -49,7 +49,6 @@ def _adaptar_configuracion_indicadores(symbol: str, df: pd.DataFrame, base_confi
     base_config = base_config or {}
     df = df.tail(60).copy()
     regimen = detectar_regimen(df)
-    close_actual = df['close'].iloc[-1]
     rsi = get_rsi(df)
     if rsi is None:
         if _should_log(f"indicadores_insuf:{symbol}", every=2.0):

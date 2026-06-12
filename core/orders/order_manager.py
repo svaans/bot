@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import asyncio
 import os
-from pathlib import Path
 from collections.abc import Mapping
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
@@ -14,34 +13,21 @@ from core.orders.order_model import Order
 from core.orders.order_open_status import OrderOpenStatus
 from core.utils.feature_flags import is_flag_enabled
 from core.utils.logger import configurar_logger
-from core.utils.log_utils import format_exception_for_log, safe_extra
+from core.utils.log_utils import safe_extra
 from core.orders import real_orders
 # Importamos validadores con nombres más descriptivos.  El módulo
 # ``validators_binance`` centraliza las restricciones de Binance.
-from core.orders.validators_binance import remainder_executable  # renamed from validators
-from core.risk.level_validators import (
-    validate_levels,
-    LevelValidationError,
-)
 from core.utils.utils import is_valid_number
 from core.event_bus import EventBus
 from core.metrics import (
     limpiar_registro_pendiente,
     subscribe_order_pnl_metrics,
 )
-from core.registro_metrico import registro_metrico
-from binance_api.ccxt_client import obtener_ccxt as obtener_cliente
 from config import config as app_config
 from core.orders.market_retry_executor import ExecutionResult, MarketRetryExecutor
 from core.orders.quantity_resolver import QuantityResolver
 from core.orders.order_manager_helpers import (
-    backtest_slippage_bps as _backtest_slippage_bps,
-    exchange_side_open_position as _exchange_side_open_position,
-    exchange_side_reduce_position as _exchange_side_reduce_position,
-    fetch_balance_non_blocking as _fetch_balance_non_blocking,
     fmt_exchange_err as _fmt_exchange_err,
-    is_short_direction as _is_short_direction,
-    sim_aplicar_slippage_entrada_salida as _sim_aplicar_slippage_entrada_salida,
 )
 from core.orders import (
     order_manager_abrir,

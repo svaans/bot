@@ -6,7 +6,7 @@ exactamente una entrada candidata.
 """
 from __future__ import annotations
 
-from typing import Any, Mapping, TypeVar
+from typing import Mapping, TypeVar
 
 T = TypeVar("T")
 

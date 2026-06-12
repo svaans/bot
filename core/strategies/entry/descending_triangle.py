@@ -6,8 +6,6 @@ def descending_triangle(df: pd.DataFrame) ->dict:
         return {'activo': False, 'mensaje': 'Insuficientes datos'}
     ultimos = df.tail(10)
     altos = ultimos['high']
-    bajos = ultimos['low']
-    soporte = min(bajos)
     maximos = altos.rolling(window=3).max()
     if maximos.is_monotonic_decreasing:
         return {'activo': True, 'mensaje': 'Triángulo descendente detectado'}

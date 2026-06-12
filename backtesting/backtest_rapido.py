@@ -1018,7 +1018,7 @@ def _descargar_fear_greed(dias: int = 1825) -> dict[int, int]:
             return {int(k): int(v) for k, v in raw.items()}
 
     url = f"https://api.alternative.me/fng/?limit={dias + 30}&format=json"
-    print(f"  [fear&greed] descargando histórico desde alternative.me…")
+    print("  [fear&greed] descargando histórico desde alternative.me…")
     try:
         with urllib.request.urlopen(url, timeout=15) as r:
             data = json.load(r)
@@ -1226,8 +1226,6 @@ def estudio_eth_riesgo(days: int, capital0: float) -> None:
 
     n = len(eth_data)
     corte = int(n * 0.7)
-    dias_train = corte
-    dias_test = n - corte
 
     riesgos = [0.02, 0.03, 0.04, 0.05, 0.06, 0.07, 0.08, 0.09, 0.10]
 
@@ -1358,7 +1356,6 @@ def estudio_fear_greed(symbols: list[str], days: int, capital0: float) -> None:
 
             n_sym = len(datos)
             dias_fase = (corte if fase == "train" else (len(list(datos.values())[0]) - corte)) if datos else 1
-            ret = (cap / (capital0 * n_sym) - 1) * 100 if n_sym else 0
             anual = ((cap / (capital0 * n_sym)) ** (365 / dias_fase) - 1) * 100 if n_sym and dias_fase > 0 else 0
             pf = gan / per if per > 0 else float("inf")
             agg[fase] = {"pf": pf, "anual": anual, "n": ntr, "dd": dd}
@@ -1918,7 +1915,7 @@ def estudio_sl_por_simbolo(symbols: list[str], days: int, capital0: float) -> No
               f"{pf_tr:>6s} {tr['anual']:+8.2f}% {tr['n']:5d} | "
               f"{pf_te:>6s} {te['anual']:+8.2f}% {te['n']:5d} {te['dd']:5.1f}%")
 
-    print(f"\nSL óptimos (test): " + "  ".join(
+    print("\nSL óptimos (test): " + "  ".join(
         f"{s.replace('EUR','')}/{mejores[s]:.1f}" for s in datos))
     n_test = int(len(list(datos.values())[0]) * 0.3) if datos else 0
     print(f"config base: Sharpe+FG_zona_neutral+vol_guard+BTC_macro+TP_opt | test ~{n_test} días")
@@ -2171,7 +2168,6 @@ def estudio_nuevo_simbolo(symbols: list[str], days: int, capital0: float) -> Non
         tr = _run_portfolio(portfolio, "train")
         te = _run_portfolio(portfolio, "test")
         delta_anual = te["anual"] - base_te["anual"]
-        delta_dd = te["dd"] - base_te["dd"]
         pf_tr_c = f"{tr['pf']:.2f}" if tr['pf'] != float("inf") else " inf"
         pf_te_c = f"{te['pf']:.2f}" if te['pf'] != float("inf") else " inf"
         signo = "↑" if delta_anual > 0.3 else ("↓" if delta_anual < -0.3 else "≈")
@@ -2184,7 +2180,7 @@ def estudio_nuevo_simbolo(symbols: list[str], days: int, capital0: float) -> Non
     mejores.sort(key=lambda x: -x[1])
     n_test = int(len(list(datos.values())[0]) * 0.3) if datos else 0
     print(f"\nconfig base: Sharpe+FG_zona_neutral+vol_guard+BTC_macro+TP_opt+SL_opt | test ~{n_test} días")
-    print(f"candidatos nuevos usan SL=1.0 / TP=3.0 (sin optimizar)")
+    print("candidatos nuevos usan SL=1.0 / TP=3.0 (sin optimizar)")
     if mejores:
         mejor = mejores[0]
         if mejor[1] > 0.5:
@@ -2480,7 +2476,7 @@ def estudio_tp_por_simbolo(symbols: list[str], days: int, capital0: float) -> No
               f"{pf_tr:>6s} {tr['anual']:+8.2f}% {tr['n']:5d} | "
               f"{pf_te:>6s} {te['anual']:+8.2f}% {te['n']:5d} {te['dd']:5.1f}%")
 
-    print(f"\nTP óptimos (test): " + "  ".join(
+    print("\nTP óptimos (test): " + "  ".join(
         f"{s.replace('EUR','')}/{mejores[s]:.1f}" for s in datos))
     n_test = int(len(list(datos.values())[0]) * 0.3) if datos else 0
     print(f"config base: Sharpe+FG_zona_neutral+vol_guard+BTC_macro | test ~{n_test} días")
@@ -2574,7 +2570,7 @@ def estudio_equity_filter(symbols: list[str], days: int, capital0: float) -> Non
               f"{pf_tr:>6s} {tr['anual']:+8.2f}% {tr['dd']:5.1f}% | "
               f"{pf_te:>6s} {te['anual']:+8.2f}% {te['dd']:5.1f}%{dd_tag}")
 
-    print(f"\nconfig: 1d umbral=5 Sharpe TP_OPT SL_OPT vol_guard+BTC_macro+FG_zona_neutral")
+    print("\nconfig: 1d umbral=5 Sharpe TP_OPT SL_OPT vol_guard+BTC_macro+FG_zona_neutral")
 
 
 def estudio_walk_forward(symbols: list[str], days: int, capital0: float,
@@ -2831,7 +2827,7 @@ def estudio_noticias(symbols: list[str], days: int, capital0: float) -> None:
               f"{pf_te:>6s} {te['anual']:+8.2f}% {te['n']:5d} {te['dd']:5.1f}%"
               f"{bloqueadas_pct}")
 
-    print(f"\nconfig: 1d umbral=5 Sharpe TP_OPT SL_OPT vol_guard+BTC_macro+FG_zona_neutral")
+    print("\nconfig: 1d umbral=5 Sharpe TP_OPT SL_OPT vol_guard+BTC_macro+FG_zona_neutral")
     print("proxy: retorno de la vela anterior, ventana 60 días")
     print("interpretacion: si zscore_-X.X mejora el test → el filtro de noticias tiene valor")
 
@@ -2915,7 +2911,7 @@ def estudio_adx(symbols: list[str], days: int, capital0: float) -> None:
               f"{pf_tr:>6s} {tr['anual']:+8.2f}% {tr['n']:5d} | "
               f"{pf_te:>6s} {te['anual']:+8.2f}% {te['n']:5d} {te['dd']:5.1f}%{tag}")
 
-    print(f"\nconfig: 1d umbral=5 Sharpe TP_OPT SL_OPT vol_guard+BTC_macro+FG_zona_neutral")
+    print("\nconfig: 1d umbral=5 Sharpe TP_OPT SL_OPT vol_guard+BTC_macro+FG_zona_neutral")
 
 
 def estudio_cierre_parcial(symbols: list[str], days: int, capital0: float) -> None:
@@ -3001,7 +2997,7 @@ def estudio_cierre_parcial(symbols: list[str], days: int, capital0: float) -> No
               f"{pf_tr:>6s} {tr['anual']:+8.2f}% {tr['n']:5d} | "
               f"{pf_te:>6s} {te['anual']:+8.2f}% {te['n']:5d} {te['dd']:5.1f}%{tag}")
 
-    print(f"\nconfig: 1d umbral=5 Sharpe TP_OPT SL_OPT vol_guard+BTC_macro+FG_zona_neutral")
+    print("\nconfig: 1d umbral=5 Sharpe TP_OPT SL_OPT vol_guard+BTC_macro+FG_zona_neutral")
 
 
 def estudio_allocation(symbols: list[str], days: int, capital0: float) -> None:
@@ -3112,7 +3108,7 @@ def estudio_allocation(symbols: list[str], days: int, capital0: float) -> None:
               f"{pf_tr:>6s} {tr['anual']:+8.2f}% {tr['n']:5d} | "
               f"{pf_te:>6s} {te['anual']:+8.2f}% {te['n']:5d} {te['dd']:5.1f}%{tag}")
 
-    print(f"\nconfig: 1d umbral=5 TP_OPT SL_OPT vol_guard+BTC_macro+FG_zona_neutral")
+    print("\nconfig: 1d umbral=5 TP_OPT SL_OPT vol_guard+BTC_macro+FG_zona_neutral")
 
 
 def _base_config_eval(datos, indicadores, btc_ind, fg_map, capital0,

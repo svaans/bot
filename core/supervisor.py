@@ -27,7 +27,6 @@ idempotente: una segunda llamada no duplica el par heartbeat/watchdog.
 from __future__ import annotations
 import asyncio
 import inspect
-import traceback
 from math import ldexp
 from collections import defaultdict, deque
 from datetime import datetime, timedelta, timezone

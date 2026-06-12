@@ -1,4 +1,3 @@
-import pandas as pd
 from core.utils.utils import validar_dataframe
 from core.strategies.tendencia import detectar_tendencia
 from core.utils import configurar_logger

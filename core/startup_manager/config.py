@@ -7,7 +7,6 @@ from contextlib import suppress
 from dataclasses import replace, is_dataclass
 from typing import Any, Optional
 
-from config.config_manager import ConfigManager
 from config.config import _load as _load_global_cfg
 from core.operational_mode import OperationalMode
 from core.trader_modular import Trader

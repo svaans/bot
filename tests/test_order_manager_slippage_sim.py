@@ -3,9 +3,9 @@ from __future__ import annotations
 
 import pytest
 
-from core.orders.order_manager import (
-    _backtest_slippage_bps,
-    _sim_aplicar_slippage_entrada_salida,
+from core.orders.order_manager_helpers import (
+    backtest_slippage_bps as _backtest_slippage_bps,
+    sim_aplicar_slippage_entrada_salida as _sim_aplicar_slippage_entrada_salida,
 )
 
 

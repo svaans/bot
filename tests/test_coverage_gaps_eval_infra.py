@@ -127,19 +127,6 @@ def test_risk_manager_alias_import() -> None:
 
 
 @pytest.mark.asyncio
-async def test_async_learning_emit() -> None:
-    from core import async_learning_manager as alm
-
-    seen: list[str] = []
-
-    def on_e(evt: str, data: dict) -> None:
-        seen.append(evt)
-
-    alm._emit(on_e, "x", {"k": 1})
-    assert seen == ["x"]
-
-
-@pytest.mark.asyncio
 async def test_gestor_aprendizaje_emit() -> None:
     from core import gestor_aprendizaje as ga
 

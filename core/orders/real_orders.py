@@ -42,14 +42,16 @@ from typing import Any, Callable, Mapping
 from datetime import datetime, timezone
 
 UTC = timezone.utc
-from binance_api.ccxt_client import obtener_ccxt as obtener_cliente
-from binance_api.filters import get_symbol_filters
+# Re-exports con enlace tardío: ``real_orders_reconcile`` los resuelve vía
+# ``_ro.<nombre>`` y los tests los parchean como atributos de este módulo.
+# No eliminar aunque el linter los marque como no usados.
+from binance_api.ccxt_client import obtener_ccxt as obtener_cliente  # noqa: F401
+from binance_api.filters import get_symbol_filters  # noqa: F401
 from .order_model import Order
-from core.orders.real_orders_parse import coerce_open_orders as _coerce_open_orders
-from core.orders.real_orders_parse import coincide_operation_id as _coincide_operation_id
-from core.orders.real_orders_parse import extraer_float as _extraer_float
-from core.orders.real_orders_parse import extraer_valor as _extraer_valor
-from core.utils.utils import configurar_logger, guardar_orden_real
+from core.orders.real_orders_parse import coerce_open_orders as _coerce_open_orders  # noqa: F401
+from core.orders.real_orders_parse import coincide_operation_id as _coincide_operation_id  # noqa: F401
+from core.orders.real_orders_parse import extraer_float as _extraer_float  # noqa: F401
+from core.utils.utils import configurar_logger, guardar_orden_real  # noqa: F401
 from core.utils.logger import log_decision
 from core.utils.log_utils import format_exception_for_log
 from core.supervisor import tick

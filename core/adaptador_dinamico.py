@@ -9,12 +9,10 @@ módulo. Si se edita ``config/configuraciones_optimas.json`` en caliente,
 usa :func:`recargar_configs_optimas` o reinicia el proceso.
 """
 from __future__ import annotations
-import asyncio
 import json
 import os
 from dataclasses import dataclass
 from typing import Any, Dict, List
-import numpy as np
 import pandas as pd
 
 from data_feed.candle_builder import backfill

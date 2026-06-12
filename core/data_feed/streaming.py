@@ -318,7 +318,7 @@ async def stream_combinado(feed: "DataFeed", symbols: List[str]) -> None:
             delay = _compute_retry_delay(feed, COMBINED_STREAM_KEY)
             await asyncio.sleep(delay)
 
-        except InactividadTimeoutError as exc:
+        except InactividadTimeoutError:
             log.warning(
                 "ws_connect:retry",
                 extra={

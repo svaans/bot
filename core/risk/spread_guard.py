@@ -1,7 +1,7 @@
 from __future__ import annotations
 from dataclasses import dataclass
 from collections import deque
-from typing import Deque, Dict, Optional
+from typing import Deque, Dict
 
 # Numpy es opcional; si no está, usamos un cálculo simple de percentil.
 try:

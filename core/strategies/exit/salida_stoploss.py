@@ -1,10 +1,9 @@
 import pandas as pd
 from core.strategies.tendencia import detectar_tendencia
-from core.estrategias import obtener_estrategias_por_tendencia, ESTRATEGIAS_POR_TENDENCIA
+from core.estrategias import ESTRATEGIAS_POR_TENDENCIA
 from core.utils.utils import validar_dataframe
 from core.adaptador_umbral import calcular_umbral_adaptativo
 from core.strategies.entry.gestor_entradas import evaluar_estrategias
-from core.strategies.pesos import gestor_pesos
 from core.utils import configurar_logger
 from core.utils.log_utils import format_exception_for_log
 from core.strategies.exit.salida_utils import resultado_salida
@@ -14,7 +13,6 @@ from core.scoring import calcular_score_tecnico
 from config.exit_defaults import load_exit_config
 from core.orders.order_model import ajustar_tick_size
 log = configurar_logger('salida_stoploss')
-pesos = gestor_pesos.pesos
 
 
 def stoploss_pct(precio_entrada: float, pct_sl: float, tick_size: float, direccion: str='long') -> float:
@@ -103,7 +101,6 @@ async def salida_stoploss(orden: dict, df: pd.DataFrame, config: dict=None) ->di
             cfg.update(config)
         factor_umbral = cfg['factor_umbral_sl']
         min_estrategias_relevantes = cfg['min_estrategias_relevantes_sl']
-        pesos_symbol = pesos.get(symbol, {})
         umbral = calcular_umbral_adaptativo(symbol, df)
         esperadas = ESTRATEGIAS_POR_TENDENCIA.get(tendencia, [])
         activas_relevantes = [e for e in activas if e in esperadas]
@@ -188,7 +185,6 @@ async def verificar_salida_stoploss(orden: dict, df: pd.DataFrame, config: (dict
     estrategias_activas = evaluacion.get('estrategias_activas', {}) if evaluacion else {}
     puntaje = evaluacion.get('puntaje_total', 0) if evaluacion else 0
     activas = [k for k, v in estrategias_activas.items() if v]
-    pesos_symbol = pesos.get(symbol, {})
     umbral = calcular_umbral_adaptativo(symbol, df)
     factor_umbral = cfg['factor_umbral_sl']
     min_estrategias_relevantes = cfg['min_estrategias_relevantes_sl']

@@ -260,12 +260,12 @@ def test_risk_validators_invalid_side() -> None:
 
 
 def test_order_manager_exchange_sides_by_direction() -> None:
-    from core.orders import order_manager as om
+    from core.orders import order_manager_helpers as omh
 
-    assert om._exchange_side_open_position("long") == "buy"
-    assert om._exchange_side_open_position("short") == "sell"
-    assert om._exchange_side_reduce_position("long") == "sell"
-    assert om._exchange_side_reduce_position("short") == "buy"
+    assert omh.exchange_side_open_position("long") == "buy"
+    assert omh.exchange_side_open_position("short") == "sell"
+    assert omh.exchange_side_reduce_position("long") == "sell"
+    assert omh.exchange_side_reduce_position("short") == "buy"
 
 
 def test_verificar_trailing_stop_short_ratio_activation() -> None:

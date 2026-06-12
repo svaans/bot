@@ -1,6 +1,5 @@
 import pandas as pd
 from ta.momentum import RSIIndicator
-from ta.trend import MACD
 from core.utils import configurar_logger
 from core.strategies.exit.salida_utils import resultado_salida
 log = configurar_logger('salida_por_rsi')

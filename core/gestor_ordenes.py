@@ -38,11 +38,9 @@ Notas
 from __future__ import annotations
 import asyncio
 import functools
-import json
-import os
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Awaitable, Callable, Optional
+from typing import Any, Callable
 
 UTC = timezone.utc
 
@@ -165,7 +163,7 @@ class GestorOrdenes:
         """Crea orden local y notifica al bus para ejecución en exchange si aplica."""
         if cantidad <= 0 or precio <= 0:
             return False
-        orden = self.orders.crear(symbol, precio, cantidad, direccion, extras or {})
+        self.orders.crear(symbol, precio, cantidad, direccion, extras or {})
         ok = await self._safe_publish("abrir_orden", {"symbol": symbol, "precio": precio, "cantidad": cantidad, "direccion": direccion})
         if not ok:
             # revertir creación si no se confirma

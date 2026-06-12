@@ -8,14 +8,16 @@ from __future__ import annotations
 from typing import Any
 
 try:
-    from data_feed.lite import DataFeed
+    # Re-export de compatibilidad: los tests parchean ``core.trader_modular.DataFeed``.
+    from data_feed.lite import DataFeed  # noqa: F401
 except ModuleNotFoundError:  # pragma: no cover
-    from data_feed import DataFeed  # type: ignore
+    pass  # type: ignore
 
 try:
-    from core.supervisor import Supervisor
+    # Re-export de compatibilidad histórica de este shim.
+    from core.supervisor import Supervisor  # noqa: F401
 except ModuleNotFoundError:  # pragma: no cover
-    from supervisor import Supervisor  # type: ignore
+    pass  # type: ignore
 
 try:  # pragma: no cover
     from binance_api.cliente import crear_cliente as _crear_cliente_impl

@@ -11,13 +11,14 @@ import pandas as pd
 import pytest
 
 from core.orders import real_orders as ro
+from core.orders import real_orders_parse as rop
 
 
 def test_real_orders_coerce_y_extractores() -> None:
     assert ro._coerce_open_orders(None) == []
     assert ro._coerce_open_orders(({"a": 1},)) == [{"a": 1}]
     m = {"info": {"clientOrderId": "x1"}}
-    assert ro._extraer_valor(m, ("clientOrderId",)) == "x1"
+    assert rop.extraer_valor(m, ("clientOrderId",)) == "x1"
     assert ro._extraer_float({"price": "1.5"}, ("price",)) == 1.5
     assert ro._extraer_float({}, ("x",)) == 0.0
     assert ro._coincide_operation_id({"clientOrderId": "abc"}, "abc") is True

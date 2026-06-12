@@ -120,7 +120,7 @@ class _HistogramTimer:
         self._restart()
         return self
 
-    def __exit__(self, exc_type, exc_val, exc_tb) -> None:  # pragma: no cover - trivial
+    def __exit__(self, _exc_type, _exc_val, _exc_tb) -> None:  # pragma: no cover - trivial
         self.observe_duration()
 
     def observe_duration(self) -> float:

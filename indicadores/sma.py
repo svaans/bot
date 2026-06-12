@@ -1,4 +1,3 @@
-import pandas as pd
 from indicadores.helpers import serie_cierres
 
 def calcular_cruce_sma(data, rapida: int = 20, lenta: int = 50) -> bool:

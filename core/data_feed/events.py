@@ -282,7 +282,6 @@ def reset_reconnect_tracking(feed: "DataFeed", key: str) -> None:
 def set_consumer_state(feed: "DataFeed", symbol: str, state: "ConsumerState") -> None:
     """Actualiza el estado interno de un consumidor y emite evento."""
 
-    from ._shared import ConsumerState
 
     prev = feed._consumer_state.get(symbol)
     if prev == state:

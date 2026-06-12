@@ -9,7 +9,6 @@ _REPORTES_DIR: str = os.getenv("REPORTES_DIARIOS_PATH", "reportes_diarios")
 
 UTC = timezone.utc
 from math import isclose
-import pandas as pd
 from core.utils.log_utils import format_exception_for_log
 from core.utils.utils import configurar_logger
 from core.utils.utils import leer_csv_seguro

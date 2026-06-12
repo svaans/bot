@@ -1,7 +1,6 @@
 import pandas as pd
 from typing import Dict, Any
 from indicadores.helpers import get_rsi, get_momentum, get_slope
-from indicadores.divergencia_rsi import detectar_divergencia_alcista
 from core.strategies.tendencia import detectar_tendencia
 from core.scoring import PESOS_SCORE_TECNICO
 from core.utils import configurar_logger
@@ -156,9 +155,7 @@ def permitir_cierre_tecnico(
         ) if isinstance(rsi_series, pd.Series) and len(df) >= 30 else None
     direccion = orden.get('direccion', 'long') if orden else 'long'
     score = _score_tecnico_basico(df, direccion)
-    envolvente = es_vela_envolvente_alcista(df)
     soporte_cerca = precio_cerca_de_soporte(df, precio)
-    divergencia = detectar_divergencia_alcista(df)
     if score <= 1:
         if not evaluar_condiciones_de_cierre_anticipado(symbol, df, orden or
             {}, score, orden.get('estrategias_activas') if orden else {}):
@@ -180,7 +177,6 @@ def permitir_cierre_tecnico(
             f'⚠️ {symbol} RSI bajo pero subiendo ({rsi:.2f}) → posible rebote. Evitar cierre.'
             )
         return False
-    soporte_reciente = df['low'].rolling(20).min().iloc[-1]
     if soporte_cerca:
         log.info(
             f'⚠️ {symbol} Soporte técnico validado cercano → posible rebote.')
