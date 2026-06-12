@@ -331,6 +331,16 @@ class StrategyEngine:
                 fg_ok = False
 
         noticias_ok = True
+        try:
+            from core.strategies.noticias_sentimiento import obtener_sentimiento as _get_sent
+            _score_noticias = _get_sent(symbol)
+            if _score_noticias is not None:
+                _logger_noticias = __import__("logging").getLogger("noticias_sentimiento")
+                _logger_noticias.info(
+                    "Sentimiento noticias %s: %.2f", symbol, _score_noticias
+                )
+        except Exception:
+            pass
         if bool(config.get("filtro_noticias_enabled", False)):
             umbral_neg = float(config.get("noticias_umbral_negativo", -0.3))
             resultado_noticias = noticias_permite_entrada(symbol, umbral_neg)
