@@ -2551,6 +2551,173 @@ def estudio_walk_forward(symbols: list[str], days: int, capital0: float,
     print("config: 1d umbral=5 SL=1×ATR TP=3×ATR riesgo=4% vol_guard+BTC_macro")
 
 
+def estudio_noticias(symbols: list[str], days: int, capital0: float) -> None:
+    """Proxy de sentimiento de noticias via z-score del retorno anterior.
+
+    Simula el efecto de un filtro de noticias negativas bloqueando entradas
+    cuando el retorno de la vela anterior está por debajo de -N desviaciones
+    estándar en una ventana rolling de 60 días. Esta es una aproximación
+    razonable: las grandes caídas diarias suelen coincidir con noticias negativas.
+
+    Variantes:
+      - sin_filtro   : baseline (todas las entradas, config óptima validada)
+      - zscore_-1.0  : bloquea si ret_prev < -1.0σ  (días rojos moderados, ~16% de velas)
+      - zscore_-1.5  : bloquea si ret_prev < -1.5σ  (días rojos fuertes,   ~7% de velas)
+      - zscore_-2.0  : bloquea si ret_prev < -2.0σ  (días muy rojos,        ~2% de velas)
+      - drop_3pct    : bloquea si la vela anterior cayó > 3% (simple threshold)
+
+    Config: Sharpe + TP_OPT + SL_OPT + vol_guard + BTC_macro + FG_zona_neutral.
+    Periodo: split 70/30 train/test.
+    """
+    TP_OPT = {"ETHEUR": 3.5, "BTCEUR": 3.0, "SOLEUR": 2.5, "XRPEUR": 4.0, "AVAXEUR": 3.0}
+    SL_OPT = {"ETHEUR": 0.8, "BTCEUR": 1.0, "SOLEUR": 0.7, "XRPEUR": 0.8, "AVAXEUR": 0.7}
+    SHARPE_RIESGO = {"ETHEUR": 0.08, "BTCEUR": 0.03, "SOLEUR": 0.03, "XRPEUR": 0.03, "AVAXEUR": 0.02}
+
+    # Descargar Fear & Greed (opcional, para mantener la config completa)
+    fg_map = _descargar_fear_greed(days)
+
+    print("  descargando datos de mercado…")
+    datos: dict[str, list] = {}
+    indicadores: dict[str, dict] = {}
+    for s in symbols:
+        try:
+            datos[s] = descargar_klines(s, "1d", days)
+            indicadores[s] = calcular_indicadores(datos[s])
+        except Exception as e:
+            print(f"  [ERROR] {s}: {e}")
+
+    btc_ind = indicadores.get("BTCEUR") or calcular_indicadores(
+        descargar_klines("BTCEUR", "1d", days))
+
+    def _news_proxy_mask(data: list, threshold_z: float | None, drop_pct: float | None) -> list[bool] | None:
+        """Construye máscara de bloqueo basada en el retorno de la vela anterior."""
+        if threshold_z is None and drop_pct is None:
+            return None
+        n = len(data)
+        mask = [True] * n
+        WINDOW = 60
+        for i in range(1, n):
+            if drop_pct is not None:
+                # bloquear si la vela i-1 cayó más del drop_pct
+                prev_open  = data[i - 1][1]
+                prev_close = data[i - 1][4]
+                if prev_open > 0 and (prev_close - prev_open) / prev_open < -drop_pct:
+                    mask[i] = False
+            elif threshold_z is not None:
+                # bloquear si el retorno de i-1 está por debajo de -N sigmas
+                start = max(0, i - WINDOW)
+                retornos = []
+                for j in range(start, i):
+                    o, c = data[j][1], data[j][4]
+                    if o > 0:
+                        retornos.append((c - o) / o)
+                if len(retornos) < 5:
+                    continue
+                media = sum(retornos) / len(retornos)
+                var = sum((r - media) ** 2 for r in retornos) / len(retornos)
+                std = math.sqrt(var) if var > 0 else 0.0
+                if std == 0:
+                    continue
+                prev_o, prev_c = data[i - 1][1], data[i - 1][4]
+                if prev_o > 0:
+                    ret_prev = (prev_c - prev_o) / prev_o
+                    z = (ret_prev - media) / std
+                    if z < threshold_z:
+                        mask[i] = False
+        return mask
+
+    variantes = [
+        ("sin_filtro",  None,   None),
+        ("zscore_-1.0", -1.0,   None),
+        ("zscore_-1.5", -1.5,   None),
+        ("zscore_-2.0", -2.0,   None),
+        ("drop_3pct",   None,   0.03),
+    ]
+
+    print(f"\n{'variante':>14s} | "
+          f"{'PF tr':>6s} {'anual tr':>9s} {'n tr':>5s} | "
+          f"{'PF te':>6s} {'anual te':>9s} {'n te':>5s} {'DD te':>6s}")
+    print("-" * 80)
+
+    for nombre, z_thr, drop_thr in variantes:
+        agg: dict[str, dict] = {}
+        for fase in ("train", "test"):
+            cap = gan = per = 0.0
+            ntr = 0
+            dd = 0.0
+            for s, data in datos.items():
+                n_s = len(data)
+                corte = int(n_s * 0.7)
+                a, b = (0, corte) if fase == "train" else (corte, n_s)
+                ind = indicadores[s]
+                riesgo = SHARPE_RIESGO.get(s, 0.03)
+
+                news_mask = _news_proxy_mask(data, z_thr, drop_thr)
+
+                # Combinar news_mask con fg_mask
+                fg_mask = None
+                if fg_map:
+                    fg_mask = []
+                    for v in data:
+                        fg_val = _fg_valor(fg_map, v[0])
+                        ok = True
+                        if fg_val is not None:
+                            if fg_val < 25 or fg_val > 75:
+                                ok = False
+                        fg_mask.append(ok)
+
+                # Fusionar: entrada permitida solo si AMBAS máscaras la permiten
+                combined_mask = None
+                if news_mask is not None or fg_mask is not None:
+                    nm = news_mask or [True] * len(data)
+                    fm = fg_mask or [True] * len(data)
+                    combined_mask = [nm[i] and fm[i] for i in range(len(data))]
+
+                r = backtest(
+                    data, s, capital0, 5.0,
+                    use_trailing=False, trend_filter=False,
+                    ind=ind, i0=a, i1=b,
+                    sl_ratio=SL_OPT.get(s, 1.0),
+                    tp_ratio=TP_OPT.get(s, 3.0),
+                    vol_guard=True,
+                    riesgo=riesgo,
+                    senal_v2=False,
+                    btc_ind=btc_ind,
+                    be_atr=0.0, adx_min=0.0,
+                    fg_mask=combined_mask,
+                )
+                cap += r.capital_final
+                gan += r.bruto_ganado
+                per += r.bruto_perdido
+                ntr += r.trades
+                dd = max(dd, r.max_drawdown)
+
+            n_sym = len(datos)
+            dias_fase = (corte if fase == "train" else (len(list(datos.values())[0]) - corte)) if datos else 1
+            anual = ((cap / (capital0 * n_sym)) ** (365 / dias_fase) - 1) * 100 if n_sym and dias_fase > 0 else 0
+            pf = gan / per if per > 0 else float("inf")
+            agg[fase] = {"pf": pf, "anual": anual, "n": ntr, "dd": dd}
+
+        tr, te = agg["train"], agg["test"]
+        pf_tr = f"{tr['pf']:.2f}" if tr["pf"] != float("inf") else "inf"
+        pf_te = f"{te['pf']:.2f}" if te["pf"] != float("inf") else "inf"
+        bloqueadas_pct = ""
+        if nombre != "sin_filtro" and datos:
+            sample = list(datos.values())[0]
+            mask_sample = _news_proxy_mask(sample, z_thr, drop_thr)
+            if mask_sample:
+                bloq = sum(1 for x in mask_sample if not x)
+                bloqueadas_pct = f"  ({bloq/len(mask_sample)*100:.0f}% bloqueadas)"
+        print(f"{nombre:>14s} | "
+              f"{pf_tr:>6s} {tr['anual']:+8.2f}% {tr['n']:5d} | "
+              f"{pf_te:>6s} {te['anual']:+8.2f}% {te['n']:5d} {te['dd']:5.1f}%"
+              f"{bloqueadas_pct}")
+
+    print(f"\nconfig: 1d umbral=5 Sharpe TP_OPT SL_OPT vol_guard+BTC_macro+FG_zona_neutral")
+    print("proxy: retorno de la vela anterior, ventana 60 días")
+    print("interpretacion: si zscore_-X.X mejora el test → el filtro de noticias tiene valor")
+
+
 # ----------------------------------------------------------------- main
 
 def fmt(res: Resultado, capital0: float, dias: int) -> str:
@@ -2608,6 +2775,8 @@ def main() -> None:
                    help="trailing stop diferido: compara activación 1.5-3.0×ATR vs TP fijo")
     p.add_argument("--study_funding_rate", action="store_true",
                    help="funding rate Binance Futures como filtro de entradas: grid 0.05-0.20%%")
+    p.add_argument("--study_noticias", action="store_true",
+                   help="proxy de sentimiento de noticias: z-score retorno anterior vs baseline")
     p.add_argument("--rotacion", action="store_true",
                    help="estrategia de referencia: rotacion de momentum")
     args = p.parse_args()
@@ -2716,6 +2885,12 @@ def main() -> None:
         t0 = time.perf_counter()
         estudio_funding_rate(symbols, args.days, args.capital)
         print(f"\n[tiempo] estudio funding rate: {time.perf_counter() - t0:.1f}s")
+        return
+
+    if args.study_noticias:
+        t0 = time.perf_counter()
+        estudio_noticias(symbols, args.days, args.capital)
+        print(f"\n[tiempo] estudio noticias: {time.perf_counter() - t0:.1f}s")
         return
 
     if args.rotacion:

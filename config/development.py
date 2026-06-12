@@ -81,6 +81,12 @@ class DevelopmentConfig:
     # Umbral inferior F&G: bloquea entradas cuando el pánico es extremo (< umbral).
     # 0 = desactivado (solo bloqueo superior). Con 25 activa zona_neutral.
     fg_umbral_miedo: int = 0
+    # Filtro de noticias (CryptoPanic RSS): bloquea entradas cuando el sentimiento
+    # de las últimas noticias del símbolo es muy negativo.
+    # Desactivado por defecto; activar en producción o con FILTRO_NOTICIAS_ENABLED=true.
+    filtro_noticias_enabled: bool = False
+    noticias_umbral_negativo: float = -0.3
+    noticias_ttl_segundos: int = 3600
     regimen_vol_atr_ratio_alto: float = 0.06
     regimen_vol_atr_ratio_bajo: float = 0.02
     regimen_atr_periodo: int = 14

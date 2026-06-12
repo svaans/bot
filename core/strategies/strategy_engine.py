@@ -28,6 +28,7 @@ from core.strategies.entry.validadores import (
 from core.strategies.exit.gestor_salidas import evaluar_salidas
 from core.strategies.pesos import gestor_pesos
 from core.strategies.filtro_macro import btc_en_tendencia, fear_greed_permite_entrada
+from core.strategies.noticias_sentimiento import noticias_permite_entrada
 from core.strategies.regimen_mercado import (
     aplicar_multiplicadores_regimen,
     etiqueta_volatilidad,
@@ -329,6 +330,13 @@ class StrategyEngine:
             if resultado_fg is False:
                 fg_ok = False
 
+        noticias_ok = True
+        if bool(config.get("filtro_noticias_enabled", False)):
+            umbral_neg = float(config.get("noticias_umbral_negativo", -0.3))
+            resultado_noticias = noticias_permite_entrada(symbol, umbral_neg)
+            if resultado_noticias is False:
+                noticias_ok = False
+
         permitido = (
             score_total > umbral
             and score_tec > umbral_score
@@ -337,6 +345,7 @@ class StrategyEngine:
             and not contradiccion
             and macro_ok
             and fg_ok
+            and noticias_ok
         )
 
         motivo = None
@@ -345,6 +354,8 @@ class StrategyEngine:
                 motivo = "macro_bajista"
             elif not fg_ok:
                 motivo = "fear_greed_codicia"
+            elif not noticias_ok:
+                motivo = "noticias_negativas"
             elif empate:
                 motivo = "empate_umbral"
             elif contradiccion:

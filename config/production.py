@@ -33,3 +33,7 @@ class ProductionConfig(DevelopmentConfig):
     max_posiciones_alts: int = 2
     # Rolling PF Guard: si el PF de las últimas 20 ops cae < 0.7, pausar entradas.
     pf_guard_enabled: bool = True
+    # Filtro noticias: off por defecto hasta validar con datos reales en vivo.
+    # Activar con FILTRO_NOTICIAS_ENABLED=true cuando el bot lleve 30+ días.
+    filtro_noticias_enabled: bool = False
+    noticias_umbral_negativo: float = -0.3
