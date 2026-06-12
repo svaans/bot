@@ -1297,8 +1297,13 @@ def estudio_completo(symbols: list[str], days: int, capital0: float) -> None:
             mask.append(ok)
         return mask
 
-    def _eval_config(riesgo_map: dict[str, float], usar_fg: bool) -> dict[str, dict]:
+    # TP validados por study_tp_por_simbolo (2026-06)
+    TP_OPT = {"ETHEUR": 3.5, "BTCEUR": 3.0, "SOLEUR": 2.5, "XRPEUR": 4.0, "AVAXEUR": 3.0}
+
+    def _eval_config(riesgo_map: dict[str, float], usar_fg: bool,
+                     tp_map: dict[str, float] | None = None) -> dict[str, dict]:
         resultado: dict[str, dict] = {}
+        corte_ref = 0
         for fase in ("train", "test"):
             cap = gan = per = 0.0
             ntr = 0
@@ -1306,13 +1311,15 @@ def estudio_completo(symbols: list[str], days: int, capital0: float) -> None:
             for s, data in datos.items():
                 n_s = len(data)
                 corte = int(n_s * 0.7)
+                corte_ref = corte
                 a, b = (0, corte) if fase == "train" else (corte, n_s)
                 fg_mask = _fg_mask_zona_neutral(data) if usar_fg else None
+                tp = (tp_map.get(s, 3.0) if tp_map else 3.0)
                 r = backtest(
                     data, s, capital0, 5.0,
                     use_trailing=False, trend_filter=False,
                     ind=indicadores[s], i0=a, i1=b,
-                    sl_ratio=1.0, tp_ratio=3.0, vol_guard=True,
+                    sl_ratio=1.0, tp_ratio=tp, vol_guard=True,
                     riesgo=riesgo_map.get(s, 0.04), senal_v2=False,
                     btc_ind=btc_ind, be_atr=0.0, adx_min=0.0,
                     fg_mask=fg_mask,
@@ -1323,17 +1330,19 @@ def estudio_completo(symbols: list[str], days: int, capital0: float) -> None:
                 ntr += r.trades
                 dd = max(dd, r.max_drawdown)
             n_sym = len(datos)
-            dias = (corte if fase == "train" else
-                    len(list(datos.values())[0]) - corte) if datos else 1
+            first_data = list(datos.values())[0] if datos else []
+            dias = (corte_ref if fase == "train" else
+                    len(first_data) - corte_ref) if first_data else 1
             anual = ((cap / (capital0 * n_sym)) ** (365 / dias) - 1) * 100 if n_sym and dias > 0 else 0
             pf = gan / per if per > 0 else float("inf")
             resultado[fase] = {"pf": pf, "anual": anual, "n": ntr, "dd": dd}
         return resultado
 
     escenarios = [
-        ("baseline",     {s: 0.04 for s in datos},  False),
-        ("solo_sharpe",  SHARPE_RIESGO,              False),
-        ("completo",     SHARPE_RIESGO,              bool(fg_map)),
+        ("baseline",     {s: 0.04 for s in datos},  False,         None),
+        ("solo_sharpe",  SHARPE_RIESGO,              False,         None),
+        ("completo",     SHARPE_RIESGO,              bool(fg_map),  None),
+        ("completo+tp",  SHARPE_RIESGO,              bool(fg_map),  TP_OPT),
     ]
 
     print(f"\n{'escenario':>14s} | "
@@ -1341,8 +1350,8 @@ def estudio_completo(symbols: list[str], days: int, capital0: float) -> None:
           f"{'PF te':>6s} {'anual te':>9s} {'n te':>5s} {'DD te':>6s}")
     print("-" * 78)
 
-    for nombre, riesgo_map, usar_fg in escenarios:
-        res = _eval_config(riesgo_map, usar_fg)
+    for nombre, riesgo_map, usar_fg, tp_map in escenarios:
+        res = _eval_config(riesgo_map, usar_fg, tp_map)
         tr, te = res["train"], res["test"]
         pf_tr = f"{tr['pf']:.2f}" if tr["pf"] != float("inf") else " inf"
         pf_te = f"{te['pf']:.2f}" if te["pf"] != float("inf") else " inf"
@@ -1356,6 +1365,8 @@ def estudio_completo(symbols: list[str], days: int, capital0: float) -> None:
           f"test ~{n_test} días | vol_guard+BTC_macro+Sharpe+FG_zona_neutral")
     print("asignación Sharpe: "
           + "  ".join(f"{s.replace('EUR','')}/{r*100:.0f}%" for s, r in SHARPE_RIESGO.items()))
+    print("TP óptimos: "
+          + "  ".join(f"{s.replace('EUR','')}/{v}" for s, v in TP_OPT.items()))
 
 
 def estudio_senal_v2(symbols: list[str], days: int, capital0: float) -> None:
