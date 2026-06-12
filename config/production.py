@@ -48,3 +48,13 @@ class ProductionConfig(DevelopmentConfig):
     # RSI momentum filter: bloquea entradas cuando RSI < 50.
     # Estudio rsi_momentum (5yr, validación 30%): +0.74pp anual, PF 2.64→2.79, Sortino +1.71.
     rsi_min_entrada: float = 50.0
+    # ── Robo-Advisor: DCA semanal automático ────────────────────────────────
+    # Estudio: DCA reduce timing risk y mejora Sharpe en mercados volátiles.
+    # Se combina con señales técnicas: DCA solo si filtros macro/riesgo OK.
+    dca_enabled: bool = True
+    dca_interval_days: int = 7       # DCA semanal
+    dca_amount_usdt: float = 0.0     # 0 = usa capital disponible por símbolo
+    # ── Robo-Advisor: Rebalanceo automático ─────────────────────────────────
+    # Drift >5% desde peso objetivo → generar señal de rebalanceo.
+    rebalancer_enabled: bool = True
+    rebalancer_drift_threshold: float = 0.05

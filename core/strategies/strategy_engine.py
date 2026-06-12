@@ -353,17 +353,33 @@ class StrategyEngine:
             if rsi_val < rsi_min_entrada:
                 rsi_momentum_ok = False
 
-        permitido = (
-            score_total > umbral
-            and score_tec > umbral_score
-            and cumple_div
-            and not validaciones_fallidas
-            and not contradiccion
-            and macro_ok
-            and fg_ok
-            and noticias_ok
-            and rsi_momentum_ok
-        )
+        # DCA override: si el intervalo DCA se cumplió, permite entrada aunque
+        # no haya señal técnica. Los filtros macro/riesgo siguen activos.
+        dca_override = False
+        if bool(config.get("dca_enabled", False)):
+            try:
+                from core.portfolio.dca_engine import dca_permite_entrada
+                if dca_permite_entrada(symbol, config):
+                    dca_override = True
+                    log.info("dca_engine: entrada DCA programada para %s", symbol)
+            except Exception:
+                pass
+
+        # Con DCA override: bypassa score técnico y RSI, pero respeta macro y riesgo
+        if dca_override and macro_ok and fg_ok and noticias_ok:
+            permitido = True
+        else:
+            permitido = (
+                score_total > umbral
+                and score_tec > umbral_score
+                and cumple_div
+                and not validaciones_fallidas
+                and not contradiccion
+                and macro_ok
+                and fg_ok
+                and noticias_ok
+                and rsi_momentum_ok
+            )
 
         motivo = None
         if not permitido:
@@ -375,6 +391,8 @@ class StrategyEngine:
                 motivo = "noticias_negativas"
             elif not rsi_momentum_ok:
                 motivo = "rsi_bajo_umbral"
+            elif dca_override:
+                motivo = None  # DCA aprobó la entrada
             elif empate:
                 motivo = "empate_umbral"
             elif contradiccion:

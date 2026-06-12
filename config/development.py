@@ -100,6 +100,17 @@ class DevelopmentConfig:
     # 0.0 = desactivado. En producción se activa con 50.0.
     # Estudio rsi_momentum: RSI≥50 → +0.74pp anual (+22.60%→+23.34%), PF 2.79, Sortino 24.41.
     rsi_min_entrada: float = 0.0
+    # ── Robo-Advisor: DCA automático ────────────────────────────────────────
+    # Compra periódica por símbolo independientemente de señales técnicas.
+    # Desactivado en dev; activo en producción vía DCA_ENABLED=true.
+    dca_enabled: bool = False
+    dca_interval_days: int = 7       # cada cuántos días ejecutar DCA
+    dca_amount_usdt: float = 0.0     # 0 = usar capital disponible del símbolo
+    # ── Robo-Advisor: Rebalanceo automático de cartera ──────────────────────
+    # Cuando un símbolo se desvía >N% de su peso objetivo → rebalancear.
+    # Pesos objetivo en estado/portfolio_target.json (default: igual weight).
+    rebalancer_enabled: bool = False
+    rebalancer_drift_threshold: float = 0.05   # 5% drift → rebalancear
     regimen_vol_atr_ratio_alto: float = 0.06
     regimen_vol_atr_ratio_bajo: float = 0.02
     regimen_atr_periodo: int = 14
