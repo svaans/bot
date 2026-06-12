@@ -45,3 +45,6 @@ class ProductionConfig(DevelopmentConfig):
     # Activar con FILTRO_NOTICIAS_ENABLED=true cuando el bot lleve 30+ días.
     filtro_noticias_enabled: bool = False
     noticias_umbral_negativo: float = -0.3
+    # RSI momentum filter: bloquea entradas cuando RSI < 50.
+    # Estudio rsi_momentum (5yr, validación 30%): +0.74pp anual, PF 2.64→2.79, Sortino +1.71.
+    rsi_min_entrada: float = 50.0

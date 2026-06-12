@@ -347,6 +347,12 @@ class StrategyEngine:
             if resultado_noticias is False:
                 noticias_ok = False
 
+        rsi_momentum_ok = True
+        rsi_min_entrada = float(config.get("rsi_min_entrada", 0.0))
+        if rsi_min_entrada > 0.0 and rsi_val is not None:
+            if rsi_val < rsi_min_entrada:
+                rsi_momentum_ok = False
+
         permitido = (
             score_total > umbral
             and score_tec > umbral_score
@@ -356,6 +362,7 @@ class StrategyEngine:
             and macro_ok
             and fg_ok
             and noticias_ok
+            and rsi_momentum_ok
         )
 
         motivo = None
@@ -366,6 +373,8 @@ class StrategyEngine:
                 motivo = "fear_greed_codicia"
             elif not noticias_ok:
                 motivo = "noticias_negativas"
+            elif not rsi_momentum_ok:
+                motivo = "rsi_bajo_umbral"
             elif empate:
                 motivo = "empate_umbral"
             elif contradiccion:
