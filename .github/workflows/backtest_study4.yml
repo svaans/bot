@@ -1,0 +1,117 @@
+name: Backtest Studies — ADX/BE/Simbolos (hacia 16-20% anual)
+
+on:
+  workflow_dispatch:
+    inputs:
+      days:
+        description: "Días de historia (730=2yr, 1825=5yr)"
+        required: false
+        default: "1825"
+      symbols:
+        description: "Símbolos separados por coma (vacío = automático según estudio)"
+        required: false
+        default: ""
+      study:
+        description: "Estudio a ejecutar"
+        required: false
+        default: "study_simbolos"
+        type: choice
+        options:
+          - study_completo
+          - study_nuevo_simbolo
+          - study_sl_por_simbolo
+          - study_funding_rate
+          - study_trailing
+          - study_senal_v2
+          - study_tp_por_simbolo
+          - study_simbolos
+          - study_wf
+          - study_sharpe
+          - study_noticias
+          - study_equity_filter
+          - study_eth_riesgo
+          - study_fear_greed
+          - study4
+          - study3
+          - study2
+          - study
+
+jobs:
+  backtest:
+    name: "Backtesting ${{ inputs.study || 'study_simbolos' }} — ${{ inputs.days || '1825' }} días"
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Diagnóstico de entorno
+        run: |
+          echo "=== Python ==="
+          python --version
+          echo "=== Sintaxis del script ==="
+          python -m py_compile backtesting/backtest_rapido.py && echo "Sintaxis OK"
+          echo "=== Conectividad ==="
+          curl -s --max-time 5 -o /dev/null -w "Binance: %{http_code} (%{time_total}s)\n" \
+            "https://api.binance.com/api/v3/ping" || echo "Binance: no accesible"
+          curl -s --max-time 5 -o /dev/null -w "CryptoCompare: %{http_code} (%{time_total}s)\n" \
+            "https://min-api.cryptocompare.com/data/price?fsym=BTC&tsyms=EUR" || echo "CryptoCompare: no accesible"
+          echo "=== Argumentos ==="
+          echo "  --${{ inputs.study || 'study_simbolos' }} --days ${{ inputs.days || '1825' }} --interval 1d"
+
+      - name: Calcular cache key (sin comas)
+        id: cachekey
+        run: |
+          STUDY_NOW="${{ inputs.study || 'study_simbolos' }}"
+          if [ "$STUDY_NOW" = "study_simbolos" ] && [ -z "${{ inputs.symbols }}" ]; then
+            RAW="BTCEUR,ETHEUR,SOLEUR,XRPEUR,AVAXEUR,ADAEUR,BNBEUR,LINKEUR,DOGEEUR,LTCEUR,DOTEUR"
+          else
+            RAW="${{ inputs.symbols || 'BTCEUR,ETHEUR,SOLEUR,XRPEUR,AVAXEUR' }}"
+          fi
+          SAFE=$(echo "$RAW" | tr ',' '_')
+          echo "key=binance-${SAFE}-${{ inputs.days || '1825' }}d" >> "$GITHUB_OUTPUT"
+
+      - name: Instalar yfinance (fallback de datos)
+        run: pip install yfinance --quiet
+
+      - name: Restaurar caché de datos Binance
+        uses: actions/cache@v4
+        with:
+          path: backtesting/cache
+          key: ${{ steps.cachekey.outputs.key }}
+          restore-keys: |
+            binance-
+
+      - name: Ejecutar backtest
+        env:
+          PYTHONUNBUFFERED: "1"
+        run: |
+          STUDY="${{ inputs.study || 'study_simbolos' }}"
+          DAYS="${{ inputs.days || '1825' }}"
+
+          # study_simbolos sin symbols explícito usa la lista completa automáticamente
+          if [ "$STUDY" = "study_simbolos" ] && [ -z "${{ inputs.symbols }}" ]; then
+            SYMBOL_ARGS=""
+          else
+            SYMBOLS="${{ inputs.symbols || 'BTCEUR,ETHEUR,SOLEUR,XRPEUR,AVAXEUR' }}"
+            SYMBOL_ARGS=""
+            IFS=',' read -ra SYM_LIST <<< "$SYMBOLS"
+            for s in "${SYM_LIST[@]}"; do
+              SYMBOL_ARGS="$SYMBOL_ARGS --symbol ${s// /}"
+            done
+          fi
+
+          echo "Corriendo: python backtesting/backtest_rapido.py --${STUDY} --days ${DAYS} --interval 1d ${SYMBOL_ARGS}"
+          echo ""
+
+          python backtesting/backtest_rapido.py \
+            --$STUDY \
+            --days "$DAYS" \
+            --interval 1d \
+            $SYMBOL_ARGS

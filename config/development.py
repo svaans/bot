@@ -48,6 +48,15 @@ class DevelopmentConfig:
     diversidad_minima: int = 2
     max_posiciones_cartera: int = 0
     max_posiciones_mismo_sentido: int = 0
+    # Límite de posiciones abiertas en alts correladas (SOL/XRP/AVAX).
+    # 0 = desactivado. En producción se activa vía config o env.
+    max_posiciones_alts: int = 0
+    # Rolling PF Guard: bloquea entradas si el PF de las últimas N operaciones
+    # cae por debajo del umbral (adaptaciones del bot que empeoran el resultado).
+    # Desactivado en dev para no interferir con tests; activo en producción.
+    pf_guard_enabled: bool = False
+    pf_guard_ventana: int = 20
+    pf_guard_umbral_pf: float = 0.7
     # Régimen adaptativo: el estudio profundo (--study2, 5 años, validación
     # 70/30) muestra que endurecer entradas en volatilidad anómala mejora el
     # PF fuera de muestra. Umbrales recalibrados para velas 1d (ATR/precio
@@ -64,6 +73,20 @@ class DevelopmentConfig:
     # con él se mantienen en PF>=1.2. Activo en producción / vía
     # FILTRO_MACRO_BTC_ENABLED=true (False aquí: tests usan estos defaults).
     filtro_macro_btc_enabled: bool = False
+    # Fear & Greed Index (alternative.me): bloquea entradas cuando el índice
+    # supera fg_umbral_codicia (codicia extrema = mercado sobrecomprado).
+    # Desactivado por defecto; activar en producción o con FILTRO_FEAR_GREED_ENABLED=true.
+    filtro_fear_greed_enabled: bool = False
+    fg_umbral_codicia: int = 75
+    # Umbral inferior F&G: bloquea entradas cuando el pánico es extremo (< umbral).
+    # 0 = desactivado (solo bloqueo superior). Con 25 activa zona_neutral.
+    fg_umbral_miedo: int = 0
+    # Filtro de noticias (CryptoPanic RSS): bloquea entradas cuando el sentimiento
+    # de las últimas noticias del símbolo es muy negativo.
+    # Desactivado por defecto; activar en producción o con FILTRO_NOTICIAS_ENABLED=true.
+    filtro_noticias_enabled: bool = False
+    noticias_umbral_negativo: float = -0.3
+    noticias_ttl_segundos: int = 3600
     regimen_vol_atr_ratio_alto: float = 0.06
     regimen_vol_atr_ratio_bajo: float = 0.02
     regimen_atr_periodo: int = 14
