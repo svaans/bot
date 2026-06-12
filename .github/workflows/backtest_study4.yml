@@ -28,6 +28,9 @@ on:
           - study_wf
           - study_sharpe
           - study_noticias
+          - study_adx
+          - study_cierre_parcial
+          - study_allocation
           - study_equity_filter
           - study_eth_riesgo
           - study_fear_greed

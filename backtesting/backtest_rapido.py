@@ -385,12 +385,16 @@ def backtest(velas: list[list[float]], symbol: str, capital0: float = 1000.0,
              fg_mask: list[bool] | None = None,
              eq_dd_pausa: float = 0.0,
              eq_dd_reduccion: float = 0.0,
-             trail_activacion_atr: float = 0.0) -> Resultado:
+             trail_activacion_atr: float = 0.0,
+             cp_frac: float = 0.0,
+             cp_tp_ratio: float = 0.0) -> Resultado:
     """vol_guard: modo adaptativo — no entra cuando la volatilidad (ATR/precio)
     supera 2x su media de 100 velas (régimen anómalo).
     btc_ind: si se pasa, filtro macro — solo entra cuando BTC > su EMA200.
     senal_v2: añade ruptura Donchian-20 al score.
     be_atr: break-even stop — SL sube a entrada cuando precio gana be_atr×ATR.
+    cp_frac: fracción de posición que cierra al nivel cp_tp_ratio×ATR (0=desactivado).
+    cp_tp_ratio: multiplicador ATR para cierre parcial (debe ser < tp_ratio).
     adx_min: filtro ADX mínimo para entrar (0 = desactivado).
     fg_mask: lista bool por vela; False = bloquear entrada (Fear&Greed filter).
     eq_dd_pausa: DD de equity (0-1) a partir del cual se pausan nuevas entradas.
@@ -434,6 +438,8 @@ def backtest(velas: list[list[float]], symbol: str, capital0: float = 1000.0,
     be_activado = False
     trailing_activo = False
     entrada_mercado = 0.0
+    cp_ejecutado = False
+    tp_parcial = 0.0
 
     for i in range(max(30, i0), n - 1):
         if cooldown > 0:
@@ -458,6 +464,19 @@ def backtest(velas: list[list[float]], symbol: str, capital0: float = 1000.0,
                     sl = max(sl, entrada_mercado)
                     be_activado = True
                     res.be_activados += 1
+            if cp_frac > 0.0 and not cp_ejecutado and tp_parcial > 0.0 and h >= tp_parcial:
+                salida_p = tp_parcial * (1 - FEE - SLIPPAGE)
+                qty_p = qty * cp_frac
+                pnl_p = qty_p * (salida_p - entrada)
+                capital += qty_p * salida_p
+                qty -= qty_p
+                res.pnl_total += pnl_p
+                res.retornos.append(pnl_p / capital0)
+                if pnl_p > 0:
+                    res.bruto_ganado += pnl_p
+                else:
+                    res.bruto_perdido += -pnl_p
+                cp_ejecutado = True
             precio_salida = None
             if l <= sl:
                 precio_salida = sl
@@ -522,6 +541,11 @@ def backtest(velas: list[list[float]], symbol: str, capital0: float = 1000.0,
             sl = close[i] - sl_ratio * ind["atr"][i]
             tp = close[i] + tp_ratio * ind["atr"][i]
             maximo = close[i]
+            if cp_frac > 0.0 and cp_tp_ratio > 0.0:
+                tp_parcial = close[i] + cp_tp_ratio * ind["atr"][i]
+                cp_ejecutado = False
+            else:
+                tp_parcial = 0.0
             capital -= qty * precio  # capital restante queda líquido
             en_pos = True
 
@@ -975,6 +999,18 @@ def _fg_valor(fg_map: dict[int, int], ts_ms: float) -> int | None:
         if v is not None:
             return v
     return None
+
+
+def _fg_mask_build(fg_map: dict[int, int], data: list, fg_min: int, fg_max: int) -> list[bool]:
+    """Construye máscara F&G para una lista de velas: True = permitido entrar."""
+    mask = []
+    for v in data:
+        fg_val = _fg_valor(fg_map, v[0])
+        ok = True
+        if fg_val is not None and (fg_val < fg_min or fg_val > fg_max):
+            ok = False
+        mask.append(ok)
+    return mask
 
 
 FUTURES_SYMBOL_MAP: dict[str, str] = {
@@ -2378,19 +2414,20 @@ def estudio_tp_por_simbolo(symbols: list[str], days: int, capital0: float) -> No
 
 
 def estudio_equity_filter(symbols: list[str], days: int, capital0: float) -> None:
-    """Evalúa el Equity Curve Filter: reducir riesgo o pausar entradas cuando
-    el capital está en drawdown respecto a su máximo histórico.
+    """Equity Curve Filter con configuración óptima validada.
 
-    Compara 5 configuraciones vs baseline sin filtro:
-      sin_filtro:    todas las entradas con riesgo 4% (baseline)
-      reducir_10:    reducir riesgo a 2% cuando DD > 10%
-      reducir_15:    reducir riesgo a 2% cuando DD > 15%
-      pausar_15:     pausar entradas cuando DD > 15%
-      pausar_20:     pausar entradas cuando DD > 20%
-
-    El objetivo: el filtro reduce el DD máximo sin sacrificar demasiado
-    retorno. Un buen filtro sube el Sharpe aunque baje el CAGR bruto.
+    Compara 5 variantes vs baseline usando TP_OPT/SL_OPT/Sharpe + F&G zona_neutral:
+      sin_filtro:    baseline — sin pausa ni reducción de riesgo
+      reducir_10%:   riesgo × 0.5 cuando DD > 10%
+      reducir_15%:   riesgo × 0.5 cuando DD > 15%
+      pausar_15%:    pausar entradas cuando DD > 15%
+      pausar_20%:    pausar entradas cuando DD > 20%
     """
+    TP_OPT = {"ETHEUR": 3.5, "BTCEUR": 3.0, "SOLEUR": 2.5, "XRPEUR": 4.0, "AVAXEUR": 3.0}
+    SL_OPT = {"ETHEUR": 0.8, "BTCEUR": 1.0, "SOLEUR": 0.7, "XRPEUR": 0.8, "AVAXEUR": 0.7}
+    SHARPE_RIESGO = {"ETHEUR": 0.08, "BTCEUR": 0.03, "SOLEUR": 0.03, "XRPEUR": 0.03, "AVAXEUR": 0.02}
+
+    fg_map = _descargar_fear_greed(days)
     print("  descargando datos…")
     datos, indicadores = {}, {}
     for s in symbols:
@@ -2415,11 +2452,12 @@ def estudio_equity_filter(symbols: list[str], days: int, capital0: float) -> Non
 
     print(f"\n{'variante':>14s} | "
           f"{'PF tr':>6s} {'anual tr':>9s} {'DD tr':>6s} | "
-          f"{'PF te':>6s} {'anual te':>9s} {'DD te':>6s}  resultado")
+          f"{'PF te':>6s} {'anual te':>9s} {'DD te':>6s}")
     print("-" * 82)
 
+    baseline_dd_te = None
     for nombre, dd_pausa, dd_red in variantes:
-        agg = {}
+        agg: dict[str, dict] = {}
         for fase in ("train", "test"):
             cap = gan = per = 0.0
             ntr = 0
@@ -2428,20 +2466,26 @@ def estudio_equity_filter(symbols: list[str], days: int, capital0: float) -> Non
                 n_s = len(data)
                 corte = int(n_s * 0.7)
                 a, b = (0, corte) if fase == "train" else (corte, n_s)
+                fg_mask = _fg_mask_build(fg_map, data, 25, 75) if fg_map else None
                 r = backtest(
                     data, s, capital0, 5.0,
                     use_trailing=False, trend_filter=False,
                     ind=indicadores[s], i0=a, i1=b,
-                    sl_ratio=1.0, tp_ratio=3.0, vol_guard=True,
-                    riesgo=0.04, senal_v2=False, btc_ind=btc_ind,
-                    eq_dd_pausa=dd_pausa, eq_dd_reduccion=dd_red,
+                    sl_ratio=SL_OPT.get(s, 1.0),
+                    tp_ratio=TP_OPT.get(s, 3.0),
+                    vol_guard=True,
+                    riesgo=SHARPE_RIESGO.get(s, 0.03),
+                    btc_ind=btc_ind,
+                    fg_mask=fg_mask,
+                    eq_dd_pausa=dd_pausa,
+                    eq_dd_reduccion=dd_red,
                 )
                 cap += r.capital_final
                 gan += r.bruto_ganado
                 per += r.bruto_perdido
                 ntr += r.trades
                 dd = max(dd, r.max_drawdown)
-            dias_f = (corte if fase == "train" else (len(list(datos.values())[0]) - corte))
+            dias_f = corte if fase == "train" else (len(list(datos.values())[0]) - corte)
             anual = ((cap / (capital0 * n_sym)) ** (365 / dias_f) - 1) * 100 if dias_f > 0 else 0
             pf = gan / per if per > 0 else float("inf")
             agg[fase] = {"pf": pf, "anual": anual, "dd": dd, "n": ntr}
@@ -2449,30 +2493,30 @@ def estudio_equity_filter(symbols: list[str], days: int, capital0: float) -> Non
         tr, te = agg["train"], agg["test"]
         pf_tr = f"{tr['pf']:.2f}" if tr["pf"] != float("inf") else "inf"
         pf_te = f"{te['pf']:.2f}" if te["pf"] != float("inf") else "inf"
-        mejora = "✓ DD↓" if te["dd"] < agg["test"]["dd"] else ""
+        if baseline_dd_te is None:
+            baseline_dd_te = te["dd"]
+        dd_tag = " ← baseline" if nombre == "sin_filtro" else (
+            f" DD↓{baseline_dd_te - te['dd']:.1f}pp" if te["dd"] < baseline_dd_te else "")
         print(f"{nombre:>14s} | "
               f"{pf_tr:>6s} {tr['anual']:+8.2f}% {tr['dd']:5.1f}% | "
-              f"{pf_te:>6s} {te['anual']:+8.2f}% {te['dd']:5.1f}%  {mejora}")
+              f"{pf_te:>6s} {te['anual']:+8.2f}% {te['dd']:5.1f}%{dd_tag}")
 
-    print(f"\nconfig base: 1d umbral=5 SL=1×ATR TP=3×ATR riesgo=4% vol_guard+BTC_macro")
+    print(f"\nconfig: 1d umbral=5 Sharpe TP_OPT SL_OPT vol_guard+BTC_macro+FG_zona_neutral")
 
 
 def estudio_walk_forward(symbols: list[str], days: int, capital0: float,
                          n_folds: int = 5) -> None:
-    """Walk-Forward Validation: divide el histórico en N ventanas y evalúa
-    la estrategia en cada período independientemente.
+    """Walk-Forward Validation con configuración óptima validada.
 
-    A diferencia del split estático 70/30, esto responde a:
-    '¿Es la estrategia consistente en TODOS los períodos de mercado o
-    solo funciona en algunos?'
-
-    Config fija (la óptima validada): 1d umbral=5 SL=1×ATR TP=3×ATR
-    riesgo=4% vol_guard ON BTC_macro ON.
-
-    Cada fold es un segmento consecutivo del histórico total.
-    Se reporta el PF, retorno anual y DD de cada ventana temporal.
-    Al final se muestra consistencia: cuántas ventanas son positivas.
+    Divide el histórico en N folds temporales y evalúa en cada uno con la
+    config completa: Sharpe + TP_OPT + SL_OPT + vol_guard + BTC_macro + FG_zona_neutral.
+    Responde: ¿es la estrategia consistente en TODOS los períodos de mercado?
     """
+    TP_OPT = {"ETHEUR": 3.5, "BTCEUR": 3.0, "SOLEUR": 2.5, "XRPEUR": 4.0, "AVAXEUR": 3.0}
+    SL_OPT = {"ETHEUR": 0.8, "BTCEUR": 1.0, "SOLEUR": 0.7, "XRPEUR": 0.8, "AVAXEUR": 0.7}
+    SHARPE_RIESGO = {"ETHEUR": 0.08, "BTCEUR": 0.03, "SOLEUR": 0.03, "XRPEUR": 0.03, "AVAXEUR": 0.02}
+
+    fg_map = _descargar_fear_greed(days)
     print("  descargando datos…")
     datos, indicadores = {}, {}
     for s in symbols:
@@ -2488,7 +2532,6 @@ def estudio_walk_forward(symbols: list[str], days: int, capital0: float,
     btc_ind = indicadores.get("BTCEUR") or calcular_indicadores(
         descargar_klines("BTCEUR", "1d", days))
 
-    # longitud mínima entre todos los símbolos
     n_min = min(len(v) for v in datos.values())
     tam_fold = n_min // n_folds
 
@@ -2504,7 +2547,6 @@ def estudio_walk_forward(symbols: list[str], days: int, capital0: float,
         a = k * tam_fold
         b = (k + 1) * tam_fold if k < n_folds - 1 else n_min
 
-        # fecha aproximada del período (usando timestamps del primer símbolo)
         primer_sym = next(iter(datos))
         ts_a = datos[primer_sym][a][0] / 1000
         ts_b = datos[primer_sym][min(b - 1, len(datos[primer_sym]) - 1)][0] / 1000
@@ -2517,15 +2559,19 @@ def estudio_walk_forward(symbols: list[str], days: int, capital0: float,
         dd = 0.0
         for s, data in datos.items():
             n_s = len(data)
+            a_s = min(a, n_s)
             b_s = min(b, n_s)
+            fg_mask = _fg_mask_build(fg_map, data, 25, 75) if fg_map else None
             r = backtest(
                 data, s, capital0, 5.0,
                 use_trailing=False, trend_filter=False,
-                ind=indicadores[s], i0=a, i1=b_s,
-                sl_ratio=1.0, tp_ratio=3.0, vol_guard=True,
-                riesgo=0.04, senal_v2=False,
+                ind=indicadores[s], i0=a_s, i1=b_s,
+                sl_ratio=SL_OPT.get(s, 1.0),
+                tp_ratio=TP_OPT.get(s, 3.0),
+                vol_guard=True,
+                riesgo=SHARPE_RIESGO.get(s, 0.03),
                 btc_ind=btc_ind,
-                be_atr=0.0, adx_min=0.0,
+                fg_mask=fg_mask,
             )
             cap += r.capital_final
             gan += r.bruto_ganado
@@ -2535,8 +2581,7 @@ def estudio_walk_forward(symbols: list[str], days: int, capital0: float,
 
         n_sym = len(datos)
         dias_fold = b - a
-        ret_total = (cap / (capital0 * n_sym) - 1) * 100
-        anual = ((cap / (capital0 * n_sym)) ** (365 / dias_fold) - 1) * 100
+        anual = ((cap / (capital0 * n_sym)) ** (365 / dias_fold) - 1) * 100 if dias_fold > 0 else 0
         pf = gan / per if per > 0 else float("inf")
         pf_str = f"{pf:.2f}" if pf != float("inf") else "inf"
         positivo = anual > 0 and pf > 1.0
@@ -2548,7 +2593,7 @@ def estudio_walk_forward(symbols: list[str], days: int, capital0: float,
 
     print(f"\nConsistencia: {fold_positivos}/{n_folds} períodos positivos "
           f"({'ROBUSTO' if fold_positivos >= n_folds * 0.8 else 'INESTABLE — revisa la estrategia'})")
-    print("config: 1d umbral=5 SL=1×ATR TP=3×ATR riesgo=4% vol_guard+BTC_macro")
+    print("config: 1d umbral=5 Sharpe TP_OPT SL_OPT vol_guard+BTC_macro+FG_zona_neutral")
 
 
 def estudio_noticias(symbols: list[str], days: int, capital0: float) -> None:
@@ -2718,6 +2763,285 @@ def estudio_noticias(symbols: list[str], days: int, capital0: float) -> None:
     print("interpretacion: si zscore_-X.X mejora el test → el filtro de noticias tiene valor")
 
 
+def estudio_adx(symbols: list[str], days: int, capital0: float) -> None:
+    """Filtro ADX: solo entrar cuando la tendencia es suficientemente fuerte.
+
+    Evalúa umbrales ADX 0 (sin filtro), 15, 20, 25, 30 con la config óptima.
+    ADX mide la fuerza de la tendencia (no su dirección); valores altos
+    indican mercados en tendencia donde el sistema de señales funciona mejor.
+    """
+    TP_OPT = {"ETHEUR": 3.5, "BTCEUR": 3.0, "SOLEUR": 2.5, "XRPEUR": 4.0, "AVAXEUR": 3.0}
+    SL_OPT = {"ETHEUR": 0.8, "BTCEUR": 1.0, "SOLEUR": 0.7, "XRPEUR": 0.8, "AVAXEUR": 0.7}
+    SHARPE_RIESGO = {"ETHEUR": 0.08, "BTCEUR": 0.03, "SOLEUR": 0.03, "XRPEUR": 0.03, "AVAXEUR": 0.02}
+
+    fg_map = _descargar_fear_greed(days)
+    print("  descargando datos de mercado…")
+    datos, indicadores = {}, {}
+    for s in symbols:
+        try:
+            datos[s] = descargar_klines(s, "1d", days)
+            indicadores[s] = calcular_indicadores(datos[s])
+        except Exception as e:
+            print(f"  [ERROR] {s}: {e}")
+    if not datos:
+        return
+    btc_ind = indicadores.get("BTCEUR") or calcular_indicadores(
+        descargar_klines("BTCEUR", "1d", days))
+    n_sym = len(datos)
+
+    variantes = [
+        ("sin_adx",  0.0),
+        ("adx>=15",  15.0),
+        ("adx>=20",  20.0),
+        ("adx>=25",  25.0),
+        ("adx>=30",  30.0),
+    ]
+
+    print(f"\n{'variante':>10s} | "
+          f"{'PF tr':>6s} {'anual tr':>9s} {'n tr':>5s} | "
+          f"{'PF te':>6s} {'anual te':>9s} {'n te':>5s} {'DD te':>6s}")
+    print("-" * 80)
+
+    for nombre, adx_min in variantes:
+        agg: dict[str, dict] = {}
+        for fase in ("train", "test"):
+            cap = gan = per = 0.0
+            ntr = 0
+            dd = 0.0
+            for s, data in datos.items():
+                n_s = len(data)
+                corte = int(n_s * 0.7)
+                a, b = (0, corte) if fase == "train" else (corte, n_s)
+                fg_mask = _fg_mask_build(fg_map, data, 25, 75) if fg_map else None
+                r = backtest(
+                    data, s, capital0, 5.0,
+                    use_trailing=False, vol_guard=True,
+                    ind=indicadores[s], i0=a, i1=b,
+                    sl_ratio=SL_OPT.get(s, 1.0),
+                    tp_ratio=TP_OPT.get(s, 3.0),
+                    riesgo=SHARPE_RIESGO.get(s, 0.03),
+                    btc_ind=btc_ind,
+                    fg_mask=fg_mask,
+                    adx_min=adx_min,
+                )
+                cap += r.capital_final
+                gan += r.bruto_ganado
+                per += r.bruto_perdido
+                ntr += r.trades
+                dd = max(dd, r.max_drawdown)
+            dias_f = corte if fase == "train" else (len(list(datos.values())[0]) - corte)
+            anual = ((cap / (capital0 * n_sym)) ** (365 / dias_f) - 1) * 100 if dias_f > 0 else 0
+            pf = gan / per if per > 0 else float("inf")
+            agg[fase] = {"pf": pf, "anual": anual, "dd": dd, "n": ntr}
+
+        tr, te = agg["train"], agg["test"]
+        pf_tr = f"{tr['pf']:.2f}" if tr["pf"] != float("inf") else "inf"
+        pf_te = f"{te['pf']:.2f}" if te["pf"] != float("inf") else "inf"
+        tag = " ← actual" if nombre == "sin_adx" else ""
+        print(f"{nombre:>10s} | "
+              f"{pf_tr:>6s} {tr['anual']:+8.2f}% {tr['n']:5d} | "
+              f"{pf_te:>6s} {te['anual']:+8.2f}% {te['n']:5d} {te['dd']:5.1f}%{tag}")
+
+    print(f"\nconfig: 1d umbral=5 Sharpe TP_OPT SL_OPT vol_guard+BTC_macro+FG_zona_neutral")
+
+
+def estudio_cierre_parcial(symbols: list[str], days: int, capital0: float) -> None:
+    """Cierre parcial: tomar beneficio en una fracción de la posición a mitad de camino.
+
+    Variantes (fracción cerrada @ nivel ATR):
+      sin_parcial:  baseline — 100% al TP_OPT
+      50pct@1.5x:   50% cierra a 1.5×ATR, 50% corre al TP_OPT
+      50pct@2.0x:   50% cierra a 2.0×ATR, 50% corre al TP_OPT
+      33pct@1.5x:   33% cierra a 1.5×ATR, 67% corre al TP_OPT
+      25pct@1.5x:   25% cierra a 1.5×ATR, 75% corre al TP_OPT
+    """
+    TP_OPT = {"ETHEUR": 3.5, "BTCEUR": 3.0, "SOLEUR": 2.5, "XRPEUR": 4.0, "AVAXEUR": 3.0}
+    SL_OPT = {"ETHEUR": 0.8, "BTCEUR": 1.0, "SOLEUR": 0.7, "XRPEUR": 0.8, "AVAXEUR": 0.7}
+    SHARPE_RIESGO = {"ETHEUR": 0.08, "BTCEUR": 0.03, "SOLEUR": 0.03, "XRPEUR": 0.03, "AVAXEUR": 0.02}
+
+    fg_map = _descargar_fear_greed(days)
+    print("  descargando datos de mercado…")
+    datos, indicadores = {}, {}
+    for s in symbols:
+        try:
+            datos[s] = descargar_klines(s, "1d", days)
+            indicadores[s] = calcular_indicadores(datos[s])
+        except Exception as e:
+            print(f"  [ERROR] {s}: {e}")
+    if not datos:
+        return
+    btc_ind = indicadores.get("BTCEUR") or calcular_indicadores(
+        descargar_klines("BTCEUR", "1d", days))
+    n_sym = len(datos)
+
+    variantes = [
+        ("sin_parcial", 0.0,  0.0),
+        ("50pct@1.5x",  0.5,  1.5),
+        ("50pct@2.0x",  0.5,  2.0),
+        ("33pct@1.5x",  0.33, 1.5),
+        ("25pct@1.5x",  0.25, 1.5),
+    ]
+
+    print(f"\n{'variante':>13s} | "
+          f"{'PF tr':>6s} {'anual tr':>9s} {'n tr':>5s} | "
+          f"{'PF te':>6s} {'anual te':>9s} {'n te':>5s} {'DD te':>6s}")
+    print("-" * 82)
+
+    for nombre, cp_frac, cp_tp_r in variantes:
+        agg: dict[str, dict] = {}
+        for fase in ("train", "test"):
+            cap = gan = per = 0.0
+            ntr = 0
+            dd = 0.0
+            for s, data in datos.items():
+                n_s = len(data)
+                corte = int(n_s * 0.7)
+                a, b = (0, corte) if fase == "train" else (corte, n_s)
+                fg_mask = _fg_mask_build(fg_map, data, 25, 75) if fg_map else None
+                r = backtest(
+                    data, s, capital0, 5.0,
+                    use_trailing=False, vol_guard=True,
+                    ind=indicadores[s], i0=a, i1=b,
+                    sl_ratio=SL_OPT.get(s, 1.0),
+                    tp_ratio=TP_OPT.get(s, 3.0),
+                    riesgo=SHARPE_RIESGO.get(s, 0.03),
+                    btc_ind=btc_ind,
+                    fg_mask=fg_mask,
+                    cp_frac=cp_frac,
+                    cp_tp_ratio=cp_tp_r,
+                )
+                cap += r.capital_final
+                gan += r.bruto_ganado
+                per += r.bruto_perdido
+                ntr += r.trades
+                dd = max(dd, r.max_drawdown)
+            dias_f = corte if fase == "train" else (len(list(datos.values())[0]) - corte)
+            anual = ((cap / (capital0 * n_sym)) ** (365 / dias_f) - 1) * 100 if dias_f > 0 else 0
+            pf = gan / per if per > 0 else float("inf")
+            agg[fase] = {"pf": pf, "anual": anual, "dd": dd, "n": ntr}
+
+        tr, te = agg["train"], agg["test"]
+        pf_tr = f"{tr['pf']:.2f}" if tr["pf"] != float("inf") else "inf"
+        pf_te = f"{te['pf']:.2f}" if te["pf"] != float("inf") else "inf"
+        tag = " ← baseline" if nombre == "sin_parcial" else ""
+        print(f"{nombre:>13s} | "
+              f"{pf_tr:>6s} {tr['anual']:+8.2f}% {tr['n']:5d} | "
+              f"{pf_te:>6s} {te['anual']:+8.2f}% {te['n']:5d} {te['dd']:5.1f}%{tag}")
+
+    print(f"\nconfig: 1d umbral=5 Sharpe TP_OPT SL_OPT vol_guard+BTC_macro+FG_zona_neutral")
+
+
+def estudio_allocation(symbols: list[str], days: int, capital0: float) -> None:
+    """Comparación de estrategias de asignación de riesgo por símbolo.
+
+    Variantes:
+      equal:        mismo riesgo para todos los símbolos (4%)
+      sharpe:       actual — ETH 8%, BTC/SOL/XRP 3%, AVAX 2%
+      vol_parity:   riesgo inversamente proporcional a la volatilidad (ATR/precio)
+      momentum_60d: riesgo proporcional al retorno de los últimos 60 días
+    """
+    TP_OPT = {"ETHEUR": 3.5, "BTCEUR": 3.0, "SOLEUR": 2.5, "XRPEUR": 4.0, "AVAXEUR": 3.0}
+    SL_OPT = {"ETHEUR": 0.8, "BTCEUR": 1.0, "SOLEUR": 0.7, "XRPEUR": 0.8, "AVAXEUR": 0.7}
+    SHARPE_FIJO = {"ETHEUR": 0.08, "BTCEUR": 0.03, "SOLEUR": 0.03, "XRPEUR": 0.03, "AVAXEUR": 0.02}
+
+    fg_map = _descargar_fear_greed(days)
+    print("  descargando datos de mercado…")
+    datos, indicadores = {}, {}
+    for s in symbols:
+        try:
+            datos[s] = descargar_klines(s, "1d", days)
+            indicadores[s] = calcular_indicadores(datos[s])
+        except Exception as e:
+            print(f"  [ERROR] {s}: {e}")
+    if not datos:
+        return
+    btc_ind = indicadores.get("BTCEUR") or calcular_indicadores(
+        descargar_klines("BTCEUR", "1d", days))
+    n_sym = len(datos)
+
+    def _vol_parity(syms: list[str], inds: dict, corte: int) -> dict[str, float]:
+        vol: dict[str, float] = {}
+        for s in syms:
+            ind = inds[s]
+            ratios = [ind["atr"][j] / ind["close"][j]
+                      for j in range(max(0, corte - 100), corte)
+                      if not math.isnan(ind["atr"][j]) and ind["close"][j] > 0]
+            vol[s] = sum(ratios) / len(ratios) if ratios else 0.03
+        inv = {s: 1.0 / max(vol[s], 1e-6) for s in syms}
+        total = sum(inv.values())
+        budget = sum(SHARPE_FIJO.values())
+        return {s: inv[s] / total * budget for s in syms}
+
+    def _momentum(syms: list[str], inds: dict, corte: int) -> dict[str, float]:
+        ret: dict[str, float] = {}
+        for s in syms:
+            close = inds[s]["close"]
+            i_end = min(corte, len(close)) - 1
+            i_start = max(0, i_end - 60)
+            ret[s] = max(close[i_end] / close[i_start] - 1, 0.0) if close[i_start] > 0 else 0.0
+        total = sum(ret.values()) or 1.0
+        budget = sum(SHARPE_FIJO.values())
+        return {s: ret[s] / total * budget for s in syms}
+
+    equal_dict = {s: 0.04 for s in datos}
+
+    print(f"\n{'variante':>13s} | "
+          f"{'PF tr':>6s} {'anual tr':>9s} {'n tr':>5s} | "
+          f"{'PF te':>6s} {'anual te':>9s} {'n te':>5s} {'DD te':>6s}")
+    print("-" * 82)
+
+    for nombre in ("equal", "sharpe", "vol_parity", "momentum_60d"):
+        agg: dict[str, dict] = {}
+        for fase in ("train", "test"):
+            cap = gan = per = 0.0
+            ntr = 0
+            dd = 0.0
+            syms = list(datos.keys())
+            for s in syms:
+                data = datos[s]
+                n_s = len(data)
+                corte = int(n_s * 0.7)
+                a, b = (0, corte) if fase == "train" else (corte, n_s)
+                fg_mask = _fg_mask_build(fg_map, data, 25, 75) if fg_map else None
+                if nombre == "equal":
+                    riesgo_s = equal_dict.get(s, 0.04)
+                elif nombre == "sharpe":
+                    riesgo_s = SHARPE_FIJO.get(s, 0.03)
+                elif nombre == "vol_parity":
+                    riesgo_s = _vol_parity(syms, indicadores, corte).get(s, 0.03)
+                else:
+                    riesgo_s = _momentum(syms, indicadores, corte).get(s, 0.03)
+                r = backtest(
+                    data, s, capital0, 5.0,
+                    use_trailing=False, vol_guard=True,
+                    ind=indicadores[s], i0=a, i1=b,
+                    sl_ratio=SL_OPT.get(s, 1.0),
+                    tp_ratio=TP_OPT.get(s, 3.0),
+                    riesgo=riesgo_s,
+                    btc_ind=btc_ind,
+                    fg_mask=fg_mask,
+                )
+                cap += r.capital_final
+                gan += r.bruto_ganado
+                per += r.bruto_perdido
+                ntr += r.trades
+                dd = max(dd, r.max_drawdown)
+            dias_f = corte if fase == "train" else (len(list(datos.values())[0]) - corte)
+            anual = ((cap / (capital0 * n_sym)) ** (365 / dias_f) - 1) * 100 if dias_f > 0 else 0
+            pf = gan / per if per > 0 else float("inf")
+            agg[fase] = {"pf": pf, "anual": anual, "dd": dd, "n": ntr}
+
+        tr, te = agg["train"], agg["test"]
+        pf_tr = f"{tr['pf']:.2f}" if tr["pf"] != float("inf") else "inf"
+        pf_te = f"{te['pf']:.2f}" if te["pf"] != float("inf") else "inf"
+        tag = " ← actual" if nombre == "sharpe" else ""
+        print(f"{nombre:>13s} | "
+              f"{pf_tr:>6s} {tr['anual']:+8.2f}% {tr['n']:5d} | "
+              f"{pf_te:>6s} {te['anual']:+8.2f}% {te['n']:5d} {te['dd']:5.1f}%{tag}")
+
+    print(f"\nconfig: 1d umbral=5 TP_OPT SL_OPT vol_guard+BTC_macro+FG_zona_neutral")
+
+
 # ----------------------------------------------------------------- main
 
 def fmt(res: Resultado, capital0: float, dias: int) -> str:
@@ -2777,6 +3101,12 @@ def main() -> None:
                    help="funding rate Binance Futures como filtro de entradas: grid 0.05-0.20%%")
     p.add_argument("--study_noticias", action="store_true",
                    help="proxy de sentimiento de noticias: z-score retorno anterior vs baseline")
+    p.add_argument("--study_adx", action="store_true",
+                   help="filtro ADX: umbrales 0/15/20/25/30 sobre config óptima validada")
+    p.add_argument("--study_cierre_parcial", action="store_true",
+                   help="cierre parcial: tomar beneficio parcial a mitad de camino al TP")
+    p.add_argument("--study_allocation", action="store_true",
+                   help="comparación de asignaciones: equal vs sharpe vs vol_parity vs momentum")
     p.add_argument("--rotacion", action="store_true",
                    help="estrategia de referencia: rotacion de momentum")
     args = p.parse_args()
@@ -2891,6 +3221,24 @@ def main() -> None:
         t0 = time.perf_counter()
         estudio_noticias(symbols, args.days, args.capital)
         print(f"\n[tiempo] estudio noticias: {time.perf_counter() - t0:.1f}s")
+        return
+
+    if args.study_adx:
+        t0 = time.perf_counter()
+        estudio_adx(symbols, args.days, args.capital)
+        print(f"\n[tiempo] estudio ADX: {time.perf_counter() - t0:.1f}s")
+        return
+
+    if args.study_cierre_parcial:
+        t0 = time.perf_counter()
+        estudio_cierre_parcial(symbols, args.days, args.capital)
+        print(f"\n[tiempo] estudio cierre_parcial: {time.perf_counter() - t0:.1f}s")
+        return
+
+    if args.study_allocation:
+        t0 = time.perf_counter()
+        estudio_allocation(symbols, args.days, args.capital)
+        print(f"\n[tiempo] estudio allocation: {time.perf_counter() - t0:.1f}s")
         return
 
     if args.rotacion:
