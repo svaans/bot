@@ -40,3 +40,12 @@ resultados/
 
 .claude/
 backtesting/cache/
+
+# Estado de runtime (generado en ejecución, no versionable)
+estado/dca_state.json
+estado/capital.json
+estado/equity_peak.json
+estado/per_symbol_losses.json
+estado/portfolio_target.json
+estado/operational_mode.db
+estado/bot.pid
