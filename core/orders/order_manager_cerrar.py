@@ -336,10 +336,25 @@ async def _finalizar_cierre_completo_async(
                 if _is_short_direction(getattr(orden, "direccion", None))
                 else "Venta"
             )
+            icono = "✅" if retorno >= 0 else "❌"
+            pnl_abs = getattr(orden, "pnl_realizado", None)
+            pnl_str = f" ({pnl_abs:+.2f}€)" if pnl_abs is not None else ""
+            # Per-symbol streak info
+            racha_str = ""
+            try:
+                from core.risk.per_symbol_guard import obtener_racha as _get_racha
+                racha = _get_racha(symbol)
+                if racha >= 2:
+                    racha_str = f"\n⚠️ Racha pérdidas {symbol}: {racha} → riesgo reducido"
+                elif racha == 1:
+                    racha_str = f"\n⚠️ Racha pérdidas {symbol}: {racha}"
+            except Exception:
+                pass
             mensaje = (
-                f"📤 {accion_cierre} {symbol}\n"
-                f"Entrada: {orden.precio_entrada:.2f} Salida: {precio_cierre:.2f}\n"
-                f"Retorno: {retorno * 100:.2f}%\nMotivo: {motivo}"
+                f"{icono} {accion_cierre} {symbol}\n"
+                f"Entrada: {orden.precio_entrada:.4f} → Salida: {precio_cierre:.4f}\n"
+                f"Retorno: {retorno * 100:+.2f}%{pnl_str}\n"
+                f"Motivo: {motivo}{racha_str}"
             )
             await manager.bus.publish(
                 "notify", {"mensaje": mensaje, "operation_id": operation_id}

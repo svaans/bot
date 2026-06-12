@@ -147,13 +147,40 @@ def metricas_semanales(carpeta: str = _REPORTES_DIR) -> pd.DataFrame:
         ganancia_promedio = retornos.mean()
         equity = retornos.cumsum()
         drawdown = (equity - equity.cummax()).min()
+
+        # Sortino: media / downside_std (sólo retornos negativos)
+        neg = retornos[retornos < 0]
+        dd_std = (neg ** 2).mean() ** 0.5 if not neg.empty else 0.0
+        sortino = (float(ganancia_promedio) / dd_std) if dd_std > 0 else float("nan")
+
+        # Profit factor: suma ganancias / suma pérdidas
+        bruto_gan = float(retornos[retornos > 0].sum())
+        bruto_per = float((-retornos[retornos < 0]).sum())
+        profit_factor = (bruto_gan / bruto_per) if bruto_per > 0 else float("inf")
+
+        # Racha máxima de pérdidas consecutivas
+        racha_max = racha_actual = 0
+        for r in retornos:
+            if r < 0:
+                racha_actual += 1
+                racha_max = max(racha_max, racha_actual)
+            else:
+                racha_actual = 0
+
+        # Calmar (semanal): retorno_total / drawdown_max
+        calmar = (float(retornos.sum()) / abs(float(drawdown))) if drawdown < 0 else float("nan")
+
         resultados.append(
             {
                 "symbol": symbol,
                 "operaciones": len(retornos),
                 "winrate": round(winrate, 2),
                 "ganancia_promedio": round(ganancia_promedio, 4),
-                "drawdown_max": round(drawdown, 4),
+                "drawdown_max": round(float(drawdown), 4),
+                "profit_factor": round(profit_factor, 3) if profit_factor != float("inf") else None,
+                "sortino": round(sortino, 3) if not (sortino != sortino) else None,
+                "calmar": round(calmar, 3) if not (calmar != calmar) else None,
+                "racha_max_perdidas": racha_max,
             }
         )
     return pd.DataFrame(resultados)
