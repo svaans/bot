@@ -992,6 +992,8 @@ def _descargar_funding_rate_historico(symbol_futures: str, days: int) -> dict[in
     Binance liquida el funding rate cada 8h → 3 por día.
     Retorna {timestamp_inicio_dia_utc_ms: fr_promedio_diario}.
     Cachea en backtesting/cache/fr_{symbol}.json para no repetir la descarga.
+    Intenta Binance fapi primero; si falla por geo-bloqueo (HTTP 451) usa Bybit
+    como fallback (los funding rates están altamente correlacionados entre exchanges).
     """
     ruta = os.path.join(CACHE_DIR, f"fr_{symbol_futures}.json")
     os.makedirs(CACHE_DIR, exist_ok=True)
@@ -1005,26 +1007,60 @@ def _descargar_funding_rate_historico(symbol_futures: str, days: int) -> dict[in
 
     end_ms = int(time.time() * 1000)
     start_ms = end_ms - days * 86_400_000
-    all_rates: list[dict] = []
-    current_start = start_ms
 
-    print(f"  [funding] descargando {symbol_futures} desde Binance Futures…")
-    while current_start < end_ms:
-        url = (f"https://fapi.binance.com/fapi/v1/fundingRate"
-               f"?symbol={symbol_futures}&startTime={current_start}&limit=1000")
-        try:
+    def _fetch_binance() -> list[dict]:
+        rates: list[dict] = []
+        current_start = start_ms
+        while current_start < end_ms:
+            url = (f"https://fapi.binance.com/fapi/v1/fundingRate"
+                   f"?symbol={symbol_futures}&startTime={current_start}&limit=1000")
             with urllib.request.urlopen(url, timeout=15) as resp:
                 batch = json.loads(resp.read())
+            if not batch:
+                break
+            rates.extend(batch)
+            last_ts = int(batch[-1]["fundingTime"])
+            if len(batch) < 1000 or last_ts >= end_ms:
+                break
+            current_start = last_ts + 1
+        return [{"fundingTime": int(r["fundingTime"]), "fundingRate": float(r["fundingRate"])}
+                for r in rates]
+
+    def _fetch_bybit() -> list[dict]:
+        rates: list[dict] = []
+        cursor_end = end_ms
+        while True:
+            url = (f"https://api.bybit.com/v5/market/funding/history"
+                   f"?category=linear&symbol={symbol_futures}"
+                   f"&startTime={start_ms}&endTime={cursor_end}&limit=200")
+            with urllib.request.urlopen(url, timeout=15) as resp:
+                data = json.loads(resp.read())
+            items = data.get("result", {}).get("list", [])
+            if not items:
+                break
+            for item in items:
+                rates.append({
+                    "fundingTime": int(item["fundingRateTimestamp"]),
+                    "fundingRate": float(item["fundingRate"]),
+                })
+            if len(items) < 200:
+                break
+            # Bybit devuelve de más reciente a más antiguo — avanzar hacia atrás
+            cursor_end = int(items[-1]["fundingRateTimestamp"]) - 1
+            if cursor_end <= start_ms:
+                break
+        return rates
+
+    all_rates: list[dict] = []
+    for fuente, fetch_fn in [("Binance", _fetch_binance), ("Bybit", _fetch_bybit)]:
+        print(f"  [funding] descargando {symbol_futures} desde {fuente}…")
+        try:
+            all_rates = fetch_fn()
+            if all_rates:
+                print(f"  [funding] {symbol_futures}: {len(all_rates)} registros ({fuente}) OK")
+                break
         except Exception as exc:
-            print(f"  [funding] {symbol_futures}: error — {exc!r}")
-            break
-        if not batch:
-            break
-        all_rates.extend(batch)
-        last_ts = int(batch[-1]["fundingTime"])
-        if len(batch) < 1000 or last_ts >= end_ms:
-            break
-        current_start = last_ts + 1
+            print(f"  [funding] {symbol_futures} ({fuente}): {exc!r}")
 
     daily: dict[int, list[float]] = {}
     for entry in all_rates:
@@ -1035,7 +1071,8 @@ def _descargar_funding_rate_historico(symbol_futures: str, days: int) -> dict[in
     resultado = {ts: sum(v) / len(v) for ts, v in daily.items()}
     with open(ruta, "w") as f:
         json.dump({str(k): v for k, v in resultado.items()}, f)
-    print(f"  [funding] {symbol_futures}: {len(resultado)} días OK")
+    if not resultado:
+        print(f"  [funding] {symbol_futures}: sin datos — filtro FR desactivado para este símbolo")
     return resultado
 
 
