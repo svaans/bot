@@ -18,6 +18,7 @@ on:
         type: choice
         options:
           - study_completo
+          - study_funding_rate
           - study_trailing
           - study_senal_v2
           - study_tp_por_simbolo

@@ -977,6 +977,78 @@ def _fg_valor(fg_map: dict[int, int], ts_ms: float) -> int | None:
     return None
 
 
+FUTURES_SYMBOL_MAP: dict[str, str] = {
+    "BTCEUR": "BTCUSDT",
+    "ETHEUR": "ETHUSDT",
+    "SOLEUR": "SOLUSDT",
+    "XRPEUR": "XRPUSDT",
+    "AVAXEUR": "AVAXUSDT",
+}
+
+
+def _descargar_funding_rate_historico(symbol_futures: str, days: int) -> dict[int, float]:
+    """Descarga histórico de funding rate de Binance Futures USDTM (sin API key).
+
+    Binance liquida el funding rate cada 8h → 3 por día.
+    Retorna {timestamp_inicio_dia_utc_ms: fr_promedio_diario}.
+    Cachea en backtesting/cache/fr_{symbol}.json para no repetir la descarga.
+    """
+    ruta = os.path.join(CACHE_DIR, f"fr_{symbol_futures}.json")
+    os.makedirs(CACHE_DIR, exist_ok=True)
+
+    if os.path.exists(ruta):
+        mtime = os.path.getmtime(ruta)
+        if time.time() - mtime < 86_400:
+            with open(ruta) as f:
+                raw = json.load(f)
+            return {int(k): float(v) for k, v in raw.items()}
+
+    end_ms = int(time.time() * 1000)
+    start_ms = end_ms - days * 86_400_000
+    all_rates: list[dict] = []
+    current_start = start_ms
+
+    print(f"  [funding] descargando {symbol_futures} desde Binance Futures…")
+    while current_start < end_ms:
+        url = (f"https://fapi.binance.com/fapi/v1/fundingRate"
+               f"?symbol={symbol_futures}&startTime={current_start}&limit=1000")
+        try:
+            with urllib.request.urlopen(url, timeout=15) as resp:
+                batch = json.loads(resp.read())
+        except Exception as exc:
+            print(f"  [funding] {symbol_futures}: error — {exc!r}")
+            break
+        if not batch:
+            break
+        all_rates.extend(batch)
+        last_ts = int(batch[-1]["fundingTime"])
+        if len(batch) < 1000 or last_ts >= end_ms:
+            break
+        current_start = last_ts + 1
+
+    daily: dict[int, list[float]] = {}
+    for entry in all_rates:
+        ts_ms = int(entry["fundingTime"])
+        ts_day = (ts_ms // 86_400_000) * 86_400_000
+        daily.setdefault(ts_day, []).append(float(entry["fundingRate"]))
+
+    resultado = {ts: sum(v) / len(v) for ts, v in daily.items()}
+    with open(ruta, "w") as f:
+        json.dump({str(k): v for k, v in resultado.items()}, f)
+    print(f"  [funding] {symbol_futures}: {len(resultado)} días OK")
+    return resultado
+
+
+def _fr_valor(fr_map: dict[int, float], ts_ms: float) -> float | None:
+    """Retorna el funding rate diario para el timestamp dado (ms)."""
+    dia_ms = (int(ts_ms) // 86_400_000) * 86_400_000
+    for offset in (0, -86_400_000, -2 * 86_400_000):
+        v = fr_map.get(dia_ms + offset)
+        if v is not None:
+            return v
+    return None
+
+
 def estudio_eth_riesgo(days: int, capital0: float) -> None:
     """Busca el riesgo óptimo por trade para ETH con la config validada.
 
@@ -1380,6 +1452,139 @@ def estudio_completo(symbols: list[str], days: int, capital0: float) -> None:
           + "  ".join(f"{s.replace('EUR','')}/{r*100:.0f}%" for s, r in SHARPE_RIESGO.items()))
     print("TP óptimos: "
           + "  ".join(f"{s.replace('EUR','')}/{v}" for s, v in TP_OPT.items()))
+
+
+def estudio_funding_rate(symbols: list[str], days: int, capital0: float) -> None:
+    """Evalúa el Funding Rate de Binance Futures como filtro de entradas.
+
+    Cuando el funding rate es alto (>umbral), los longs están pagando una prima
+    elevada → mercado sobrecalentado → alta probabilidad de reversión → bloquear.
+
+    Compara 5 umbrales vs baseline (sin filtro FR), sobre config completa validada:
+      sin_fr       — baseline actual (Sharpe+FG_zona_neutral+vol_guard+BTC_macro+TP_opt)
+      fr_0.05%     — bloquear si FR > 0.0005 (0.05%)
+      fr_0.10%     — bloquear si FR > 0.0010 (0.10%)
+      fr_0.15%     — bloquear si FR > 0.0015 (0.15%)
+      fr_0.20%     — bloquear si FR > 0.0020 (0.20%)
+    """
+    SHARPE_RIESGO = {
+        "ETHEUR": 0.08, "BTCEUR": 0.03,
+        "SOLEUR": 0.03, "XRPEUR": 0.03, "AVAXEUR": 0.02,
+    }
+    TP_OPT = {"ETHEUR": 3.5, "BTCEUR": 3.0, "SOLEUR": 2.5, "XRPEUR": 4.0, "AVAXEUR": 3.0}
+
+    print("  descargando Fear&Greed histórico…")
+    fg_map = _descargar_fear_greed(days)
+
+    print("  descargando Funding Rate histórico por símbolo…")
+    fr_maps: dict[str, dict[int, float]] = {}
+    for s in symbols:
+        fut_sym = FUTURES_SYMBOL_MAP.get(s)
+        if fut_sym:
+            fr_maps[s] = _descargar_funding_rate_historico(fut_sym, days)
+        else:
+            print(f"  [funding] sin mapping para {s}")
+
+    print("  descargando datos de mercado…")
+    datos: dict[str, list] = {}
+    indicadores: dict[str, list] = {}
+    for s in symbols:
+        try:
+            datos[s] = descargar_klines(s, "1d", days)
+            indicadores[s] = calcular_indicadores(datos[s])
+        except Exception as e:
+            print(f"  [ERROR] {s}: {e}")
+    if not datos:
+        return
+
+    btc_ind = indicadores.get("BTCEUR") or calcular_indicadores(
+        descargar_klines("BTCEUR", "1d", days))
+
+    def _mask_combinada(data: list, s: str, fr_umbral: float) -> list[bool]:
+        fr_map = fr_maps.get(s, {})
+        mask = []
+        for v in data:
+            ts_ms = v[0]
+            fg_ok = True
+            if fg_map:
+                fg_val = _fg_valor(fg_map, ts_ms)
+                if fg_val is not None:
+                    fg_ok = 25 <= fg_val <= 75
+            fr_ok = True
+            if fr_umbral > 0 and fr_map:
+                fr_val = _fr_valor(fr_map, ts_ms)
+                if fr_val is not None:
+                    fr_ok = fr_val <= fr_umbral
+            mask.append(fg_ok and fr_ok)
+        return mask
+
+    def _eval(fr_umbral: float) -> dict[str, dict]:
+        resultado: dict[str, dict] = {}
+        corte_ref = 0
+        for fase in ("train", "test"):
+            cap = gan = per = 0.0
+            ntr = 0
+            dd = 0.0
+            bloqueados = 0
+            for s, data in datos.items():
+                n_s = len(data)
+                corte = int(n_s * 0.7)
+                corte_ref = corte
+                a, b = (0, corte) if fase == "train" else (corte, n_s)
+                mask = _mask_combinada(data, s, fr_umbral)
+                bloqueados += sum(1 for i in range(a, b) if not mask[i])
+                r = backtest(
+                    data, s, capital0, 5.0,
+                    use_trailing=False, trend_filter=False,
+                    ind=indicadores[s], i0=a, i1=b,
+                    sl_ratio=1.0, tp_ratio=TP_OPT.get(s, 3.0), vol_guard=True,
+                    riesgo=SHARPE_RIESGO.get(s, 0.03), senal_v2=False,
+                    btc_ind=btc_ind, be_atr=0.0, adx_min=0.0,
+                    fg_mask=mask,
+                )
+                cap += r.capital_final
+                gan += r.bruto_ganado
+                per += r.bruto_perdido
+                ntr += r.trades
+                dd = max(dd, r.max_drawdown)
+            n_sym = len(datos)
+            first_data = list(datos.values())[0] if datos else []
+            dias = (corte_ref if fase == "train" else
+                    len(first_data) - corte_ref) if first_data else 1
+            anual = ((cap / (capital0 * n_sym)) ** (365 / dias) - 1) * 100 if n_sym and dias > 0 else 0
+            pf = gan / per if per > 0 else float("inf")
+            resultado[fase] = {"pf": pf, "anual": anual, "n": ntr, "dd": dd,
+                               "bloqueados": bloqueados}
+        return resultado
+
+    escenarios = [
+        ("sin_fr",    0.0),
+        ("fr_0.05%",  0.0005),
+        ("fr_0.10%",  0.0010),
+        ("fr_0.15%",  0.0015),
+        ("fr_0.20%",  0.0020),
+    ]
+
+    print(f"\n{'escenario':>11s} | "
+          f"{'PF tr':>6s} {'anual tr':>9s} {'n tr':>5s} | "
+          f"{'PF te':>6s} {'anual te':>9s} {'n te':>5s} {'DD te':>6s} {'bloq':>5s}")
+    print("-" * 80)
+
+    for nombre, fr_umbral in escenarios:
+        res = _eval(fr_umbral)
+        tr, te = res["train"], res["test"]
+        pf_tr = f"{tr['pf']:.2f}" if tr["pf"] != float("inf") else " inf"
+        pf_te = f"{te['pf']:.2f}" if te["pf"] != float("inf") else " inf"
+        marker = " ← actual" if nombre == "sin_fr" else ""
+        print(f"{nombre:>11s} | "
+              f"{pf_tr:>6s} {tr['anual']:+8.2f}% {tr['n']:5d} | "
+              f"{pf_te:>6s} {te['anual']:+8.2f}% {te['n']:5d} {te['dd']:5.1f}% "
+              f"{te['bloqueados']:5d}{marker}")
+
+    n_test = int(len(list(datos.values())[0]) * 0.3) if datos else 0
+    print(f"\nconfig: {len(datos)} símbolos × 1d | test ~{n_test} días | "
+          "Sharpe+FG_zona_neutral+vol_guard+BTC_macro+TP_opt")
+    print("bloq = días de entrada bloqueados por FR en la ventana test")
 
 
 def estudio_trailing(symbols: list[str], days: int, capital0: float) -> None:
@@ -2023,6 +2228,8 @@ def main() -> None:
                    help="optimiza TP ratio por símbolo: grid 2.0-6.0 en train/test")
     p.add_argument("--study_trailing", action="store_true",
                    help="trailing stop diferido: compara activación 1.5-3.0×ATR vs TP fijo")
+    p.add_argument("--study_funding_rate", action="store_true",
+                   help="funding rate Binance Futures como filtro de entradas: grid 0.05-0.20%%")
     p.add_argument("--rotacion", action="store_true",
                    help="estrategia de referencia: rotacion de momentum")
     args = p.parse_args()
@@ -2113,6 +2320,12 @@ def main() -> None:
         t0 = time.perf_counter()
         estudio_trailing(symbols, args.days, args.capital)
         print(f"\n[tiempo] estudio trailing: {time.perf_counter() - t0:.1f}s")
+        return
+
+    if args.study_funding_rate:
+        t0 = time.perf_counter()
+        estudio_funding_rate(symbols, args.days, args.capital)
+        print(f"\n[tiempo] estudio funding rate: {time.perf_counter() - t0:.1f}s")
         return
 
     if args.rotacion:
