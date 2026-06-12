@@ -985,6 +985,14 @@ FUTURES_SYMBOL_MAP: dict[str, str] = {
     "AVAXEUR": "AVAXUSDT",
 }
 
+OKX_SYMBOL_MAP: dict[str, str] = {
+    "BTCUSDT": "BTC-USDT-SWAP",
+    "ETHUSDT": "ETH-USDT-SWAP",
+    "SOLUSDT": "SOL-USDT-SWAP",
+    "XRPUSDT": "XRP-USDT-SWAP",
+    "AVAXUSDT": "AVAX-USDT-SWAP",
+}
+
 
 def _descargar_funding_rate_historico(symbol_futures: str, days: int) -> dict[int, float]:
     """Descarga histórico de funding rate de Binance Futures USDTM (sin API key).
@@ -1045,14 +1053,43 @@ def _descargar_funding_rate_historico(symbol_futures: str, days: int) -> dict[in
                 })
             if len(items) < 200:
                 break
-            # Bybit devuelve de más reciente a más antiguo — avanzar hacia atrás
             cursor_end = int(items[-1]["fundingRateTimestamp"]) - 1
             if cursor_end <= start_ms:
                 break
         return rates
 
+    def _fetch_okx() -> list[dict]:
+        okx_sym = OKX_SYMBOL_MAP.get(symbol_futures)
+        if not okx_sym:
+            return []
+        rates: list[dict] = []
+        cursor_after = ""
+        while True:
+            url = (f"https://www.okx.com/api/v5/public/funding-rate-history"
+                   f"?instId={okx_sym}&limit=100"
+                   + (f"&after={cursor_after}" if cursor_after else ""))
+            req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                data = json.loads(resp.read())
+            if data.get("code") != "0":
+                break
+            items = data.get("data", [])
+            if not items:
+                break
+            for item in items:
+                ts = int(item["fundingTime"])
+                if ts < start_ms:
+                    return rates
+                rates.append({"fundingTime": ts, "fundingRate": float(item["fundingRate"])})
+            if len(items) < 100:
+                break
+            cursor_after = items[-1]["fundingTime"]
+        return rates
+
     all_rates: list[dict] = []
-    for fuente, fetch_fn in [("Binance", _fetch_binance), ("Bybit", _fetch_bybit)]:
+    for fuente, fetch_fn in [("Binance", _fetch_binance),
+                              ("Bybit",   _fetch_bybit),
+                              ("OKX",     _fetch_okx)]:
         print(f"  [funding] descargando {symbol_futures} desde {fuente}…")
         try:
             all_rates = fetch_fn()
