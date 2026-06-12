@@ -1094,20 +1094,23 @@ async def consumer_loop(feed: "DataFeed", symbol: str) -> None:
             )
             if should_activate_debug_wrapper:
                 activate_handler_debug_wrapper(feed)
-            ts_processed = candle.get("timestamp")
-            prev = feed._last_processed_ts.get(symbol)
-            if ts_processed is not None:
-                if prev is not None and ts_processed <= prev:
-                    events.set_consumer_state(feed, symbol, ConsumerState.LOOP)
-                    log.error(
-                        "%s: consumer sin avanzar timestamp (prev=%s actual=%s)",
-                        symbol,
-                        prev,
-                        ts_processed,
-                    )
-                    await reiniciar_consumer(feed, symbol)
-                    return
-                feed._last_processed_ts[symbol] = ts_processed
+        # Fuera del ``finally``: un ``return`` dentro de un ``finally`` se traga
+        # las excepciones en vuelo (incluida CancelledError, re-lanzada arriba a
+        # propósito). SyntaxWarning en Python 3.14+.
+        ts_processed = candle.get("timestamp")
+        prev = feed._last_processed_ts.get(symbol)
+        if ts_processed is not None:
+            if prev is not None and ts_processed <= prev:
+                events.set_consumer_state(feed, symbol, ConsumerState.LOOP)
+                log.error(
+                    "%s: consumer sin avanzar timestamp (prev=%s actual=%s)",
+                    symbol,
+                    prev,
+                    ts_processed,
+                )
+                await reiniciar_consumer(feed, symbol)
+                return
+            feed._last_processed_ts[symbol] = ts_processed
 
 
 async def reiniciar_consumer(feed: "DataFeed", symbol: str) -> None:
