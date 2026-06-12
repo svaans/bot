@@ -1938,6 +1938,152 @@ def estudio_trailing(symbols: list[str], days: int, capital0: float) -> None:
     print("trailing: SL sigue max_precio − 1×ATR desde activación")
 
 
+def estudio_nuevo_simbolo(symbols: list[str], days: int, capital0: float) -> None:
+    """Evalúa el impacto de añadir un símbolo candidato al portfolio actual.
+
+    Portfolio base: 5 símbolos validados con config completa (Sharpe+FG+vol_guard+BTC+TP_opt+SL_opt).
+    Por cada candidato: ejecuta el portfolio de 6 símbolos y compara contra el de 5.
+
+    El candidato nuevo usa SL=1.0 / TP=3.0 (sin optimizar) para evitar sobreajuste.
+    Candidatos probados: LINKEUR, LTCEUR, ADAEUR, DOGEEUR, DOTEUR.
+
+    Métricas clave:
+      - ¿Sube el retorno anual del portfolio?
+      - ¿Mejora o mantiene el PF?
+      - ¿Cuánto sube el DD?
+      - ¿Cuántos trades aporta el nuevo símbolo?
+    """
+    BASE = ["BTCEUR", "ETHEUR", "SOLEUR", "XRPEUR", "AVAXEUR"]
+    CANDIDATOS = ["LINKEUR", "LTCEUR", "ADAEUR", "DOGEEUR", "DOTEUR"]
+
+    SHARPE_RIESGO = {
+        "ETHEUR": 0.08, "BTCEUR": 0.03,
+        "SOLEUR": 0.03, "XRPEUR": 0.03, "AVAXEUR": 0.02,
+    }
+    TP_OPT = {"ETHEUR": 3.5, "BTCEUR": 3.0, "SOLEUR": 2.5, "XRPEUR": 4.0, "AVAXEUR": 3.0}
+    SL_OPT = {"ETHEUR": 0.8, "BTCEUR": 1.0, "SOLEUR": 0.7, "XRPEUR": 0.8, "AVAXEUR": 0.7}
+
+    print("  descargando Fear&Greed histórico…")
+    fg_map = _descargar_fear_greed(days)
+
+    print("  descargando datos de mercado (base + candidatos)…")
+    todos = BASE + CANDIDATOS
+    datos: dict[str, list] = {}
+    indicadores: dict[str, list] = {}
+    for s in todos:
+        try:
+            datos[s] = descargar_klines(s, "1d", days)
+            indicadores[s] = calcular_indicadores(datos[s])
+        except Exception as e:
+            print(f"  [SKIP] {s}: {e}")
+
+    if not datos:
+        return
+
+    btc_ind = indicadores.get("BTCEUR") or calcular_indicadores(
+        descargar_klines("BTCEUR", "1d", days))
+
+    def _fg_mask(data: list) -> list[bool] | None:
+        if not fg_map:
+            return None
+        mask = []
+        for v in data:
+            fg_val = _fg_valor(fg_map, v[0])
+            ok = True
+            if fg_val is not None:
+                ok = 25 <= fg_val <= 75
+            mask.append(ok)
+        return mask
+
+    def _run_portfolio(syms: list[str], fase: str) -> dict:
+        cap = gan = per = 0.0
+        ntr = ntr_nuevo = 0
+        dd = 0.0
+        corte_ref = 0
+        for s in syms:
+            if s not in datos:
+                continue
+            data = datos[s]
+            n_s = len(data)
+            corte = int(n_s * 0.7)
+            corte_ref = corte
+            a, b = (0, corte) if fase == "train" else (corte, n_s)
+            fg_mask = _fg_mask(data)
+            r = backtest(
+                data, s, capital0, 5.0,
+                use_trailing=False, trend_filter=False,
+                ind=indicadores[s], i0=a, i1=b,
+                sl_ratio=SL_OPT.get(s, 1.0),
+                tp_ratio=TP_OPT.get(s, 3.0), vol_guard=True,
+                riesgo=SHARPE_RIESGO.get(s, 0.03), senal_v2=False,
+                btc_ind=btc_ind, be_atr=0.0, adx_min=0.0,
+                fg_mask=fg_mask,
+            )
+            cap += r.capital_final
+            gan += r.bruto_ganado
+            per += r.bruto_perdido
+            ntr += r.trades
+            dd = max(dd, r.max_drawdown)
+            if s not in BASE:
+                ntr_nuevo += r.trades
+
+        syms_ok = [s for s in syms if s in datos]
+        n_sym = len(syms_ok)
+        first_data = datos[syms_ok[0]] if syms_ok else []
+        dias = (corte_ref if fase == "train" else
+                len(first_data) - corte_ref) if first_data else 1
+        anual = ((cap / (capital0 * n_sym)) ** (365 / dias) - 1) * 100 if n_sym and dias > 0 else 0
+        pf = gan / per if per > 0 else float("inf")
+        return {"pf": pf, "anual": anual, "n": ntr, "dd": dd, "n_nuevo": ntr_nuevo}
+
+    # Portfolio base (5 símbolos)
+    base_tr = _run_portfolio(BASE, "train")
+    base_te = _run_portfolio(BASE, "test")
+
+    print(f"\n{'portfolio':>16s} | "
+          f"{'PF tr':>6s} {'anual tr':>9s} {'n tr':>5s} | "
+          f"{'PF te':>6s} {'anual te':>9s} {'n te':>5s} {'DD te':>6s} {'+trades':>7s}")
+    print("-" * 84)
+
+    pf_tr = f"{base_tr['pf']:.2f}" if base_tr['pf'] != float("inf") else " inf"
+    pf_te = f"{base_te['pf']:.2f}" if base_te['pf'] != float("inf") else " inf"
+    print(f"{'base (5 sym)':>16s} | "
+          f"{pf_tr:>6s} {base_tr['anual']:+8.2f}% {base_tr['n']:5d} | "
+          f"{pf_te:>6s} {base_te['anual']:+8.2f}% {base_te['n']:5d} {base_te['dd']:5.1f}%"
+          f"{'':>8s}")
+    print("-" * 84)
+
+    mejores: list[tuple[str, float]] = []
+    for cand in CANDIDATOS:
+        if cand not in datos:
+            print(f"{'+ ' + cand:>16s} | sin datos")
+            continue
+        portfolio = BASE + [cand]
+        tr = _run_portfolio(portfolio, "train")
+        te = _run_portfolio(portfolio, "test")
+        delta_anual = te["anual"] - base_te["anual"]
+        delta_dd = te["dd"] - base_te["dd"]
+        pf_tr_c = f"{tr['pf']:.2f}" if tr['pf'] != float("inf") else " inf"
+        pf_te_c = f"{te['pf']:.2f}" if te['pf'] != float("inf") else " inf"
+        signo = "↑" if delta_anual > 0.3 else ("↓" if delta_anual < -0.3 else "≈")
+        print(f"{'+ ' + cand:>16s} | "
+              f"{pf_tr_c:>6s} {tr['anual']:+8.2f}% {tr['n']:5d} | "
+              f"{pf_te_c:>6s} {te['anual']:+8.2f}% {te['n']:5d} {te['dd']:5.1f}% "
+              f"{delta_anual:+5.1f}pp {signo}  (+{te['n_nuevo']}t)")
+        mejores.append((cand, delta_anual))
+
+    mejores.sort(key=lambda x: -x[1])
+    n_test = int(len(list(datos.values())[0]) * 0.3) if datos else 0
+    print(f"\nconfig base: Sharpe+FG_zona_neutral+vol_guard+BTC_macro+TP_opt+SL_opt | test ~{n_test} días")
+    print(f"candidatos nuevos usan SL=1.0 / TP=3.0 (sin optimizar)")
+    if mejores:
+        mejor = mejores[0]
+        if mejor[1] > 0.5:
+            print(f"→ mejor candidato: {mejor[0]} (+{mejor[1]:.1f}pp anual en test)")
+        else:
+            print("→ ningún candidato mejora el portfolio en test")
+
+
 def estudio_senal_v2(symbols: list[str], days: int, capital0: float) -> None:
     """Compara señal v1 (RSI+MACD+volumen) vs v2 (+Donchian-20 breakout).
 
@@ -2456,6 +2602,8 @@ def main() -> None:
                    help="optimiza TP ratio por símbolo: grid 2.0-6.0 en train/test")
     p.add_argument("--study_sl_por_simbolo", action="store_true",
                    help="optimiza SL ratio por símbolo: grid 0.5-2.0 en train/test")
+    p.add_argument("--study_nuevo_simbolo", action="store_true",
+                   help="evalúa añadir un candidato al portfolio: LINK/LTC/ADA/DOGE/DOT")
     p.add_argument("--study_trailing", action="store_true",
                    help="trailing stop diferido: compara activación 1.5-3.0×ATR vs TP fijo")
     p.add_argument("--study_funding_rate", action="store_true",
@@ -2550,6 +2698,12 @@ def main() -> None:
         t0 = time.perf_counter()
         estudio_sl_por_simbolo(symbols, args.days, args.capital)
         print(f"\n[tiempo] estudio sl_por_simbolo: {time.perf_counter() - t0:.1f}s")
+        return
+
+    if args.study_nuevo_simbolo:
+        t0 = time.perf_counter()
+        estudio_nuevo_simbolo(symbols, args.days, args.capital)
+        print(f"\n[tiempo] estudio nuevo simbolo: {time.perf_counter() - t0:.1f}s")
         return
 
     if args.study_trailing:
