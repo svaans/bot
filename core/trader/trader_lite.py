@@ -246,12 +246,28 @@ class TraderLite(TraderLiteBackfillMixin, TraderLiteProcessingMixin):
         self._connection_signal_task: asyncio.Task | None = None
         self._owned_event_bus: Any | None = None
 
-        # Cliente de exchange (solo modo real)
+        # Cliente del FEED de datos (warmup + WebSocket). Importante: este
+        # cliente solo alimenta datos de mercado (feed.escuchar); las órdenes
+        # van por otro cliente (ccxt) gateado por modo_real, así que crearlo en
+        # paper NO habilita órdenes reales.
+        #
+        # En paper el cliente era None, y binance_api.websocket._should_simulate
+        # trata cliente=None como "simular" → el WS generaba velas sintéticas
+        # (rampa ~100.x). Para hacer paper trading útil (datos REALES, órdenes
+        # simuladas) se crea aquí un cliente real cuando BINANCE_SIMULATED=0.
         self._cliente = None
         crear_cliente_fn = _crear_cliente_factory()
-        if bool(getattr(config, "modo_real", False)) and crear_cliente_fn is not None:
+        modo_real = bool(getattr(config, "modo_real", False))
+        quiere_datos_reales = os.getenv("BINANCE_SIMULATED", "1").strip().lower() in {
+            "0", "false", "no",
+        }
+        if crear_cliente_fn is not None and (modo_real or quiere_datos_reales):
             try:
-                self._cliente = crear_cliente_fn(config)
+                if modo_real:
+                    self._cliente = crear_cliente_fn(config)
+                else:
+                    # paper + BINANCE_SIMULATED=0: fuerza datos reales en el feed.
+                    self._cliente = crear_cliente_fn(config, simulated=False)
             except Exception:
                 # no bloquea el arranque en simulado
                 self._cliente = None

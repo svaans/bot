@@ -13,6 +13,9 @@ RestartSec=10
 # El dashboard solo escucha en localhost; se accede por túnel SSH o Tailscale.
 Environment=DASHBOARD_HOST=127.0.0.1
 Environment=PYTHONUNBUFFERED=1
+# Datos de mercado REALES en paper trading (órdenes siguen simuladas si
+# MODO_REAL=False). Sin esto, el feed genera velas sintéticas (~100.x).
+Environment=BINANCE_SIMULATED=0
 # Protecciones básicas del servicio
 NoNewPrivileges=true
 PrivateTmp=true
