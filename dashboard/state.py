@@ -227,6 +227,33 @@ def _read_last_prices() -> Dict[str, Dict[str, Any]]:
         return {}
 
 
+def _read_price_history(n: int = 40) -> Dict[str, list]:
+    """Lee las últimas ``n`` velas (close) por símbolo desde el BufferManager.
+
+    Alimenta la gráfica de precios del dashboard. Best-effort: cualquier fallo
+    devuelve lo acumulado hasta el momento.
+    """
+    try:
+        from core.vela.buffers import get_buffer_manager  # noqa: PLC0415
+        bm = get_buffer_manager()
+        result: Dict[str, list] = {}
+        for sym, tf_dict in (bm._estados or {}).items():
+            for st in tf_dict.values():
+                buf = getattr(st, "buffer", None)
+                if not buf:
+                    continue
+                closes = []
+                for vela in list(buf)[-n:]:
+                    if isinstance(vela, dict) and vela.get("close") is not None:
+                        closes.append(round(float(vela["close"]), 6))
+                if closes:
+                    result[sym] = closes
+                break  # solo el primer timeframe
+        return result
+    except Exception:
+        return {}
+
+
 def _read_capital() -> tuple[dict, float]:
     """Lee capital desde disco (solo si ha cambiado)."""
     try:
@@ -278,6 +305,7 @@ def get_snapshot() -> dict:
     capital, disponible = _read_capital()
     ws_live, cs_live, qs_live = _read_live_ws_state()
     prices = _read_last_prices()
+    price_history = _read_price_history()
     with _lock:
         uptime = int(time.time() - _state["uptime_start"])
         ws = ws_live if _bot_ref is not None else _state["ws_connected"]
@@ -297,4 +325,5 @@ def get_snapshot() -> dict:
             "activity": list(_activity),
             "symbol_eval": symbol_eval,
             "prices": prices,
+            "price_history": price_history,
         }

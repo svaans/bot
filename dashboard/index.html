@@ -216,11 +216,16 @@
   }
   .empty .big { font-size: 26px; display: block; margin-bottom: 8px; opacity: .6; }
 
-  /* capital list */
-  .cap-row { display: flex; justify-content: space-between; padding: 8px 4px; font-size: 13px; }
-  .cap-row + .cap-row { border-top: 1px solid var(--line); }
-  .cap-row .k { color: var(--text-2); }
-  .cap-row .v { font-weight: 650; }
+  /* price history rows */
+  .ph-row { display: flex; align-items: center; gap: 12px; padding: 11px 4px; }
+  .ph-row + .ph-row { border-top: 1px solid var(--line); }
+  .ph-row .coin { width: 34px; height: 34px; font-size: 12px; }
+  .ph-row .nm { font-size: 13px; font-weight: 650; flex: none; width: 52px; }
+  .ph-spark { flex: 1; height: 36px; min-width: 0; }
+  .ph-spark svg { width: 100%; height: 36px; display: block; }
+  .ph-row .right { text-align: right; flex: none; }
+  .ph-row .px { font-size: 13.5px; font-weight: 650; }
+  .ph-row .ch { font-size: 11.5px; font-weight: 650; margin-top: 2px; }
 
   ::-webkit-scrollbar { width: 6px; }
   ::-webkit-scrollbar-thumb { background: rgba(255,255,255,.12); border-radius: 99px; }
@@ -274,10 +279,10 @@
         <div id="evals"><div class="empty"><span class="big">🔍</span>Aún sin evaluaciones</div></div>
       </section>
 
-      <!-- CAPITAL -->
+      <!-- PRECIOS -->
       <section class="card">
-        <div class="card-head"><h2>Capital por símbolo</h2></div>
-        <div id="capital"><div class="empty">Sin datos de capital</div></div>
+        <div class="card-head"><h2>Precios</h2><div class="meta" id="phMeta">últimas velas</div></div>
+        <div id="priceHistory"><div class="empty"><span class="big">📈</span>Esperando histórico de precios…</div></div>
       </section>
     </div>
 
@@ -466,13 +471,46 @@ function renderEvals(d) {
   }).join("");
 }
 
-function renderCapital(d) {
-  const cap = d.capital || {};
-  const keys = Object.keys(cap);
-  if (!keys.length) return;
-  $("capital").innerHTML = keys.sort().map((k) =>
-    `<div class="cap-row"><span class="k">${esc(k)}</span><span class="v">${fmtMoney(cap[k], 2)} USDT</span></div>`
-  ).join("");
+function sparkPath(vals, w, h, p) {
+  const min = Math.min(...vals), max = Math.max(...vals), span = (max - min) || 1;
+  const x = (i) => p + (i / (vals.length - 1)) * (w - 2 * p);
+  const y = (v) => h - p - ((v - min) / span) * (h - 2 * p);
+  return vals.map((v, i) => `${i ? "L" : "M"}${x(i).toFixed(1)},${y(v).toFixed(1)}`).join(" ");
+}
+
+function renderPriceHistory(d) {
+  const hist = d.price_history || {};
+  const syms = Object.keys(hist).sort();
+  if (!syms.length) return;
+  $("phMeta").textContent = `${syms.length} pares · últimas velas`;
+  $("priceHistory").innerHTML = syms.map((sym, idx) => {
+    const vals = (hist[sym] || []).map(Number).filter((v) => !isNaN(v));
+    if (vals.length < 2) return "";
+    const first = vals[0], last = vals[vals.length - 1];
+    const ch = first ? ((last - first) / first) * 100 : 0;
+    const up = ch >= 0;
+    const col = up ? "var(--green)" : "var(--red)";
+    const gid = `phg${idx}`;
+    const meta = COIN_STYLE[baseSym(sym)] || {};
+    return `<div class="ph-row">
+      ${coinIcon(sym)}
+      <span class="nm">${esc(baseSym(sym))}</span>
+      <div class="ph-spark">
+        <svg viewBox="0 0 120 36" preserveAspectRatio="none">
+          <defs><linearGradient id="${gid}" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stop-color="${col}" stop-opacity=".35"/>
+            <stop offset="100%" stop-color="${col}" stop-opacity="0"/>
+          </linearGradient></defs>
+          <path fill="url(#${gid})" d="${sparkPath(vals, 120, 36, 3)} L117,36 L3,36 Z"/>
+          <path fill="none" stroke="${col}" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round" d="${sparkPath(vals, 120, 36, 3)}"/>
+        </svg>
+      </div>
+      <div class="right">
+        <div class="px">${fmtMoney(last)}</div>
+        <div class="ch" style="color:${col}">${up ? "▲" : "▼"} ${Math.abs(ch).toFixed(2)}%</div>
+      </div>
+    </div>`;
+  }).join("") || '<div class="empty">Histórico insuficiente</div>';
 }
 
 function renderSignals(d) {
@@ -522,7 +560,7 @@ async function tick() {
     const d = await r.json();
     failures = 0;
     renderTop(d); renderHero(d); renderMarket(d); renderPositions(d);
-    renderEvals(d); renderCapital(d); renderSignals(d); renderActivity(d);
+    renderEvals(d); renderPriceHistory(d); renderSignals(d); renderActivity(d);
   } catch (e) {
     if (++failures >= 2) {
       const ws = $("wsPill");
