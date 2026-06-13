@@ -9,7 +9,7 @@ from pathlib import Path
 
 from aiohttp import web
 
-from .state import get_snapshot, update_from_heartbeat
+from .state import get_snapshot, obtener_capital_real, update_from_heartbeat
 
 _log = logging.getLogger("dashboard")
 
@@ -43,6 +43,10 @@ def install_log_handler() -> None:
 async def _handle_status(request: web.Request) -> web.Response:
     try:
         snapshot = get_snapshot()
+        try:
+            snapshot["capital_real"] = await obtener_capital_real()
+        except Exception:
+            snapshot["capital_real"] = None
         body = json.dumps(snapshot, default=str, ensure_ascii=False)
         return web.Response(
             text=body,

@@ -181,7 +181,10 @@ class DevelopmentConfig:
     orders_reconcile_enabled: bool = False
     funding_enabled: bool = False
     backfill_ventana_enabled: bool = False
-    risk_capital_total: float = 0.0
+    # Capital VIRTUAL para paper trading: 1000 USDT repartidos entre los
+    # símbolos (1000/n por símbolo). Es el bankroll simulado del bot; no tiene
+    # relación con el saldo real de Binance (ese se muestra aparte en el panel).
+    risk_capital_total: float = 1000.0
     risk_capital_default_per_symbol: float = 0.0
     risk_capital_per_symbol: Dict[str, float] = field(default_factory=dict)
     risk_kelly_base: float = 0.1

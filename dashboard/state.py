@@ -268,11 +268,72 @@ def _read_capital() -> tuple[dict, float]:
 
 _bot_ref = None
 
+# Capital REAL de la cuenta de Binance (valorado en USDT). Se cachea para no
+# golpear el endpoint privado /api/v3/account en cada poll del dashboard.
+_CAPITAL_REAL_TTL = 60.0
+_capital_real_cache: Dict[str, Any] = {"ts": 0.0, "valor": None}
+_STABLES = {"USDT", "BUSD", "USDC", "FDUSD", "TUSD"}
+
 
 def set_bot_ref(bot: object) -> None:
     """Guarda una referencia débil al bot para leer estado en tiempo real."""
     global _bot_ref
     _bot_ref = bot
+
+
+def _cliente_real() -> Any:
+    """Devuelve el cliente de Binance no simulado del bot, o None."""
+    bot = _bot_ref
+    for obj in (bot, getattr(bot, "trader", None)):
+        cliente = getattr(obj, "_cliente", None)
+        if cliente is not None and not getattr(cliente, "simulated", True):
+            return cliente
+    return None
+
+
+async def obtener_capital_real() -> Optional[float]:
+    """Valor total de la cuenta REAL de Binance en USDT (cacheado ``_CAPITAL_REAL_TTL``).
+
+    Solo lectura (``/api/v3/account`` firmado). Devuelve ``None`` si no hay
+    cliente real (sin claves o modo simulado puro) o si la consulta falla.
+    """
+    now = time.time()
+    if _capital_real_cache["valor"] is not None and (now - _capital_real_cache["ts"]) < _CAPITAL_REAL_TTL:
+        return _capital_real_cache["valor"]
+
+    cliente = _cliente_real()
+    if cliente is None:
+        return None
+    try:
+        from binance_api.cliente import fetch_balance_async, fetch_ticker_async  # noqa: PLC0415
+
+        balance = await fetch_balance_async(cliente)
+        total_por_activo = balance.get("total", {}) if isinstance(balance, dict) else {}
+        total_usdt = 0.0
+        for activo, cantidad in total_por_activo.items():
+            try:
+                cantidad = float(cantidad)
+            except (TypeError, ValueError):
+                continue
+            if cantidad <= 0:
+                continue
+            if activo in _STABLES:
+                total_usdt += cantidad
+                continue
+            try:
+                ticker = await fetch_ticker_async(cliente, f"{activo}USDT")
+                precio = float(ticker.get("last", 0.0))
+                total_usdt += cantidad * precio
+            except Exception:
+                # Activo sin par USDT o ticker no disponible: se ignora.
+                continue
+        valor = round(total_usdt, 2)
+        _capital_real_cache.update({"ts": now, "valor": valor})
+        return valor
+    except Exception:
+        _log = logging.getLogger("dashboard")
+        _log.warning("No se pudo leer el capital real de Binance", exc_info=True)
+        return _capital_real_cache["valor"]  # último conocido (o None)
 
 
 def _read_live_ws_state() -> tuple[bool, dict, dict]:
