@@ -618,22 +618,39 @@ def backtest(velas: list[list[float]], symbol: str, capital0: float = 1000.0,
 
 # ----------------------------------------------------------------- estudio
 
-def estudio_timeframes(symbols: list[str], days: int, capital0: float) -> None:
-    """Grid timeframe x umbral x trailing x filtro de tendencia.
+def estudio_timeframes_data(
+    symbols: list[str],
+    days: int,
+    capital0: float,
+    progress_cb=None,
+) -> list[dict]:
+    """Grid timeframe x umbral x trailing x filtro de tendencia (datos estructurados).
 
-    Optimiza sobre el 70% inicial (train) y valida sobre el 30% final
-    (test, fuera de muestra) para detectar sobreajuste.
+    Optimiza sobre el 70% inicial (train) y valida sobre el 30% final (test,
+    fuera de muestra). Devuelve una lista de dicts ordenada por PF de test
+    descendente, lista para serializar a JSON (``pf=None`` representa infinito,
+    es decir, sin pérdidas). ``progress_cb(fraccion, mensaje)`` es opcional.
     """
     intervalos = ["15m", "1h", "4h", "1d"]
-    filas = []
-    for itv in intervalos:
+    filas: list[dict] = []
+
+    def _resumen(cap: float, gan: float, per: float, ntr: int) -> dict:
+        pf = gan / per if per > 0 else float("inf")
+        return {
+            "ret": round((cap / (capital0 * len(symbols)) - 1) * 100, 2),
+            "pf": round(pf, 2) if pf != float("inf") else None,
+            "trades": ntr,
+        }
+
+    for idx, itv in enumerate(intervalos):
+        if progress_cb:
+            progress_cb(idx / len(intervalos), f"Descargando y evaluando {itv}…")
         datos, indicadores = {}, {}
         for s in symbols:
             datos[s] = descargar_klines(s, itv, days)
             indicadores[s] = calcular_indicadores(datos[s])
         n_min = min(len(v) for v in datos.values())
         corte = int(n_min * 0.7)
-        print(f"[{itv}] velas={n_min} train=0..{corte} test={corte}..{n_min}")
 
         for umbral in (3.0, 4.0, 5.0):
             for trailing in (True, False):
@@ -651,23 +668,42 @@ def estudio_timeframes(symbols: list[str], days: int, capital0: float) -> None:
                             gan += r.bruto_ganado
                             per += r.bruto_perdido
                             ntr += r.trades
-                        agg[fase] = {
-                            "ret": (cap / (capital0 * len(symbols)) - 1) * 100,
-                            "pf": gan / per if per > 0 else float("inf"),
-                            "trades": ntr,
-                        }
-                    filas.append((itv, umbral, trailing, tendencia, agg))
+                        agg[fase] = _resumen(cap, gan, per, ntr)
+                    filas.append({
+                        "tf": itv,
+                        "umbral": umbral,
+                        "trailing": trailing,
+                        "tendencia": tendencia,
+                        "train": agg["train"],
+                        "test": agg["test"],
+                    })
 
-    filas.sort(key=lambda f: f[4]["test"]["pf"] if f[4]["test"]["pf"] != float("inf") else -1,
-               reverse=True)
+    # Orden por PF de test descendente (None=inf va primero).
+    filas.sort(
+        key=lambda f: float("inf") if f["test"]["pf"] is None else f["test"]["pf"],
+        reverse=True,
+    )
+    if progress_cb:
+        progress_cb(1.0, "Completado")
+    return filas
+
+
+def estudio_timeframes(symbols: list[str], days: int, capital0: float) -> None:
+    """Grid timeframe x umbral x trailing x filtro de tendencia.
+
+    Optimiza sobre el 70% inicial (train) y valida sobre el 30% final
+    (test, fuera de muestra) para detectar sobreajuste.
+    """
+    filas = estudio_timeframes_data(symbols, days, capital0)
     print(f"\n{'tf':>4s} {'umbral':>6s} {'trail':>5s} {'tend':>4s} | "
           f"{'PF train':>8s} {'ret train':>9s} {'n':>4s} | "
           f"{'PF test':>8s} {'ret test':>9s} {'n':>4s}")
-    for itv, u, tr, te, agg in filas:
-        t0, t1 = agg["train"], agg["test"]
-        pf0 = f"{t0['pf']:.2f}" if t0["pf"] != float("inf") else "inf"
-        pf1 = f"{t1['pf']:.2f}" if t1["pf"] != float("inf") else "inf"
-        print(f"{itv:>4s} {u:6.1f} {str(tr):>5s} {str(te):>4s} | "
+    for fila in filas:
+        t0, t1 = fila["train"], fila["test"]
+        pf0 = "inf" if t0["pf"] is None else f"{t0['pf']:.2f}"
+        pf1 = "inf" if t1["pf"] is None else f"{t1['pf']:.2f}"
+        print(f"{fila['tf']:>4s} {fila['umbral']:6.1f} {str(fila['trailing']):>5s} "
+              f"{str(fila['tendencia']):>4s} | "
               f"{pf0:>8s} {t0['ret']:+8.2f}% {t0['trades']:4d} | "
               f"{pf1:>8s} {t1['ret']:+8.2f}% {t1['trades']:4d}")
 

@@ -234,6 +234,41 @@
   .ph-row .px { font-size: 13.5px; font-weight: 650; }
   .ph-row .ch { font-size: 11.5px; font-weight: 650; margin-top: 2px; }
 
+  /* estudio de timeframes */
+  .study-bar { display: flex; gap: 10px; margin-bottom: 14px; }
+  .study-sel {
+    background: var(--card-2); color: var(--text); border: 1px solid var(--line);
+    border-radius: 12px; padding: 9px 12px; font-size: 13px; font-weight: 600;
+  }
+  .study-btn {
+    flex: 1; border: none; border-radius: 12px; padding: 10px 16px;
+    font-size: 13.5px; font-weight: 700; color: #fff; cursor: pointer;
+    background: linear-gradient(135deg, var(--accent), var(--accent-2));
+  }
+  .study-btn:disabled { opacity: .5; cursor: default; }
+  .study-progress { margin-bottom: 14px; }
+  .study-progress-bar {
+    height: 6px; border-radius: 999px; background: rgba(255,255,255,.08); overflow: hidden;
+  }
+  .study-progress-fill {
+    height: 100%; width: 0%; border-radius: 999px;
+    background: linear-gradient(90deg, var(--accent), var(--accent-2));
+    transition: width .4s ease;
+  }
+  .study-status { font-size: 12px; color: var(--text-2); margin-top: 6px; }
+  .study-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+  .study-table th {
+    text-align: right; font-size: 11px; color: var(--text-3); font-weight: 600;
+    padding: 6px 8px; border-bottom: 1px solid var(--line); white-space: nowrap;
+  }
+  .study-table th:first-child, .study-table td:first-child { text-align: left; }
+  .study-table td { text-align: right; padding: 7px 8px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+  .study-table tr.best td { background: rgba(110,86,248,.10); }
+  .study-table .tf { font-weight: 700; }
+  .pf-pos { color: var(--green); font-weight: 650; }
+  .pf-neg { color: var(--red); font-weight: 650; }
+  .study-wrap { overflow-x: auto; }
+
   ::-webkit-scrollbar { width: 6px; }
   ::-webkit-scrollbar-thumb { background: rgba(255,255,255,.12); border-radius: 99px; }
 </style>
@@ -321,6 +356,27 @@
       </section>
     </div>
   </div>
+
+  <!-- ESTUDIO DE TIMEFRAMES -->
+  <section class="card" style="margin-top:18px">
+    <div class="card-head">
+      <h2>Estudio de timeframes</h2>
+      <div class="meta" id="studyMeta">comparar 15m · 1h · 4h · 1d</div>
+    </div>
+    <div class="study-bar">
+      <select id="studyDays" class="study-sel">
+        <option value="180">6 meses</option>
+        <option value="365" selected>1 año</option>
+        <option value="730">2 años</option>
+      </select>
+      <button id="studyRun" class="study-btn" onclick="runStudy()">Ejecutar estudio</button>
+    </div>
+    <div class="study-progress" id="studyProgressWrap" style="display:none">
+      <div class="study-progress-bar"><div class="study-progress-fill" id="studyProgressFill"></div></div>
+      <div class="study-status" id="studyStatus"></div>
+    </div>
+    <div id="studyResults"><div class="empty"><span class="big">🧪</span>Aún no se ha ejecutado ningún estudio. Tarda ~5-15 min según el rango.</div></div>
+  </section>
 </div>
 
 <script>
@@ -530,6 +586,87 @@ function renderPriceHistory(d) {
   }).join("") || '<div class="empty">Histórico insuficiente</div>';
 }
 
+/* ───────── estudio de timeframes ───────── */
+
+let studyPolling = null;
+
+function pfCell(pf) {
+  if (pf == null) return '<span class="pf-pos">∞</span>';
+  const cls = pf >= 1 ? "pf-pos" : "pf-neg";
+  return `<span class="${cls}">${Number(pf).toFixed(2)}</span>`;
+}
+
+async function runStudy() {
+  const days = parseInt($("studyDays").value, 10) || 365;
+  $("studyRun").disabled = true;
+  try {
+    await fetch("/api/study/run", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ days }),
+    });
+  } catch (e) { /* el poller refleja el estado */ }
+  pollStudy();
+  if (!studyPolling) studyPolling = setInterval(pollStudy, 3000);
+}
+
+async function pollStudy() {
+  try {
+    const r = await fetch("/api/study/status", { cache: "no-store" });
+    if (!r.ok) return;
+    renderStudy(await r.json());
+  } catch (e) { /* ignore */ }
+}
+
+function renderStudy(s) {
+  const running = s.status === "running";
+  $("studyRun").disabled = running;
+  $("studyRun").textContent = running ? "Ejecutando…" : "Ejecutar estudio";
+  $("studyProgressWrap").style.display = running ? "block" : "none";
+
+  if (running) {
+    $("studyProgressFill").style.width = `${Math.round((s.progress || 0) * 100)}%`;
+    $("studyStatus").textContent = s.mensaje || "Procesando…";
+  } else if (studyPolling && s.status !== "running") {
+    clearInterval(studyPolling); studyPolling = null;
+  }
+
+  if (s.status === "error") {
+    $("studyResults").innerHTML = `<div class="empty">❌ ${esc(s.error || "Error en el estudio")}</div>`;
+    return;
+  }
+  const filas = s.resultados || [];
+  if (!filas.length) {
+    if (!running) {
+      $("studyResults").innerHTML = '<div class="empty"><span class="big">🧪</span>Aún no se ha ejecutado ningún estudio. Tarda ~5-15 min según el rango.</div>';
+    }
+    return;
+  }
+  const meta = s.params && s.params.days ? `${s.params.days} días · ordenado por PF fuera de muestra` : "";
+  $("studyMeta").textContent = meta;
+  const top = filas.slice(0, 24);
+  $("studyResults").innerHTML = `<div class="study-wrap"><table class="study-table">
+    <thead><tr>
+      <th>TF</th><th>Umbral</th><th>Trail</th><th>Tend</th>
+      <th>PF train</th><th>Ret train</th><th>n</th>
+      <th>PF test</th><th>Ret test</th><th>n</th>
+    </tr></thead>
+    <tbody>${top.map((f, i) => `
+      <tr class="${i === 0 ? "best" : ""}">
+        <td class="tf">${esc(f.tf)}</td>
+        <td>${f.umbral}</td>
+        <td>${f.trailing ? "sí" : "no"}</td>
+        <td>${f.tendencia ? "sí" : "no"}</td>
+        <td>${pfCell(f.train.pf)}</td>
+        <td>${f.train.ret >= 0 ? "+" : ""}${f.train.ret.toFixed(1)}%</td>
+        <td>${f.train.trades}</td>
+        <td>${pfCell(f.test.pf)}</td>
+        <td>${f.test.ret >= 0 ? "+" : ""}${f.test.ret.toFixed(1)}%</td>
+        <td>${f.test.trades}</td>
+      </tr>`).join("")}</tbody>
+  </table></div>`;
+}
+
 function renderSignals(d) {
   const sigs = d.signals || [];
   $("sigMeta").textContent = `${sigs.length} evaluadas`;
@@ -589,6 +726,16 @@ async function tick() {
 }
 tick();
 setInterval(tick, 3000);
+
+// Estado inicial del estudio (puede haber uno en curso o ya terminado).
+pollStudy().then(() => {
+  if (studyPolling == null) {
+    fetch("/api/study/status", { cache: "no-store" })
+      .then((r) => r.ok ? r.json() : null)
+      .then((s) => { if (s && s.status === "running") studyPolling = setInterval(pollStudy, 3000); })
+      .catch(() => {});
+  }
+});
 </script>
 </body>
 </html>

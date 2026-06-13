@@ -65,6 +65,36 @@ async def _handle_index(request: web.Request) -> web.Response:
         return web.Response(status=500, text=f"Error loading dashboard: {exc}")
 
 
+def _json(data: dict, status: int = 200) -> web.Response:
+    return web.Response(
+        text=json.dumps(data, default=str, ensure_ascii=False),
+        content_type="application/json",
+        status=status,
+        headers={"Access-Control-Allow-Origin": "*"},
+    )
+
+
+async def _handle_study_status(request: web.Request) -> web.Response:
+    from .study import estado_estudio  # noqa: PLC0415
+
+    return _json(estado_estudio())
+
+
+async def _handle_study_run(request: web.Request) -> web.Response:
+    from .study import lanzar_estudio  # noqa: PLC0415
+
+    days = 365
+    try:
+        if request.body_exists:
+            body = await request.json()
+            days = int(body.get("days", 365))
+        elif "days" in request.query:
+            days = int(request.query["days"])
+    except Exception:
+        days = 365
+    return _json(lanzar_estudio(days=days))
+
+
 async def run_dashboard(port: int | None = None) -> None:
     """Arranca el servidor y bloquea hasta la cancelación."""
     install_log_handler()
@@ -76,6 +106,8 @@ async def run_dashboard(port: int | None = None) -> None:
     app = web.Application()
     app.router.add_get("/", _handle_index)
     app.router.add_get("/api/status", _handle_status)
+    app.router.add_get("/api/study/status", _handle_study_status)
+    app.router.add_post("/api/study/run", _handle_study_run)
 
     runner = web.AppRunner(app, access_log=None)
     await runner.setup()
