@@ -618,6 +618,66 @@ def backtest(velas: list[list[float]], symbol: str, capital0: float = 1000.0,
 
 # ----------------------------------------------------------------- estudio
 
+def simulacion_inversion_data(
+    symbols: list[str],
+    days: int,
+    capital: float,
+    tf: str = "1d",
+    umbral: float = 3.0,
+    progress_cb=None,
+) -> dict:
+    """¿Cuánto habrían rendido ``capital`` repartidos entre ``symbols``?
+
+    Compara, sobre los últimos ``days`` días en timeframe ``tf``:
+      - **Estrategia**: el backtest técnico del bot (capital final agregado).
+      - **Comprar y mantener**: invertir y no tocar (benchmark honesto).
+
+    Devuelve un dict JSON-serializable con agregado y desglose por símbolo.
+    """
+    cap_por = capital / len(symbols) if symbols else 0.0
+    por_simbolo: list[dict] = []
+    est_final = 0.0
+    bh_final = 0.0
+    trades = ganadores = 0
+
+    for idx, s in enumerate(symbols):
+        if progress_cb:
+            progress_cb(idx / max(1, len(symbols)), f"Simulando {s}…")
+        velas = descargar_klines(s, tf, days)
+        ind = calcular_indicadores(velas)
+        r = backtest(velas, s, cap_por, umbral, ind=ind)
+        est_final += r.capital_final
+        bh_final += cap_por * (1 + r.buy_hold / 100.0)
+        trades += r.trades
+        ganadores += r.ganadores
+        por_simbolo.append({
+            "symbol": s,
+            "estrategia_final": round(r.capital_final, 2),
+            "estrategia_pct": round((r.capital_final / cap_por - 1) * 100, 2) if cap_por else 0.0,
+            "buyhold_pct": round(r.buy_hold, 2),
+            "trades": r.trades,
+            "winrate": round(r.winrate, 1),
+            "max_drawdown": round(r.max_drawdown, 1),
+        })
+
+    if progress_cb:
+        progress_cb(1.0, "Completado")
+
+    return {
+        "capital_inicial": round(capital, 2),
+        "estrategia_final": round(est_final, 2),
+        "estrategia_pct": round((est_final / capital - 1) * 100, 2) if capital else 0.0,
+        "buyhold_final": round(bh_final, 2),
+        "buyhold_pct": round((bh_final / capital - 1) * 100, 2) if capital else 0.0,
+        "trades": trades,
+        "winrate": round(100.0 * ganadores / trades, 1) if trades else 0.0,
+        "tf": tf,
+        "umbral": umbral,
+        "dias": days,
+        "por_simbolo": por_simbolo,
+    }
+
+
 def estudio_timeframes_data(
     symbols: list[str],
     days: int,

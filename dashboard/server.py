@@ -80,19 +80,34 @@ async def _handle_study_status(request: web.Request) -> web.Response:
     return _json(estado_estudio())
 
 
-async def _handle_study_run(request: web.Request) -> web.Response:
-    from .study import lanzar_estudio  # noqa: PLC0415
-
-    days = 365
+async def _dias_de_request(request: web.Request) -> int:
     try:
         if request.body_exists:
             body = await request.json()
-            days = int(body.get("days", 365))
-        elif "days" in request.query:
-            days = int(request.query["days"])
+            return int(body.get("days", 365))
+        if "days" in request.query:
+            return int(request.query["days"])
     except Exception:
-        days = 365
-    return _json(lanzar_estudio(days=days))
+        pass
+    return 365
+
+
+async def _handle_study_run(request: web.Request) -> web.Response:
+    from .study import lanzar_estudio  # noqa: PLC0415
+
+    return _json(lanzar_estudio(days=await _dias_de_request(request)))
+
+
+async def _handle_sim_status(request: web.Request) -> web.Response:
+    from .study import estado_simulacion  # noqa: PLC0415
+
+    return _json(estado_simulacion())
+
+
+async def _handle_sim_run(request: web.Request) -> web.Response:
+    from .study import lanzar_simulacion  # noqa: PLC0415
+
+    return _json(lanzar_simulacion(days=await _dias_de_request(request)))
 
 
 async def run_dashboard(port: int | None = None) -> None:
@@ -108,6 +123,8 @@ async def run_dashboard(port: int | None = None) -> None:
     app.router.add_get("/api/status", _handle_status)
     app.router.add_get("/api/study/status", _handle_study_status)
     app.router.add_post("/api/study/run", _handle_study_run)
+    app.router.add_get("/api/sim/status", _handle_sim_status)
+    app.router.add_post("/api/sim/run", _handle_sim_run)
 
     runner = web.AppRunner(app, access_log=None)
     await runner.setup()

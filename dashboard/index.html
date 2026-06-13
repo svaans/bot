@@ -268,6 +268,15 @@
   .pf-pos { color: var(--green); font-weight: 650; }
   .pf-neg { color: var(--red); font-weight: 650; }
   .study-wrap { overflow-x: auto; }
+  /* simulación de inversión */
+  .sim-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  @media (max-width: 560px) { .sim-grid { grid-template-columns: 1fr; } }
+  .sim-box { background: rgba(255,255,255,.04); border-radius: var(--r-md); padding: 16px; }
+  .sim-box .sim-k { font-size: 12px; color: var(--text-2); }
+  .sim-box .sim-v { font-size: 26px; font-weight: 800; letter-spacing: -.02em; margin: 4px 0 2px; }
+  .sim-box .sim-v small { font-size: 15px; font-weight: 700; color: var(--text-2); }
+  .sim-box .sim-ch { font-size: 13px; font-weight: 700; }
+  .sim-box .sim-extra { font-size: 11.5px; color: var(--text-3); margin-top: 6px; }
 
   ::-webkit-scrollbar { width: 6px; }
   ::-webkit-scrollbar-thumb { background: rgba(255,255,255,.12); border-radius: 99px; }
@@ -376,6 +385,27 @@
       <div class="study-status" id="studyStatus"></div>
     </div>
     <div id="studyResults"><div class="empty"><span class="big">🧪</span>Aún no se ha ejecutado ningún estudio. Tarda ~5-15 min según el rango.</div></div>
+  </section>
+
+  <!-- SIMULACIÓN DE INVERSIÓN -->
+  <section class="card" style="margin-top:18px">
+    <div class="card-head">
+      <h2>¿Cuánto habría ganado?</h2>
+      <div class="meta" id="simMeta">1000 USDT · estrategia vs comprar y mantener</div>
+    </div>
+    <div class="study-bar">
+      <select id="simDays" class="study-sel">
+        <option value="180">6 meses</option>
+        <option value="365" selected>1 año</option>
+        <option value="730">2 años</option>
+      </select>
+      <button id="simRun" class="study-btn" onclick="runSim()">Simular inversión</button>
+    </div>
+    <div class="study-progress" id="simProgressWrap" style="display:none">
+      <div class="study-progress-bar"><div class="study-progress-fill" id="simProgressFill"></div></div>
+      <div class="study-status" id="simStatus"></div>
+    </div>
+    <div id="simResults"><div class="empty"><span class="big">💰</span>Simula cuánto habrían rendido 1000 USDT con la estrategia, comparado con solo comprar y mantener.</div></div>
   </section>
 </div>
 
@@ -636,7 +666,7 @@ function renderStudy(s) {
     $("studyResults").innerHTML = `<div class="empty">❌ ${esc(s.error || "Error en el estudio")}</div>`;
     return;
   }
-  const filas = s.resultados || [];
+  const filas = s.resultado || [];
   if (!filas.length) {
     if (!running) {
       $("studyResults").innerHTML = '<div class="empty"><span class="big">🧪</span>Aún no se ha ejecutado ningún estudio. Tarda ~5-15 min según el rango.</div>';
@@ -666,6 +696,85 @@ function renderStudy(s) {
         <td>${f.test.trades}</td>
       </tr>`).join("")}</tbody>
   </table></div>`;
+}
+
+/* ───────── simulación de inversión ───────── */
+
+let simPolling = null;
+
+async function runSim() {
+  const days = parseInt($("simDays").value, 10) || 365;
+  $("simRun").disabled = true;
+  try {
+    await fetch("/api/sim/run", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ days }),
+    });
+  } catch (e) { /* el poller refleja el estado */ }
+  pollSim();
+  if (!simPolling) simPolling = setInterval(pollSim, 2000);
+}
+
+async function pollSim() {
+  try {
+    const r = await fetch("/api/sim/status", { cache: "no-store" });
+    if (!r.ok) return;
+    renderSim(await r.json());
+  } catch (e) { /* ignore */ }
+}
+
+function renderSim(s) {
+  const running = s.status === "running";
+  $("simRun").disabled = running;
+  $("simRun").textContent = running ? "Simulando…" : "Simular inversión";
+  $("simProgressWrap").style.display = running ? "block" : "none";
+  if (running) {
+    $("simProgressFill").style.width = `${Math.round((s.progress || 0) * 100)}%`;
+    $("simStatus").textContent = s.mensaje || "Procesando…";
+  } else if (simPolling && s.status !== "running") {
+    clearInterval(simPolling); simPolling = null;
+  }
+  if (s.status === "error") {
+    $("simResults").innerHTML = `<div class="empty">❌ ${esc(s.error || "Error en la simulación")}</div>`;
+    return;
+  }
+  const d = s.resultado;
+  if (!d) return;
+  $("simMeta").textContent = `${fmtMoney(d.capital_inicial, 0)} USDT · ${d.dias} días · estrategia vs comprar y mantener`;
+
+  const card = (titulo, final, pct, extra) => {
+    const up = pct >= 0;
+    const col = up ? "var(--green)" : "var(--red)";
+    const dif = final - d.capital_inicial;
+    return `<div class="sim-box">
+      <div class="sim-k">${titulo}</div>
+      <div class="sim-v">${fmtMoney(final, 2)} <small>USDT</small></div>
+      <div class="sim-ch" style="color:${col}">${up ? "▲" : "▼"} ${dif >= 0 ? "+" : ""}${fmtMoney(dif, 2)} (${up ? "+" : ""}${pct.toFixed(2)}%)</div>
+      ${extra ? `<div class="sim-extra">${extra}</div>` : ""}
+    </div>`;
+  };
+
+  const filas = (d.por_simbolo || []).map((p) => `
+    <tr>
+      <td class="tf">${esc(baseSym(p.symbol))}</td>
+      <td><span class="${p.estrategia_pct >= 0 ? "pf-pos" : "pf-neg"}">${p.estrategia_pct >= 0 ? "+" : ""}${p.estrategia_pct.toFixed(1)}%</span></td>
+      <td><span class="${p.buyhold_pct >= 0 ? "pf-pos" : "pf-neg"}">${p.buyhold_pct >= 0 ? "+" : ""}${p.buyhold_pct.toFixed(1)}%</span></td>
+      <td>${p.trades}</td>
+      <td>${p.winrate.toFixed(0)}%</td>
+      <td>${p.max_drawdown.toFixed(0)}%</td>
+    </tr>`).join("");
+
+  $("simResults").innerHTML = `
+    <div class="sim-grid">
+      ${card("Con la estrategia del bot", d.estrategia_final, d.estrategia_pct,
+             `${d.trades} operaciones · ${d.winrate.toFixed(0)}% acierto`)}
+      ${card("Comprar y mantener", d.buyhold_final, d.buyhold_pct, "sin operar, solo holdear")}
+    </div>
+    <div class="study-wrap" style="margin-top:14px"><table class="study-table">
+      <thead><tr><th>Moneda</th><th>Estrategia</th><th>Hold</th><th>Trades</th><th>Acierto</th><th>Max DD</th></tr></thead>
+      <tbody>${filas}</tbody>
+    </table></div>`;
 }
 
 function renderSignals(d) {
@@ -728,15 +837,17 @@ async function tick() {
 tick();
 setInterval(tick, 3000);
 
-// Estado inicial del estudio (puede haber uno en curso o ya terminado).
-pollStudy().then(() => {
-  if (studyPolling == null) {
-    fetch("/api/study/status", { cache: "no-store" })
+// Estado inicial de estudio y simulación (puede haber uno en curso o terminado).
+function _initJob(pollFn, statusUrl, setPoller, intervalMs) {
+  pollFn().then(() => {
+    fetch(statusUrl, { cache: "no-store" })
       .then((r) => r.ok ? r.json() : null)
-      .then((s) => { if (s && s.status === "running") studyPolling = setInterval(pollStudy, 3000); })
+      .then((s) => { if (s && s.status === "running") setPoller(setInterval(pollFn, intervalMs)); })
       .catch(() => {});
-  }
-});
+  });
+}
+_initJob(pollStudy, "/api/study/status", (h) => { studyPolling = h; }, 3000);
+_initJob(pollSim, "/api/sim/status", (h) => { simPolling = h; }, 2000);
 </script>
 </body>
 </html>
