@@ -65,6 +65,9 @@ async def run_dashboard(port: int | None = None) -> None:
     """Arranca el servidor y bloquea hasta la cancelación."""
     install_log_handler()
     port = port or int(os.getenv("DASHBOARD_PORT", "8080"))
+    # En un VPS conviene no exponer el dashboard a internet (no tiene auth):
+    # DASHBOARD_HOST=127.0.0.1 + túnel SSH, o la IP privada de Tailscale.
+    host = os.getenv("DASHBOARD_HOST", "0.0.0.0")
 
     app = web.Application()
     app.router.add_get("/", _handle_index)
@@ -72,7 +75,7 @@ async def run_dashboard(port: int | None = None) -> None:
 
     runner = web.AppRunner(app, access_log=None)
     await runner.setup()
-    site = web.TCPSite(runner, "0.0.0.0", port)
+    site = web.TCPSite(runner, host, port)
     await site.start()
 
     _log.info("Dashboard disponible en http://localhost:%s", port)

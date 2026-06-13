@@ -1,0 +1,21 @@
+[Unit]
+Description=Bot de trading (svaans/bot)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=botuser
+WorkingDirectory=/opt/bot
+ExecStart=/opt/bot/venv/bin/python main.py
+Restart=always
+RestartSec=10
+# El dashboard solo escucha en localhost; se accede por túnel SSH o Tailscale.
+Environment=DASHBOARD_HOST=127.0.0.1
+Environment=PYTHONUNBUFFERED=1
+# Protecciones básicas del servicio
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
