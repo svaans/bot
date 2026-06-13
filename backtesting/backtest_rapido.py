@@ -678,11 +678,15 @@ def estudio_timeframes_data(
                         "test": agg["test"],
                     })
 
-    # Orden por PF de test descendente (None=inf va primero).
-    filas.sort(
-        key=lambda f: float("inf") if f["test"]["pf"] is None else f["test"]["pf"],
-        reverse=True,
-    )
+    # Orden: primero las combinaciones con operaciones REALES en test (PF
+    # significativo), por PF descendente; al final las que no operaron en test
+    # (PF=inf espurio por 0 trades, no es rentabilidad real).
+    def _orden(f: dict):
+        tiene_trades = 1 if f["test"]["trades"] > 0 else 0
+        pf = float("inf") if f["test"]["pf"] is None else f["test"]["pf"]
+        return (tiene_trades, pf)
+
+    filas.sort(key=_orden, reverse=True)
     if progress_cb:
         progress_cb(1.0, "Completado")
     return filas

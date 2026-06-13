@@ -590,7 +590,8 @@ function renderPriceHistory(d) {
 
 let studyPolling = null;
 
-function pfCell(pf) {
+function pfCell(pf, trades) {
+  if (trades === 0) return '<span style="color:var(--text-3)">—</span>';
   if (pf == null) return '<span class="pf-pos">∞</span>';
   const cls = pf >= 1 ? "pf-pos" : "pf-neg";
   return `<span class="${cls}">${Number(pf).toFixed(2)}</span>`;
@@ -657,10 +658,10 @@ function renderStudy(s) {
         <td>${f.umbral}</td>
         <td>${f.trailing ? "sí" : "no"}</td>
         <td>${f.tendencia ? "sí" : "no"}</td>
-        <td>${pfCell(f.train.pf)}</td>
+        <td>${pfCell(f.train.pf, f.train.trades)}</td>
         <td>${f.train.ret >= 0 ? "+" : ""}${f.train.ret.toFixed(1)}%</td>
         <td>${f.train.trades}</td>
-        <td>${pfCell(f.test.pf)}</td>
+        <td>${pfCell(f.test.pf, f.test.trades)}</td>
         <td>${f.test.ret >= 0 ? "+" : ""}${f.test.ret.toFixed(1)}%</td>
         <td>${f.test.trades}</td>
       </tr>`).join("")}</tbody>

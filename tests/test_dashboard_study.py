@@ -41,9 +41,12 @@ def test_estudio_timeframes_data_estructura(monkeypatch: pytest.MonkeyPatch) -> 
         assert set(fila[fase]) == {"ret", "pf", "trades"}
         assert fila[fase]["pf"] is None or isinstance(fila[fase]["pf"], (int, float))
 
-    # Ordenado por PF de test descendente (None=inf primero).
+    # Orden: filas con operaciones reales en test primero (por PF desc), y las
+    # de 0 trades (PF=inf espurio) al final.
     def _clave(f):
-        return float("inf") if f["test"]["pf"] is None else f["test"]["pf"]
+        tiene = 1 if f["test"]["trades"] > 0 else 0
+        pf = float("inf") if f["test"]["pf"] is None else f["test"]["pf"]
+        return (tiene, pf)
 
     claves = [_clave(f) for f in filas]
     assert claves == sorted(claves, reverse=True)
