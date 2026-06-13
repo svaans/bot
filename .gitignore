@@ -42,3 +42,8 @@ resultados/
 
 .claude/
 backtesting/cache/
+
+# Estado runtime: lo escribe el bot en ejecución; nunca se versiona.
+# (estado/evaluaciones_repo.py es código y SÍ se versiona, ver excepción)
+estado/*
+!estado/evaluaciones_repo.py
