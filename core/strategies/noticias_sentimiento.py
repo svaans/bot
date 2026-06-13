@@ -19,9 +19,12 @@ import xml.etree.ElementTree as ET
 _logger = logging.getLogger(__name__)
 
 _TTL = 3_600  # refrescar cada hora por símbolo
+_TTL_FALLO = 1_800  # backoff tras un fallo: no reintentar (ni spamear logs) durante este tiempo
 
 # {ticker: (timestamp_fetch, score)}
 _cache: dict[str, tuple[float, float]] = {}
+# {ticker: timestamp_hasta} — durante el backoff no se vuelve a pedir la fuente
+_fallo_hasta: dict[str, float] = {}
 
 # Símbolos de trading → ticker CryptoPanic
 SYMBOL_TO_TICKER: dict[str, str] = {
@@ -84,6 +87,12 @@ def obtener_sentimiento(symbol: str) -> float | None:
     if cached is not None and (ts_ahora - cached[0]) < _TTL:
         return cached[1]
 
+    # Backoff: si la fuente falló hace poco, no se reintenta hasta que expire
+    # _TTL_FALLO. Evita martillear una fuente caída/403 en cada evaluación (y
+    # el spam de logs asociado). Se devuelve el último score conocido o None.
+    if ts_ahora < _fallo_hasta.get(ticker, 0.0):
+        return cached[1] if cached is not None else None
+
     url = _RSS_URL.format(ticker=ticker)
     try:
         with urllib.request.urlopen(url, timeout=5) as resp:
@@ -99,6 +108,7 @@ def obtener_sentimiento(symbol: str) -> float | None:
                 break
         score = _puntuar_titulares(titulos)
         _cache[ticker] = (ts_ahora, score)
+        _fallo_hasta.pop(ticker, None)  # éxito: se cancela cualquier backoff previo
         _logger.info(
             "Noticias %s: score=%.2f  (%d titulares, pos=%d neg=%d)",
             ticker, score, len(titulos),
@@ -107,7 +117,14 @@ def obtener_sentimiento(symbol: str) -> float | None:
         )
         return score
     except Exception as exc:
-        _logger.warning("Noticias no disponibles para %s: %s", ticker, exc)
+        # Activa el backoff: durante _TTL_FALLO no se reintenta. Como el fetch
+        # solo se alcanza cuando el backoff ha expirado, este warning se emite
+        # como mucho una vez por ventana (≈30 min) por ticker, no en bucle.
+        _fallo_hasta[ticker] = ts_ahora + _TTL_FALLO
+        _logger.warning(
+            "Noticias no disponibles para %s: %s (no se reintenta en %ds)",
+            ticker, exc, _TTL_FALLO,
+        )
         # Devolver score cacheado si existe, aunque esté expirado
         if cached is not None:
             return cached[1]

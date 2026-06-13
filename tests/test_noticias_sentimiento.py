@@ -5,13 +5,25 @@ import time
 import xml.etree.ElementTree as ET
 from unittest.mock import MagicMock, patch
 
+import pytest
 
 from core.strategies.noticias_sentimiento import (
     _puntuar_titulares,
     noticias_permite_entrada,
     obtener_sentimiento,
     _cache,
+    _fallo_hasta,
 )
+
+
+@pytest.fixture(autouse=True)
+def _limpiar_estado_noticias():
+    """Aísla cache y backoff de fallos entre tests."""
+    _cache.clear()
+    _fallo_hasta.clear()
+    yield
+    _cache.clear()
+    _fallo_hasta.clear()
 
 
 def _make_rss(titles: list[str]) -> bytes:

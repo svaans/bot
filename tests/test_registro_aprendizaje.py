@@ -9,6 +9,7 @@ Cubre:
 from __future__ import annotations
 
 import json
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
@@ -20,14 +21,18 @@ from learning.registro_aprendizaje import registrar_cierre_para_aprendizaje
 
 
 def _registro(symbol: str = "BTC/USDT", retorno: float = 0.05) -> dict:
+    # Timestamps relativos a "ahora": analizar_estrategias_en_ordenes filtra por
+    # ventana reciente (dias=1), así que fechas fijas se quedan fuera de la
+    # ventana según avanza el reloj (time-bomb). Usar now() lo hace robusto.
+    ahora = datetime.now(timezone.utc)
     return {
         "symbol": symbol,
         "precio_entrada": 100.0,
         "cantidad": 1.0,
         "estrategias_activas": json.dumps({"rsi": 1.0, "ema": 0.5}),
-        "fecha_cierre": "2026-06-12T10:00:00+00:00",
+        "fecha_cierre": ahora.isoformat(),
         "retorno_total": retorno,
-        "timestamp": "2026-06-12T09:00:00+00:00",
+        "timestamp": (ahora - timedelta(minutes=5)).isoformat(),
         "detalles_tecnicos": {"slope": 0.1},
     }
 
