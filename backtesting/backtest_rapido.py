@@ -618,6 +618,200 @@ def backtest(velas: list[list[float]], symbol: str, capital0: float = 1000.0,
 
 # ----------------------------------------------------------------- estudio
 
+def _ticker_a_par(symbol: str) -> str:
+    """``BTCUSDT`` → ``BTC/USDT`` (para casar con las claves de gestor_pesos)."""
+    s = symbol.upper()
+    for quote in ("USDT", "BUSD", "USDC", "EUR", "USD"):
+        if s.endswith(quote) and len(s) > len(quote):
+            return f"{s[:-len(quote)]}/{quote}"
+    return s
+
+
+def backtest_aprendizaje_data(
+    symbols: list[str],
+    days: int,
+    capital: float,
+    tf: str = "1d",
+    umbral: float = 1.5,
+    reweight_every: int = 15,
+    progress_cb=None,
+) -> dict:
+    """Backtest que USA el aprendizaje: estrategias reales ponderadas por los
+    pesos aprendidos, con re-pesado periódico (simula la evolución del
+    aprendizaje) y las validaciones del motor en vivo.
+
+    Aproximación honesta: reutiliza las estrategias de entrada, los validadores
+    (RSI/slope/Bollinger/volumen), la detección de tendencia y la matemática de
+    aprendizaje (``calcular_pesos_suavizados``). Los pesos se llevan en una
+    copia LOCAL por símbolo (nunca se toca el ``gestor_pesos`` del bot en vivo).
+    Salidas por SL/TP basados en ATR. No replica régimen de volatilidad ni
+    sinergia/contradicciones del motor, por lo que es orientativo.
+    """
+    import json as _json
+
+    import pandas as pd
+
+    from core.estrategias import obtener_estrategias_por_tendencia
+    from core.strategies.entry.loader import cargar_estrategias
+    from core.strategies.entry.validadores import (
+        validar_bollinger, validar_rsi, validar_slope, validar_volumen,
+    )
+    from core.strategies.pesos import _normalize_with_floor, gestor_pesos
+    from core.strategies.tendencia import detectar_tendencia
+    from learning.entrenador_estrategias import calcular_pesos_suavizados
+
+    funcs = cargar_estrategias()
+    cap_por = capital / len(symbols) if symbols else 0.0
+    WARMUP = 35
+
+    por_simbolo: list[dict] = []
+    est_final = 0.0
+    bh_final = 0.0
+    trades_tot = ganadores_tot = 0
+    aprendizaje: list[dict] = []
+
+    for idx, s in enumerate(symbols):
+        if progress_cb:
+            progress_cb(idx / max(1, len(symbols)), f"Simulando {s} con aprendizaje…")
+        velas = descargar_klines(s, tf, days)
+        ind = calcular_indicadores(velas)
+        atr = ind["atr"]
+        df = pd.DataFrame(velas, columns=["timestamp", "open", "high", "low", "close", "volume"])
+        close = df["close"].tolist()
+        high = df["high"].tolist()
+        low = df["low"].tolist()
+        n = len(df)
+
+        par = _ticker_a_par(s)
+        pesos_local = {k: float(v) for k, v in (gestor_pesos.pesos.get(par, {}) or {}).items()}
+        pesos_iniciales = dict(pesos_local)
+
+        capital_sym = cap_por
+        en_pos = False
+        entrada = sl = tp = 0.0
+        estrategias_entrada: set[str] = set()
+        n_trades = n_win = 0
+        n_reweights = 0
+        ordenes_sim: list[dict] = []
+
+        for i in range(WARMUP, n):
+            if en_pos:
+                precio_salida = None
+                if low[i] <= sl:
+                    precio_salida = sl
+                elif high[i] >= tp:
+                    precio_salida = tp
+                if precio_salida is not None:
+                    ret = precio_salida / entrada - 1.0
+                    capital_sym *= (1.0 + ret)
+                    n_trades += 1
+                    if ret > 0:
+                        n_win += 1
+                    ordenes_sim.append({
+                        "estrategias_activas": _json.dumps({k: True for k in estrategias_entrada}),
+                        "retorno_total": ret,
+                    })
+                    en_pos = False
+                    # Aprendizaje: re-pesado periódico con la matemática real.
+                    if len(ordenes_sim) >= reweight_every and len(ordenes_sim) % reweight_every == 0:
+                        dfo = pd.DataFrame(ordenes_sim)
+                        corte = int(len(dfo) * 0.7)
+                        nuevos, _m = calcular_pesos_suavizados(
+                            dfo.iloc[:corte], dfo.iloc[corte:], pesos_local,
+                            factor_suavizado=0.03, minimo_operaciones=3,
+                        )
+                        if nuevos:
+                            pesos_local = _normalize_with_floor(
+                                nuevos, total=gestor_pesos.total, piso=gestor_pesos.piso,
+                            )
+                            n_reweights += 1
+                continue
+
+            ventana = df.iloc[max(0, i - 200):i + 1]
+            tendencia, _ = detectar_tendencia(s, ventana)
+            if tendencia not in ("alcista", "lateral"):
+                continue
+            nombres = obtener_estrategias_por_tendencia(tendencia)
+            puntaje = 0.0
+            activas: set[str] = set()
+            for nm in nombres:
+                fn = funcs.get(nm)
+                if not callable(fn):
+                    continue
+                try:
+                    res = fn(ventana)
+                    if isinstance(res, dict) and res.get("activo"):
+                        activas.add(nm)
+                        puntaje += float(pesos_local.get(nm, 0.0))
+                except Exception:
+                    continue
+            if puntaje < umbral or not activas:
+                continue
+            if not (validar_rsi(ventana, "long") and validar_slope(ventana, tendencia)
+                    and validar_bollinger(ventana) and validar_volumen(ventana)):
+                continue
+            a = atr[i]
+            if a is None or math.isnan(a) or a <= 0:
+                continue
+            entrada = close[i]
+            sl = entrada - SL_RATIO * a
+            tp = entrada + TP_RATIO * a
+            estrategias_entrada = set(activas)
+            en_pos = True
+
+        # Cierre forzado al final del periodo.
+        if en_pos:
+            ret = close[n - 1] / entrada - 1.0
+            capital_sym *= (1.0 + ret)
+            n_trades += 1
+            if ret > 0:
+                n_win += 1
+
+        buy_hold_pct = (close[n - 1] / close[WARMUP] - 1.0) * 100 if n > WARMUP and close[WARMUP] else 0.0
+        est_final += capital_sym
+        bh_final += cap_por * (1 + buy_hold_pct / 100.0)
+        trades_tot += n_trades
+        ganadores_tot += n_win
+
+        # Resumen del aprendizaje: estrategias que más ganaron/perdieron peso.
+        cambios = sorted(
+            ((nm, pesos_local.get(nm, 0.0) - pesos_iniciales.get(nm, 0.0)) for nm in pesos_iniciales),
+            key=lambda x: x[1],
+        )
+        subieron = [{"estrategia": nm, "delta": round(d, 2)} for nm, d in reversed(cambios[-3:]) if d > 0.01]
+        bajaron = [{"estrategia": nm, "delta": round(d, 2)} for nm, d in cambios[:3] if d < -0.01]
+
+        por_simbolo.append({
+            "symbol": s,
+            "estrategia_final": round(capital_sym, 2),
+            "estrategia_pct": round((capital_sym / cap_por - 1) * 100, 2) if cap_por else 0.0,
+            "buyhold_pct": round(buy_hold_pct, 2),
+            "trades": n_trades,
+            "winrate": round(100.0 * n_win / n_trades, 1) if n_trades else 0.0,
+            "reweights": n_reweights,
+        })
+        aprendizaje.append({"symbol": s, "subieron": subieron, "bajaron": bajaron})
+
+    if progress_cb:
+        progress_cb(1.0, "Completado")
+
+    return {
+        "capital_inicial": round(capital, 2),
+        "estrategia_final": round(est_final, 2),
+        "estrategia_pct": round((est_final / capital - 1) * 100, 2) if capital else 0.0,
+        "buyhold_final": round(bh_final, 2),
+        "buyhold_pct": round((bh_final / capital - 1) * 100, 2) if capital else 0.0,
+        "trades": trades_tot,
+        "winrate": round(100.0 * ganadores_tot / trades_tot, 1) if trades_tot else 0.0,
+        "tf": tf,
+        "umbral": umbral,
+        "dias": days,
+        "con_aprendizaje": True,
+        "por_simbolo": por_simbolo,
+        "aprendizaje": aprendizaje,
+    }
+
+
 def simulacion_inversion_data(
     symbols: list[str],
     days: int,

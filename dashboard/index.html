@@ -277,6 +277,13 @@
   .sim-box .sim-v small { font-size: 15px; font-weight: 700; color: var(--text-2); }
   .sim-box .sim-ch { font-size: 13px; font-weight: 700; }
   .sim-box .sim-extra { font-size: 11.5px; color: var(--text-3); margin-top: 6px; }
+  .sim-check { display: flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--text-2); white-space: nowrap; }
+  .sim-check input { accent-color: var(--accent); width: 16px; height: 16px; }
+  .aprend-box { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--line); }
+  .aprend-title { font-size: 12px; color: var(--text-2); margin-bottom: 8px; }
+  .aprend-row { display: flex; gap: 10px; align-items: baseline; padding: 5px 0; }
+  .aprend-row .nm { font-size: 12.5px; font-weight: 700; width: 48px; flex: none; }
+  .aprend-chips { display: flex; flex-wrap: wrap; gap: 5px; }
 
   ::-webkit-scrollbar { width: 6px; }
   ::-webkit-scrollbar-thumb { background: rgba(255,255,255,.12); border-radius: 99px; }
@@ -399,6 +406,7 @@
         <option value="365" selected>1 año</option>
         <option value="730">2 años</option>
       </select>
+      <label class="sim-check"><input type="checkbox" id="simAprend"> Usar aprendizaje</label>
       <button id="simRun" class="study-btn" onclick="runSim()">Simular inversión</button>
     </div>
     <div class="study-progress" id="simProgressWrap" style="display:none">
@@ -704,12 +712,13 @@ let simPolling = null;
 
 async function runSim() {
   const days = parseInt($("simDays").value, 10) || 365;
+  const aprendizaje = $("simAprend").checked;
   $("simRun").disabled = true;
   try {
     await fetch("/api/sim/run", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ days }),
+      body: JSON.stringify({ days, aprendizaje }),
     });
   } catch (e) { /* el poller refleja el estado */ }
   pollSim();
@@ -755,6 +764,10 @@ function renderSim(s) {
     </div>`;
   };
 
+  const aprend = !!d.con_aprendizaje;
+  const ultCol = (p) => aprend
+    ? `<td>${p.reweights ?? 0}</td>`
+    : `<td>${(p.max_drawdown ?? 0).toFixed(0)}%</td>`;
   const filas = (d.por_simbolo || []).map((p) => `
     <tr>
       <td class="tf">${esc(baseSym(p.symbol))}</td>
@@ -762,19 +775,38 @@ function renderSim(s) {
       <td><span class="${p.buyhold_pct >= 0 ? "pf-pos" : "pf-neg"}">${p.buyhold_pct >= 0 ? "+" : ""}${p.buyhold_pct.toFixed(1)}%</span></td>
       <td>${p.trades}</td>
       <td>${p.winrate.toFixed(0)}%</td>
-      <td>${p.max_drawdown.toFixed(0)}%</td>
+      ${ultCol(p)}
     </tr>`).join("");
+
+  // Bloque de evolución del aprendizaje (solo en modo con aprendizaje).
+  let aprendHtml = "";
+  if (aprend && Array.isArray(d.aprendizaje)) {
+    const chips = (arr, cls, sign) => (arr || []).map((x) =>
+      `<span class="chip ${cls}">${esc(x.estrategia.replace(/^estrategia_/, ""))} ${sign}${x.delta.toFixed(1)}</span>`).join(" ");
+    const filasA = d.aprendizaje.filter((a) => (a.subieron || []).length || (a.bajaron || []).length).map((a) => `
+      <div class="aprend-row">
+        <span class="nm">${esc(baseSym(a.symbol))}</span>
+        <div class="aprend-chips">${chips(a.subieron, "success", "+") || '<span style="color:var(--text-3)">—</span>'} ${chips(a.bajaron, "danger", "")}</div>
+      </div>`).join("");
+    if (filasA) {
+      aprendHtml = `<div class="aprend-box">
+        <div class="aprend-title">Cómo ajustó el aprendizaje los pesos (Δ por estrategia)</div>
+        ${filasA}
+      </div>`;
+    }
+  }
 
   $("simResults").innerHTML = `
     <div class="sim-grid">
-      ${card("Con la estrategia del bot", d.estrategia_final, d.estrategia_pct,
+      ${card("Con la estrategia del bot" + (aprend ? " + aprendizaje" : ""), d.estrategia_final, d.estrategia_pct,
              `${d.trades} operaciones · ${d.winrate.toFixed(0)}% acierto`)}
       ${card("Comprar y mantener", d.buyhold_final, d.buyhold_pct, "sin operar, solo holdear")}
     </div>
     <div class="study-wrap" style="margin-top:14px"><table class="study-table">
-      <thead><tr><th>Moneda</th><th>Estrategia</th><th>Hold</th><th>Trades</th><th>Acierto</th><th>Max DD</th></tr></thead>
+      <thead><tr><th>Moneda</th><th>Estrategia</th><th>Hold</th><th>Trades</th><th>Acierto</th><th>${aprend ? "Re-pesos" : "Max DD"}</th></tr></thead>
       <tbody>${filas}</tbody>
-    </table></div>`;
+    </table></div>
+    ${aprendHtml}`;
 }
 
 function renderSignals(d) {

@@ -107,7 +107,19 @@ async def _handle_sim_status(request: web.Request) -> web.Response:
 async def _handle_sim_run(request: web.Request) -> web.Response:
     from .study import lanzar_simulacion  # noqa: PLC0415
 
-    return _json(lanzar_simulacion(days=await _dias_de_request(request)))
+    days = 365
+    aprendizaje = False
+    try:
+        if request.body_exists:
+            body = await request.json()
+            days = int(body.get("days", 365))
+            aprendizaje = bool(body.get("aprendizaje", False))
+        elif "days" in request.query:
+            days = int(request.query["days"])
+            aprendizaje = request.query.get("aprendizaje") in ("1", "true", "yes")
+    except Exception:
+        days, aprendizaje = 365, False
+    return _json(lanzar_simulacion(days=days, aprendizaje=aprendizaje))
 
 
 async def run_dashboard(port: int | None = None) -> None:

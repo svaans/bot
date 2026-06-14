@@ -96,16 +96,22 @@ def estado_estudio() -> Dict[str, Any]:
 _simulacion = _Job()
 
 
-def lanzar_simulacion(days: int = 365, capital: float = 1000.0) -> Dict[str, Any]:
+def lanzar_simulacion(days: int = 365, capital: float = 1000.0, aprendizaje: bool = False) -> Dict[str, Any]:
     days = _days_validos(days)
 
     def _fn() -> dict:
-        from backtesting.backtest_rapido import simulacion_inversion_data  # noqa: PLC0415
-        return simulacion_inversion_data(
+        from backtesting import backtest_rapido as bt  # noqa: PLC0415
+        if aprendizaje:
+            return bt.backtest_aprendizaje_data(
+                _SYMBOLS_DEFAULT, days, capital, tf="1d", progress_cb=_simulacion.progress,
+            )
+        return bt.simulacion_inversion_data(
             _SYMBOLS_DEFAULT, days, capital, tf="1d", progress_cb=_simulacion.progress,
         )
 
-    return _simulacion.lanzar(_fn, {"symbols": _SYMBOLS_DEFAULT, "days": days, "capital": capital})
+    return _simulacion.lanzar(
+        _fn, {"symbols": _SYMBOLS_DEFAULT, "days": days, "capital": capital, "aprendizaje": aprendizaje},
+    )
 
 
 def estado_simulacion() -> Dict[str, Any]:

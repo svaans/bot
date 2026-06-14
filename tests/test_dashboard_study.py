@@ -135,6 +135,48 @@ def test_simulacion_inversion_data(monkeypatch: pytest.MonkeyPatch) -> None:
     assert isinstance(d["buyhold_final"], (int, float))
 
 
+def _fake_klines_tendencia(symbol: str, interval: str, days: int):
+    """Velas con ciclos alcistas/bajistas (activan estrategias y validaciones)."""
+    import math
+    out = []
+    t = 1_700_000_000_000
+    price = 100.0
+    for i in range(300):
+        price *= 1 + 0.004 * math.sin(i / 30) + (0.002 if i % 5 else -0.003)
+        price = max(1.0, price)
+        o = price
+        c = price * 1.002
+        out.append([t + i * 86_400_000, o, max(o, c) * 1.01, min(o, c) * 0.99, c, 1200.0])
+    return out
+
+
+def test_backtest_aprendizaje_data(monkeypatch: pytest.MonkeyPatch) -> None:
+    import backtesting.backtest_rapido as bt
+
+    monkeypatch.setattr(bt, "descargar_klines", _fake_klines_tendencia)
+    d = bt.backtest_aprendizaje_data(["BTCUSDT", "ETHUSDT"], 365, 1000.0, tf="1d", reweight_every=5)
+
+    json.dumps(d)  # JSON-serializable (sin inf/nan ni sets)
+    assert d["con_aprendizaje"] is True
+    assert d["capital_inicial"] == 1000.0
+    assert len(d["por_simbolo"]) == 2
+    assert "aprendizaje" in d and len(d["aprendizaje"]) == 2
+    # Cada símbolo expone su nº de re-pesados del aprendizaje.
+    for p in d["por_simbolo"]:
+        assert "reweights" in p and p["reweights"] >= 0
+
+
+def test_backtest_aprendizaje_no_muta_gestor_pesos(monkeypatch: pytest.MonkeyPatch) -> None:
+    import backtesting.backtest_rapido as bt
+    from core.strategies.pesos import gestor_pesos
+
+    monkeypatch.setattr(bt, "descargar_klines", _fake_klines_tendencia)
+    antes = {s: dict(p) for s, p in gestor_pesos.pesos.items()}
+    bt.backtest_aprendizaje_data(["BTCUSDT"], 365, 1000.0, tf="1d", reweight_every=5)
+    # El backtest usa una copia LOCAL: los pesos del bot en vivo no cambian.
+    assert {s: dict(p) for s, p in gestor_pesos.pesos.items()} == antes
+
+
 def test_dashboard_simulacion_flujo(monkeypatch: pytest.MonkeyPatch) -> None:
     import backtesting.backtest_rapido as bt
     import dashboard.study as study
